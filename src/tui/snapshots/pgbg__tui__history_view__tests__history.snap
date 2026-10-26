@@ -1,0 +1,16 @@
+---
+source: src/tui/history_view.rs
+expression: render(entries).backend()
+---
+"                ╭ History of shop ─────────────────────────────╮                "
+"                │ › ▌                                          │                "
+"                │                                              │                "
+"                │ ▎↺ SELECT total FROM…  10-26 09:30 · 4 rows  │                "
+"                │  ↺ DELETE FROM orde…  10-26 09:30 · refused  │                "
+"                │   ↑↓ pick · ⏎ opens · esc closes             │                "
+"                │                                              │                "
+"                │                                              │                "
+"                │                                              │                "
+"                │                                              │                "
+"                │                                              │                "
+"                ╰──────────────────────────────────────────────╯                "

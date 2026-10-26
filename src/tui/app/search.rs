@@ -2,6 +2,7 @@
 //! ranked again only when the line or the list changes.
 use crate::act::{self, Act, Pane};
 use crate::connection::Connection;
+use crate::history::Entry;
 use crate::query::Query;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use vtui::fuzzy;
@@ -33,6 +34,12 @@ pub(in crate::tui) trait Searched: Clone {
 impl Searched for Query {
     fn search_text(&self) -> String {
         self.path.to_string()
+    }
+}
+
+impl Searched for Entry {
+    fn search_text(&self) -> String {
+        self.statement.clone()
     }
 }
 

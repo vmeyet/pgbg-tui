@@ -8,6 +8,7 @@ use vtui::theme::Theme;
 pub(super) use form::{Form, PasswordFrom, Slot};
 pub(super) use grid::Grid;
 use grid::Move;
+pub(super) use history::Recall;
 pub(super) use picker::{Note, Picker};
 pub(super) use protocol::{Action, Answer, ConfigAnswer, Incoming, QueryAnswer, RunId, SaveConnection, Saving, TunnelState};
 pub(super) use queries::{Finder, Queries};
@@ -18,6 +19,7 @@ pub(super) use sheet::{Run, SessionState, Sheet, View};
 mod editor;
 pub(super) mod form;
 mod grid;
+pub(super) mod history;
 pub(super) mod picker;
 mod protocol;
 pub(super) mod queries;
@@ -68,6 +70,8 @@ pub(super) enum Overlay {
     Picker(Picker),
     /// The form that adds or edits a connection, from the picker.
     Form(Box<Form>),
+    /// The `ctrl-r` search over the connection's history.
+    Recall(Recall),
     /// A question on the footer line: the path of a new query, or whether to open one over unsaved text.
     Prompt(Prompt),
 }
@@ -150,6 +154,10 @@ impl App {
             finder.paste(text, &self.queries.all);
             return vec![];
         }
+        if let Some(Overlay::Recall(recall)) = self.overlay.as_mut() {
+            recall.search.paste(text, &recall.all);
+            return vec![];
+        }
         let is_editor_on_top = self.overlay.is_none() && self.focus == Focus::Editor;
         if is_editor_on_top {
             self.sheet_mut().paste(text);
@@ -182,6 +190,7 @@ impl App {
                 actions
             }
             Overlay::Picker(picker) => self.picker_key(picker, key),
+            Overlay::Recall(recall) => self.recall_key(recall, key),
             Overlay::Form(form) => self.form_key(*form, key),
             Overlay::Prompt(prompt) => {
                 let (prompt, actions) = self.prompt_after(prompt, key);
@@ -215,6 +224,7 @@ impl App {
             Act::Open => return self.open_in_sidebar(),
             Act::Save => return self.save(),
             Act::EditOutside => return self.edit_outside(),
+            Act::History => return self.recall(),
             Act::Close | Act::Delete | Act::CloseSession | Act::Add | Act::Edit => {}
         }
         vec![]
@@ -276,6 +286,7 @@ impl App {
             Answer::Queries(QueryAnswer::NotSaved { connection, path, error }) => self.not_saved(&connection, &path, &error),
             Answer::Config(ConfigAnswer::Changed(connections)) => return self.take_connections(connections),
             Answer::Config(ConfigAnswer::Failed(error)) => self.config_failed(error),
+            Answer::History { connection, entries } => self.history_read(&connection, entries),
         }
         vec![]
     }

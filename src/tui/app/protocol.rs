@@ -2,6 +2,7 @@
 use crate::config::ConnectionChange;
 use crate::connection::{Connection, ConnectionName};
 use crate::db::model::{LocalPort, ResultSet, Statement};
+use crate::history::Entry;
 use crate::query::{Query, QueryPath};
 use crate::secret::Secret;
 use std::time::Duration;
@@ -46,6 +47,8 @@ pub(in crate::tui) enum Action {
     RemoveConnection(ConnectionName),
     /// Write a connection the form filled in.
     SaveConnection(SaveConnection),
+    /// Read the history of the connection, for `ctrl-r`.
+    ListHistory(ConnectionName),
 }
 
 /// A connection to add or edit: the keys it sets, and the password typed for its keychain item.
@@ -74,6 +77,8 @@ pub(in crate::tui) enum Answer {
     Queries(QueryAnswer),
     /// About a change to the config.
     Config(ConfigAnswer),
+    /// The history of `connection`: each statement once, newest first.
+    History { connection: ConnectionName, entries: Vec<Entry> },
 }
 
 /// What changing the config came to.

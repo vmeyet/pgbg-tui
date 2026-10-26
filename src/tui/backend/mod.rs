@@ -3,8 +3,10 @@ use super::app::{Action, Answer, Incoming, RunId, TunnelState};
 use crate::connection::{Connection, ConnectionName, WritePolicy};
 use crate::db::model::{CancelToken, Route, ServerError, Statement};
 use crate::db::{Session, guard};
+use crate::history::{Entry, History, Outcome, Store};
 use crate::query::{Query, Roots};
 use crate::tunnel::{Died, Tunnel};
+use chrono::Utc;
 use config::ConfigFile;
 use futures_util::future;
 use queries::QueryFiles;
@@ -32,6 +34,8 @@ pub(super) struct Backend {
     answers: UnboundedSender<Answer>,
     queries: QueryFiles,
     config: ConfigFile,
+    /// Where each run is added and `ctrl-r` reads from; none keeps no history.
+    history: Option<Store>,
 }
 
 /// The way to one session task: jobs and cancels in.
@@ -62,7 +66,12 @@ impl Backend {
     pub(super) fn new(roots: Roots, config: PathBuf, answers: UnboundedSender<Answer>) -> Self {
         let queries = QueryFiles { roots, answers: answers.clone() };
         let config = ConfigFile { path: config, answers: answers.clone() };
-        Self { sessions: BTreeMap::new(), answers, queries, config }
+        Self { sessions: BTreeMap::new(), answers, queries, config, history: None }
+    }
+
+    /// The backend adding each run to `history`.
+    pub(super) fn with_history(self, history: Option<Store>) -> Self {
+        Self { history, ..self }
     }
 
     /// The file of `query` for the user's editor; blocks on the file system, so the loop calls it with the terminal lent.
@@ -90,7 +99,21 @@ impl Backend {
             }
             Action::RemoveConnection(connection) => self.config.remove(connection),
             Action::SaveConnection(save) => self.config.save(save),
+            Action::ListHistory(connection) => self.list_history(connection),
         }
+    }
+
+    /// Reads the history of `connection` on a blocking thread; one that cannot be read is logged and comes back empty.
+    fn list_history(&self, connection: ConnectionName) {
+        let (history, answers) = (self.history.clone(), self.answers.clone());
+        tokio::task::spawn_blocking(move || {
+            let read = history.map(|store| store.read(&connection)).transpose();
+            let entries = read.unwrap_or_else(|err| {
+                tracing::warn!("the history of `{connection}` was not read: {err}");
+                None
+            });
+            send(&answers, Answer::History { connection, entries: entries.map(History::distinct).unwrap_or_default() });
+        });
     }
 
     /// Stops the session task of `connection` in the background, which drops its session and kills its tunnel.
@@ -102,10 +125,12 @@ impl Backend {
 
     /// Starts the task that opens a session on `connection`, or asks the one that serves it to open it again unless it is open.
     fn open(&mut self, connection: Connection) {
-        match self.sessions.get(connection.name()) {
-            Some(session) => session.send(Job::Open),
-            None => _ = self.sessions.insert(connection.name().clone(), SessionLink::start(connection, self.answers.clone())),
+        if let Some(session) = self.sessions.get(connection.name()) {
+            session.send(Job::Open);
+            return;
         }
+        let name = connection.name().clone();
+        _ = self.sessions.insert(name, SessionLink::start(connection, self.answers.clone(), self.history.clone()));
     }
 
     /// Queues `statement` on the session of `connection`; its answer comes back as an `Answer`.
@@ -134,10 +159,10 @@ impl Backend {
 
 impl SessionLink {
     /// Starts the task that opens a session on `connection` and runs each statement in turn.
-    fn start(connection: Connection, answers: UnboundedSender<Answer>) -> Self {
+    fn start(connection: Connection, answers: UnboundedSender<Answer>, history: Option<Store>) -> Self {
         let (jobs, queue) = mpsc::unbounded_channel();
         let (cancels, cancelled) = mpsc::unbounded_channel();
-        let task = tokio::spawn(SessionTask { connection, tunnel: None, session: None, cancelled, answers }.serve(queue));
+        let task = tokio::spawn(SessionTask { connection, tunnel: None, session: None, cancelled, answers, history }.serve(queue));
         Self { jobs, cancels, task }
     }
 
@@ -181,6 +206,13 @@ struct SessionTask {
     session: Option<Session>,
     cancelled: UnboundedReceiver<RunId>,
     answers: UnboundedSender<Answer>,
+    history: Option<Store>,
+}
+
+/// A run's answer for the app, and what came of it for the history.
+struct Answered {
+    incoming: Incoming,
+    outcome: Outcome,
 }
 
 impl SessionTask {
@@ -243,20 +275,30 @@ impl SessionTask {
     }
 
     async fn run(&mut self, queued: Queued) {
+        let (statement, started_at, clock) = (queued.statement.as_str().to_owned(), Utc::now(), Instant::now());
         if self.session.is_none()
             && let Err(error) = self.open().await
         {
             self.send(Incoming::Failed { run: queued.run, error, position: None });
+            self.record(Entry {
+                statement,
+                connection: self.connection.name().clone(),
+                started_at,
+                took_ms: 0,
+                outcome: Outcome::LinkError,
+            });
             return;
         }
         let Some(session) = self.session.as_mut() else { return };
         let run = queued.run;
-        let answer = if was_cancelled(&mut self.cancelled, run) {
-            Incoming::Failed { run, error: CANCELLED_BEFORE_SENT.to_owned(), position: None }
-        } else {
-            run_until_answered(session, self.connection.writes(), queued, &mut self.cancelled).await
-        };
-        self.send(answer);
+        if was_cancelled(&mut self.cancelled, run) {
+            self.send(Incoming::Failed { run, error: CANCELLED_BEFORE_SENT.to_owned(), position: None });
+            return;
+        }
+        let Answered { incoming, outcome } = run_until_answered(session, self.connection.writes(), queued, &mut self.cancelled).await;
+        let took_ms = u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.record(Entry { statement, connection: self.connection.name().clone(), started_at, took_ms, outcome });
+        self.send(incoming);
         if let Some(why) = self.session.as_ref().and_then(Session::lost) {
             self.lose(why);
         }
@@ -305,6 +347,13 @@ impl SessionTask {
         }
     }
 
+    /// Adds `entry` to the history in the background: the next statement never waits on the disk.
+    fn record(&self, entry: Entry) {
+        if let Some(store) = &self.history {
+            drop(store.record(entry));
+        }
+    }
+
     fn lose(&mut self, why: String) {
         self.session = None;
         self.send(Incoming::Closed(why));
@@ -349,7 +398,7 @@ async fn run_until_answered(
     writes: WritePolicy,
     queued: Queued,
     cancelled: &mut UnboundedReceiver<RunId>,
-) -> Incoming {
+) -> Answered {
     let token = session.cancel_token();
     let run = queued.run;
     let mut answer = pin!(answer_to(session, writes, queued));
@@ -371,20 +420,23 @@ async fn cancel(token: &CancelToken) {
     }
 }
 
-async fn answer_to(session: &mut Session, writes: WritePolicy, queued: Queued) -> Incoming {
+async fn answer_to(session: &mut Session, writes: WritePolicy, queued: Queued) -> Answered {
     let Queued { run, statement } = queued;
     let admitted = match guard::admit(statement, writes) {
         Ok(admitted) => admitted,
-        Err(refusal) => return Incoming::Refused { run, why: refusal.to_string() },
+        Err(refusal) => return Answered { incoming: Incoming::Refused { run, why: refusal.to_string() }, outcome: Outcome::Refused },
     };
     let started = Instant::now();
-    match session.run(&admitted).await {
+    let result = session.run(&admitted).await;
+    let outcome = Outcome::of(&result);
+    let incoming = match result {
         Ok(result) => Incoming::Result { run, result, took: started.elapsed() },
         Err(err) => {
             let position = err.downcast_ref::<ServerError>().and_then(|server| server.position);
             Incoming::Failed { run, position, error: format!("{err:#}") }
         }
-    }
+    };
+    Answered { incoming, outcome }
 }
 
 #[cfg(test)]

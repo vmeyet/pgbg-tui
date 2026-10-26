@@ -1,0 +1,16 @@
+---
+source: src/tui/history_view.rs
+expression: "render(vec![]).backend()"
+---
+"                ╭ History of shop ─────────────────────────────╮                "
+"                │ › ▌                                          │                "
+"                │                                              │                "
+"                │   no statement run on this connection yet    │                "
+"                │   ↑↓ pick · ⏎ opens · esc closes             │                "
+"                │                                              │                "
+"                │                                              │                "
+"                │                                              │                "
+"                │                                              │                "
+"                │                                              │                "
+"                │                                              │                "
+"                ╰──────────────────────────────────────────────╯                "

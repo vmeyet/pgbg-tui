@@ -7,6 +7,7 @@ mod finder_view;
 mod form_view;
 mod grid_view;
 mod help_view;
+mod history_view;
 mod outside;
 mod picker_view;
 mod prompt_view;
@@ -18,6 +19,7 @@ mod theme;
 mod ui;
 
 use crate::connection::{Connection, ConnectionName};
+use crate::history::Store;
 use crate::query::{Places, Query, Roots};
 use crate::signal::Signals;
 use anyhow::Result;
@@ -46,7 +48,7 @@ pub(crate) async fn run(connections: Vec<Connection>, first: Connection, config:
     let theme = vtui::ground::ask().map_or_else(Theme::default, |ground| Theme::default().with_ground(ground));
     let mut app = App::new(connections, &first, theme);
     let (answers, mut incoming) = mpsc::unbounded_channel();
-    let mut backend = Backend::new(find_roots().await?, config, answers);
+    let mut backend = Backend::new(find_roots().await?, config, answers).with_history(Store::from_env());
     for action in std::iter::once(Action::Open(first)).chain(App::start()) {
         backend.dispatch(action);
     }

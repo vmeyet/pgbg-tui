@@ -51,7 +51,7 @@ The MR that ships a step ticks its box.
 
 - [ ] Portal pages fetched as the grid scrolls
 - [x] History per connection: `pgbg run` adds each statement, `pgbg history <connection>` lists them
-- [ ] The TUI adds its statements to the history, `ctrl-r` searches it
+- [x] The TUI adds its statements to the history, `ctrl-r` searches it
 
 ## 8. Schema
 
