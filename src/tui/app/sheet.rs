@@ -118,11 +118,15 @@ impl Sheet {
     pub(super) fn cancel(&mut self) -> Vec<Action> {
         let Run::Running { run } = self.run else { return vec![] };
         self.run = Run::Cancelling { run };
-        vec![Action::Cancel { connection: self.name().clone(), run }]
+        vec![self.cancel_of(run)]
     }
 
     pub(super) fn cancel_of_running(&self) -> Option<Action> {
-        self.running_run().map(|run| Action::Cancel { connection: self.name().clone(), run })
+        self.running_run().map(|run| self.cancel_of(run))
+    }
+
+    fn cancel_of(&self, run: RunId) -> Action {
+        Action::Cancel { connection: self.name().clone(), run }
     }
 
     fn running_run(&self) -> Option<RunId> {

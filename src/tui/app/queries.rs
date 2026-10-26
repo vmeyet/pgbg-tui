@@ -1,50 +1,15 @@
 //! The saved queries in the app: the sidebar's tree and its cursor, the `ctrl-p` finder, and the query open in the editor.
 use super::editor::Editor;
+use super::search::{Search, Searching};
 use super::{Action, App, Focus, Overlay};
-use crate::act::{self, Act, Pane};
+use crate::act::Pane;
 use crate::connection::ConnectionName;
 use crate::query::{Query, TreeRow, tree_rows};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::KeyEvent;
 use std::collections::BTreeSet;
-use vtui::palette::{MAX_SHOWN, Palette};
 
-/// The finder's only mode: every query, by its path.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(in crate::tui) struct ByPath;
-
-impl vtui::palette::Mode for ByPath {
-    fn switched_by(self, _first: char) -> Option<Self> {
-        None
-    }
-
-    fn takes_commands(self) -> bool {
-        false
-    }
-}
-
-/// The finder: the line typed, and the queries it matches, ranked again only when the line or the list changes.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub(in crate::tui) struct Finder {
-    pub(in crate::tui) palette: Palette<ByPath>,
-    pub(in crate::tui) shown: Vec<Query>,
-}
-
-impl Finder {
-    fn new(all: &[Query]) -> Self {
-        Self { palette: Palette::default(), shown: found(all, "") }
-    }
-
-    /// Types the printable characters of `text`, then ranks once.
-    pub(super) fn paste(&mut self, text: &str, all: &[Query]) {
-        text.chars().filter(|c| !c.is_control()).for_each(|c| self.palette.type_char(c));
-        self.rank(all);
-    }
-
-    fn rank(&mut self, all: &[Query]) {
-        self.shown = found(all, &self.palette.input);
-        self.palette.move_by(0, self.shown.len());
-    }
-}
+/// The `ctrl-p` finder over every saved query, by its path.
+pub(in crate::tui) type Finder = Search<Query>;
 
 /// Every saved query, the folders folded in the sidebar, and its cursor.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -58,12 +23,6 @@ impl Queries {
     pub(in crate::tui) fn rows(&self) -> Vec<TreeRow> {
         tree_rows(&self.all, &self.closed)
     }
-}
-
-/// The queries the finder lists for `input`, best first.
-fn found(all: &[Query], input: &str) -> Vec<Query> {
-    let ranked = vtui::fuzzy::rank(input, all.iter().map(|query| (query.path.to_string(), query)));
-    ranked.into_iter().take(MAX_SHOWN).map(|(_, query)| query.clone()).collect()
 }
 
 impl App {
@@ -102,28 +61,14 @@ impl App {
         vec![]
     }
 
-    /// The finder after `key`, `None` once it closed, and what to do: its own keys move, pick and quit, the rest types.
-    pub(super) fn finder_after(&mut self, mut finder: Finder, key: KeyEvent) -> (Option<Finder>, Vec<Action>) {
-        match act::act_for(key, Pane::Finder) {
-            Some(Act::Down) => finder.palette.move_by(1, finder.shown.len()),
-            Some(Act::Up) => finder.palette.move_by(-1, finder.shown.len()),
-            Some(Act::Open) => {
-                let picked = finder.shown.into_iter().nth(finder.palette.selected);
-                return (None, picked.map(|query| self.open_query(query)).into_iter().collect());
-            }
-            Some(Act::Close) => return (None, vec![]),
-            Some(Act::Quit) => return (None, self.quit()),
-            _ => match key.code {
-                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    finder.palette.type_char(c);
-                    finder.rank(&self.queries.all);
-                }
-                KeyCode::Backspace if !finder.palette.backspace() => return (None, vec![]),
-                KeyCode::Backspace => finder.rank(&self.queries.all),
-                _ => {}
-            },
+    /// The finder after `key`, `None` once it closed, and what to do: a picked query opens in the editor.
+    pub(super) fn finder_after(&mut self, finder: Finder, key: KeyEvent) -> (Option<Finder>, Vec<Action>) {
+        match finder.after(key, Pane::Finder, &self.queries.all) {
+            Searching::Typed(finder) | Searching::Unhandled(finder, _) => (Some(finder), vec![]),
+            Searching::Closed => (None, vec![]),
+            Searching::Picked(query) => (None, vec![self.open_query(query)]),
+            Searching::Quit => (None, self.quit()),
         }
-        (Some(finder), vec![])
     }
 
     /// Reads `query` into the editor on screen.
@@ -152,6 +97,7 @@ pub(in crate::tui) mod tests {
     use super::*;
     use crate::chart::Series;
     use crate::query::{QueryPath, Source};
+    use crossterm::event::{KeyCode, KeyModifiers};
     use std::time::Duration;
 
     pub(in crate::tui) fn query(path: &str) -> Query {

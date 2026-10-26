@@ -1,30 +1,15 @@
 //! `ctrl-o`, the connection picker: typing narrows the connections as fzf does, and picking one shows its sheet,
 //! opening its session the first time.
+use super::search::{Search, Searching};
 use super::{Action, App, Form, Overlay, Run, SessionState, Sheet};
-use crate::act::{self, Act, Pane};
+use crate::act::{Act, Pane};
 use crate::connection::{Connection, ConnectionName};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use vtui::fuzzy;
-use vtui::palette::{Mode, Palette};
+use crossterm::event::{KeyCode, KeyEvent};
 
-/// The picker searches connections only, so no character switches its mode.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(in crate::tui) struct Picking;
-
-impl Mode for Picking {
-    fn switched_by(self, _first: char) -> Option<Self> {
-        None
-    }
-
-    fn takes_commands(self) -> bool {
-        false
-    }
-}
-
-/// The picker: the line typed and the highlighted row, and the line it says under them.
+/// The picker: the connections matching the line typed, and the line it says under them.
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::tui) struct Picker {
-    pub(in crate::tui) palette: Palette<Picking>,
+    pub(in crate::tui) search: Search<Connection>,
     pub(in crate::tui) note: Option<Note>,
 }
 
@@ -52,13 +37,7 @@ enum Picked {
 
 impl App {
     pub(super) fn open_picker(&mut self) {
-        self.overlay = Some(Overlay::Picker(Picker { palette: Palette::new(Picking, vec![]), note: None }));
-    }
-
-    /// The connections whose name matches `typed`, best first; every one, by name, when nothing is typed.
-    pub(in crate::tui) fn matching(&self, typed: &str) -> Vec<&Connection> {
-        let names = self.connections.iter().map(|connection| (connection.name().to_string(), connection));
-        fuzzy::rank(typed, names).into_iter().map(|(_, connection)| connection).collect()
+        self.overlay = Some(Overlay::Picker(Picker { search: Search::new(&self.connections), note: None }));
     }
 
     /// The sheet of the connection `name`, once it was opened.
@@ -90,50 +69,41 @@ impl App {
         vec![]
     }
 
-    /// What `key` does: a pending question takes it; else the picker's own keys move, pick, remove and close, the rest types.
+    /// What `key` does: a pending question takes it; else the search moves, picks and closes, the rest acts on the highlighted row.
     fn picked(&self, picker: Picker, key: KeyEvent) -> Picked {
-        let Picker { mut palette, note } = picker;
+        let Picker { search, note } = picker;
         if let Some(Note::ConfirmRemove(name)) = note {
             let is_yes = key.code == KeyCode::Char('y');
-            return if is_yes { Picked::Remove(name) } else { Picked::Stay(Picker { palette, note: None }) };
+            return if is_yes { Picked::Remove(name) } else { Picked::Stay(Picker { search, note: None }) };
         }
-        let matching = self.matching(&palette.input);
-        let selected = matching.get(palette.selected).map(|connection| connection.name().clone());
-        let note = match act::act_for(key, Pane::Picker) {
-            Some(Act::Down) => {
-                palette.move_by(1, matching.len());
-                None
-            }
-            Some(Act::Up) => {
-                palette.move_by(-1, matching.len());
-                None
-            }
-            Some(Act::Open) => {
-                return matching.get(palette.selected).map_or(Picked::Stay(Picker { palette, note: None }), |&c| Picked::Show(c.clone()));
-            }
-            Some(Act::Close) => return Picked::Close,
-            Some(Act::Quit) => return Picked::Quit,
-            Some(Act::Add) => return Picked::Form(Box::new(Form::adding())),
-            Some(Act::Edit) => match matching.get(palette.selected) {
+        match search.after(key, Pane::Picker, &self.connections) {
+            Searching::Typed(search) => Picked::Stay(Picker { search, note: None }),
+            Searching::Closed => Picked::Close,
+            Searching::Picked(connection) => Picked::Show(connection),
+            Searching::Quit => Picked::Quit,
+            Searching::Unhandled(search, act) => self.act_on_selected(search, act),
+        }
+    }
+
+    /// What `act` does to the highlighted connection: edit it, remove it or close its session; `ctrl-a` adds one.
+    fn act_on_selected(&self, search: Search<Connection>, act: Act) -> Picked {
+        let selected = search.selected().cloned();
+        let name = selected.as_ref().map(|connection| connection.name().clone());
+        let note = match act {
+            Act::Add => return Picked::Form(Box::new(Form::adding())),
+            Act::Edit => match &selected {
                 Some(connection) => return Picked::Form(Box::new(Form::editing(connection))),
                 None => None,
             },
-            Some(Act::Delete) => selected.map(|name| self.removal(name)),
-            Some(Act::CloseSession) => match selected.filter(|name| self.sheet_of(name).is_some()) {
+            Act::Delete => name.map(|name| self.removal(name)),
+            Act::CloseSession => match name.filter(|name| self.sheet_of(name).is_some()) {
                 Some(name) if name != *self.sheet().name() => return Picked::CloseSession(name),
                 Some(name) => Some(on_screen(&name)),
                 None => None,
             },
-            _ => match key.code {
-                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    palette.type_char(c);
-                    None
-                }
-                KeyCode::Backspace if !palette.backspace() => return Picked::Close,
-                _ => None,
-            },
+            _ => None,
         };
-        Picked::Stay(Picker { palette, note })
+        Picked::Stay(Picker { search, note })
     }
 
     /// The question before removing `name`; the connection on screen cannot go.
@@ -174,6 +144,9 @@ impl App {
         let closed = self.close_gone(&connections);
         let reopened = self.reopen_changed(&connections);
         self.connections = connections;
+        if let Some(Overlay::Picker(picker)) = &mut self.overlay {
+            picker.search.rank(&self.connections);
+        }
         self.clear_said();
         if matches!(self.overlay, Some(Overlay::Form(_))) {
             self.overlay = None;
@@ -233,6 +206,7 @@ pub(in crate::tui) mod tests {
     use crate::connection::Entry;
     use crate::connection::WritePolicy;
     use crate::db::model::Statement;
+    use crossterm::event::KeyModifiers;
     use std::time::Duration;
     use vtui::theme::Theme;
 
@@ -274,7 +248,7 @@ pub(in crate::tui) mod tests {
     }
 
     fn names(app: &App) -> Vec<String> {
-        app.matching(&picker(app).palette.input).iter().map(|c| c.name().to_string()).collect()
+        picker(app).search.shown.iter().map(|c| c.name().to_string()).collect()
     }
 
     fn switch_to(app: &mut App, typed: &str) -> Vec<Action> {
@@ -412,6 +386,16 @@ pub(in crate::tui) mod tests {
     }
 
     #[test]
+    fn a_connection_added_while_the_picker_is_open_is_listed() {
+        let mut app = on_local();
+        ctrl(&mut app, 'o');
+        let mut connections = app.connections.clone();
+        connections.push(named("replica", "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\n"));
+        app.take_connections(connections);
+        assert_eq!(names(&app), ["local", "prod", "staging", "replica"]);
+    }
+
+    #[test]
     fn ctrl_c_in_the_picker_quits() {
         let mut app = on_local();
         ctrl(&mut app, 'o');
@@ -436,7 +420,7 @@ pub(in crate::tui) mod tests {
         ctrl(&mut app, 'n');
         ctrl(&mut app, 'n');
         key(&mut app, KeyCode::Up);
-        assert_eq!(picker(&app).palette.selected, 1);
+        assert_eq!(picker(&app).search.palette.selected, 1);
     }
 
     fn on_prod_with_local_open() -> App {
@@ -459,7 +443,7 @@ pub(in crate::tui) mod tests {
         let mut app = on_prod_with_local_open();
         ctrl(&mut app, 'd');
         assert_eq!(press(&mut app, "n"), []);
-        assert_eq!((picker(&app).note.as_ref(), picker(&app).palette.input.as_str()), (None, ""));
+        assert_eq!((picker(&app).note.as_ref(), picker(&app).search.palette.input.as_str()), (None, ""));
     }
 
     #[test]
