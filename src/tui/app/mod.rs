@@ -5,14 +5,16 @@ use crossterm::event::{KeyCode, KeyEvent};
 use vtui::help::Help;
 use vtui::theme::Theme;
 
+pub(super) use form::{Form, PasswordFrom, Slot};
 pub(super) use grid::Grid;
 use grid::Move;
 pub(super) use picker::{Note, Picker};
-pub(super) use protocol::{Action, Answer, ConfigAnswer, Incoming, QueryAnswer, RunId, TunnelState};
+pub(super) use protocol::{Action, Answer, ConfigAnswer, Incoming, QueryAnswer, RunId, SaveConnection, Saving, TunnelState};
 pub(super) use queries::{Finder, Queries};
 pub(super) use sheet::{Run, SessionState, Sheet, View};
 
 mod editor;
+pub(super) mod form;
 mod grid;
 pub(super) mod picker;
 mod protocol;
@@ -60,6 +62,8 @@ pub(super) enum Overlay {
     Finder(Finder),
     /// The `ctrl-o` connection picker.
     Picker(Picker),
+    /// The form that adds or edits a connection, from the picker.
+    Form(Box<Form>),
 }
 
 /// The help after `key`: `?` lists every key, `j`/`k` scroll, any other key closes it.
@@ -170,6 +174,7 @@ impl App {
                 actions
             }
             Overlay::Picker(picker) => self.picker_key(picker, key),
+            Overlay::Form(form) => self.form_key(*form, key),
         }
     }
 
@@ -195,7 +200,7 @@ impl App {
             Act::Connections => self.open_picker(),
             Act::Chart => self.sheet_mut().switch_view(),
             Act::Open => return self.open_in_sidebar(),
-            Act::Close | Act::Delete | Act::CloseSession => {}
+            Act::Close | Act::Delete | Act::CloseSession | Act::Add | Act::Edit | Act::Save => {}
         }
         vec![]
     }

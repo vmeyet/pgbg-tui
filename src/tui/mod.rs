@@ -4,6 +4,7 @@ mod backend;
 mod chart_view;
 mod editor_view;
 mod finder_view;
+mod form_view;
 mod grid_view;
 mod help_view;
 mod picker_view;

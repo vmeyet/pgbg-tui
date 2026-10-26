@@ -1,7 +1,9 @@
 //! What the app and the backend say to each other: the actions it asks for and the answers that come back.
+use crate::config::ConnectionChange;
 use crate::connection::{Connection, ConnectionName};
 use crate::db::model::{LocalPort, ResultSet, Statement};
 use crate::query::Query;
+use crate::secret::Secret;
 use std::time::Duration;
 
 /// Which run of a statement an answer or a cancel is about, so a late one never lands on the next run.
@@ -35,6 +37,25 @@ pub(in crate::tui) enum Action {
     Reopen(Connection),
     /// Remove the connection from the config, with the keychain item no other connection names.
     RemoveConnection(ConnectionName),
+    /// Write a connection the form filled in.
+    SaveConnection(SaveConnection),
+}
+
+/// A connection to add or edit: the keys it sets, and the password typed for its keychain item.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::tui) struct SaveConnection {
+    pub(in crate::tui) name: ConnectionName,
+    pub(in crate::tui) saving: Saving,
+    pub(in crate::tui) change: ConnectionChange,
+    /// Written to the keychain item `change` names before the config, when one was typed.
+    pub(in crate::tui) password: Option<Secret>,
+}
+
+/// Whether the form adds a connection or changes one already there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::tui) enum Saving {
+    Add,
+    Edit,
 }
 
 /// What the backend answers.

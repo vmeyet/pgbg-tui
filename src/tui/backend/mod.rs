@@ -79,6 +79,7 @@ impl Backend {
                 self.open(connection);
             }
             Action::RemoveConnection(connection) => self.config.remove(connection),
+            Action::SaveConnection(save) => self.config.save(save),
         }
     }
 

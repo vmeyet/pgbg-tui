@@ -9,12 +9,28 @@ use std::process::Stdio;
 mod keychain;
 mod typed;
 
-/// A password, read when a session opens and dropped once connected.
+/// A password, read when a session opens and dropped once connected, or typed in the TUI's connection form.
+#[derive(Clone, Default, PartialEq, Eq)]
 pub(crate) struct Secret(String);
 
 impl Secret {
     pub(crate) fn expose(&self) -> &str {
         &self.0
+    }
+
+    /// Adds `c` to a password being typed.
+    pub(crate) fn push(&mut self, c: char) {
+        self.0.push(c);
+    }
+
+    /// Erases the last character typed.
+    pub(crate) fn pop(&mut self) {
+        self.0.pop();
+    }
+
+    /// How many characters the form shows as `•`.
+    pub(crate) fn typed_count(&self) -> usize {
+        self.0.chars().count()
     }
 }
 

@@ -1,9 +1,9 @@
 //! The config file, changed off the loop through the same `config` functions the command line uses; after each
 //! change the connections are read back and sent as `ConfigAnswer::Changed`.
-use super::super::app::{Answer, ConfigAnswer};
+use super::super::app::{Answer, ConfigAnswer, SaveConnection, Saving};
 use crate::config::{self, Config};
 use crate::connection::ConnectionName;
-use crate::secret::Keychain;
+use crate::secret::{Keychain, SecretSource};
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 use tokio::sync::mpsc::UnboundedSender;
@@ -22,6 +22,33 @@ impl ConfigFile {
         let (path, answers) = (self.path.clone(), self.answers.clone());
         tokio::task::spawn_blocking(move || send(&answers, changed(&path, |path| remove(path, &name))));
     }
+}
+
+impl ConfigFile {
+    /// Writes the password typed to its keychain item, then the connection, as `pgbg password set` and
+    /// `pgbg connection add|edit` do; an edit that names a new item deletes the old one no other connection names.
+    pub(super) fn save(&self, save: SaveConnection) {
+        let (path, answers) = (self.path.clone(), self.answers.clone());
+        tokio::task::spawn_blocking(move || send(&answers, changed(&path, |path| saved(path, &save))));
+    }
+}
+
+fn saved(path: &Path, save: &SaveConnection) -> Result<()> {
+    let SaveConnection { name, saving, change, password } = save;
+    if let (Some(SecretSource::Keychain(item)), Some(password)) = (&change.password, password) {
+        Keychain::PGBG.write(item, password)?;
+    }
+    match saving {
+        Saving::Add => config::add_connection(path, name, change),
+        Saving::Edit => edit(path, save),
+    }
+}
+
+fn edit(path: &Path, save: &SaveConnection) -> Result<()> {
+    let connections = Config::read(path)?.config.connections;
+    let replaced = save.change.password.as_ref().and_then(|source| config::replaced_keychain_item(&connections, &save.name, source));
+    config::edit_connection(path, &save.name, &save.change)?;
+    replaced.map_or(Ok(()), |item| Keychain::PGBG.delete(item))
 }
 
 fn remove(path: &Path, name: &ConnectionName) -> Result<()> {
@@ -65,6 +92,19 @@ mod tests {
         let answer = changed(&path, |path| remove(path, &"replica".parse().unwrap()));
         let ConfigAnswer::Changed(connections) = answer else { panic!("{answer:?}") };
         assert_eq!(connections.iter().map(|c| c.name().to_string()).collect::<Vec<_>>(), ["local"]);
+    }
+
+    #[test]
+    fn an_added_connection_comes_back_with_the_others() {
+        let (_dir, path) = config(SHOP);
+        let change = config::ConnectionChange {
+            tier: Some(crate::connection::Tier::Staging),
+            url: Some(crate::connection::Target::parse("postgres://nina@db.example.com/shop?sslmode=require").unwrap()),
+            ..Default::default()
+        };
+        let save = SaveConnection { name: "staging".parse().unwrap(), saving: Saving::Add, change, password: None };
+        let ConfigAnswer::Changed(connections) = changed(&path, |path| saved(path, &save)) else { panic!("not saved") };
+        assert_eq!(connections.len(), 3);
     }
 
     #[test]
