@@ -1,6 +1,6 @@
 //! The connection form, from the picker's `ctrl-a` and `ctrl-e`: each key of a connection on its own line, checked as
 //! the command line checks its flags, then written by the backend; an edit writes only the keys that changed.
-use super::{Action, App, Overlay, SaveConnection, Saving};
+use super::{Action, App, ConfigChangeId, KeychainPassword, Overlay, SaveConnection, Saving};
 use crate::act::{self, Act, Pane};
 use crate::config::ConnectionChange;
 use crate::connection::{Connection, ConnectionName, Target, Tier, TunnelSpec, WritePolicy};
@@ -52,8 +52,8 @@ pub(in crate::tui) struct Form {
     pub(in crate::tui) writes: WritePolicy,
     /// Why a line is refused, each beside its line.
     pub(in crate::tui) errors: Vec<(Slot, String)>,
-    /// That a save is on its way.
-    pub(in crate::tui) is_saving: bool,
+    /// The save on its way, until its answer comes.
+    sent: Option<ConfigChangeId>,
     /// Why the last save failed.
     pub(in crate::tui) failure: Option<String>,
 }
@@ -74,7 +74,7 @@ impl Form {
             tunnel: Field::default(),
             writes: WritePolicy::ReadOnly,
             errors: vec![],
-            is_saving: false,
+            sent: None,
             failure: None,
         }
     }
@@ -107,9 +107,18 @@ impl Form {
         shown.into_iter().chain(rest).filter(|&(_, is_shown)| is_shown).map(|(slot, _)| slot).collect()
     }
 
+    pub(in crate::tui) fn is_saving(&self) -> bool {
+        self.sent.is_some()
+    }
+
+    /// Whether `id` is the save this form sent and waits on.
+    pub(in crate::tui) fn is_waiting_on(&self, id: ConfigChangeId) -> bool {
+        self.sent == Some(id)
+    }
+
     /// Says why the save failed; the form stays as it was typed.
     pub(in crate::tui) fn failed(&mut self, why: String) {
-        self.is_saving = false;
+        self.sent = None;
         self.failure = Some(why);
     }
 
@@ -140,9 +149,10 @@ impl Form {
         }
     }
 
-    /// What to save, once every line checks; else each refused line says why.
-    fn submit(&mut self) -> Option<SaveConnection> {
-        let name = self.checked_name();
+    /// What to save as `id`, once every line checks; else each refused line says why. A new connection cannot take the
+    /// name of one in `connections`.
+    fn submit(&mut self, id: ConfigChangeId, connections: &[Connection]) -> Option<SaveConnection> {
+        let name = self.checked_name(connections);
         let url = Target::parse(self.url.text()).map_err(|err| format!("{err:#}"));
         let tunnel = self.checked_tunnel();
         let password = self.checked_password();
@@ -150,8 +160,20 @@ impl Form {
         let refused = refused.into_iter().chain([(Slot::Tunnel, tunnel.as_ref().err()), (Slot::PasswordWhere, password.as_ref().err())]);
         self.errors = refused.filter_map(|(slot, why)| Some((slot, why?.clone()))).collect();
         let (Ok(name), Ok(url), Ok(tunnel), Ok(password)) = (name, url, tunnel, password) else { return None };
-        let typed = (self.password_from == PasswordFrom::Keychain && self.password.typed_count() > 0).then(|| self.password.clone());
-        Some(SaveConnection { name, saving: self.saving, change: self.change(url, tunnel, password), password: typed })
+        let typed = self.typed_password(password.as_ref());
+        self.sent = Some(id);
+        Some(SaveConnection { id, name, saving: self.saving, change: self.change(url, tunnel, password), password: typed })
+    }
+
+    /// The password typed, for the keychain item `source` names, whether the config already names that item or not.
+    fn typed_password(&self, source: Option<&SecretSource>) -> Option<KeychainPassword> {
+        let has_typed = self.password.typed_count() > 0;
+        match source {
+            Some(SecretSource::Keychain(item)) if has_typed => {
+                Some(KeychainPassword { item: item.clone(), password: self.password.clone() })
+            }
+            _ => None,
+        }
     }
 
     /// Every key for a new connection; for one edited, only those that differ from the config.
@@ -167,8 +189,13 @@ impl Form {
         }
     }
 
-    fn checked_name(&self) -> Result<ConnectionName, String> {
-        self.name.text().trim().parse().map_err(|err| format!("{err:#}"))
+    fn checked_name(&self, connections: &[Connection]) -> Result<ConnectionName, String> {
+        let name: ConnectionName = self.name.text().trim().parse().map_err(|err| format!("{err:#}"))?;
+        let is_taken = self.saving == Saving::Add && connections.iter().any(|connection| *connection.name() == name);
+        if is_taken {
+            return Err(format!("`{name}` is already a connection: `ctrl-e` in the picker edits it"));
+        }
+        Ok(name)
     }
 
     fn checked_tunnel(&self) -> Result<Option<TunnelSpec>, String> {
@@ -258,9 +285,10 @@ impl App {
             Some(Act::Up) => form.step(-1),
             Some(Act::Close) => return vec![],
             Some(Act::Quit) => return self.quit(),
+            Some(Act::Save) if form.is_saving() => {}
             Some(Act::Save) => {
-                actions.extend(form.submit().map(Action::SaveConnection));
-                form.is_saving = !actions.is_empty();
+                let id = self.new_config_change();
+                actions.extend(form.submit(id, &self.connections).map(Action::SaveConnection));
             }
             _ => form.type_key(key),
         }
@@ -272,7 +300,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::super::picker::tests::{ctrl, on_local, press};
-    use super::super::{Answer, ConfigAnswer};
+    use super::super::{Answer, ConfigAnswer, Run};
     use super::*;
     use crate::fixtures::named;
 
@@ -308,7 +336,7 @@ mod tests {
         assert_eq!((save.name.to_string(), save.saving), ("replica".to_owned(), Saving::Add));
         assert_eq!((save.change.tier, save.change.writes), (Some(Tier::Staging), Some(WritePolicy::ReadOnly)));
         assert_eq!(save.change.url.map(|url| url.to_string()).as_deref(), Some("postgres://nina@db.example.com/shop?sslmode=require"));
-        assert!(form(&app).is_saving);
+        assert!(form(&app).is_saving());
     }
 
     #[test]
@@ -349,7 +377,7 @@ mod tests {
         press(&mut app, "hunter2");
         assert!(!format!("{:?}", app.overlay).contains("hunter2"));
         let save = saved(key(&mut app, KeyCode::Enter));
-        assert_eq!(save.password.map(|password| password.expose().to_owned()).as_deref(), Some("hunter2"));
+        assert_eq!(save.password.map(|typed| typed.password.expose().to_owned()).as_deref(), Some("hunter2"));
         assert_eq!(save.change.password, Some(SecretSource::Keychain("pgbg/local".parse().unwrap())));
     }
 
@@ -366,14 +394,81 @@ mod tests {
         assert!(form(&app).error(Slot::Tunnel).is_some_and(|why| why.contains("{port}")));
     }
 
+    fn local() -> Connection {
+        named("local", "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\n")
+    }
+
+    fn adding_replica(app: &mut App) -> SaveConnection {
+        adding(app);
+        press(app, "replica");
+        key(app, KeyCode::Tab);
+        key(app, KeyCode::Tab);
+        press(app, "postgres://nina@localhost/shop");
+        saved(key(app, KeyCode::Enter))
+    }
+
     #[test]
     fn a_failed_save_says_why_and_a_saved_one_closes_the_form() {
         let mut app = on_local();
-        adding(&mut app);
-        app.apply(Answer::Config(ConfigAnswer::Failed("permission denied".into())));
+        let save = adding_replica(&mut app);
+        app.apply(Answer::Config { id: save.id, answer: ConfigAnswer::Failed("permission denied".into()) });
         assert_eq!(form(&app).failure.as_deref(), Some("permission denied"));
-        let local = named("local", "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\n");
-        app.apply(Answer::Config(ConfigAnswer::Changed(vec![local])));
+        let again = saved(key(&mut app, KeyCode::Enter));
+        app.apply(Answer::Config { id: again.id, answer: ConfigAnswer::Changed(vec![local()]) });
         assert_eq!(app.overlay, None);
+    }
+
+    #[test]
+    fn a_second_enter_while_saving_sends_nothing() {
+        let mut app = on_local();
+        adding_replica(&mut app);
+        assert_eq!(key(&mut app, KeyCode::Enter), []);
+    }
+
+    #[test]
+    fn an_answer_to_another_change_leaves_the_form_waiting() {
+        let mut app = on_local();
+        let save = adding_replica(&mut app);
+        let other = save.id.next();
+        app.apply(Answer::Config { id: other, answer: ConfigAnswer::Failed("permission denied".into()) });
+        app.apply(Answer::Config { id: other, answer: ConfigAnswer::Changed(vec![local()]) });
+        assert_eq!((form(&app).is_saving(), form(&app).failure.as_ref()), (true, None));
+    }
+
+    #[test]
+    fn a_failed_save_never_touches_the_result() {
+        let mut app = on_local();
+        let save = adding_replica(&mut app);
+        app.apply(Answer::Config { id: save.id, answer: ConfigAnswer::Failed("permission denied".into()) });
+        assert_eq!(app.sheet().run, Run::Idle);
+    }
+
+    #[test]
+    fn a_name_already_taken_is_refused_beside_its_line() {
+        let mut app = on_local();
+        adding(&mut app);
+        press(&mut app, "prod");
+        key(&mut app, KeyCode::Tab);
+        key(&mut app, KeyCode::Tab);
+        press(&mut app, "postgres://nina@localhost/shop");
+        assert_eq!(key(&mut app, KeyCode::Enter), []);
+        assert!(form(&app).error(Slot::Name).is_some_and(|why| why.contains("already")), "{:?}", form(&app).errors);
+    }
+
+    #[test]
+    fn a_new_password_for_the_keychain_item_the_config_names_is_sent_for_that_item() {
+        let keyed =
+            named("local", "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\npassword = { keychain = \"pgbg/local\" }\n");
+        let mut app = App::new(vec![keyed.clone()], &keyed, vtui::theme::Theme::default());
+        ctrl(&mut app, 'o');
+        ctrl(&mut app, 'e');
+        for _ in 0..4 {
+            key(&mut app, KeyCode::Tab);
+        }
+        press(&mut app, "hunter3");
+        let save = saved(key(&mut app, KeyCode::Enter));
+        assert_eq!(save.change.password, None);
+        let typed = save.password.map(|typed| (typed.item.to_string(), typed.password.expose().to_owned()));
+        assert_eq!(typed, Some(("pgbg/local".to_owned(), "hunter3".to_owned())));
     }
 }

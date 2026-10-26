@@ -1,9 +1,9 @@
 //! The config file, changed off the loop through the same `config` functions the command line uses; after each
-//! change the connections are read back and sent as `ConfigAnswer::Changed`.
-use super::super::app::{Answer, ConfigAnswer, SaveConnection, Saving};
+//! change the connections are read back and sent as `ConfigAnswer::Changed`, with the id of the change.
+use super::super::app::{Answer, ConfigAnswer, ConfigChangeId, KeychainPassword, SaveConnection, Saving};
 use crate::config::{self, Config};
 use crate::connection::ConnectionName;
-use crate::secret::{Keychain, SecretSource};
+use crate::secret::{Keychain, KeychainItem};
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 use tokio::sync::mpsc::UnboundedSender;
@@ -18,37 +18,41 @@ pub(in crate::tui) struct ConfigFile {
 impl ConfigFile {
     /// Removes the connection `name`, and first the keychain item no other connection names, as
     /// `pgbg connection remove` does; on a blocking thread, since both are files and processes.
-    pub(super) fn remove(&self, name: ConnectionName) {
+    pub(super) fn remove(&self, id: ConfigChangeId, name: ConnectionName) {
         let (path, answers) = (self.path.clone(), self.answers.clone());
-        tokio::task::spawn_blocking(move || send(&answers, changed(&path, |path| remove(path, &name))));
+        tokio::task::spawn_blocking(move || send(&answers, id, changed(&path, |path| remove(path, &name))));
     }
-}
 
-impl ConfigFile {
-    /// Writes the password typed to its keychain item, then the connection, as `pgbg password set` and
-    /// `pgbg connection add|edit` do; an edit that names a new item deletes the old one no other connection names.
+    /// Writes the connection as `pgbg connection add|edit` does, then the password typed to its keychain item as
+    /// `pgbg password set` does, so a change the config refuses never touches the keychain; an edit that names a new
+    /// item then deletes the old one no other connection names.
     pub(super) fn save(&self, save: SaveConnection) {
         let (path, answers) = (self.path.clone(), self.answers.clone());
-        tokio::task::spawn_blocking(move || send(&answers, changed(&path, |path| saved(path, &save))));
+        tokio::task::spawn_blocking(move || send(&answers, save.id, changed(&path, |path| saved(path, &save, &Keychain::PGBG))));
     }
 }
 
-fn saved(path: &Path, save: &SaveConnection) -> Result<()> {
-    let SaveConnection { name, saving, change, password } = save;
-    if let (Some(SecretSource::Keychain(item)), Some(password)) = (&change.password, password) {
-        Keychain::PGBG.write(item, password)?;
+fn saved(path: &Path, save: &SaveConnection, keychain: &Keychain) -> Result<()> {
+    let replaced = replaced_item(path, save)?;
+    write_connection(path, save)?;
+    if let Some(KeychainPassword { item, password }) = &save.password {
+        keychain.write(item, password)?;
     }
-    match saving {
-        Saving::Add => config::add_connection(path, name, change),
-        Saving::Edit => edit(path, save),
-    }
+    replaced.map_or(Ok(()), |item| keychain.delete(&item))
 }
 
-fn edit(path: &Path, save: &SaveConnection) -> Result<()> {
+/// The keychain item an edit stops naming, which no other connection names; none for a new connection.
+fn replaced_item(path: &Path, save: &SaveConnection) -> Result<Option<KeychainItem>> {
+    let Some(source) = save.change.password.as_ref().filter(|_| save.saving == Saving::Edit) else { return Ok(None) };
     let connections = Config::read(path)?.config.connections;
-    let replaced = save.change.password.as_ref().and_then(|source| config::replaced_keychain_item(&connections, &save.name, source));
-    config::edit_connection(path, &save.name, &save.change)?;
-    replaced.map_or(Ok(()), |item| Keychain::PGBG.delete(item))
+    Ok(config::replaced_keychain_item(&connections, &save.name, source).cloned())
+}
+
+fn write_connection(path: &Path, save: &SaveConnection) -> Result<()> {
+    match save.saving {
+        Saving::Add => config::add_connection(path, &save.name, &save.change),
+        Saving::Edit => config::edit_connection(path, &save.name, &save.change),
+    }
 }
 
 fn remove(path: &Path, name: &ConnectionName) -> Result<()> {
@@ -67,8 +71,8 @@ fn changed(path: &Path, change: impl FnOnce(&Path) -> Result<()>) -> ConfigAnswe
     }
 }
 
-fn send(answers: &UnboundedSender<Answer>, answer: ConfigAnswer) {
-    if answers.send(Answer::Config(answer)).is_err() {
+fn send(answers: &UnboundedSender<Answer>, id: ConfigChangeId, answer: ConfigAnswer) {
+    if answers.send(Answer::Config { id, answer }).is_err() {
         tracing::warn!("the loop is gone: a config answer is dropped");
     }
 }
@@ -102,9 +106,28 @@ mod tests {
             url: Some(crate::connection::Target::parse("postgres://nina@db.example.com/shop?sslmode=require").unwrap()),
             ..Default::default()
         };
-        let save = SaveConnection { name: "staging".parse().unwrap(), saving: Saving::Add, change, password: None };
-        let ConfigAnswer::Changed(connections) = changed(&path, |path| saved(path, &save)) else { panic!("not saved") };
+        let save =
+            SaveConnection { id: ConfigChangeId::FIRST, name: "staging".parse().unwrap(), saving: Saving::Add, change, password: None };
+        let ConfigAnswer::Changed(connections) = changed(&path, |path| saved(path, &save, &Keychain::TEST)) else { panic!("not saved") };
         assert_eq!(connections.len(), 3);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    #[ignore = "touches the login keychain, under a throwaway service"]
+    async fn adding_a_name_already_taken_fails_before_the_keychain_is_written() {
+        let (_dir, path) = config(SHOP);
+        let item: KeychainItem = "probe-name-taken".parse().unwrap();
+        let mut typed = crate::secret::Secret::default();
+        "hunter2".chars().for_each(|c| typed.push(c));
+        let password = Some(KeychainPassword { item: item.clone(), password: typed });
+        let change = config::ConnectionChange { password: Some(crate::secret::SecretSource::Keychain(item.clone())), ..Default::default() };
+        let save = SaveConnection { id: ConfigChangeId::FIRST, name: "local".parse().unwrap(), saving: Saving::Add, change, password };
+        let answer = changed(&path, |path| saved(path, &save, &Keychain::TEST));
+        let read = Keychain::TEST.read(&item).await;
+        Keychain::TEST.delete(&item).unwrap();
+        assert!(matches!(&answer, ConfigAnswer::Failed(why) if why.contains("already")), "{answer:?}");
+        assert!(read.is_err(), "the keychain item was written");
     }
 
     #[test]

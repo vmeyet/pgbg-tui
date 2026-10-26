@@ -10,7 +10,9 @@ pub(super) use grid::Grid;
 use grid::Move;
 pub(super) use history::Recall;
 pub(super) use picker::{Note, Picker};
-pub(super) use protocol::{Action, Answer, ConfigAnswer, Incoming, QueryAnswer, RunId, SaveConnection, Saving, TunnelState};
+pub(super) use protocol::{
+    Action, Answer, ConfigAnswer, ConfigChangeId, Incoming, KeychainPassword, QueryAnswer, RunId, SaveConnection, Saving, TunnelState,
+};
 pub(super) use queries::{Finder, Queries};
 pub(super) use save::Prompt;
 pub(super) use search::{ROWS_SHOWN, Search};
@@ -102,6 +104,10 @@ pub(super) struct App {
     pub(super) queries: Queries,
     fit: Fit,
     pub(super) should_quit: bool,
+    /// The id the next change to the config takes.
+    next_config_change: ConfigChangeId,
+    /// Why a change to the config failed when no form waits on it; the status line says it until the next key.
+    pub(super) config_failure: Option<String>,
 }
 
 impl App {
@@ -117,6 +123,8 @@ impl App {
             queries: Queries::default(),
             fit: Fit::default(),
             should_quit: false,
+            next_config_change: ConfigChangeId::FIRST,
+            config_failure: None,
         }
     }
 
@@ -136,6 +144,7 @@ impl App {
 
     /// Takes one key; returns what the runner should do about it.
     pub(super) fn handle_key(&mut self, key: KeyEvent) -> Vec<Action> {
+        self.config_failure = None;
         if let Some(overlay) = self.overlay.take() {
             return self.overlay_key(overlay, key);
         }
@@ -260,6 +269,13 @@ impl App {
         }
     }
 
+    /// A new id for a change to the config, so its answer reaches only what asked for it.
+    fn new_config_change(&mut self) -> ConfigChangeId {
+        let id = self.next_config_change;
+        self.next_config_change = id.next();
+        id
+    }
+
     /// Quits, cancelling every running statement first so no server runs one to its end.
     pub(super) fn quit(&mut self) -> Vec<Action> {
         self.should_quit = true;
@@ -284,8 +300,8 @@ impl App {
             }
             Answer::Queries(QueryAnswer::Saved { connection, query, text }) => self.saved(&connection, query, &text),
             Answer::Queries(QueryAnswer::NotSaved { connection, path, error }) => self.not_saved(&connection, &path, &error),
-            Answer::Config(ConfigAnswer::Changed(connections)) => return self.take_connections(connections),
-            Answer::Config(ConfigAnswer::Failed(error)) => self.config_failed(error),
+            Answer::Config { id, answer: ConfigAnswer::Changed(connections) } => return self.take_connections(id, connections),
+            Answer::Config { id, answer: ConfigAnswer::Failed(error) } => self.config_failed(id, error),
             Answer::History { connection, entries } => self.history_read(&connection, entries),
         }
         vec![]

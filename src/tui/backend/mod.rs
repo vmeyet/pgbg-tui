@@ -98,7 +98,7 @@ impl Backend {
                 self.close(connection.name());
                 self.open(connection);
             }
-            Action::RemoveConnection(connection) => self.config.remove(connection),
+            Action::RemoveConnection { id, connection } => self.config.remove(id, connection),
             Action::SaveConnection(save) => self.config.save(save),
             Action::ListHistory(connection) => self.list_history(connection),
         }
