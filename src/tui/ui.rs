@@ -165,7 +165,7 @@ mod tests {
     #[test]
     fn an_open_query_names_the_editor() {
         let mut app = with_queries();
-        app.apply(Incoming::QueryOpened { path: query("orders/daily.sql"), text: "SELECT 1".into() });
+        app.apply(Incoming::QueryOpened { query: query("orders/daily.sql"), text: "SELECT 1".into() });
         insta::assert_snapshot!("query_open", render(&app, 60, 6).backend());
     }
 

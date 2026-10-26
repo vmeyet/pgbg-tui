@@ -3,7 +3,7 @@ use crate::act::{self, Act, Pane};
 use crate::connection::{Connection, ConnectionName, Tier, WritePolicy};
 use crate::db::guard;
 use crate::db::model::{LocalPort, ResultSet, Statement};
-use crate::query::QueryPath;
+use crate::query::Query;
 use crate::syntax::Spans;
 use crossterm::event::{KeyCode, KeyEvent};
 use std::time::Duration;
@@ -43,7 +43,7 @@ pub(super) enum Action {
     /// List every saved query.
     ListQueries,
     /// Read this query, for the editor.
-    OpenQuery(QueryPath),
+    OpenQuery(Query),
 }
 
 /// What the backend answers.
@@ -73,13 +73,13 @@ pub(super) enum Incoming {
         position: Option<usize>,
     },
     /// Every saved query, sorted.
-    Queries(Vec<QueryPath>),
+    Queries(Vec<Query>),
     QueryOpened {
-        path: QueryPath,
+        query: Query,
         text: String,
     },
     QueryNotOpened {
-        path: QueryPath,
+        query: Query,
         error: String,
     },
 }
@@ -336,8 +336,8 @@ impl App {
                 self.run = Run::Failed(error);
             }
             Incoming::Queries(all) => self.queries.all = all,
-            Incoming::QueryOpened { path, text } => self.opened(path, &text),
-            Incoming::QueryNotOpened { path, error } => self.run = Run::Failed(format!("could not open {path}: {error}")),
+            Incoming::QueryOpened { query, text } => self.opened(query, &text),
+            Incoming::QueryNotOpened { query, error } => self.run = Run::Failed(format!("could not open {}: {error}", query.path)),
         }
     }
 
