@@ -110,3 +110,19 @@ fn pgbg_alone_without_connections_says_where_to_add_one() {
     assert!(!output.status.success());
     assert!(stderr(&output).contains("[connections.<name>]"), "{}", stderr(&output));
 }
+
+#[test]
+fn password_set_refuses_a_connection_whose_password_comes_from_elsewhere_before_reading_one() {
+    let output = pgbg(
+        "[connections.staging]\ntier = \"staging\"\nurl = \"postgres://nina@localhost/shop\"\npassword = { env = \"STAGING_PGPASSWORD\" }\n",
+        &["password", "set", "staging"],
+    );
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("not the keychain"), "{}", stderr(&output));
+}
+
+#[test]
+fn password_set_on_an_unknown_connection_says_where_to_find_them() {
+    let output = pgbg(SHOP, &["password", "set", "nope"]);
+    assert!(stderr(&output).contains("no connection `nope`"), "{}", stderr(&output));
+}

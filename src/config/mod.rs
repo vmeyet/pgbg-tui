@@ -7,6 +7,9 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 mod ignored;
+mod write;
+
+pub(crate) use write::set_password;
 
 const PATH_VARIABLE: &str = "PGBG_CONFIG";
 

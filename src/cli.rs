@@ -36,6 +36,22 @@ pub enum Command {
         /// One SQL statement.
         sql: String,
     },
+    /// The passwords pgbg keeps in the macOS keychain; there is no flag for a password, which `ps` would show.
+    Password {
+        /// What to do with it.
+        #[command(subcommand)]
+        command: PasswordCommand,
+    },
+}
+
+/// What `pgbg password` does.
+#[derive(Subcommand, Debug)]
+pub enum PasswordCommand {
+    /// Saves a connection's password in the keychain, typed hidden or piped in; a connection with no password yet gets `{ keychain = "pgbg/<name>" }`.
+    Set {
+        /// The connection's name in `config.toml`.
+        connection: ConnectionName,
+    },
 }
 
 #[cfg(test)]
@@ -62,6 +78,13 @@ mod tests {
     fn a_connection_name_the_config_cannot_hold_is_refused_while_parsing() {
         assert!(parse(&["run", "my shop", "SELECT 1"]).is_err());
         assert!(parse(&["tui", "shop/eu"]).is_err());
+    }
+
+    #[test]
+    fn a_password_is_never_taken_from_the_command_line() {
+        assert!(matches!(parse(&["password", "set", "prod"]).unwrap().command, Some(Command::Password { .. })));
+        assert!(parse(&["password", "set", "prod", "--password", "hunter2"]).is_err());
+        assert!(parse(&["password", "set", "prod", "hunter2"]).is_err());
     }
 
     #[test]

@@ -1,6 +1,8 @@
 //! One module per subcommand, each with a `run` the binary calls.
 /// `pgbg connections`.
 pub mod connections;
+/// `pgbg password set`.
+pub mod password;
 /// `pgbg run`.
 pub mod run;
 /// `pgbg`, or `pgbg tui`.

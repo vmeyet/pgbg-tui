@@ -1,7 +1,7 @@
 //! The `pgbg` binary: parses the command line and runs the matching command.
 use anyhow::Result;
 use clap::Parser;
-use pgbg::cli::{Cli, Command};
+use pgbg::cli::{Cli, Command, PasswordCommand};
 use pgbg::commands;
 
 #[tokio::main]
@@ -23,5 +23,6 @@ async fn run(cli: &Cli) -> Result<()> {
         Some(Command::Tui { connection }) => commands::tui::run(connection.as_ref()).await,
         Some(Command::Connections) => commands::connections::run(cli.json),
         Some(Command::Run { connection, sql }) => commands::run::run(connection, sql, cli.json).await,
+        Some(Command::Password { command: PasswordCommand::Set { connection } }) => commands::password::set(connection),
     }
 }

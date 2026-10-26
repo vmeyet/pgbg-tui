@@ -24,10 +24,12 @@ ratatui = "0.30"
 serde = { version = "1.0", features = ["derive"] }
 serde_ignored = "0.1.14"
 serde_json = "1.0"
+tempfile = "3.20"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "time"] }
 tokio-postgres = { version = "0.7", default-features = false, features = ["runtime", "with-chrono-0_4", "with-uuid-1", "with-serde_json-1"] }
 tokio-postgres-rustls = { version = "0.14", features = ["ring", "webpki-roots"] }
 toml = "1.1"
+toml_edit = { version = "0.25", features = ["serde"] }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 url = "2.5"
@@ -36,7 +38,6 @@ vtui = { git = "https://github.com/vmeyet/vtui", tag = "v0.1.0" }
 
 [dev-dependencies]
 insta = "1"
-tempfile = "3.20"
 
 [profile.release]
 lto = "fat"

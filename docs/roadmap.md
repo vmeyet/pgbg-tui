@@ -28,7 +28,7 @@ The MR that ships a step ticks its box.
 ## 4. Connections
 
 - [ ] Tiers and their colours, `statement_timeout` per tier
-- [ ] Secret sources: keychain, environment, command
+- [x] Secret sources: keychain, environment, command
 - [ ] `ctrl-o` connection picker; sessions stay open, switching back is instant
 - [ ] `pgbg connection add|edit|remove` and `pgbg password set <connection>`: the config rewritten key by key, the password written to the keychain with `security -i`
 - [ ] The same from the picker: a connection form in the TUI
