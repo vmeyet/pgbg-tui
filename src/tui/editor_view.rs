@@ -2,7 +2,7 @@
 use super::app::{App, Focus};
 use super::theme;
 use crate::connection::{ConnectionName, Tier, WritePolicy};
-use crate::syntax::{Spans, Token};
+use crate::syntax::{Painted, Spans};
 use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
@@ -24,8 +24,13 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
     let column = Line::from(before.rsplit('\n').next().unwrap_or_default()).width() as u16;
     let scroll = row.saturating_sub(inside.height.saturating_sub(1));
     let mark = Style::default().fg(app.theme.danger).add_modifier(Modifier::REVERSED);
-    let text = coloured(sheet.editor.text(), &sheet.colours, sheet.error_mark, mark, &app.theme);
-    f.render_widget(Paragraph::new(text).scroll((scroll, 0)), inside);
+    let window = Window { first: usize::from(scroll), rows: usize::from(inside.height) };
+    let text = coloured(
+        sheet.editor.text(),
+        Paint { colours: sheet.editor.colours(), mark: sheet.error_mark, mark_style: mark, theme: &app.theme },
+        window,
+    );
+    f.render_widget(Paragraph::new(text), inside);
     if !focused {
         return;
     }
@@ -33,15 +38,33 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
     f.set_cursor_position(Position { x, y: inside.y + row - scroll });
 }
 
-/// `text` line by line, each token in its colour, and the character at byte `mark` in `mark_style` on top;
-/// a mark on a line's end draws a space there.
-fn coloured<'a>(text: &'a str, colours: &[Spans], mark: Option<usize>, mark_style: Style, theme: &Theme) -> Text<'a> {
+/// The lines of the editor in view.
+#[derive(Clone, Copy, Debug)]
+struct Window {
+    first: usize,
+    rows: usize,
+}
+
+/// How the text is painted: its colours per line, and the character at byte `mark` in `mark_style` on top.
+#[derive(Clone, Copy)]
+struct Paint<'a> {
+    colours: &'a [Spans],
+    mark: Option<usize>,
+    mark_style: Style,
+    theme: &'a Theme,
+}
+
+/// The lines of `text` in `window`, each token in its colour, the mark on top; a mark on a line's end draws a space there.
+fn coloured<'a>(text: &'a str, paint: Paint<'_>, window: Window) -> Text<'a> {
     let mut line_start = 0;
     let mut lines = Vec::new();
-    for (index, line) in text.split('\n').enumerate() {
-        let marked = mark.and_then(|at| at.checked_sub(line_start)).filter(|&at| at <= line.len()).map(|at| marked_range(line, at));
-        let spans = colours.get(index).map_or(&[][..], Vec::as_slice);
-        lines.push(coloured_line(line, spans, marked, mark_style, theme));
+    for (index, line) in text.split('\n').enumerate().take(window.first + window.rows) {
+        if index >= window.first {
+            let marked =
+                paint.mark.and_then(|at| at.checked_sub(line_start)).filter(|&at| at <= line.len()).map(|at| marked_range(line, at));
+            let spans = paint.colours.get(index).map_or(&[][..], Vec::as_slice);
+            lines.push(coloured_line(line, spans, marked, paint));
+        }
         line_start += line.len() + 1;
     }
     Text::from(lines)
@@ -52,29 +75,66 @@ fn marked_range(line: &str, at: usize) -> Range<usize> {
     at..at + line[at..].chars().next().map_or(0, char::len_utf8)
 }
 
-/// The line cut wherever a token or the mark starts or stops.
-fn coloured_line<'a>(
-    line: &'a str,
-    spans: &[(Range<usize>, Token)],
-    mark: Option<Range<usize>>,
-    mark_style: Style,
-    theme: &Theme,
-) -> Line<'a> {
-    let mut edges: Vec<usize> = spans.iter().map(|(range, _)| range).chain(&mark).flat_map(|range| [range.start, range.end]).collect();
-    edges.extend([0, line.len()]);
-    edges.retain(|&edge| edge <= line.len() && line.is_char_boundary(edge));
-    edges.sort_unstable();
-    edges.dedup();
-    let token_colour = |at: usize| spans.iter().find(|(range, _)| range.contains(&at)).map(|(_, token)| theme::token(theme, *token));
-    let style_at = |at: usize| {
-        let is_marked = mark.as_ref().is_some_and(|range| range.contains(&at));
-        if is_marked { mark_style } else { token_colour(at).map_or_else(Style::default, |colour| Style::default().fg(colour)) }
+/// The line as runs of one style each, in one pass over its spans, then the mark cut in on top.
+fn coloured_line<'a>(line: &'a str, spans: &[Painted], mark: Option<Range<usize>>, paint: Paint<'_>) -> Line<'a> {
+    let runs = token_runs(line, spans, paint.theme);
+    let mut pieces: Vec<Span<'a>> = match &mark {
+        Some(mark) => runs
+            .into_iter()
+            .flat_map(|run| cut_by_mark(&run, mark, paint.mark_style))
+            .filter(|run| !run.bytes.is_empty())
+            .map(|run| run.span(line))
+            .collect(),
+        None => runs.into_iter().map(|run| run.span(line)).collect(),
     };
-    let mut pieces: Vec<Span<'a>> = edges.windows(2).map(|piece| Span::styled(&line[piece[0]..piece[1]], style_at(piece[0]))).collect();
     if mark.is_some_and(|range| range.is_empty()) {
-        pieces.push(Span::styled(" ", mark_style));
+        pieces.push(Span::styled(" ", paint.mark_style));
     }
     Line::from(pieces)
+}
+
+/// Bytes of a line drawn in one style.
+struct Run {
+    bytes: Range<usize>,
+    style: Style,
+}
+
+impl Run {
+    fn span<'a>(&self, line: &'a str) -> Span<'a> {
+        Span::styled(&line[self.bytes.clone()], self.style)
+    }
+}
+
+/// The whole line as runs: each span in its token's colour, the gaps between them plain; spans that do not fit the
+/// line or its characters are skipped, as stale colours can be.
+fn token_runs(line: &str, spans: &[Painted], theme: &Theme) -> Vec<Run> {
+    let fits = |painted: &&Painted| {
+        painted.bytes.end <= line.len() && line.is_char_boundary(painted.bytes.start) && line.is_char_boundary(painted.bytes.end)
+    };
+    let mut runs = Vec::with_capacity(2 * spans.len() + 1);
+    let mut at = 0;
+    for painted in spans.iter().filter(fits) {
+        if painted.bytes.start < at {
+            continue;
+        }
+        runs.push(Run { bytes: at..painted.bytes.start, style: Style::default() });
+        runs.push(Run { bytes: painted.bytes.clone(), style: Style::default().fg(theme::token(theme, painted.token)) });
+        at = painted.bytes.end;
+    }
+    runs.push(Run { bytes: at..line.len(), style: Style::default() });
+    runs.retain(|run| !run.bytes.is_empty());
+    runs
+}
+
+/// `run` split where `mark` starts and ends, the marked part in `mark_style`.
+fn cut_by_mark(run: &Run, mark: &Range<usize>, mark_style: Style) -> [Run; 3] {
+    let clamp = |at: usize| at.clamp(run.bytes.start, run.bytes.end);
+    let (start, end) = (clamp(mark.start), clamp(mark.end));
+    [
+        Run { bytes: run.bytes.start..start, style: run.style },
+        Run { bytes: start..end, style: mark_style },
+        Run { bytes: end..run.bytes.end, style: run.style },
+    ]
 }
 
 /// `Editor`, then the name the header gives, or else the path of the saved query in it.
@@ -127,16 +187,20 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::{Backend as _, TestBackend};
 
+    const EVERY_LINE: Window = Window { first: 0, rows: usize::MAX / 2 };
+
     fn marked_text(text: &str, mark: usize) -> Vec<String> {
         let style = Style::default().add_modifier(Modifier::REVERSED);
         let shown = |span: &Span<'_>| if span.style == style { format!("[{}]", span.content) } else { span.content.to_string() };
-        let text = coloured(text, &[], Some(mark), style, &Theme::default());
+        let theme = Theme::default();
+        let text = coloured(text, Paint { colours: &[], mark: Some(mark), mark_style: style, theme: &theme }, EVERY_LINE);
         text.lines.iter().map(|line| line.spans.iter().map(shown).collect()).collect()
     }
 
     fn painted(text: &str, mark: Option<usize>) -> String {
         let mark_style = Style::default().fg(Theme::default().danger).add_modifier(Modifier::REVERSED);
-        let text = coloured(text, &syntax::highlight(text), mark, mark_style, &Theme::default());
+        let (colours, theme) = (syntax::highlight(text), Theme::default());
+        let text = coloured(text, Paint { colours: &colours, mark, mark_style, theme: &theme }, EVERY_LINE);
         let piece = |span: &Span<'_>| format!("{:?}/{:?} {:?}", span.style.fg, span.style.add_modifier, span.content);
         text.lines.iter().map(|line| line.spans.iter().map(piece).collect::<Vec<_>>().join("\n")).collect::<Vec<_>>().join("\n---\n")
     }

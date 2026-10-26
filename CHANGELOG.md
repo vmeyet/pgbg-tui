@@ -64,6 +64,8 @@ Each entry says what changed, then where, then how to use it.
 
 ### Fixed
 
+- **Pasting into the TUI editor** inserts the text as it is: a line end in a pasted statement no longer runs the part before it, and a tab no longer moves the keys to the result.
+  Typing in a long editor no longer waits on its colours, which follow a moment after you stop.
 - **`esc` cancels only the statement you see running** in the TUI: a cancel that arrives late never stops the next statement, and `esc` while the session is still opening keeps the statement from the server.
 - **`ctrl-c` cancels the running statement before pgbg quits**, so the server does not run it to its end.
 - **A lost session shows at once** in the TUI's status line, even when nothing runs; the next `⏎` opens a new one.
