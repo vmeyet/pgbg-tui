@@ -62,8 +62,8 @@ Switching connection:
 
 Charting a result:
 
-1. `v` on a result asks `chart::infer` for a `ChartSpec`: the first text or date column as x, the numeric columns as y.
-2. A saved query can set it in its header instead: `-- chart: bar x=day y=orders`.
+1. `v` on a result asks `chart::infer` for a `ChartSpec`: the first text, date or time column as x, the numeric columns as y; bars when x is text or there are at most 12 rows, a line otherwise.
+2. A saved query can set it in its header instead: `-- chart: bar x=day y=orders,refunds`, parsed by `ChartSpec`'s `FromStr`; a header without `x=` or `y=` leaves them to the result, as `infer` would pick them.
 3. `chart::Series::from_result` builds the points; `chart_view` draws them.
 
 ## Boundaries
