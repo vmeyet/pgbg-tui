@@ -38,7 +38,7 @@ thread_local! {
 /// The capture names the grammar's query uses and the token each paints.
 /// tree-sitter matches a capture to the longest listed name that prefixes it, so `string` also
 /// covers `string.special`.
-const CAPTURES: [(&str, Token); 13] = [
+const CAPTURES: [(&str, Token); 14] = [
     ("keyword", Token::Keyword),
     ("conditional", Token::Keyword),
     ("storageclass", Token::Keyword),
@@ -47,6 +47,7 @@ const CAPTURES: [(&str, Token); 13] = [
     ("number", Token::Number),
     ("float", Token::Number),
     ("boolean", Token::Constant),
+    ("constant", Token::Constant),
     ("type", Token::Type),
     ("attribute", Token::Type),
     ("function", Token::Function),
@@ -115,18 +116,23 @@ fn configuration() -> Option<&'static HighlightConfiguration> {
 
 /// The grammar's query is written for Neovim: its number patterns use Lua's `%d`, which the Rust
 /// highlighter reads as a literal `%`, so every literal stayed a string; comments also carry a
-/// Neovim-only `@spell`. Here a literal is a string only when quoted, a number when it is digits.
+/// Neovim-only `@spell`. Here a literal is a string only when quoted, a number when it is digits with an optional
+/// exponent, and `NULL` a constant rather than a type. A table name keeps the plain colour, not the type colour
+/// upstream gives it.
 fn sql() -> Option<HighlightConfiguration> {
-    const LITERALS: &str = r#"((literal) @string (#match? @string "^['\"]"))
-((literal) @number (#match? @number "^[-+]?[0-9]*[.]?[0-9]+$"))
+    const OVERRIDES: &str = r#"((literal) @string (#match? @string "^['\"]"))
+((literal) @number (#match? @number "^[-+]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)?$"))
+(keyword_null) @constant
 "#;
+    const REPLACED_LINES: [&str; 2] = ["(literal) @string", "(keyword_null)"];
+    const TABLE_NAME: &str = "(object_reference\n  name: (identifier) @type)";
     let upstream = tree_sitter_sequel::HIGHLIGHTS_QUERY.replace("@comment @spell", "@comment");
     let kept: Vec<String> = upstream
         .split("\n\n")
-        .filter(|block| !block.contains("%d"))
-        .map(|block| block.lines().filter(|line| line.trim() != "(literal) @string").collect::<Vec<_>>().join("\n"))
+        .filter(|block| !block.contains("%d") && block.trim() != TABLE_NAME)
+        .map(|block| block.lines().filter(|line| !REPLACED_LINES.contains(&line.trim())).collect::<Vec<_>>().join("\n"))
         .collect();
-    let highlights = format!("{LITERALS}{}", kept.join("\n\n"));
+    let highlights = format!("{OVERRIDES}{}", kept.join("\n\n"));
     HighlightConfiguration::new(tree_sitter_sequel::LANGUAGE.into(), "sql", &highlights, "", "").ok()
 }
 
@@ -167,6 +173,25 @@ mod tests {
         let lines = highlight(sql);
         assert!(tokens_of("SELECT 'one", &lines[0]).contains(&("'one", Token::String)), "{:?}", lines[0]);
         assert!(tokens_of("two' FROM orders", &lines[1]).contains(&("two'", Token::String)), "{:?}", lines[1]);
+    }
+
+    #[test]
+    fn null_is_a_constant() {
+        let sql = "SELECT NULL";
+        assert!(tokens_of(sql, &highlight(sql)[0]).contains(&("NULL", Token::Constant)));
+    }
+
+    #[test]
+    fn a_table_name_keeps_the_plain_colour() {
+        let sql = "SELECT id FROM orders";
+        assert!(!tokens_of(sql, &highlight(sql)[0]).iter().any(|(text, _)| *text == "orders"));
+    }
+
+    #[test]
+    fn a_number_with_an_exponent_is_a_number() {
+        let sql = "SELECT 1e3, 2.5e3";
+        let tokens = tokens_of(sql, &highlight(sql)[0]);
+        assert!(tokens.contains(&("1e3", Token::Number)) && tokens.contains(&("2.5e3", Token::Number)), "{tokens:?}");
     }
 
     #[test]
