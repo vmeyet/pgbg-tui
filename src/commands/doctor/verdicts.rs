@@ -1,10 +1,11 @@
 use super::report::Check;
-use crate::connection::{Connection, TimeoutChoice, Tls, TunnelSpec};
-use crate::db::model::{LocalPort, ServerFacts};
+use crate::connection::{Connection, TimeoutChoice, Tls, TunnelSpec, WritePolicy};
+use crate::db::model::{LocalPort, RoleRights, ServerFacts};
 use std::path::Path;
 
 const PRIVATE_CA: &str = "sslrootcert";
 const OTHERS_READ_OR_WRITE: u32 = 0o077;
+const READ_ONLY_ROLE: &str = "use a read-only role: the role is the only real guarantee";
 
 pub(super) fn config_refused(err: &anyhow::Error) -> Check {
     Check::fail("config", format!("{err:#}"), "fix `config.toml` as it says; `pgbg connections` lists what loads")
@@ -104,6 +105,39 @@ pub(super) fn timeout(connection: &Connection, facts: &ServerFacts) -> Check {
         TimeoutChoice::Tier(tier_timeout) => format!("the server's, stricter than the {tier} tier's {tier_timeout}"),
     };
     Check::ok("timeout", format!("{in_effect}, {why}"))
+}
+
+/// What `rights` lets the role write: each power it holds, then its writable tables, the first ones named.
+fn powers(rights: &RoleRights) -> Vec<String> {
+    let flags = [
+        (rights.is_superuser, "is a superuser"),
+        (rights.can_create_role, "creates roles"),
+        (rights.can_create_db, "creates databases"),
+        (rights.can_bypass_rls, "bypasses row security"),
+        (rights.can_write_all_data, "is in `pg_write_all_data`"),
+    ];
+    let held = flags.into_iter().filter(|(is_held, _)| *is_held).map(|(_, power)| power.to_owned());
+    held.chain(writable_tables(rights)).collect()
+}
+
+fn writable_tables(rights: &RoleRights) -> Option<String> {
+    let count = rights.writable_table_count;
+    let unnamed = count.saturating_sub(rights.writable_tables.len() as u64);
+    let more = if unnamed > 0 { format!(" and {unnamed} more") } else { String::new() };
+    let tables = if count == 1 { "table" } else { "tables" };
+    (count > 0).then(|| format!("writes {count} {tables}: {}{more}", rights.writable_tables.join(", ")))
+}
+
+pub(super) fn role(writes: WritePolicy, rights: &RoleRights) -> Check {
+    let powers = powers(rights);
+    if powers.is_empty() {
+        return Check::ok("role", "read only: it can write no table");
+    }
+    let found = format!("not read only: it {}", powers.join(", "));
+    match writes {
+        WritePolicy::Allowed => Check::ok("role", format!("{found}; this connection allows writes")),
+        WritePolicy::ReadOnly => Check::warn("role", found, READ_ONLY_ROLE),
+    }
 }
 
 #[cfg(test)]
@@ -215,5 +249,37 @@ mod tests {
     fn a_timeout_other_than_the_one_pgbg_set_is_a_warning() {
         let check = timeout(&connection(""), &facts(0, 0));
         assert_eq!((check.verdict, check.found.as_str()), (Verdict::Warn, "0s in effect, not the 30s pgbg set"));
+    }
+
+    #[test]
+    fn a_role_that_writes_nothing_is_read_only() {
+        assert_eq!(role(WritePolicy::ReadOnly, &RoleRights::default()), Check::ok("role", "read only: it can write no table"));
+    }
+
+    fn writer() -> RoleRights {
+        RoleRights {
+            can_create_db: true,
+            writable_tables: vec!["public.customers".into(), "public.orders".into()],
+            writable_table_count: 14,
+            ..RoleRights::default()
+        }
+    }
+
+    #[test]
+    fn a_role_that_writes_on_a_read_only_connection_is_a_warning_naming_what_it_writes() {
+        let check = role(WritePolicy::ReadOnly, &writer());
+        assert_eq!(check.found, "not read only: it creates databases, writes 14 tables: public.customers, public.orders and 12 more");
+        assert_eq!(check.fix.as_deref(), Some(READ_ONLY_ROLE));
+    }
+
+    #[test]
+    fn a_role_that_writes_on_a_connection_that_allows_writes_is_fine() {
+        assert_eq!(role(WritePolicy::Allowed, &writer()).verdict, Verdict::Ok);
+    }
+
+    #[test]
+    fn a_superuser_says_so_first() {
+        let rights = RoleRights { is_superuser: true, ..RoleRights::default() };
+        assert_eq!(role(WritePolicy::ReadOnly, &rights).found, "not read only: it is a superuser");
     }
 }

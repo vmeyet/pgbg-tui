@@ -60,14 +60,18 @@ async fn reached(connection: &Connection) -> Vec<Check> {
     started.into_iter().chain(session).chain(stopped).collect()
 }
 
-/// What the session says of itself; it is dropped once read, before its tunnel stops.
+/// What the session says of itself and of its role; it is dropped once read, before its tunnel stops.
 async fn read(connection: &Connection, mut session: Session) -> Vec<Check> {
     let facts = match session.server_facts().await {
         Ok(facts) => facts,
         Err(err) => return vec![verdicts::not_read("server", &err)],
     };
+    let role = match session.role_rights().await {
+        Ok(rights) => verdicts::role(connection.writes(), &rights),
+        Err(err) => verdicts::not_read("role", &err),
+    };
     let [login, server] = verdicts::server(&facts);
-    vec![login, server, verdicts::timeout(connection, &facts)]
+    vec![login, server, verdicts::timeout(connection, &facts), role]
 }
 
 async fn stop(mut tunnel: Tunnel) -> Check {
