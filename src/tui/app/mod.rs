@@ -13,7 +13,6 @@ pub(super) use grid::Grid;
 
 const LOST_SESSION: &str = "session lost, ⏎ opens a new one";
 use grid::Move;
-pub(super) use grid::cell_text;
 
 mod grid;
 mod keys;
@@ -212,8 +211,8 @@ impl App {
     }
 
     fn grid_step(&mut self, step: Move) {
-        if let Run::Done { grid, .. } = &mut self.run {
-            grid.step(step, self.grid_rows);
+        if let Run::Done { grid, result, .. } = &mut self.run {
+            grid.step(step, result, self.grid_rows);
         }
     }
 

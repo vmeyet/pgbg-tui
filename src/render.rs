@@ -1,5 +1,5 @@
-//! Plain-terminal output for the scriptable commands: columns aligned by width.
-use crate::db::model::ResultSet;
+//! Text for the terminal: aligned tables for the scriptable commands, and values escaped and cut for every view.
+use crate::db::model::{ResultSet, Value};
 use ratatui::text::Span;
 use std::borrow::Cow;
 
@@ -21,6 +21,11 @@ pub(crate) fn row_count(result: &ResultSet) -> String {
         count => format!("{count} rows"),
     };
     if result.is_cut { format!("first {count}") } else { count }
+}
+
+/// The first `chars` characters `value` prints, control characters escaped.
+pub(crate) fn cell_text(value: &Value, chars: usize) -> String {
+    printable(&value.prefix(chars)).into_owned()
 }
 
 /// `text` with each control character escaped, a newline as `\n` and ESC as `\u{1b}`, so a value
@@ -46,7 +51,7 @@ fn padded(cell: &str, columns: usize) -> String {
 }
 
 /// The terminal columns `cell` takes: two for a wide character such as `日`.
-fn width(cell: &str) -> usize {
+pub(crate) fn width(cell: &str) -> usize {
     Span::raw(cell).width()
 }
 
@@ -83,6 +88,11 @@ mod tests {
     fn wide_characters_align_by_the_columns_they_take() {
         let rows = [row(&["日本", "nina"]), row(&["ab", "noel"])];
         assert_eq!(table(&rows), "日本  nina\nab    noel\n");
+    }
+
+    #[test]
+    fn a_cell_shows_its_first_characters_escaped() {
+        assert_eq!(cell_text(&Value::Text("nina\nnoel".into()), 5), "nina\\n");
     }
 
     #[test]

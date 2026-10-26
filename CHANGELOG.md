@@ -25,7 +25,7 @@ Each entry says what changed, then where, then how to use it.
 - **The results grid** in the TUI: numbers line up on the right, `▶` marks the current row, and a control character in a value shows escaped.
   Press `tab` to give it the keys, then `j`/`k`, `PgUp`/`PgDn` and `g`/`G` to scroll its rows, `h`/`l` its columns; `tab` again goes back to the editor.
 - **`pgbg run <connection> "<sql>"`** runs one statement and prints its result as a table, with the row count.
-  Add `--json` for a script: `{"columns": [...], "rows": [[...]]}`.
+  Add `--json` for a script: `{"columns": [...], "rows": [[...]], "is_cut": false}`; `is_cut` is `true` when only the first 10 000 rows came back.
   A connection is read only unless it says `writes = "allowed"`: a statement that is not a read is refused before it is sent, and every read runs in a read-only transaction that is rolled back.
   The password comes from `password = { keychain = "..." }`, `{ env = "..." }` or `{ command = [...] }`.
 - **`pgbg connections`** lists the connections of your `config.toml`: name, tier, URL, and how pgbg reaches each one.
@@ -40,7 +40,7 @@ Each entry says what changed, then where, then how to use it.
 - **`ctrl-c` cancels the running statement before pgbg quits**, so the server does not run it to its end.
 - **A lost session shows at once** in the TUI's status line, even when nothing runs; the next `⏎` opens a new one.
 - **The error mark stays off when you edit while a statement runs**, instead of marking the wrong character.
-
+- **A huge value no longer slows the results grid**: a cell formats only the characters it can show, so a 10 MB JSON value draws as fast as a short one.
 - **A lost session opens again** in the TUI: after the server restarts or the link drops, the next statement you run opens a new session instead of failing for good.
   The statement that met the dead link fails; press `⏎` to run it again.
 - **Opening a session gives up after 10 seconds** instead of waiting on a server that never answers.
