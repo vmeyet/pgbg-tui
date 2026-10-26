@@ -29,7 +29,7 @@ When a boundary or a flow changes, change this page in the same MR.
 | `act.rs`, `keymap.rs` (planned) | Every action in one table (name, default keys, help, pane, and palette verb (planned)); the user's `[keys]` on top (planned) |
 | `tui/mod.rs` | The event loop: terminal events, answers and the recolour timer in, frames out |
 | `tui/app/` | `App`, the pure state machine: keys in, `Action`s out, `Answer`s applied to the sheet of the connection that gave them, a saved query read to the sheet that asked for it; `protocol.rs` holds what the app and the backend say to each other, `sheet.rs` one connection's state; one `Overlay` at most (help, finder, picker) takes the keys |
-| `tui/backend/` | `Backend::dispatch` hands each `Action` over without waiting, to one part per concern: sessions (one per connection opened, a task owns each one, runs its statements in turn, takes cancels by `RunId` while a statement runs, and says when the session is lost), queries, and history (planned) |
+| `tui/backend/` | `Backend::dispatch` hands each `Action` over without waiting, to one part per concern: sessions (one per connection opened, a task owns each one, runs its statements in turn, takes cancels by `RunId` while a statement runs, and says when the session is lost), queries, the config (changed through `config/` on a blocking thread, then read back), and history (planned) |
 | `tui/ui.rs`, `tui/*_view.rs` | Drawing: layout in `ui.rs`, one view module per pane or modal |
 | `tui/grid_view/` | The results grid: only the visible rows and columns are drawn |
 | `tui/chart_view/` | Draws a `Series` with ratatui's `BarChart` (bars across, so text labels stay readable) and `Chart` (braille line), one file per kind; a legend in vtui's user colours |
@@ -58,7 +58,8 @@ Switching connection:
 1. `ctrl-o` opens the connection picker; picking one not yet open starts its sheet and returns `Action::Open(connection)`, picking one whose session failed returns it again so its task opens it again, picking an open one shows its sheet and returns nothing.
 2. When the connection has a tunnel, the session task starts it with `Tunnel::start`: it picks a free port, runs the command, and waits until the port answers.
 3. `Session::open` takes the tunnel's `Route`: it connects to `hostaddr=127.0.0.1` and the tunnel's port, and keeps the URL's host for the TLS certificate check; it reads the schema in the background for completion and the sidebar (planned).
-4. The session stays open until pgbg quits, so switching back is instant; its tunnel stops with it.
+4. The session stays open until pgbg quits or `ctrl-x` in the picker closes it, so switching back is instant; its tunnel stops with it.
+   When the config changes, the sheet of a connection gone closes and the sheet of one changed opens a new session on it (`Action::Reopen`).
    Each sheet keeps its editor text and its result while another one is shown, and the answers of its session land on it alone.
 5. A session whose link is gone, or whose rollback failed, is opened again before the next statement; it is never retried on its own.
    A statement sent while its session fails to open fails with it, and is never sent on a later open; once pgbg quits, one still queued is never sent.

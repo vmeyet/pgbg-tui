@@ -159,7 +159,7 @@ fn suggested(app: &App, named: &ConnectionName) -> Span<'static> {
 /// first header line pgbg could not read. The statement still runs on the connection on screen.
 fn header_notes(app: &App) -> Line<'static> {
     let sheet = app.sheet();
-    let elsewhere = sheet.header.connection.as_ref().filter(|&named| *named != sheet.name);
+    let elsewhere = sheet.header.connection.as_ref().filter(|&named| named != sheet.name());
     let suggestion = elsewhere.map(|named| suggested(app, named));
     let warning = sheet.header.warnings.first().map(|warning| Span::styled(format!(" ⚠ {warning} "), Style::default().fg(app.theme.warn)));
     Line::from(suggestion.into_iter().chain(warning).collect::<Vec<_>>())
@@ -172,7 +172,7 @@ fn open_error(app: &App) -> Span<'static> {
 }
 
 fn badge(app: &App) -> Span<'static> {
-    match app.sheet().writes {
+    match app.sheet().connection.writes() {
         WritePolicy::ReadOnly => Span::styled(" READ ONLY ", Style::default().fg(app.theme.muted)),
         WritePolicy::Allowed => Span::styled(" WRITES ", Style::default().fg(app.theme.danger).add_modifier(Modifier::BOLD)),
     }

@@ -29,6 +29,12 @@ pub(in crate::tui) enum Action {
     ListQueries,
     /// Read this query into the editor of the connection's sheet.
     OpenQuery { connection: ConnectionName, query: Query },
+    /// Close the connection's session and its tunnel; nothing when it has none.
+    Close(ConnectionName),
+    /// Close the connection's session and open one on it as the config now says.
+    Reopen(Connection),
+    /// Remove the connection from the config, with the keychain item no other connection names.
+    RemoveConnection(ConnectionName),
 }
 
 /// What the backend answers.
@@ -38,6 +44,17 @@ pub(in crate::tui) enum Answer {
     Session { connection: ConnectionName, incoming: Incoming },
     /// About the saved queries: the list every connection shares, or a query read for one sheet.
     Queries(QueryAnswer),
+    /// About a change to the config.
+    Config(ConfigAnswer),
+}
+
+/// What changing the config came to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::tui) enum ConfigAnswer {
+    /// Its connections once changed, read back from the file.
+    Changed(Vec<Connection>),
+    /// The change was refused or failed, in the error's words; the file is as it was.
+    Failed(String),
 }
 
 /// What reading the saved queries came to.

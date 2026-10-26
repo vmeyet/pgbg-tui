@@ -5,15 +5,18 @@ use crate::db::model::{CancelToken, Route, ServerError, Statement};
 use crate::db::{Session, guard};
 use crate::query::Roots;
 use crate::tunnel::{Died, Tunnel};
+use config::ConfigFile;
 use futures_util::future;
 use queries::QueryFiles;
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::pin::pin;
 use std::time::Duration;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
+mod config;
 mod queries;
 
 /// How long quitting waits for the session tasks to finish a cancel, so the terminal comes back soon.
@@ -28,6 +31,7 @@ pub(super) struct Backend {
     sessions: BTreeMap<ConnectionName, SessionLink>,
     answers: UnboundedSender<Answer>,
     queries: QueryFiles,
+    config: ConfigFile,
 }
 
 /// The way to one session task: jobs and cancels in.
@@ -54,10 +58,11 @@ struct Queued {
 }
 
 impl Backend {
-    /// The backend with no session yet; saved queries are read under `roots`.
-    pub(super) fn new(roots: Roots, answers: UnboundedSender<Answer>) -> Self {
+    /// The backend with no session yet; saved queries are read under `roots`, the config is changed at `config`.
+    pub(super) fn new(roots: Roots, config: PathBuf, answers: UnboundedSender<Answer>) -> Self {
         let queries = QueryFiles { roots, answers: answers.clone() };
-        Self { sessions: BTreeMap::new(), answers, queries }
+        let config = ConfigFile { path: config, answers: answers.clone() };
+        Self { sessions: BTreeMap::new(), answers, queries, config }
     }
 
     /// Hands `action` over without waiting on it; the loop never awaits the database.
@@ -68,6 +73,19 @@ impl Backend {
             Action::Cancel { connection, run } => self.cancel(&connection, run),
             Action::ListQueries => self.queries.list(),
             Action::OpenQuery { connection, query } => self.queries.open(connection, query),
+            Action::Close(connection) => self.close(&connection),
+            Action::Reopen(connection) => {
+                self.close(connection.name());
+                self.open(connection);
+            }
+            Action::RemoveConnection(connection) => self.config.remove(connection),
+        }
+    }
+
+    /// Stops the session task of `connection` in the background, which drops its session and kills its tunnel.
+    fn close(&mut self, connection: &ConnectionName) {
+        if let Some(session) = self.sessions.remove(connection) {
+            tokio::spawn(session.stop());
         }
     }
 
@@ -385,7 +403,7 @@ mod tests {
 
     fn started_on(connection: Connection) -> (Backend, UnboundedReceiver<Answer>) {
         let (sender, answers) = mpsc::unbounded_channel();
-        let mut backend = Backend::new(Roots::default(), sender);
+        let mut backend = Backend::new(Roots::default(), PathBuf::from("config.toml"), sender);
         backend.open(connection);
         (backend, answers)
     }

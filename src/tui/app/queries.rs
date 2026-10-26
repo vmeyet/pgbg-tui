@@ -128,12 +128,12 @@ impl App {
 
     /// Reads `query` into the editor on screen.
     fn open_query(&self, query: Query) -> Action {
-        Action::OpenQuery { connection: self.sheet().name.clone(), query }
+        Action::OpenQuery { connection: self.sheet().name().clone(), query }
     }
 
     /// Puts the text of `query` in the editor of `connection`, which it now stands for; the keys go to it when it is on screen.
     pub(super) fn opened(&mut self, connection: &ConnectionName, query: Query, text: &str) {
-        let is_on_screen = self.sheet().name == *connection;
+        let is_on_screen = self.sheet().name() == connection;
         let Some(sheet) = self.sheet_of_mut(connection) else { return };
         sheet.query_error = None;
         sheet.opened = Some(query);

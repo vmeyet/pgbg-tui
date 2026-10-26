@@ -8,7 +8,7 @@ expression: terminal.backend()
 "││                  │ ▎● local  localhost/shop · read only  open               │                  ││"
 "│╰──────────────────│  ● prod  via tunnel · read only                          │──────────────────╯│"
 "│╭ Result ──────────│  ● staging  db.example.com/shop  WRITES                  │──────────────────╮│"
-"││ ⏎ runs the statem│   ↑↓ pick · ⏎ opens or switches · esc                    │                  ││"
+"││ ⏎ runs the statem│   ↑↓ pick · ⏎ opens · ^d removes · ^x closes · esc       │                  ││"
 "││                  │                                                          │                  ││"
 "││                  │                                                          │                  ││"
 "│╰──────────────────│                                                          │──────────────────╯│"
