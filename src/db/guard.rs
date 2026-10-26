@@ -3,6 +3,7 @@
 use super::model::Statement;
 use crate::connection::WritePolicy;
 use std::fmt;
+use std::ops::Range;
 
 const READS: [&str; 6] = ["SELECT", "WITH", "VALUES", "TABLE", "EXPLAIN", "SHOW"];
 /// Words that change data, create a table (`SELECT ... INTO`) or run the statement (`EXPLAIN ANALYZE`).
@@ -58,6 +59,45 @@ fn check_read(tokens: &[Token]) -> Result<(), Refusal> {
     }
 }
 
+/// Where the statement the cursor at byte `at` of `sql` stands in begins and ends, its `;` and the
+/// whitespace around it left out; `None` when `sql` holds no statement. A cursor right after a `;`, or on blank text after
+/// it, stands in the statement before it.
+pub(crate) fn statement_at(sql: &str, at: usize) -> Option<Range<usize>> {
+    let pieces = pieces(&placed_tokens(sql), sql.len());
+    let holding = pieces.iter().position(|piece| at <= piece.range.end + 1).unwrap_or(pieces.len() - 1);
+    let statement = pieces[..=holding].iter().rev().find(|piece| piece.has_tokens)?;
+    Some(trimmed(sql, statement.range.clone()))
+}
+
+/// The text between two `;`, and whether it holds anything but comments and whitespace.
+struct Piece {
+    range: Range<usize>,
+    has_tokens: bool,
+}
+
+fn pieces(tokens: &[Placed], len: usize) -> Vec<Piece> {
+    let mut pieces = vec![];
+    let mut start = 0;
+    let mut has_tokens = false;
+    for placed in tokens {
+        if placed.token == Token::End {
+            pieces.push(Piece { range: start..placed.at, has_tokens });
+            (start, has_tokens) = (placed.at + 1, false);
+        } else {
+            has_tokens = true;
+        }
+    }
+    pieces.push(Piece { range: start..len, has_tokens });
+    pieces
+}
+
+fn trimmed(sql: &str, range: Range<usize>) -> Range<usize> {
+    let text = &sql[range.clone()];
+    let start = range.start + text.len() - text.trim_start().len();
+    let end = range.end - (text.len() - text.trim_end().len());
+    start..end
+}
+
 fn holds_more_than_one_statement(tokens: &[Token]) -> bool {
     let mut after_first_end = tokens.iter().skip_while(|token| **token != Token::End).skip(1);
     after_first_end.any(|token| *token != Token::End)
@@ -68,19 +108,25 @@ fn first_write_word<'a>(words: &[&'a str]) -> Option<&'a str> {
     words.iter().copied().find(|word| WRITES.contains(word)).or(locks)
 }
 
-/// The words of `sql` in upper case, its `;`, and one `Other` for anything else: comments and
-/// whitespace drop out, and string literals and quoted identifiers hide what they hold.
 fn tokens(sql: &str) -> Vec<Token> {
+    placed_tokens(sql).into_iter().map(|placed| placed.token).collect()
+}
+
+/// The words of `sql` in upper case, its `;`, and one `Other` for anything else, each with the byte
+/// it starts at: comments and whitespace drop out, and string literals and quoted identifiers hide what they hold.
+fn placed_tokens(sql: &str) -> Vec<Placed> {
     let mut tokens = vec![];
     let mut rest = sql;
     while let Some(c) = rest.chars().next() {
         let after = &rest[c.len_utf8()..];
+        let at = sql.len() - rest.len();
+        let mut push = |token| tokens.push(Placed { at, token });
         rest = match c {
             '-' if after.starts_with('-') => after.find(['\n', '\r']).map_or("", |end| &after[end..]),
             '/' if after.starts_with('*') => after_block_comment(&after[1..]),
             c if c.is_whitespace() => after,
             ';' => {
-                tokens.push(Token::End);
+                push(Token::End);
                 after
             }
             c if c.is_alphabetic() || c == '_' => {
@@ -88,19 +134,19 @@ fn tokens(sql: &str) -> Vec<Token> {
                 let word = rest[..end].to_uppercase();
                 let next = &rest[end..];
                 let is_escape_string = word == "E" && next.starts_with('\'');
-                tokens.push(Token::Word(word));
+                push(Token::Word(word));
                 if is_escape_string { after_escape_string(&next[1..]) } else { next }
             }
             '\'' | '"' => {
-                tokens.push(Token::Other);
+                push(Token::Other);
                 after_quoted(after, c)
             }
             '$' => {
-                tokens.push(Token::Other);
+                push(Token::Other);
                 after_dollar(rest)
             }
             _ => {
-                tokens.push(Token::Other);
+                push(Token::Other);
                 after
             }
         };
@@ -174,6 +220,12 @@ fn after_dollar(rest: &str) -> &str {
         }
         _ => &rest[1..],
     }
+}
+
+#[derive(Debug)]
+struct Placed {
+    at: usize,
+    token: Token,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -331,6 +383,36 @@ mod tests {
     fn a_parameter_or_a_lone_dollar_hides_nothing() {
         assert_eq!(refused_word("SELECT * FROM orders WHERE id = $1 FOR UPDATE"), "UPDATE");
         assert_eq!(refused_word("SELECT $tag FROM orders FOR UPDATE"), "UPDATE");
+    }
+
+    fn statement_under(marked: &str) -> Option<String> {
+        let (sql, at) = (marked.replace('|', ""), marked.find('|').unwrap());
+        statement_at(&sql, at).map(|range| sql[range].to_owned())
+    }
+
+    #[test]
+    fn the_cursor_picks_the_statement_it_stands_in() {
+        assert_eq!(statement_under("SELECT 1;\nSELECT |2;\nSELECT 3"), Some("SELECT 2".into()));
+        assert_eq!(statement_under("|SELECT 1; SELECT 2"), Some("SELECT 1".into()));
+    }
+
+    #[test]
+    fn a_cursor_right_after_a_semicolon_or_on_blank_text_after_it_picks_the_statement_before() {
+        assert_eq!(statement_under("SELECT 1;| SELECT 2"), Some("SELECT 1".into()));
+        assert_eq!(statement_under("SELECT 1;\n  -- done\n|"), Some("SELECT 1".into()));
+    }
+
+    #[test]
+    fn a_semicolon_in_a_string_or_a_comment_splits_nothing() {
+        assert_eq!(
+            statement_under("SELECT ';' AS mark, $$;$$ /* ; */ -- ;\nFROM orders|"),
+            Some("SELECT ';' AS mark, $$;$$ /* ; */ -- ;\nFROM orders".into())
+        );
+    }
+
+    #[test]
+    fn blank_text_holds_no_statement() {
+        assert_eq!(statement_under("  -- nothing\n|"), None);
     }
 
     #[test]

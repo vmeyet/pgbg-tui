@@ -11,6 +11,8 @@ Each entry says what changed, then where, then how to use it.
 - **The TUI**: `pgbg` opens it on the first connection of your `config.toml`, `pgbg tui <connection>` on the one you name.
   Its frame takes the colour of the connection's tier: green for local, amber for staging, red for production.
   Type a statement in the editor and press `⏎` to run it; `⌥⏎` breaks the line, `ctrl-c` quits.
+  With several statements in the editor, `⏎` runs only the one under the cursor, split on `;` outside strings and comments.
+  `esc` cancels a running statement on the server.
 - **The results grid** in the TUI: numbers line up on the right, `▶` marks the current row, and a control character in a value shows escaped.
   Press `tab` to give it the keys, then `j`/`k`, `PgUp`/`PgDn` and `g`/`G` to scroll its rows, `h`/`l` its columns; `tab` again goes back to the editor.
 - **`pgbg run <connection> "<sql>"`** runs one statement and prints its result as a table, with the row count.
