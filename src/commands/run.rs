@@ -1,4 +1,5 @@
-use crate::connection::ConnectionName;
+use crate::connection::{Connection, ConnectionName};
+use crate::db::guard::Admitted;
 use crate::db::model::{ResultSet, Route, Statement};
 use crate::db::{Session, guard};
 use crate::render;
@@ -14,11 +15,28 @@ pub async fn run(connection: &ConnectionName, sql: &str, json: bool) -> Result<(
         None => None,
     };
     let route = tunnel.as_ref().map_or(Route::Direct, Tunnel::route);
-    let result = Session::open(&connection, route).await?.run(&admitted).await?;
+    let result = run_on(&connection, route, &admitted).await;
+    stop(tunnel).await;
+    print(&result?, json)
+}
+
+async fn run_on(connection: &Connection, route: Route, admitted: &Admitted) -> Result<ResultSet> {
+    Session::open(connection, route).await?.run(admitted).await
+}
+
+/// Stops `tunnel` and warns when its forward outlives it.
+async fn stop(tunnel: Option<Tunnel>) {
+    let Some(mut tunnel) = tunnel else { return };
+    if let Err(err) = tunnel.stop().await {
+        super::warn(&format!("{err:#}"));
+    }
+}
+
+fn print(result: &ResultSet, json: bool) -> Result<()> {
     if json {
-        println!("{}", serde_json::to_string_pretty(&result)?);
+        println!("{}", serde_json::to_string_pretty(result)?);
     } else {
-        print!("{}", text(&result));
+        print!("{}", text(result));
     }
     Ok(())
 }

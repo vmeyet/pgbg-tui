@@ -13,6 +13,7 @@ mod ui;
 
 use crate::connection::Connection;
 use crate::query::{Places, Roots};
+use crate::signal::Signals;
 use anyhow::Result;
 use app::{Action, Answer, App};
 use backend::Backend;
@@ -27,13 +28,14 @@ use vtui::theme::Theme;
 pub(crate) async fn run(connections: Vec<Connection>, first: Connection) -> Result<()> {
     let theme = vtui::ground::ask().map_or_else(Theme::default, |ground| Theme::default().with_ground(ground));
     let mut app = App::new(connections, &first, theme);
+    let mut signals = Signals::listen()?;
     let (answers, mut incoming) = mpsc::unbounded_channel();
     let mut backend = Backend::new(find_roots().await?, answers);
     for action in std::iter::once(Action::Open(first)).chain(App::start()) {
         actions::spawn(action, &mut backend);
     }
     let (mut terminal, screen) = Screen::enter();
-    let outcome = event_loop(&mut terminal, &mut app, &mut backend, &mut incoming).await;
+    let outcome = event_loop(&mut terminal, &mut app, &mut backend, &mut incoming, &mut signals).await;
     screen.leave();
     backend.stop().await;
     outcome
@@ -52,6 +54,7 @@ async fn event_loop(
     app: &mut App,
     backend: &mut Backend,
     incoming: &mut UnboundedReceiver<Answer>,
+    signals: &mut Signals,
 ) -> Result<()> {
     let mut events = EventStream::new();
     while !app.should_quit {
@@ -67,6 +70,7 @@ async fn event_loop(
                 app.apply(answer);
                 vec![]
             }
+            stopped = signals.next() => return Err(stopped.into()),
             else => break,
         };
         for action in actions {

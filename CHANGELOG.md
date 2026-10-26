@@ -18,8 +18,10 @@ Each entry says what changed, then where, then how to use it.
   The search stops at your home folder or at the top of your repository, where `.git` is; a queries folder that is a link, or that another user owns, is skipped.
   Only a plain file of 1 MiB at most opens: a pipe, a link or a dump says why it does not.
 - **Tunnels** for `pgbg run` and the TUI: a connection with `tunnel = { command = [...] }` starts that command on a free local port, put in place of `{port}`, and connects through it.
-  TLS still checks the certificate against the host in `url`, so `sslmode=require` works through a tunnel; `before = [...]` runs once first.
-  A tunnel that dies says how and quotes its last words; it stops with pgbg, along with any `ssh` or `gcloud` it started, even when pgbg crashes.
+  TLS still checks the certificate against the host in `url`, so `sslmode=require` works through a tunnel; a tunnel without it needs `tls = "off"` on purpose, even to `localhost`.
+  `before = [...]` runs once first, and is given up after 2 minutes.
+  A tunnel that dies says how and quotes its last words; it stops with pgbg, along with any `ssh` or `gcloud` it started, even when pgbg crashes, is killed or loses its terminal.
+  pgbg warns when a tunnel's port still answers once it stopped, as when an ssh `ControlMaster` holds the forward: add `-o ControlPath=none` to the command.
   The TUI's status line shows `⇄ tunnel :<port>`; when the tunnel dies, its session closes, and `⏎` starts both again.
 - **A statement timeout on every session**, set by the connection's tier: none on local, a minute on staging, 30 seconds on production.
   The server cancels a statement that runs longer; set `statement_timeout = "2min"` on a connection to choose its own, `"0s"` for none.

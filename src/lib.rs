@@ -11,6 +11,7 @@ pub mod log;
 mod query;
 mod render;
 mod secret;
+pub mod signal;
 mod syntax;
 mod tui;
 mod tunnel;

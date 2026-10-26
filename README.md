@@ -18,12 +18,14 @@ url = "postgres://nina@localhost:5432/shop"
 tier = "production"
 url = "postgres://reader@db.example.com/shop?sslmode=require"
 password = { keychain = "pgbg/prod" }
-tunnel = { command = ["ssh", "-N", "-L", "{port}:db.example.com:5432", "bastion.example.com"] }
+tunnel = { command = ["ssh", "-N", "-o", "ControlPath=none", "-o", "ExitOnForwardFailure=yes", "-L", "127.0.0.1:{port}:db.example.com:5432", "bastion.example.com"] }
 ```
 
 No password goes in this file: it comes from the keychain, an environment variable or a command.
 A host that is not this machine needs `sslmode=require` in its `url`, or `tls = "off"` on the connection to talk in clear on purpose.
 A tunnel's `command` forwards the port pgbg puts in place of `{port}`; pgbg then connects to that port on `127.0.0.1` and still checks the certificate against the host in `url`.
+A connection with a tunnel needs `sslmode=require`, or `tls = "off"` on purpose, even when its `url` says `localhost`: another program could answer on that port.
+For ssh, keep `ControlPath=none`, so the forward dies with pgbg instead of living on in a shared connection, and `ExitOnForwardFailure=yes`, so ssh stops when it cannot take the port.
 An optional `before` command, such as one that wakes the bastion, runs once before each tunnel starts, so it must be safe to run twice.
 Each session gets a statement timeout from its tier: none on local, a minute on staging, 30 seconds on production; `statement_timeout = "2min"` on a connection sets its own.
 `pgbg connection add|edit|remove` and `pgbg password set <connection>` write this file for you and keep your comments.

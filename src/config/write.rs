@@ -244,7 +244,7 @@ mod tests {
     fn staging() -> ConnectionChange {
         change(|c| {
             c.tier = Some(Tier::Staging);
-            c.url = Some(url("postgres://nina@localhost:5433/shop"));
+            c.url = Some(url("postgres://nina@localhost:5433/shop?sslmode=require"));
             c.tunnel = Some(tunnel(&["ssh", "-N", "-L", "{port}:localhost:5432", "db.example.com"]));
             c.password = Some(SecretSource::Env("STAGING_PGPASSWORD".into()));
             c.writes = Some(WritePolicy::Allowed);
@@ -263,7 +263,7 @@ mod tests {
     fn an_added_connection_lands_at_the_end_with_its_keys_in_order() {
         let (_dir, path) = typed_config(TYPED);
         add_connection(&path, &"staging".parse().unwrap(), &staging()).unwrap();
-        let added = "\n[connections.staging]\ntier = \"staging\"\nurl = \"postgres://nina@localhost:5433/shop\"\ntunnel = { command = [\"ssh\", \"-N\", \"-L\", \"{port}:localhost:5432\", \"db.example.com\"] }\npassword = { env = \"STAGING_PGPASSWORD\" }\nwrites = \"allowed\"\n";
+        let added = "\n[connections.staging]\ntier = \"staging\"\nurl = \"postgres://nina@localhost:5433/shop?sslmode=require\"\ntunnel = { command = [\"ssh\", \"-N\", \"-L\", \"{port}:localhost:5432\", \"db.example.com\"] }\npassword = { env = \"STAGING_PGPASSWORD\" }\nwrites = \"allowed\"\n";
         assert_eq!(read(&path), format!("{TYPED}{added}"));
     }
 

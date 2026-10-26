@@ -24,13 +24,18 @@ pub fn print_error(err: &anyhow::Error) {
     }
 }
 
+/// `text` on stderr as a warning, escaped.
+fn warn(text: &str) {
+    eprintln!("! {}", printable(text));
+}
+
 /// Each key of the config this pgbg ignores, on stderr.
 fn warn_of_ignored_keys(warnings: &[String], path: &Path) {
     if warnings.is_empty() {
         return;
     }
     for warning in warnings {
-        eprintln!("! {}", printable(warning));
+        warn(warning);
     }
     eprintln!("  in {}", path.display());
 }

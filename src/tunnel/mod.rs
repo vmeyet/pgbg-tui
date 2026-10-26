@@ -2,6 +2,7 @@
 use crate::connection::TunnelSpec;
 use crate::db::model::{LocalPort, Route};
 use anyhow::{Context, Result, anyhow, bail};
+use rustix::io::Errno;
 use rustix::process::Pid;
 use std::collections::VecDeque;
 use std::fmt;
@@ -17,6 +18,12 @@ use tokio::time::{Instant, sleep, timeout};
 /// How long a tunnel has to answer on its port: an IAP or SSH handshake can take seconds.
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 const READY_POLL: Duration = Duration::from_millis(50);
+/// How long `before` may take: starting a stopped bastion can take a minute.
+const BEFORE_TIMEOUT: Duration = Duration::from_secs(120);
+/// How long a stopped tunnel's port may keep answering while the processes of its group go.
+const SILENCE_TIMEOUT: Duration = Duration::from_secs(1);
+const HANDED_OFF: &str = "the tunnel ended cleanly before its port answered, so it likely handed the forward to another ssh \
+                          (a `ControlMaster`) or went to the background: add `-o ControlPath=none` to an ssh command, and drop `-f`";
 /// How long a dead tunnel's stderr is waited for, in case a process outside its group still holds it.
 const LAST_WORDS_TIMEOUT: Duration = Duration::from_secs(1);
 const LAST_WORDS_LINES: usize = 5;
@@ -57,7 +64,9 @@ impl Tunnel {
         let port = free_port().await?;
         let mut tunnel = Self::spawn(&spec.command_on(port), port)?;
         if let Err(err) = tunnel.wait_until_ready(ready_timeout).await {
-            tunnel.stop().await;
+            if let Err(left) = tunnel.stop().await {
+                tracing::warn!("{left:#}");
+            }
             return Err(err);
         }
         Ok(tunnel)
@@ -83,12 +92,22 @@ impl Tunnel {
         matches!(self.child.try_wait(), Ok(None))
     }
 
-    /// Kills the tunnel's whole group and reaps it; safe to call twice.
-    pub(crate) async fn stop(&mut self) {
+    /// Kills the tunnel's whole group and reaps it, then fails if its port still answers: a process outside
+    /// the group holds the forward, as an ssh `ControlMaster` does. Safe to call twice.
+    pub(crate) async fn stop(&mut self) -> Result<()> {
         self.kill_group();
         if let Err(err) = self.child.wait().await {
             tracing::warn!("the tunnel `{}` could not be reaped: {err}", self.program);
         }
+        if !goes_silent(self.port, SILENCE_TIMEOUT).await {
+            bail!(
+                "the tunnel `{}` stopped, but port {} still answers: another process holds the forward, such as an ssh `ControlMaster`; \
+                 add `-o ControlPath=none` to the command",
+                self.program,
+                self.port
+            );
+        }
+        Ok(())
     }
 
     fn spawn(command: &[String], port: LocalPort) -> Result<Self> {
@@ -113,17 +132,23 @@ impl Tunnel {
     async fn wait_until_ready(&mut self, ready_timeout: Duration) -> Result<()> {
         let deadline = Instant::now() + ready_timeout;
         loop {
-            if TcpStream::connect((Ipv4Addr::LOCALHOST, self.port.get())).await.is_ok() {
+            if answers(self.port).await {
                 return Ok(());
             }
             if Instant::now() >= deadline {
                 bail!("the tunnel `{}` did not answer on port {} within {}s", self.program, self.port, ready_timeout.as_secs_f32());
             }
             tokio::select! {
-                status = self.child.wait() => return Err(self.died(status.ok()).await.into()),
+                status = self.child.wait() => return Err(self.died_before_ready(status.ok()).await),
                 () = sleep(READY_POLL) => {}
             }
         }
+    }
+
+    async fn died_before_ready(&mut self, status: Option<ExitStatus>) -> anyhow::Error {
+        let is_clean_exit = status.is_some_and(|status| status.success());
+        let died = anyhow::Error::new(self.died(status).await);
+        if is_clean_exit { died.context(HANDED_OFF) } else { died }
     }
 
     async fn died(&mut self, status: Option<ExitStatus>) -> Died {
@@ -137,8 +162,9 @@ impl Tunnel {
 
     fn kill_group(&mut self) {
         let Some(group) = self.group.take() else { return };
-        if let Err(err) = groups::kill(group) {
-            tracing::warn!("the tunnel `{}` could not be killed: {err}", self.program);
+        match groups::kill(group) {
+            Ok(()) | Err(Errno::SRCH) => {}
+            Err(err) => tracing::warn!("the tunnel `{}` could not be killed: {err}", self.program),
         }
     }
 }
@@ -152,18 +178,30 @@ impl Drop for Tunnel {
 /// Runs `before` to its end; it must be safe to run twice, since each start runs it again.
 async fn run_before(before: &[String]) -> Result<()> {
     let (program, args) = before.split_first().ok_or_else(|| anyhow!("`tunnel.before` is empty"))?;
-    let output = Command::new(program)
-        .args(args)
-        .stdin(Stdio::null())
-        .kill_on_drop(true)
-        .output()
+    let running = Command::new(program).args(args).stdin(Stdio::null()).kill_on_drop(true).output();
+    let output = timeout(BEFORE_TIMEOUT, running)
         .await
+        .map_err(|_elapsed| anyhow!("`tunnel.before` (`{program}`) did not end within {}s", BEFORE_TIMEOUT.as_secs()))?
         .with_context(|| format!("running `tunnel.before` (`{program}`)"))?;
     if !output.status.success() {
         let last_words = last_lines(String::from_utf8_lossy(&output.stderr).lines());
         bail!("`tunnel.before` (`{program}`) failed: {}", with_last_words(&output.status.to_string(), &last_words));
     }
     Ok(())
+}
+
+async fn answers(port: LocalPort) -> bool {
+    TcpStream::connect((Ipv4Addr::LOCALHOST, port.get())).await.is_ok()
+}
+
+/// Whether nothing answers on `port` any more, within `wait`.
+async fn goes_silent(port: LocalPort, wait: Duration) -> bool {
+    let silence = async {
+        while answers(port).await {
+            sleep(READY_POLL).await;
+        }
+    };
+    timeout(wait, silence).await.is_ok()
 }
 
 async fn free_port() -> Result<LocalPort> {
@@ -235,6 +273,16 @@ while True:
     for source, sink in ((client, upstream), (upstream, client)):
         threading.Thread(target=pipe, args=(source, sink), daemon=True).start()
 ";
+    /// A forward that leaves the tunnel's group, as an ssh `ControlMaster` holds one, and goes away on its own soon after.
+    const DETACH: &str = "
+import os, socket, sys, time
+if os.fork() == 0:
+    os.setsid()
+    server = socket.create_server(('127.0.0.1', int(sys.argv[1])))
+    time.sleep(3)
+    sys.exit(0)
+time.sleep(60)
+";
     const STOP_TIMEOUT: Duration = Duration::from_secs(5);
     const PANICKING_CHILD: &str = "PGBG_TEST_PANICKING_TUNNEL";
     const PANIC_TEST: &str = "tunnel::tests::a_panic_kills_every_live_tunnel_even_where_no_drop_runs";
@@ -254,24 +302,14 @@ while True:
         tunnel.port.get()
     }
 
-    async fn answers(port: u16) -> bool {
-        TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await.is_ok()
-    }
-
     async fn until_silent(port: u16) -> bool {
-        timeout(STOP_TIMEOUT, async {
-            while answers(port).await {
-                sleep(READY_POLL).await;
-            }
-        })
-        .await
-        .is_ok()
+        goes_silent(LocalPort::new(port), STOP_TIMEOUT).await
     }
 
     #[tokio::test]
     async fn a_started_tunnel_answers_on_the_port_it_picked() {
         let tunnel = Tunnel::start(&listener()).await.unwrap();
-        assert!(answers(port_of(&tunnel)).await);
+        assert!(answers(tunnel.port).await);
         assert_eq!(tunnel.route(), Route::Tunnel(tunnel.port));
     }
 
@@ -293,15 +331,43 @@ while True:
     async fn stopping_a_tunnel_kills_the_processes_it_started_too() {
         let forking = spec(&["sh", "-c", &format!("python3 -c \"{LISTEN}\" \"$0\"; true"), "{port}"], None);
         let mut tunnel = Tunnel::start(&forking).await.unwrap();
-        tunnel.stop().await;
+        tunnel.stop().await.unwrap();
         assert!(until_silent(port_of(&tunnel)).await);
+    }
+
+    #[tokio::test]
+    async fn a_tunnel_that_ends_cleanly_before_answering_says_it_likely_handed_the_forward_off() {
+        let handing_off = spec(&["sh", "-c", "exit 0", "{port}"], None);
+        let err = format!("{:#}", Tunnel::start(&handing_off).await.unwrap_err());
+        assert!(err.contains("handed the forward") && err.contains("ControlPath=none"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn stopping_a_tunnel_whose_port_still_answers_says_so() {
+        let detaching = spec(&["python3", "-c", DETACH, "{port}"], None);
+        let mut tunnel = Tunnel::start(&detaching).await.unwrap();
+        let err = tunnel.stop().await.unwrap_err().to_string();
+        assert!(err.contains("still answers"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn stopping_a_tunnel_whose_port_went_silent_is_fine() {
+        let mut tunnel = Tunnel::start(&listener()).await.unwrap();
+        assert!(tunnel.stop().await.is_ok());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_before_command_that_never_ends_is_given_up() {
+        let stuck = spec(&["python3", "-c", LISTEN, "{port}"], Some(&["sleep", "600"]));
+        let err = Tunnel::start(&stuck).await.unwrap_err().to_string();
+        assert!(err.contains("`tunnel.before`") && err.contains("did not end within"), "{err}");
     }
 
     #[tokio::test]
     async fn stopping_a_tunnel_twice_is_safe() {
         let mut tunnel = Tunnel::start(&listener()).await.unwrap();
-        tunnel.stop().await;
-        tunnel.stop().await;
+        tunnel.stop().await.unwrap();
+        tunnel.stop().await.unwrap();
         assert!(until_silent(port_of(&tunnel)).await);
     }
 
