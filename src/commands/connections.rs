@@ -1,4 +1,4 @@
-use crate::config::{self, Config};
+use crate::config;
 use crate::connection::{Connection, WritePolicy};
 use crate::render;
 use anyhow::Result;
@@ -7,13 +7,12 @@ use std::path::Path;
 /// Prints the connections of the config: a plain table, or JSON with `json`.
 pub fn run(json: bool) -> Result<()> {
     let path = config::path();
-    let loaded = Config::read(&path)?;
-    super::warn_of_ignored_keys(&loaded.warnings, &path);
+    let config = super::load(&path)?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&loaded.config.connections)?);
+        println!("{}", serde_json::to_string_pretty(&config.connections)?);
         return Ok(());
     }
-    print!("{}", text(&loaded.config.connections, &path));
+    print!("{}", text(&config.connections, &path));
     Ok(())
 }
 
@@ -39,6 +38,7 @@ fn notes(connection: &Connection) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
 
     const SHOP: &str = r#"
 [connections.local]

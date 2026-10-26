@@ -7,7 +7,7 @@ pub mod run;
 pub mod tui;
 
 use crate::config::{self, Config};
-use crate::connection::Connection;
+use crate::connection::{Connection, ConnectionName};
 use anyhow::{Result, anyhow};
 use std::path::Path;
 
@@ -22,15 +22,20 @@ fn warn_of_ignored_keys(warnings: &[String], path: &Path) {
     eprintln!("  in {}", path.display());
 }
 
+/// The config at `path`, once each key it ignores is warned of on stderr.
+fn load(path: &Path) -> Result<Config> {
+    let loaded = Config::read(path)?;
+    warn_of_ignored_keys(&loaded.warnings, path);
+    Ok(loaded.config)
+}
+
 /// The connection named `name` in the config, or its first one when `name` is `None`.
-fn connection(name: Option<&str>) -> Result<Connection> {
+fn connection(name: Option<&ConnectionName>) -> Result<Connection> {
     let path = config::path();
-    let loaded = Config::read(&path)?;
-    warn_of_ignored_keys(&loaded.warnings, &path);
-    let mut connections = loaded.config.connections.into_iter();
+    let mut connections = load(&path)?.connections.into_iter();
     match name {
         Some(name) => connections
-            .find(|c| c.name().to_string() == name)
+            .find(|c| c.name() == name)
             .ok_or_else(|| anyhow!("no connection `{name}` in {}: `pgbg connections` lists them", path.display())),
         None => connections.next().ok_or_else(|| anyhow!("no connections in {}: add one under `[connections.<name>]`", path.display())),
     }

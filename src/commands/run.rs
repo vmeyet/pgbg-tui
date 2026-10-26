@@ -1,10 +1,11 @@
+use crate::connection::ConnectionName;
 use crate::db::model::{ResultSet, Statement};
 use crate::db::{Session, guard};
 use crate::render;
 use anyhow::Result;
 
 /// Runs one statement on the connection named `connection` and prints its result: a plain table, or JSON with `json`.
-pub async fn run(connection: &str, sql: &str, json: bool) -> Result<()> {
+pub async fn run(connection: &ConnectionName, sql: &str, json: bool) -> Result<()> {
     let connection = super::connection(Some(connection))?;
     let admitted = guard::admit(Statement::new(sql), connection.writes())?;
     let result = Session::open(&connection).await?.run(&admitted).await?;

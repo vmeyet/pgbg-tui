@@ -6,15 +6,22 @@ use serde::de::DeserializeOwned;
 /// Words no setting is named after, since a password never goes in the config.
 const SECRET_WORDS: [&str; 4] = ["key", "token", "secret", "password"];
 
+/// What a config text holds, with one warning for each key it ignored.
+#[derive(Debug)]
+pub(super) struct Parsed<T> {
+    pub(super) value: T,
+    pub(super) warnings: Vec<String>,
+}
+
 /// What `text` holds, and one warning for each key it ignored.
-pub(super) fn parse<T: DeserializeOwned>(text: &str) -> Result<(T, Vec<String>)> {
+pub(super) fn parse<T: DeserializeOwned>(text: &str) -> Result<Parsed<T>> {
     let mut ignored = vec![];
     let document = toml::Deserializer::parse(text).map_err(|err| without_source(&err, text))?;
     let value = serde_ignored::deserialize(document, |path| ignored.push(path.to_string())).map_err(|err| without_source(&err, text))?;
     if let Some(secret) = ignored.iter().find(|key| is_secret(key)) {
         bail!("`{secret}` looks like a secret: a password comes from the keychain, an environment variable or a command, never the config");
     }
-    Ok((value, ignored.iter().map(|key| warning(key)).collect()))
+    Ok(Parsed { value, warnings: ignored.iter().map(|key| warning(key)).collect() })
 }
 
 /// `err` as its line and message only: toml's own report quotes the line, which may hold a secret.
@@ -55,12 +62,12 @@ mod tests {
     }
 
     fn warned(text: &str) -> Vec<String> {
-        parse::<Shop>(text).unwrap().1
+        parse::<Shop>(text).unwrap().warnings
     }
 
     #[test]
     fn an_unknown_key_is_ignored_with_a_warning_naming_its_full_path() {
-        let (shop, warnings) = parse::<Shop>("[tables.orders]\nrows = 3\ncolour = \"red\"\n").unwrap();
+        let Parsed { value: shop, warnings } = parse::<Shop>("[tables.orders]\nrows = 3\ncolour = \"red\"\n").unwrap();
         assert_eq!(shop.tables["orders"].rows, 3, "what it knows still loads");
         assert_eq!(warnings, ["`tables.orders.colour` is not a setting this pgbg knows; it is ignored — written for a newer pgbg?"]);
     }

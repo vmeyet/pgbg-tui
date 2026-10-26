@@ -18,7 +18,7 @@ When a boundary or a flow changes, change this page in the same MR.
 | `db/` | The only module that sees `tokio_postgres`: connect over rustls, run a statement, stream rows, cancel |
 | `db/model/` | The neutral model: `ResultSet`, `Column`, `ColumnKind`, `Value`, `Page`, `Schema`, `Table`, `ServerError`, and `CancelToken`, whose driver part only `db/` reads |
 | `db/guard.rs` | Classifies a statement before it is sent: read, write, or more than one statement; `admit` turns a statement into an `Admitted`, the only kind a session runs; `statement_at` finds the statement under the editor's cursor with the same tokenizer |
-| `db/decode.rs` | Wire values to `Value`, by column type |
+| `db/decode.rs` | Wire values to `Value`, by column type, a domain by its base type; a value it cannot decode is `Unsupported`, never an error |
 | `query/` | Saved queries: the `.pgbg/queries/` tree, the header (`-- name:`, `-- chart:`), load and save |
 | `history.rs` | Every statement run, per connection, in a local file |
 | `chart/` | `ChartSpec` (kind, x column, y columns) and `Series` built from a `ResultSet`, both pure; one file per chart kind |
@@ -41,8 +41,9 @@ Running a statement:
 
 1. The editor hands `App` the statement under the cursor; `App` returns `Action::Run { session, sql }`.
 2. `db::guard` classifies it; a write on a read-only connection comes back as `Incoming::Refused` and never reaches the server.
-3. The session opens `BEGIN READ ONLY`, sets `statement_timeout` from the tier, and declares a cursor for the statement.
-4. The first page (`FETCH 500`) comes back as `Incoming::Page`; the grid paints it, and more pages are fetched as the cursor nears the end.
+3. The session opens `BEGIN READ ONLY`, sets `statement_timeout` from the tier, and binds the statement to a portal (`Transaction::bind`).
+   A portal takes any statement the guard admits; `DECLARE CURSOR` takes only a `SELECT` or `VALUES`, not `SHOW` or `EXPLAIN`.
+4. The first page (`query_portal(&portal, 500)`) comes back as `Incoming::Page`; the grid paints it, and more pages are fetched as the grid nears the end.
 5. A server error comes back as a `ServerError` with the server's position; the editor marks that character until the text changes.
 6. `Esc` on a running statement sends the server a cancel request over a link of its own, with the session's TLS; the statement fails with the server's words, and the transaction is always rolled back at the end.
 
@@ -101,7 +102,7 @@ Four layers, outermost first; only the last one is a guarantee.
 
 ## Performance
 
-- Rows stream through a cursor, a page at a time; nothing waits on the whole result.
+- Rows stream through a portal, a page at a time; nothing waits on the whole result.
 - The grid draws only the visible window; column widths come from the first page and the header, capped.
 - Values are decoded once, at the boundary, into `Value`; drawing formats only what is on screen.
 - Syntax colours are rebuilt only when the editor text changes.
@@ -119,6 +120,6 @@ One word per concept, in code, docs and UI.
 | statement | One SQL statement, the unit pgbg runs |
 | query | A saved `.sql` file under `.pgbg/queries/` |
 | result | The columns and rows a statement returned, page by page |
-| page | One batch of rows fetched from the cursor |
+| page | One batch of rows fetched from the portal |
 | chart | A bar or line drawing of a result |
 | history | Every statement run on a connection |

@@ -1,4 +1,5 @@
 //! Plain-terminal output for the scriptable commands: columns aligned by width.
+use ratatui::text::Span;
 use std::borrow::Cow;
 
 const GAP: &str = "  ";
@@ -34,12 +35,17 @@ fn escape_control(c: char) -> String {
 }
 
 fn line(row: &[Cow<'_, str>], widths: &[usize]) -> String {
-    let padded: Vec<String> = row.iter().zip(widths).map(|(cell, width)| format!("{cell:<width$}")).collect();
+    let padded: Vec<String> = row.iter().zip(widths).map(|(cell, &width)| padded(cell, width)).collect();
     padded.join(GAP).trim_end().to_owned() + "\n"
 }
 
+fn padded(cell: &str, columns: usize) -> String {
+    format!("{cell}{}", " ".repeat(columns.saturating_sub(width(cell))))
+}
+
+/// The terminal columns `cell` takes: two for a wide character such as `日`.
 fn width(cell: &str) -> usize {
-    cell.chars().count()
+    Span::raw(cell).width()
 }
 
 #[cfg(test)]
@@ -54,6 +60,12 @@ mod tests {
     fn columns_align_on_their_widest_cell() {
         let rows = [row(&["local", "local", "postgres://nina@localhost/shop"]), row(&["staging", "staging", ""])];
         assert_eq!(table(&rows), "local    local    postgres://nina@localhost/shop\nstaging  staging\n");
+    }
+
+    #[test]
+    fn wide_characters_align_by_the_columns_they_take() {
+        let rows = [row(&["日本", "nina"]), row(&["ab", "noel"])];
+        assert_eq!(table(&rows), "日本  nina\nab    noel\n");
     }
 
     #[test]

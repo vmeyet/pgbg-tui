@@ -1,43 +1,51 @@
 //! The editing keys of the SQL editor: what each one does to the text and its cursor.
+use super::App;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use vtui::field::Field;
 
-/// Applies `key` to `editor`; returns whether the text changed. A key either inserts or deletes, never
-/// both, so the length says it.
-pub(super) fn edit(editor: &mut Field, key: KeyEvent) -> bool {
-    let length_before = editor.text().len();
-    let alt = key.modifiers.contains(KeyModifiers::ALT);
-    let control = key.modifiers.contains(KeyModifiers::CONTROL);
-    match key.code {
-        KeyCode::Enter => editor.insert('\n'),
-        KeyCode::Char('w') if control => editor.delete_word(),
-        KeyCode::Char(c) if !control => editor.insert(c),
-        KeyCode::Backspace if alt => editor.delete_word(),
-        KeyCode::Backspace => editor.backspace(),
-        KeyCode::Delete => editor.delete(),
-        KeyCode::Left if alt => editor.word_left(),
-        KeyCode::Right if alt => editor.word_right(),
-        KeyCode::Left => editor.left(),
-        KeyCode::Right => editor.right(),
-        KeyCode::Up => editor.up(),
-        KeyCode::Down => editor.down(),
-        KeyCode::Home => editor.start(),
-        KeyCode::End => editor.end(),
-        _ => {}
+impl App {
+    /// Applies `key` to the editor; a change to the text drops the error mark, which pointed into the old text.
+    pub(super) fn edit(&mut self, key: KeyEvent) {
+        let editor = &mut self.editor;
+        // A key either inserts or deletes, never both, so the length says whether the text changed.
+        let length_before = editor.text().len();
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Enter => editor.insert('\n'),
+            KeyCode::Char('w') if control => editor.delete_word(),
+            KeyCode::Char(c) if !control => editor.insert(c),
+            KeyCode::Backspace if alt => editor.delete_word(),
+            KeyCode::Backspace => editor.backspace(),
+            KeyCode::Delete => editor.delete(),
+            KeyCode::Left if alt => editor.word_left(),
+            KeyCode::Right if alt => editor.word_right(),
+            KeyCode::Left => editor.left(),
+            KeyCode::Right => editor.right(),
+            KeyCode::Up => editor.up(),
+            KeyCode::Down => editor.down(),
+            KeyCode::Home => editor.start(),
+            KeyCode::End => editor.end(),
+            _ => {}
+        }
+        if editor.text().len() != length_before {
+            self.error_mark = None;
+        }
     }
-    editor.text().len() != length_before
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::tests::app;
     use super::*;
+    use vtui::field::Field;
 
     fn press(text: &str, keys: &[KeyEvent]) -> String {
-        let mut editor = Field::new(text);
+        let mut app = app();
+        app.editor = Field::new(text);
         for &key in keys {
-            edit(&mut editor, key);
+            app.edit(key);
         }
-        let (before, under, after) = editor.split();
+        let (before, under, after) = app.editor.split();
         format!("{before}|{under}{after}")
     }
 

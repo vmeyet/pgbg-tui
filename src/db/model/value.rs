@@ -19,6 +19,11 @@ pub(crate) enum Value {
     Timestamp(NaiveDateTime),
     TimestampTz(DateTime<Utc>),
     Bytes(Vec<u8>),
+    /// A date or timestamp of `infinity`.
+    Infinity,
+    /// A date or timestamp of `-infinity`.
+    NegativeInfinity,
+    /// A value of a type pgbg does not decode, or out of the range it can hold.
     Unsupported,
 }
 
@@ -28,7 +33,10 @@ impl fmt::Display for Value {
             Self::Null => f.write_str("NULL"),
             Self::Bool(value) => write!(f, "{value}"),
             Self::Int(value) => write!(f, "{value}"),
-            Self::Float(value) => write!(f, "{value}"),
+            Self::Float(value) => match non_finite(*value) {
+                Some(spelled) => f.write_str(spelled),
+                None => write!(f, "{value}"),
+            },
             Self::Numeric(text) | Self::Text(text) => f.write_str(text),
             Self::Json(value) => write!(f, "{value}"),
             Self::Uuid(value) => write!(f, "{value}"),
@@ -37,8 +45,20 @@ impl fmt::Display for Value {
             Self::Timestamp(value) => write!(f, "{value}"),
             Self::TimestampTz(value) => write!(f, "{}", value.format("%Y-%m-%d %H:%M:%S%.f%:z")),
             Self::Bytes(bytes) => write!(f, "\\x{}", bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>()),
+            Self::Infinity => f.write_str("infinity"),
+            Self::NegativeInfinity => f.write_str("-infinity"),
             Self::Unsupported => f.write_str("<unsupported>"),
         }
+    }
+}
+
+/// `NaN`, `Infinity` or `-Infinity` as PostgreSQL spells them, for a float that is not finite.
+fn non_finite(value: f64) -> Option<&'static str> {
+    match value {
+        _ if value.is_nan() => Some("NaN"),
+        f64::INFINITY => Some("Infinity"),
+        f64::NEG_INFINITY => Some("-Infinity"),
+        _ => None,
     }
 }
 
@@ -49,7 +69,10 @@ impl Serialize for Value {
             Self::Null => serializer.serialize_none(),
             Self::Bool(value) => serializer.serialize_bool(*value),
             Self::Int(value) => serializer.serialize_i64(*value),
-            Self::Float(value) => serializer.serialize_f64(*value),
+            Self::Float(value) => match non_finite(*value) {
+                Some(spelled) => serializer.serialize_str(spelled),
+                None => serializer.serialize_f64(*value),
+            },
             Self::Json(value) => value.serialize(serializer),
             other => serializer.collect_str(other),
         }
@@ -69,6 +92,19 @@ mod tests {
     fn a_timestamp_with_time_zone_prints_its_offset() {
         let at = DateTime::parse_from_rfc3339("2026-10-26T09:30:00Z").unwrap().to_utc();
         assert_eq!(Value::TimestampTz(at).to_string(), "2026-10-26 09:30:00+00:00");
+    }
+
+    #[test]
+    fn non_finite_floats_print_and_serialize_as_postgres_spells_them() {
+        let floats = [Value::Float(f64::NAN), Value::Float(f64::INFINITY), Value::Float(f64::NEG_INFINITY), Value::Float(1.5)];
+        assert_eq!(floats.iter().map(Value::to_string).collect::<Vec<_>>(), ["NaN", "Infinity", "-Infinity", "1.5"]);
+        assert_eq!(serde_json::to_string(&floats).unwrap(), r#"["NaN","Infinity","-Infinity",1.5]"#);
+    }
+
+    #[test]
+    fn infinity_prints_and_serializes_as_postgres_spells_it() {
+        assert_eq!(Value::NegativeInfinity.to_string(), "-infinity");
+        assert_eq!(serde_json::to_string(&Value::Infinity).unwrap(), r#""infinity""#);
     }
 
     #[test]
