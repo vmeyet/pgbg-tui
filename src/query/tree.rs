@@ -1,8 +1,9 @@
 //! The queries as the sidebar shows them: folders first, then files, each level sorted, folders nested.
 use super::{Query, Source};
+use crate::render;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// One line of the tree.
+/// One line of the tree; `name` is drawn as it is, its control characters escaped.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TreeRow {
     /// `key` names the folder for `closed`: its source and its path, as `project/orders`.
@@ -38,12 +39,16 @@ impl<'a> Folder<'a> {
         for (name, folder) in &self.folders {
             let key = format!("{key}/{name}");
             let is_open = !closed.contains(&key);
-            rows.push(TreeRow::Folder { name: (*name).to_owned(), depth, key: key.clone(), is_open });
+            rows.push(TreeRow::Folder { name: render::printable(name).into_owned(), depth, key: key.clone(), is_open });
             if is_open {
                 rows.extend(folder.rows(depth + 1, &key, closed));
             }
         }
-        rows.extend(self.queries.iter().map(|(name, query)| TreeRow::Query { name: (*name).to_owned(), depth, query: (*query).clone() }));
+        rows.extend(self.queries.iter().map(|(name, query)| TreeRow::Query {
+            name: render::printable(name).into_owned(),
+            depth,
+            query: (*query).clone(),
+        }));
         rows
     }
 }
@@ -98,6 +103,12 @@ mod tests {
         let all = queries(Source::Project, &["orders/daily.sql", "alpha.sql"]);
         let closed = BTreeSet::from(["project/orders".to_owned()]);
         assert_eq!(drawn(&tree_rows(&all, &closed)), ["▸ orders/", "alpha.sql"]);
+    }
+
+    #[test]
+    fn a_control_character_in_a_folder_or_file_name_is_drawn_escaped() {
+        let all = queries(Source::Project, &["orders\u{1b}[2J/daily\u{202e}.sql"]);
+        assert_eq!(drawn(&tree_rows(&all, &BTreeSet::new())), ["▾ orders\\u{1b}[2J/", "  daily\\u{202e}.sql"]);
     }
 
     #[test]
