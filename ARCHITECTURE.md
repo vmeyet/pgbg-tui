@@ -82,7 +82,7 @@ Charting a result:
 - Side effects live at the edges: `main.rs`, `signal.rs`, `commands/`, `tui/mod.rs`, `tui/backend/`, `tunnel/`, `secret/`, `config/` when it rewrites the file, `query/` when it lists and reads the queries folders, `history.rs` when it appends and reads its files.
 - `tui/app/` is pure: it never reads the clock nor does I/O; its tests drive it with keys and `Answer` values.
 - `chart/` is pure: a `ResultSet` in, a `Series` out; drawing lives in `tui/chart_view/`.
-- A program that takes the terminal (`$EDITOR` on a saved query) runs from the loop through `Screen::lend`, with the key stream paused.
+- A program that takes the terminal (`$EDITOR` on a saved query) runs from the loop through `Screen::lend`, with the key stream dropped and pastes given back until it exits; the query is read again after.
 - Secrets are read only in `secret/` and sent only by `Session::open` and the keychain write.
 
 ## Read only

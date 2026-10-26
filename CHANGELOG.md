@@ -37,6 +37,7 @@ Each entry says what changed, then where, then how to use it.
   A header line pgbg cannot read shows as a warning in the editor's title; the query opens and runs all the same.
   `ctrl-s` saves the editor's text over the query it stands for; new text asks for a path, as `orders/daily`, and goes under `.pgbg/queries/`, or your own folder when the project has none.
   The editor's title marks unsaved text with `*`, and opening another query over it asks first.
+  `ctrl-e` in the editor opens the saved query in your `$VISUAL` or `$EDITOR`, and pgbg reads it again when the editor exits.
 - **Tunnels** for `pgbg run` and the TUI: a connection with `tunnel = { command = [...] }` starts that command on a free local port, put in place of `{port}`, and connects through it.
   TLS still checks the certificate against the host in `url`, so `sslmode=require` works through a tunnel; a tunnel without it needs `tls = "off"` on purpose, even to `localhost`.
   `before = [...]` runs once first, and is given up after 2 minutes.

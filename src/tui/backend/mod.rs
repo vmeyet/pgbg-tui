@@ -3,7 +3,7 @@ use super::app::{Action, Answer, Incoming, RunId, TunnelState};
 use crate::connection::{Connection, ConnectionName, WritePolicy};
 use crate::db::model::{CancelToken, Route, ServerError, Statement};
 use crate::db::{Session, guard};
-use crate::query::Roots;
+use crate::query::{Query, Roots};
 use crate::tunnel::{Died, Tunnel};
 use config::ConfigFile;
 use futures_util::future;
@@ -65,6 +65,11 @@ impl Backend {
         Self { sessions: BTreeMap::new(), answers, queries, config }
     }
 
+    /// The file of `query` for the user's editor; blocks on the file system, so the loop calls it with the terminal lent.
+    pub(super) fn query_file(&self, query: &Query) -> anyhow::Result<PathBuf> {
+        self.queries.file(query)
+    }
+
     /// Hands `action` over without waiting on it; the loop never awaits the database.
     pub(super) fn dispatch(&mut self, action: Action) {
         match action {
@@ -75,6 +80,9 @@ impl Backend {
             Action::OpenQuery { connection, query } => self.queries.open(connection, query),
             Action::SaveQuery { connection, query, text } => self.queries.save(connection, query, text),
             Action::SaveNewQuery { connection, path, text } => self.queries.save_new(connection, path, text),
+            Action::EditOutside { query, .. } => {
+                tracing::warn!("{} goes to the loop, which lends the terminal, not to the backend", query.path);
+            }
             Action::Close(connection) => self.close(&connection),
             Action::Reopen(connection) => {
                 self.close(connection.name());

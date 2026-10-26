@@ -35,6 +35,9 @@ pub(in crate::tui) enum Action {
     SaveQuery { connection: ConnectionName, query: Query, text: String },
     /// Write the text of the connection's editor as a new query at this path, never over another one.
     SaveNewQuery { connection: ConnectionName, path: QueryPath, text: String },
+    /// Lend the terminal to the user's editor on this query's file, then read it again into the connection's sheet; the
+    /// loop runs it, not the backend.
+    EditOutside { connection: ConnectionName, query: Query },
     /// Close the connection's session and its tunnel; nothing when it has none.
     Close(ConnectionName),
     /// Close the connection's session and open one on it as the config now says.

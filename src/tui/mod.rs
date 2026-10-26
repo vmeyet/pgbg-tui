@@ -7,6 +7,7 @@ mod finder_view;
 mod form_view;
 mod grid_view;
 mod help_view;
+mod outside;
 mod picker_view;
 mod prompt_view;
 mod result_view;
@@ -16,11 +17,11 @@ mod styled;
 mod theme;
 mod ui;
 
-use crate::connection::Connection;
-use crate::query::{Places, Roots};
+use crate::connection::{Connection, ConnectionName};
+use crate::query::{Places, Query, Roots};
 use crate::signal::Signals;
 use anyhow::Result;
-use app::{Action, Answer, App, Fit};
+use app::{Action, Answer, App, Fit, QueryAnswer};
 use backend::Backend;
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste, Event, EventStream, KeyEventKind};
 use futures_util::StreamExt;
@@ -51,7 +52,8 @@ pub(crate) async fn run(connections: Vec<Connection>, first: Connection, config:
     }
     let (mut terminal, screen) = Screen::enter();
     take_pastes();
-    let outcome = event_loop(&mut terminal, &mut app, &mut backend, &mut incoming, &mut signals).await;
+    let screens = Screens { terminal: &mut terminal, screen: &screen };
+    let outcome = event_loop(screens, &mut app, &mut backend, &mut incoming, &mut signals).await;
     give_pastes_back();
     screen.leave();
     backend.stop().await;
@@ -86,8 +88,42 @@ async fn find_roots() -> Result<Roots> {
     Ok(tokio::task::spawn_blocking(found).await?)
 }
 
+/// The terminal the loop draws on, and the screen that lends it to another program.
+struct Screens<'a> {
+    terminal: &'a mut DefaultTerminal,
+    screen: &'a Screen,
+}
+
+impl Screens<'_> {
+    /// Lends the terminal to the user's editor on `query`'s file until it exits, pastes as keys as a shell has them.
+    fn edit_outside(&mut self, query: &Query, backend: &Backend) -> Result<()> {
+        tokio::task::block_in_place(|| {
+            let path = backend.query_file(query)?;
+            give_pastes_back();
+            let edited = self.screen.lend(self.terminal, || outside::edit(&path));
+            take_pastes();
+            edited
+        })
+    }
+}
+
+/// Once the editor exits: the read of the query it wrote, for the sheet that asked, or the answer saying why it could not run.
+fn after_editing(edit: Edit, edited: Result<()>) -> Result<Action, Answer> {
+    let Edit { connection, query } = edit;
+    match edited {
+        Ok(()) => Ok(Action::OpenQuery { connection, query }),
+        Err(err) => Err(Answer::Queries(QueryAnswer::NotOpened { connection, query, error: format!("{err:#}") })),
+    }
+}
+
+/// A query the user's editor had, for the sheet that asked for it.
+struct Edit {
+    connection: ConnectionName,
+    query: Query,
+}
+
 async fn event_loop(
-    terminal: &mut DefaultTerminal,
+    mut screens: Screens<'_>,
     app: &mut App,
     backend: &mut Backend,
     incoming: &mut UnboundedReceiver<Answer>,
@@ -96,7 +132,7 @@ async fn event_loop(
     let mut events = EventStream::new();
     while !app.should_quit {
         let mut fit = Fit::default();
-        terminal.draw(|f| fit = ui::draw(f, app))?;
+        screens.terminal.draw(|f| fit = ui::draw(f, app))?;
         app.fit(fit);
         let actions = tokio::select! {
             Some(event) = events.next() => match event? {
@@ -118,7 +154,18 @@ async fn event_loop(
             else => break,
         };
         for action in actions {
-            backend.dispatch(action);
+            let Action::EditOutside { connection, query } = action else {
+                backend.dispatch(action);
+                continue;
+            };
+            // The key stream's reader thread would steal the editor's keys: it stops with the stream, and a new one starts after.
+            drop(events);
+            let edited = screens.edit_outside(&query, backend);
+            events = EventStream::new();
+            match after_editing(Edit { connection, query }, edited) {
+                Ok(read) => backend.dispatch(read),
+                Err(failed) => app.apply(failed).into_iter().for_each(|action| backend.dispatch(action)),
+            }
         }
     }
     Ok(())

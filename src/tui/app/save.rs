@@ -8,6 +8,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use vtui::field::Field;
 
 const EXTENSION: &str = ".sql";
+const SAVE_FIRST: &str = "save the query with ^s before editing it in $EDITOR";
 
 /// A question on the footer line; while it is open it takes every key.
 #[derive(Clone, Debug, PartialEq)]
@@ -43,6 +44,16 @@ impl App {
             return vec![];
         };
         vec![Action::SaveQuery { connection: sheet.name().clone(), query, text: sheet.editor.text().to_owned() }]
+    }
+
+    /// Hands the saved query to the user's editor; text not saved yet would be lost, so it asks for a save first.
+    pub(super) fn edit_outside(&mut self) -> Vec<Action> {
+        let sheet = self.sheet_mut();
+        let Some(query) = sheet.opened.clone().filter(|_| !sheet.is_dirty) else {
+            sheet.query_error = Some(SAVE_FIRST.to_owned());
+            return vec![];
+        };
+        vec![Action::EditOutside { connection: sheet.name().clone(), query }]
     }
 
     /// Opens `query` in the editor on screen, after asking when it holds text not saved yet.
@@ -184,5 +195,20 @@ mod tests {
         let other: ConnectionName = "prod".parse().unwrap();
         app.apply(Answer::Queries(QueryAnswer::Saved { connection: other, query: query("x.sql"), text: "SELECT 2".into() }));
         assert_eq!((app.sheet().opened.as_ref(), app.sheet().is_dirty), (None, true));
+    }
+
+    #[test]
+    fn ctrl_e_hands_a_saved_query_to_the_users_editor() {
+        let mut app = opened("SELECT 1");
+        let edit = Action::EditOutside { connection: shop(), query: query("daily.sql") };
+        assert_eq!(press(&mut app, KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL)), [edit]);
+    }
+
+    #[test]
+    fn ctrl_e_on_unsaved_text_asks_for_a_save_first() {
+        let mut app = opened("SELECT 1");
+        press(&mut app, KeyCode::Char(';'));
+        assert_eq!(press(&mut app, KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL)), []);
+        assert_eq!(app.sheet().query_error.as_deref(), Some(SAVE_FIRST));
     }
 }
