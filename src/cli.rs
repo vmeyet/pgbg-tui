@@ -25,6 +25,13 @@ pub struct Cli {
 pub enum Command {
     /// The connections in `config.toml`: name, tier, URL, and how pgbg reaches each one.
     Connections,
+    /// Runs one statement on a connection and prints its result; read only unless the connection allows writes.
+    Run {
+        /// The connection's name in `config.toml`.
+        connection: String,
+        /// One SQL statement.
+        sql: String,
+    },
 }
 
 #[cfg(test)]

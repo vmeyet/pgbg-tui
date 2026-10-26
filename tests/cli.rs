@@ -69,3 +69,30 @@ fn an_unknown_key_warns_on_stderr_and_the_list_still_prints() {
     assert!(stderr(&output).contains("`theme` is not a setting"), "{}", stderr(&output));
     assert!(stdout(&output).starts_with("local "));
 }
+
+#[test]
+fn run_refuses_a_write_on_a_read_only_connection_before_connecting() {
+    let output = pgbg(SHOP, &["run", "local", "DELETE FROM orders"]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("`DELETE` is not a read"), "{}", stderr(&output));
+}
+
+#[test]
+fn run_on_an_unknown_connection_says_where_to_find_them() {
+    let output = pgbg(SHOP, &["run", "shop", "SELECT 1"]);
+    assert!(stderr(&output).contains("no connection `shop`") && stderr(&output).contains("pgbg connections"), "{}", stderr(&output));
+}
+
+#[test]
+#[ignore = "needs PGBG_TEST_DATABASE_URL"]
+fn run_json_prints_the_columns_and_rows() {
+    let url = std::env::var("PGBG_TEST_DATABASE_URL").unwrap();
+    let output = pgbg(
+        &format!("[connections.shop]\ntier = \"local\"\nurl = \"{url}\"\n"),
+        &["run", "shop", "SELECT 7 AS id, 'nina' AS customer", "--json"],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["columns"][1]["name"], "customer");
+    assert_eq!(json["rows"][0], serde_json::json!([7, "nina"]));
+}
