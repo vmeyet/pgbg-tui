@@ -1,14 +1,18 @@
-//! What to chart from a result: pure, drawing lives in `tui/chart_view/`.
+//! What to chart and the points to draw, from a result: pure, drawing lives in `tui/chart_view/`.
 pub(crate) use spec::ChartSpec;
 
 use crate::db::model::{Column, ColumnKind, ResultSet};
 
+mod axis;
+mod bar;
+mod line;
+mod series;
 mod spec;
 
 /// A result with at most this many rows is drawn as bars, whatever its x.
 const FEW_POINTS: usize = 12;
 
-/// How a chart draws its points.
+/// How a chart draws its points; each kind keeps its own cap in its own file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ChartKind {
     Bar,
@@ -23,6 +27,14 @@ impl ChartKind {
         match self {
             Self::Bar => "bar",
             Self::Line => "line",
+        }
+    }
+
+    /// The indexes of the points drawn out of `points`, in order: all of them when they fit the kind's cap.
+    fn keep(self, points: usize) -> Vec<usize> {
+        match self {
+            Self::Bar => bar::keep(points),
+            Self::Line => line::keep(points),
         }
     }
 }
@@ -66,11 +78,11 @@ mod tests {
     use super::*;
     use crate::db::model::Value;
 
-    fn column(name: &str, kind: ColumnKind) -> Column {
+    pub(super) fn column(name: &str, kind: ColumnKind) -> Column {
         Column { name: name.to_owned(), kind, type_name: String::new() }
     }
 
-    fn result(columns: Vec<Column>, rows: Vec<Vec<Value>>) -> ResultSet {
+    pub(super) fn result(columns: Vec<Column>, rows: Vec<Vec<Value>>) -> ResultSet {
         ResultSet { columns, rows, is_cut: false }
     }
 
