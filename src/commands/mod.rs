@@ -1,4 +1,6 @@
 //! One module per subcommand, each with a `run` the binary calls.
+/// `pgbg connection add|edit|remove`.
+pub mod connection;
 /// `pgbg connections`.
 pub mod connections;
 /// `pgbg password set`.
@@ -31,14 +33,16 @@ fn load(path: &Path) -> Result<Config> {
     Ok(loaded.config)
 }
 
+fn no_connection(name: &ConnectionName, path: &Path) -> anyhow::Error {
+    anyhow!("no connection `{name}` in {}: `pgbg connections` lists them", path.display())
+}
+
 /// The connection named `name` in the config, or its first one when `name` is `None`.
 fn connection(name: Option<&ConnectionName>) -> Result<Connection> {
     let path = config::path();
     let mut connections = load(&path)?.connections.into_iter();
     match name {
-        Some(name) => connections
-            .find(|c| c.name() == name)
-            .ok_or_else(|| anyhow!("no connection `{name}` in {}: `pgbg connections` lists them", path.display())),
+        Some(name) => connections.find(|c| c.name() == name).ok_or_else(|| no_connection(name, &path)),
         None => connections.next().ok_or_else(|| anyhow!("no connections in {}: add one under `[connections.<name>]`", path.display())),
     }
 }

@@ -1,6 +1,9 @@
 //! The command line `pgbg` parses, with the help text each flag shows.
 use crate::connection::ConnectionName;
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
+
+const TIERS: [&str; 3] = ["local", "staging", "production"];
+const WRITE_POLICIES: [&str; 2] = ["allowed", "read-only"];
 
 /// The command line: global flags, then one subcommand.
 #[derive(Parser, Debug)]
@@ -36,6 +39,12 @@ pub enum Command {
         /// One SQL statement.
         sql: String,
     },
+    /// Adds, changes or removes a connection in `config.toml`, keeping the rest of the file as written.
+    Connection {
+        /// What to do with it.
+        #[command(subcommand)]
+        command: ConnectionCommand,
+    },
     /// The passwords pgbg keeps in the macOS keychain; there is no flag for a password, which `ps` would show.
     Password {
         /// What to do with it.
@@ -52,6 +61,78 @@ pub enum PasswordCommand {
         /// The connection's name in `config.toml`.
         connection: ConnectionName,
     },
+}
+
+/// What `pgbg connection` does.
+#[derive(Subcommand, Debug)]
+pub enum ConnectionCommand {
+    /// Adds a connection; read only unless `--writes allowed`.
+    Add {
+        /// The new connection's name.
+        connection: ConnectionName,
+        /// `local`, `staging` or `production`: sets the colour and the timeout.
+        #[arg(long, value_parser = TIERS)]
+        tier: String,
+        /// `postgres://user@host:port/database`, without a password.
+        #[arg(long)]
+        url: String,
+        /// The other keys.
+        #[command(flatten)]
+        keys: ConnectionKeys,
+    },
+    /// Changes the keys given and leaves the others as they are.
+    #[command(group(clap::ArgGroup::new("change").required(true).multiple(true)
+        .args(["tier", "url", "tunnel", "password_env", "password_command", "keychain", "writes"])))]
+    Edit {
+        /// The connection's name in `config.toml`.
+        connection: ConnectionName,
+        /// `local`, `staging` or `production`.
+        #[arg(long, value_parser = TIERS)]
+        tier: Option<String>,
+        /// `postgres://user@host:port/database`, without a password.
+        #[arg(long)]
+        url: Option<String>,
+        /// The other keys.
+        #[command(flatten)]
+        keys: ConnectionKeys,
+    },
+    /// Removes a connection, and its keychain item unless another connection names it too.
+    Remove {
+        /// The connection's name in `config.toml`.
+        connection: ConnectionName,
+        /// Leaves the keychain item in place.
+        #[arg(long)]
+        keep_password: bool,
+    },
+}
+
+/// The keys `add` and `edit` share.
+#[derive(Args, Debug)]
+pub struct ConnectionKeys {
+    /// The command that forwards a local port, split on spaces, `{port}` where the port goes: "ssh -N -L {port}:localhost:5432 bastion".
+    #[arg(long)]
+    pub tunnel: Option<String>,
+    /// Where the password comes from.
+    #[command(flatten)]
+    pub password: PasswordFlags,
+    /// `allowed` lets statements other than reads run.
+    #[arg(long, value_parser = WRITE_POLICIES)]
+    pub writes: Option<String>,
+}
+
+/// One place the password comes from; no flag takes the password itself, which `ps` would show.
+#[derive(Args, Debug)]
+#[group(multiple = false)]
+pub struct PasswordFlags {
+    /// The environment variable that holds it.
+    #[arg(long)]
+    pub password_env: Option<String>,
+    /// The command that prints it, split on spaces.
+    #[arg(long)]
+    pub password_command: Option<String>,
+    /// The keychain item that holds it; `pgbg password set` saves it there.
+    #[arg(long)]
+    pub keychain: Option<String>,
 }
 
 #[cfg(test)]
@@ -85,6 +166,28 @@ mod tests {
         assert!(matches!(parse(&["password", "set", "prod"]).unwrap().command, Some(Command::Password { .. })));
         assert!(parse(&["password", "set", "prod", "--password", "hunter2"]).is_err());
         assert!(parse(&["password", "set", "prod", "hunter2"]).is_err());
+    }
+
+    #[test]
+    fn connection_add_needs_a_tier_and_a_url_and_takes_no_password() {
+        let add = ["connection", "add", "prod", "--tier", "production", "--url", "postgres://nina@db.example.com/shop"];
+        assert!(parse(&add).is_ok());
+        assert!(parse(&add[..5]).is_err());
+        assert!(parse(&[&add[..], &["--tier", "qa"]].concat()).is_err());
+        assert!(parse(&[&add[..], &["--password", "hunter2"]].concat()).is_err());
+    }
+
+    #[test]
+    fn a_connection_takes_one_password_source_at_most() {
+        let edit = ["connection", "edit", "prod", "--password-env", "PROD_PGPASSWORD"];
+        assert!(parse(&edit).is_ok());
+        assert!(parse(&[&edit[..], &["--keychain", "pgbg/prod"]].concat()).is_err());
+    }
+
+    #[test]
+    fn connection_edit_needs_something_to_change() {
+        assert!(parse(&["connection", "edit", "prod"]).is_err());
+        assert!(parse(&["connection", "edit", "prod", "--writes", "read-only"]).is_ok());
     }
 
     #[test]

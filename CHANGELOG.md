@@ -8,6 +8,9 @@ Each entry says what changed, then where, then how to use it.
 
 ### New
 
+- **`pgbg connection add|edit|remove`** writes `config.toml` for you, one key at a time, keeping your comments and order.
+  `add <name> --tier <tier> --url <url>` takes `--tunnel "<command>"`, one of `--password-env`, `--password-command` or `--keychain`, and `--writes allowed`; `edit` changes only the flags you give.
+  `remove` deletes the connection's keychain item too; add `--keep-password` to leave it.
 - **`pgbg password set <connection>`** saves a connection's password in the macOS keychain.
   Type it at the hidden prompt, or pipe it in: `pass shop | pgbg password set prod`; no flag takes a password, so `ps` never shows one.
   A connection with no password yet gets `password = { keychain = "pgbg/<name>" }` in your `config.toml`, the rest of the file as you wrote it.

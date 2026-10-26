@@ -16,10 +16,16 @@ tunnel = { command = ["ssh", "-N", "-L", "{port}:localhost:5432", "db.example.co
 
 /// The binary on `config`, with the log off so no run writes to the real cache folder.
 fn pgbg(config: &str, args: &[&str]) -> Output {
+    pgbg_rewriting(config, args).0
+}
+
+/// The binary on `config`, and the config's text once it ran.
+fn pgbg_rewriting(config: &str, args: &[&str]) -> (Output, String) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
     std::fs::write(&path, config).unwrap();
-    Command::new(env!("CARGO_BIN_EXE_pgbg")).args(args).env("PGBG_CONFIG", &path).env("PGBG_LOG", "off").output().unwrap()
+    let output = Command::new(env!("CARGO_BIN_EXE_pgbg")).args(args).env("PGBG_CONFIG", &path).env("PGBG_LOG", "off").output().unwrap();
+    (output, std::fs::read_to_string(&path).unwrap_or_default())
 }
 
 fn stdout(output: &Output) -> String {
@@ -125,4 +131,43 @@ fn password_set_refuses_a_connection_whose_password_comes_from_elsewhere_before_
 fn password_set_on_an_unknown_connection_says_where_to_find_them() {
     let output = pgbg(SHOP, &["password", "set", "nope"]);
     assert!(stderr(&output).contains("no connection `nope`"), "{}", stderr(&output));
+}
+
+#[test]
+fn connection_add_writes_a_connection_the_list_then_shows() {
+    let args = [
+        "connection",
+        "add",
+        "staging",
+        "--tier",
+        "staging",
+        "--url",
+        "postgres://nina@localhost:5433/shop",
+        "--tunnel",
+        "ssh -N -L {port}:localhost:5432 db.example.com",
+        "--password-env",
+        "STAGING_PGPASSWORD",
+    ];
+    let (output, config) = pgbg_rewriting(SHOP, &args);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(config.starts_with(SHOP), "{config}");
+    assert!(config.ends_with("password = { env = \"STAGING_PGPASSWORD\" }\n"), "{config}");
+    assert!(stdout(&pgbg(&config, &["connections"])).contains("staging     postgres://nina@localhost:5433/shop"));
+}
+
+#[test]
+fn connection_add_refuses_a_password_in_the_url_and_leaves_the_file() {
+    let (output, config) =
+        pgbg_rewriting(SHOP, &["connection", "add", "staging", "--tier", "staging", "--url", "postgres://nina:hunter2@localhost/shop"]);
+    assert!(!output.status.success());
+    assert!(!stderr(&output).contains("hunter2"), "{}", stderr(&output));
+    assert_eq!(config, SHOP);
+}
+
+#[test]
+fn connection_remove_with_keep_password_drops_only_the_table() {
+    let (output, config) = pgbg_rewriting(SHOP, &["connection", "remove", "prod", "--keep-password"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(!stdout(&output).contains("keychain"), "{}", stdout(&output));
+    assert_eq!(config, SHOP.split("\n[connections.prod]").next().unwrap());
 }

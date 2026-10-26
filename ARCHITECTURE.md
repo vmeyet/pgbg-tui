@@ -90,6 +90,7 @@ Four layers, outermost first; only the last one is a guarantee.
 - The config loader refuses a plain `password`, and a URL with a password in it.
 - Keychain items live under the service `pgbg`, one account per item; `security` reads one on a pipe, and writes one through `security -i` so the password never shows in argv.
 - `pgbg password set <connection>` takes the password typed hidden or piped in, never as a flag.
+- `pgbg connection remove` deletes the connection's keychain item before its table, unless `--keep-password` or another connection names the same item.
 
 ## Tunnels
 
