@@ -79,6 +79,7 @@ async fn from_command(argv: &[String]) -> Result<Secret> {
     let output = tokio::process::Command::new(program)
         .args(args)
         .stdin(Stdio::null())
+        .kill_on_drop(true)
         .output()
         .await
         .with_context(|| format!("running `{program}` for the password"))?;
@@ -87,7 +88,12 @@ async fn from_command(argv: &[String]) -> Result<Secret> {
     }
     let printed =
         String::from_utf8(output.stdout).map_err(|_password_bytes| anyhow!("`{program}` printed a password that is not UTF-8"))?;
-    Ok(Secret(printed.trim_end_matches(['\n', '\r']).to_owned()))
+    Ok(Secret(without_line_end(&printed).to_owned()))
+}
+
+/// `text` without the newlines a command or a terminal ends it with.
+fn without_line_end(text: &str) -> &str {
+    text.trim_end_matches(['\n', '\r'])
 }
 
 #[cfg(test)]

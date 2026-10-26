@@ -69,6 +69,13 @@ fn a_password_in_a_url_stops_pgbg_without_printing_it() {
 }
 
 #[test]
+fn an_error_prints_the_control_characters_it_quotes_escaped() {
+    let output = pgbg("[connections.\"shop\\u001b[2J\"]\ntier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\n", &["connections"]);
+    let err = stderr(&output);
+    assert!(err.contains("shop\\u{1b}[2J") && !err.contains("shop\u{1b}"), "{err:?}");
+}
+
+#[test]
 fn an_unknown_key_warns_on_stderr_and_the_list_still_prints() {
     let output = pgbg(&format!("theme = \"nord\"\n{SHOP}"), &["connections"]);
     assert!(output.status.success());

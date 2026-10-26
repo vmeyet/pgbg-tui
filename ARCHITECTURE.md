@@ -90,7 +90,7 @@ Four layers, outermost first; only the last one is a guarantee.
 - A connection names where its password comes from: `password = { keychain = "pgbg/prod" }`, `{ env = "PROD_PGPASSWORD" }` or `{ command = ["gcloud", "secrets", "versions", "access", ...] }`.
 - The password is read when the session opens, kept in a `Secret`, and dropped once connected.
 - The config loader refuses a plain `password`, and a URL with a password in it.
-- Keychain items live under the service `pgbg`, one account per item; `security` reads one on a pipe, and writes one through `security -i` so the password never shows in argv.
+- Keychain items live under the service `pgbg`, one account per item; `security -g` reads one on a pipe, in hex when it is not printable ASCII, and `security -i` writes one so the password never shows in argv; an error quotes `security`'s exit status only.
 - `pgbg password set <connection>` takes the password typed hidden or piped in, never as a flag.
 - `pgbg connection remove` deletes the connection's keychain item before its table, unless `--keep-password` or another connection names the same item.
 

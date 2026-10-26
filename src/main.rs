@@ -9,10 +9,7 @@ async fn main() {
     let cli = Cli::parse();
     pgbg::log::start();
     if let Err(err) = run(&cli).await {
-        eprintln!("\x1b[31m✗\x1b[0m {err}");
-        for cause in err.chain().skip(1) {
-            eprintln!("  \x1b[2m{cause}\x1b[0m");
-        }
+        commands::print_error(&err);
         std::process::exit(1);
     }
 }
