@@ -1,6 +1,6 @@
 //! Invented fixtures the tests share: the connection `shop`, the test database, tunnels to it, and results of `orders`.
 use crate::connection::{Connection, Entry, WritePolicy};
-use crate::db::model::{Column, ColumnKind, ResultSet, Value};
+use crate::db::model::{Column, ColumnKind, Index, ResultSet, Schema, SchemaColumn, SchemaNode, Table, TableKind, Value};
 
 /// The environment variable naming the throwaway database the `#[ignore]`d tests run against.
 const DATABASE_URL: &str = "PGBG_TEST_DATABASE_URL";
@@ -82,4 +82,34 @@ pub(crate) fn orders() -> ResultSet {
         ],
         is_cut: false,
     }
+}
+
+fn schema_column(name: &str, type_name: &str, default: Option<&str>) -> SchemaColumn {
+    SchemaColumn {
+        name: name.to_owned(),
+        type_name: type_name.to_owned(),
+        is_nullable: default.is_some(),
+        default: default.map(str::to_owned),
+    }
+}
+
+fn schema_table(name: &str, columns: Vec<SchemaColumn>) -> Table {
+    Table { name: name.to_owned(), kind: TableKind::Table, estimated_rows: None, columns, indexes: vec![] }
+}
+
+/// The schema of `shop`: `orders` and `customers` in `public`, `invoices` in `billing`; `orders` has its key, a
+/// default and a row estimate.
+pub(crate) fn shop_schema() -> Schema {
+    let key = Index { name: "orders_pkey".to_owned(), columns: vec!["id".to_owned()], is_unique: true, is_primary: true };
+    let orders_columns = vec![
+        schema_column("id", "integer", None),
+        schema_column("customer_id", "integer", None),
+        schema_column("total", "numeric(10,2)", Some("0")),
+    ];
+    let orders = Table { estimated_rows: Some(1200), indexes: vec![key], ..schema_table("orders", orders_columns) };
+    let customers = schema_table("customers", vec![schema_column("id", "integer", None), schema_column("name", "text", None)]);
+    let invoices = schema_table("invoices", vec![schema_column("id", "integer", None), schema_column("order_id", "integer", None)]);
+    let public = SchemaNode { name: "public".to_owned(), tables: vec![orders, customers] };
+    let billing = SchemaNode { name: "billing".to_owned(), tables: vec![invoices] };
+    Schema { schemas: vec![billing, public] }
 }

@@ -337,3 +337,18 @@ fn a_kill_of_pgbg_run_stops_its_tunnel_too() {
 fn closing_the_terminal_of_pgbg_run_stops_its_tunnel_too() {
     a_tunnel_goes_when_pgbg_is_stopped_by(Signal::HUP);
 }
+
+#[test]
+#[ignore = "needs PGBG_TEST_DATABASE_URL"]
+fn schema_json_lists_the_tables_the_filter_keeps() {
+    let url = std::env::var("PGBG_TEST_DATABASE_URL").unwrap();
+    let config = format!("[connections.shop]\ntier = \"local\"\nurl = \"{url}\"\nwrites = \"allowed\"\n");
+    let created = pgbg(&config, &["run", "shop", "CREATE TABLE IF NOT EXISTS cli_schema_orders (id int PRIMARY KEY)"]);
+    assert!(created.status.success(), "{}", stderr(&created));
+    let output = pgbg(&config, &["schema", "shop", "cli_schema_ord", "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["schemas"][0]["tables"][0]["name"], "cli_schema_orders");
+    assert_eq!(json["schemas"][0]["tables"][0]["indexes"][0]["is_primary"], true);
+    assert_eq!(json["schemas"][0]["tables"].as_array().unwrap().len(), 1);
+}

@@ -33,6 +33,7 @@ async fn run(cli: &Cli) -> Result<()> {
         Some(Command::Run { connection, sql }) => until_stopped(commands::run::run(connection, sql, cli.json)).await,
         Some(Command::Doctor { connection }) => commands::doctor::run(connection, cli.json).await,
         Some(Command::History { connection, limit }) => commands::history::run(connection, *limit, cli.json),
+        Some(Command::Schema { connection, filter }) => until_stopped(commands::schema::run(connection, filter.as_deref(), cli.json)).await,
         Some(Command::Connection { command }) => connection(command),
         Some(Command::Password { command: PasswordCommand::Set { connection } }) => commands::password::set(connection).await,
     }
