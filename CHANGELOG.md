@@ -8,6 +8,9 @@ Each entry says what changed, then where, then how to use it.
 
 ### New
 
+- **Tunnels** for `pgbg run`: a connection with `tunnel = { command = [...] }` starts that command on a free local port, put in place of `{port}`, and connects through it.
+  TLS still checks the certificate against the host in `url`, so `sslmode=require` works through a tunnel; `before = [...]` runs once first.
+  A tunnel that dies says how and quotes its last words; it stops with pgbg, along with any `ssh` or `gcloud` it started.
 - **`pgbg connection add|edit|remove`** writes `config.toml` for you, one key at a time, keeping your comments and order.
   `add <name> --tier <tier> --url <url>` takes `--tunnel "<command>"`, one of `--password-env`, `--password-command` or `--keychain`, and `--writes allowed`; `edit` changes only the flags you give.
   `remove` deletes the connection's keychain item too; add `--keep-password` to leave it.
@@ -44,7 +47,7 @@ Each entry says what changed, then where, then how to use it.
 - **A huge value no longer slows the results grid**: a cell formats only the characters it can show, so a 10 MB JSON value draws as fast as a short one.
 - **A lost session opens again** in the TUI: after the server restarts or the link drops, the next statement you run opens a new session instead of failing for good.
   The statement that met the dead link fails; press `⏎` to run it again.
-- **Opening a session gives up after 10 seconds** instead of waiting on a server that never answers.
+- **Opening a session gives up after 10 seconds** instead of waiting on a server that never answers, even one that takes the link and then stalls, as a tunnel does.
   Set `connect_timeout` in the connection's `url` to wait longer.
 - **A big result cannot fill the memory**: the TUI and `pgbg run` keep the first 10 000 rows, and say `first 10000 rows` when there were more.
   Add a `LIMIT` or a `WHERE` to see the rest.

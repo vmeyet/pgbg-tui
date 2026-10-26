@@ -16,13 +16,15 @@ url = "postgres://nina@localhost:5432/shop"
 
 [connections.prod]
 tier = "production"
-url = "postgres://reader@localhost/shop?sslmode=require"
+url = "postgres://reader@db.example.com/shop?sslmode=require"
 password = { keychain = "pgbg/prod" }
-tunnel = { command = ["ssh", "-N", "-L", "{port}:localhost:5432", "bastion.example.com"] }
+tunnel = { command = ["ssh", "-N", "-L", "{port}:db.example.com:5432", "bastion.example.com"] }
 ```
 
 No password goes in this file: it comes from the keychain, an environment variable or a command.
 A host that is not this machine needs `sslmode=require` in its `url`, or `tls = "off"` on the connection to talk in clear on purpose.
+A tunnel's `command` forwards the port pgbg puts in place of `{port}`; pgbg then connects to that port on `127.0.0.1` and still checks the certificate against the host in `url`.
+An optional `before` command, such as one that wakes the bastion, runs once before each tunnel starts, so it must be safe to run twice.
 `pgbg connection add|edit|remove` and `pgbg password set <connection>` write this file for you and keep your comments.
 
 ## Run a statement

@@ -10,3 +10,4 @@ mod render;
 mod secret;
 mod syntax;
 mod tui;
+mod tunnel;

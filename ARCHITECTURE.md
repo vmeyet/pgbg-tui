@@ -14,9 +14,9 @@ When a boundary or a flow changes, change this page in the same MR.
 | `config/` | `config.toml`: connections, theme, keys; load, validate, refuse secrets; rewrite key by key with `toml_edit`, checked as a load would, through a temp file only its owner reads |
 | `connection/` | `Connection`: name, tier, target, tunnel, secret source, write policy, TLS; parsed once from config |
 | `secret/` | `Secret` (prints `<redacted>`) and its sources: keychain through `/usr/bin/security`, environment variable, command; `SecretSource::read` reads one when a session opens; `Secret::from_stdin` reads one typed hidden or piped in |
-| `tunnel/` | `Tunnel`: a child process forwarding a free `127.0.0.1` port to the database; start, wait for the port, stop |
+| `tunnel/` | `Tunnel`: a child process forwarding a free `127.0.0.1` port to the database; start, wait for the port, stop; its `Route` is what a session opens along |
 | `db/` | The only module that sees `tokio_postgres`: connect over rustls, run a statement, stream rows, cancel |
-| `db/model/` | The neutral model: `ResultSet`, `Column`, `ColumnKind`, `Value`, `Page`, `Schema`, `Table`, `ServerError`, and `CancelToken`, whose driver part only `db/` reads |
+| `db/model/` | The neutral model: `ResultSet`, `Column`, `ColumnKind`, `Value`, `Page`, `Schema`, `Table`, `ServerError`, `Route` (direct, or a tunnel's `LocalPort`), and `CancelToken`, whose driver part only `db/` reads |
 | `db/guard.rs` | Classifies a statement before it is sent: read, write, or more than one statement; `admit` turns a statement into an `Admitted`, the only kind a session runs; `statement_at` finds the statement under the editor's cursor with the same tokenizer |
 | `db/decode.rs` | Wire values to `Value`, by column type, a domain by its base type; a value it cannot decode is `Unsupported`, never an error |
 | `query/` | Saved queries: the `.pgbg/queries/` tree, the header (`-- name:`, `-- chart:`), load and save |
@@ -54,10 +54,10 @@ Switching connection:
 
 1. `ctrl-o` opens the connection picker; picking one returns `Action::Open { connection }`.
 2. When the connection has a tunnel, `tunnel::start` picks a free port, runs the command, and waits until the port answers.
-3. `db::connect` opens the session through the tunnel and reads the schema in the background for completion and the sidebar.
+3. `Session::open` takes the tunnel's `Route`: it connects to `hostaddr=127.0.0.1` and the tunnel's port, and keeps the URL's host for the TLS certificate check; it reads the schema in the background for completion and the sidebar.
 4. The session stays open until pgbg quits, so switching back is instant; its tunnel stops with it.
 5. A session whose link is gone, or whose rollback failed, is opened again before the next statement; it is never retried on its own.
-6. Opening gives up after 10 seconds unless the `url` sets `connect_timeout`, and each session asks the server to stop its statement once pgbg is gone (`client_connection_check_interval`).
+6. Opening gives up after 10 seconds, TLS and login included, unless the `url` sets `connect_timeout`; and each session asks the server to stop its statement once pgbg is gone (`client_connection_check_interval`).
 
 Charting a result:
 
@@ -98,7 +98,9 @@ Four layers, outermost first; only the last one is a guarantee.
 
 - A tunnel is a command with a `{port}` placeholder: `ssh -N -L {port}:localhost:5432 bastion`, `gcloud compute start-iap-tunnel ... --local-host-port=localhost:{port}`, `cloud-sql-proxy --port {port} ...`.
 - An optional `before` command runs first, once, and is safe to run twice (starting a stopped bastion).
-- pgbg picks the free port, so two pgbg can run side by side; the child runs in its own process group and is killed with it on quit or crash.
+- pgbg picks the free port, so two pgbg can run side by side; the child runs in its own process group, and stopping or dropping the `Tunnel` kills the whole group, so an `ssh` or `gcloud` it started dies too.
+- A tunnel is ready once its port takes a TCP connection, within 30 seconds; one that dies first says how it exited and its last lines of stderr, never its arguments.
+- A session through a tunnel connects to `hostaddr=127.0.0.1` on the tunnel's port, and TLS still checks the certificate against the URL's host; that is why the config refuses a `hostaddr` of its own.
 - The status line shows the tunnel state; a tunnel that dies closes its session and says why.
 
 ## Saved queries

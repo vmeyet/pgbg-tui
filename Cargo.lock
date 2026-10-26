@@ -1453,6 +1453,7 @@ dependencies = [
  "futures-util",
  "insta",
  "ratatui",
+ "rustix",
  "serde",
  "serde_ignored",
  "serde_json",
