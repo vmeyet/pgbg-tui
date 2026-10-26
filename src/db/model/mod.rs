@@ -1,9 +1,11 @@
 //! The neutral model of what a statement returns: code outside `db/` never sees a driver type.
 pub(crate) use cancel::CancelToken;
+pub(crate) use error::ServerError;
 use serde::Serialize;
 pub(crate) use value::Value;
 
 mod cancel;
+mod error;
 mod value;
 
 /// One SQL statement, as typed: the unit pgbg runs.

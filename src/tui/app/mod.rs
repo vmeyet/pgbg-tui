@@ -35,8 +35,19 @@ pub(super) enum Incoming {
     },
     /// The guard kept the statement from the server, and why.
     Refused(String),
-    /// The server, or the link to it, failed the statement.
-    Failed(String),
+    /// The server, or the link to it, failed the statement; the server may say where in it.
+    Failed {
+        error: String,
+        /// A character count from 1 into the statement sent, as PostgreSQL counts.
+        position: Option<usize>,
+    },
+}
+
+/// The statement last sent, and the byte of the editor it starts at.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Sent {
+    start: usize,
+    statement: Statement,
 }
 
 /// Where the session stands, as the status line says it.
@@ -84,6 +95,9 @@ pub(super) struct App {
     pub(super) focus: Focus,
     /// The grid rows the last frame had room for: a page, for `PgDn`.
     grid_rows: usize,
+    sent: Option<Sent>,
+    /// The editor's byte the server's last error points at, until the text changes.
+    pub(super) error_mark: Option<usize>,
     pub(super) should_quit: bool,
 }
 
@@ -100,6 +114,8 @@ impl App {
             run: Run::Idle,
             focus: Focus::Editor,
             grid_rows: 0,
+            sent: None,
+            error_mark: None,
             should_quit: false,
         }
     }
@@ -145,7 +161,11 @@ impl App {
         if key.code == KeyCode::Enter && key.modifiers.is_empty() {
             return self.run_editor();
         }
+        let text_before = self.editor.text().to_owned();
         keys::edit(&mut self.editor, key);
+        if self.editor.text() != text_before {
+            self.error_mark = None;
+        }
         vec![]
     }
 
@@ -166,8 +186,20 @@ impl App {
         }
         let (before, _, _) = self.editor.split();
         let Some(range) = guard::statement_at(self.editor.text(), before.len()) else { return vec![] };
+        let statement = Statement::new(&self.editor.text()[range.clone()]);
         self.run = Run::Running;
-        vec![Action::Run(Statement::new(&self.editor.text()[range]))]
+        self.error_mark = None;
+        self.sent = Some(Sent { start: range.start, statement: statement.clone() });
+        vec![Action::Run(statement)]
+    }
+
+    /// The editor's byte at character `position` of the statement sent; the end of it when the server
+    /// points just past its last character.
+    fn editor_byte(&self, position: usize) -> Option<usize> {
+        let sent = self.sent.as_ref()?;
+        let text = sent.statement.as_str();
+        let offset = text.char_indices().map(|(at, _)| at).chain(std::iter::once(text.len())).nth(position.checked_sub(1)?)?;
+        Some(sent.start + offset)
     }
 
     /// Applies one answer of the backend.
@@ -182,7 +214,10 @@ impl App {
             }
             Incoming::Result { result, took } => self.run = Run::Done { grid: Grid::new(&result), result, took },
             Incoming::Refused(why) => self.run = Run::Failed(format!("not sent: {why}")),
-            Incoming::Failed(err) => self.run = Run::Failed(err),
+            Incoming::Failed { error, position } => {
+                self.error_mark = position.and_then(|position| self.editor_byte(position));
+                self.run = Run::Failed(error);
+            }
         }
     }
 }
@@ -328,6 +363,46 @@ pub(super) mod tests {
         enter(&mut app);
         app.apply(Incoming::Refused("`DELETE` is not a read".into()));
         assert_eq!(app.run, Run::Failed("not sent: `DELETE` is not a read".into()));
+    }
+
+    fn failed_at(app: &mut App, position: usize) {
+        app.apply(Incoming::Failed { error: "ERROR: syntax error".into(), position: Some(position) });
+    }
+
+    #[test]
+    fn a_server_error_marks_its_position_in_the_editor() {
+        let mut app = typed("SELECT 1;\nSELECT * FROM no_such_orders");
+        enter(&mut app);
+        failed_at(&mut app, 15);
+        assert_eq!(app.error_mark.map(|at| &app.editor.text()[at..]), Some("no_such_orders"));
+    }
+
+    #[test]
+    fn a_position_past_the_last_character_marks_the_end_of_the_statement() {
+        let mut app = typed("SELECT ;");
+        app.handle_key(KeyEvent::from(KeyCode::Left));
+        enter(&mut app);
+        failed_at(&mut app, 7);
+        assert_eq!(app.error_mark, Some(6));
+    }
+
+    #[test]
+    fn the_mark_counts_characters_not_bytes() {
+        let mut app = typed("SELECT 'zoë', x");
+        enter(&mut app);
+        failed_at(&mut app, 15);
+        assert_eq!(app.error_mark.map(|at| &app.editor.text()[at..]), Some("x"));
+    }
+
+    #[test]
+    fn editing_the_text_drops_the_mark() {
+        let mut app = typed("SELECT x");
+        enter(&mut app);
+        failed_at(&mut app, 8);
+        app.handle_key(KeyEvent::from(KeyCode::Left));
+        assert_eq!(app.error_mark, Some(7));
+        app.handle_key(KeyEvent::from(KeyCode::Char('y')));
+        assert_eq!(app.error_mark, None);
     }
 
     #[test]
