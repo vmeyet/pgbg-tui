@@ -6,11 +6,13 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 pub(crate) use target::Target;
+pub(crate) use timeout::StatementTimeout;
 pub(crate) use tls::Tls;
 pub(crate) use tunnel::TunnelSpec;
 
 mod password;
 mod target;
+mod timeout;
 mod tls;
 mod tunnel;
 
@@ -29,6 +31,8 @@ pub(crate) struct Entry {
     writes: WritePolicy,
     #[serde(default)]
     tls: Option<Tls>,
+    #[serde(default)]
+    statement_timeout: Option<String>,
 }
 
 /// A named database target: where it is, how to reach it, how to log in, and whether it takes writes.
@@ -43,6 +47,7 @@ pub(crate) struct Connection {
     password: Option<SecretSource>,
     writes: WritePolicy,
     tls: Tls,
+    statement_timeout: StatementTimeout,
 }
 
 /// The name a connection has under `[connections.<name>]`, typed on the command line.
@@ -71,8 +76,9 @@ pub(crate) enum WritePolicy {
 impl Connection {
     /// The connection `[connections.<name>]` describes, or why it is refused.
     pub(crate) fn new(name: &str, entry: Entry) -> Result<Self> {
-        let Entry { tier, url, password, tunnel, writes, tls } = entry;
+        let Entry { tier, url, password, tunnel, writes, tls, statement_timeout } = entry;
         let url = Target::parse(&url)?;
+        let statement_timeout = statement_timeout.as_deref().map(StatementTimeout::parse).transpose()?;
         Ok(Self {
             name: ConnectionName::new(name)?,
             tier,
@@ -81,6 +87,7 @@ impl Connection {
             tunnel,
             password: password.map(secret_source).transpose()?,
             writes,
+            statement_timeout: statement_timeout.unwrap_or_else(|| tier.statement_timeout()),
         })
     }
 
@@ -110,6 +117,22 @@ impl Connection {
 
     pub(crate) fn tls(&self) -> Tls {
         self.tls
+    }
+
+    /// The connection's own `statement_timeout`, else its tier's.
+    pub(crate) fn statement_timeout(&self) -> StatementTimeout {
+        self.statement_timeout
+    }
+}
+
+impl Tier {
+    /// None on a local database; a minute on staging and half that on production, where a slow statement costs the most.
+    fn statement_timeout(self) -> StatementTimeout {
+        match self {
+            Self::Local => StatementTimeout::NONE,
+            Self::Staging => StatementTimeout::STAGING,
+            Self::Production => StatementTimeout::PRODUCTION,
+        }
     }
 }
 
@@ -222,6 +245,25 @@ mod tests {
         assert!(connection("my shop", "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\n").is_err());
         assert!(connection("", "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\n").is_err());
         assert!(connection("shop-eu_1.ro", "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\n").is_ok());
+    }
+
+    #[test]
+    fn each_tier_has_its_statement_timeout() {
+        let local = connection("shop", "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\n").unwrap();
+        let production = connection("shop", "tier = \"production\"\nurl = \"postgres://nina@db.example.com/shop?sslmode=require\"\n");
+        assert_eq!(local.statement_timeout(), StatementTimeout::NONE);
+        assert_eq!(shop("").unwrap().statement_timeout().to_string(), "1min");
+        assert_eq!(production.unwrap().statement_timeout().to_string(), "30s");
+    }
+
+    #[test]
+    fn a_connection_may_set_its_own_statement_timeout() {
+        assert_eq!(shop("statement_timeout = \"2min\"").unwrap().statement_timeout().to_string(), "2min");
+    }
+
+    #[test]
+    fn a_statement_timeout_that_does_not_parse_is_refused() {
+        assert!(shop("statement_timeout = \"soon\"").unwrap_err().to_string().contains("statement_timeout"));
     }
 
     #[test]

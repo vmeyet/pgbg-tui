@@ -12,7 +12,7 @@ When a boundary or a flow changes, change this page in the same MR.
 | `main.rs`, `cli.rs` | The clap command line and the dispatch to `commands/` |
 | `commands/` | One module per subcommand, each with a `run`; plain output through `render.rs`, JSON with `--json` |
 | `config/` | `config.toml`: connections, theme, keys; load, validate, refuse secrets; rewrite key by key with `toml_edit`, checked as a load would, through a temp file only its owner reads |
-| `connection/` | `Connection`: name, tier, target, tunnel, secret source, write policy, TLS; parsed once from config |
+| `connection/` | `Connection`: name, tier, target, tunnel, secret source, write policy, TLS, statement timeout; parsed once from config |
 | `secret/` | `Secret` (prints `<redacted>`) and its sources: keychain through `/usr/bin/security`, environment variable, command; `SecretSource::read` reads one when a session opens; `Secret::from_stdin` reads one typed hidden or piped in |
 | `tunnel/` | `Tunnel`: a child process forwarding a free `127.0.0.1` port to the database; start, wait for the port, stop; its `Route` is what a session opens along |
 | `db/` | The only module that sees `tokio_postgres`: connect over rustls, run a statement, stream rows, cancel |
@@ -41,7 +41,7 @@ Running a statement:
 
 1. The editor hands `App` the statement under the cursor; `App` returns `Action::Run { run, statement }`, and every answer about it carries the same `RunId`, so a late one never lands on the next run.
 2. `db::guard` classifies it; a write on a read-only connection comes back as `Incoming::Refused` and never reaches the server.
-3. The session opens `BEGIN READ ONLY`, sets `statement_timeout` from the tier, and binds the statement to a portal (`Transaction::bind`).
+3. The session opens `BEGIN READ ONLY` and binds the statement to a portal (`Transaction::bind`).
    A portal takes any statement the guard admits; `DECLARE CURSOR` takes only a `SELECT` or `VALUES`, not `SHOW` or `EXPLAIN`.
 4. The first page (`query_portal(&portal, 500)`) comes back as `Incoming::Page`; the grid paints it, and more pages are fetched as the grid nears the end.
    Until paging lands, a result keeps its first 10 000 rows and says it is cut.
@@ -57,7 +57,8 @@ Switching connection:
 3. `Session::open` takes the tunnel's `Route`: it connects to `hostaddr=127.0.0.1` and the tunnel's port, and keeps the URL's host for the TLS certificate check; it reads the schema in the background for completion and the sidebar.
 4. The session stays open until pgbg quits, so switching back is instant; its tunnel stops with it.
 5. A session whose link is gone, or whose rollback failed, is opened again before the next statement; it is never retried on its own.
-6. Opening gives up after 10 seconds, TLS and login included, unless the `url` sets `connect_timeout`; and each session asks the server to stop its statement once pgbg is gone (`client_connection_check_interval`).
+6. Opening sets `statement_timeout`: the connection's own, else its tier's (none on local, 60 s on staging, 30 s on production).
+7. Opening gives up after 10 seconds, TLS and login included, unless the `url` sets `connect_timeout`; and each session asks the server to stop its statement once pgbg is gone (`client_connection_check_interval`).
 
 Charting a result:
 

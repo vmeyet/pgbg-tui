@@ -1,5 +1,5 @@
 //! The only module that sees `tokio_postgres`: connect, run one statement, decode its rows, cancel it.
-use crate::connection::{Connection, Target, Tls};
+use crate::connection::{Connection, StatementTimeout, Target, Tls};
 use anyhow::{Context, Result, anyhow};
 use futures_util::{StreamExt, TryStreamExt, future};
 use guard::{Admitted, Mode};
@@ -57,6 +57,7 @@ impl Session {
         };
         let Link { client, ended } = link.with_context(|| format!("connecting to {}", connection.name()))?;
         stop_statements_when_client_gone(&client).await;
+        set_statement_timeout(&client, connection.statement_timeout()).await?;
         Ok(Self { client, tls, has_failed_rollback: false, ended })
     }
 
@@ -204,6 +205,12 @@ async fn stop_statements_when_client_gone(client: &Client) {
     if let Err(err) = client.batch_execute(STOP_WHEN_CLIENT_GONE).await {
         tracing::warn!("the server will not stop a statement when pgbg is gone: {err}");
     }
+}
+
+/// Not best effort: a production session never runs without its timeout.
+async fn set_statement_timeout(client: &Client, timeout: StatementTimeout) -> Result<()> {
+    let sql = format!("SET statement_timeout = {}", timeout.as_millis());
+    client.batch_execute(&sql).await.map_err(server_error).context("setting the statement timeout")
 }
 
 /// Streams the rows of `statement`, prepared first so a result without rows still has its columns.
@@ -409,6 +416,37 @@ mod tests {
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_statement_that_cannot_run_in_a_transaction_runs_when_writes_are_allowed() {
         assert!(run(WritePolicy::Allowed, "VACUUM").await.is_ok());
+    }
+
+    async fn session_on(tier: &str, extra: &str) -> Session {
+        let url = std::env::var(DATABASE_URL).unwrap();
+        let entry: Entry = toml::from_str(&format!("tier = \"{tier}\"\nurl = \"{url}\"\n{extra}")).unwrap();
+        Session::open(&Connection::new("shop", entry).unwrap(), Route::Direct).await.unwrap()
+    }
+
+    async fn on(mut session: Session, sql: &str) -> Result<ResultSet> {
+        session.run(&guard::admit(Statement::new(sql), WritePolicy::ReadOnly).unwrap()).await
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_session_runs_with_the_statement_timeout_of_its_tier() {
+        let shown = on(session_on("staging", "").await, "SHOW statement_timeout").await.unwrap();
+        assert_eq!(shown.rows, [[Value::Text("1min".into())]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_session_runs_with_the_statement_timeout_of_its_connection() {
+        let shown = on(session_on("staging", "statement_timeout = \"90s\"").await, "SHOW statement_timeout").await.unwrap();
+        assert_eq!(shown.rows, [[Value::Text("90s".into())]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_statement_past_its_timeout_is_cancelled_by_the_server() {
+        let err = on(session_on("local", "statement_timeout = \"100ms\"").await, "SELECT pg_sleep(5)").await.unwrap_err();
+        assert!(err.to_string().contains("statement timeout"), "{err}");
     }
 
     #[tokio::test]

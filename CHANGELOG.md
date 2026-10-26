@@ -15,6 +15,8 @@ Each entry says what changed, then where, then how to use it.
   TLS still checks the certificate against the host in `url`, so `sslmode=require` works through a tunnel; `before = [...]` runs once first.
   A tunnel that dies says how and quotes its last words; it stops with pgbg, along with any `ssh` or `gcloud` it started, even when pgbg crashes.
   The TUI's status line shows `⇄ tunnel :<port>`; when the tunnel dies, its session closes, and `⏎` starts both again.
+- **A statement timeout on every session**, set by the connection's tier: none on local, a minute on staging, 30 seconds on production.
+  The server cancels a statement that runs longer; set `statement_timeout = "2min"` on a connection to choose its own, `"0s"` for none.
 - **`pgbg connection add|edit|remove`** writes `config.toml` for you, one key at a time, keeping your comments and order.
   `add <name> --tier <tier> --url <url>` takes `--tunnel "<command>"`, one of `--password-env`, `--password-command` or `--keychain`, and `--writes allowed`; `edit` changes only the flags you give.
   `remove` deletes the connection's keychain item too; add `--keep-password` to leave it.
