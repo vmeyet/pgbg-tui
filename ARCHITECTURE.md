@@ -25,9 +25,9 @@ When a boundary or a flow changes, change this page in the same MR.
 | `syntax/` | SQL colours from tree-sitter, loaded on first use |
 | `act.rs`, `keymap.rs` | Every action in one table (name, default keys, help, palette verb, pane); the user's `[keys]` on top |
 | `tui/mod.rs` | The event loop: terminal events, answers and ticks in, frames out |
-| `tui/app/` | `App`, the pure state machine: keys in, `Action`s out, `Incoming` answers applied |
+| `tui/app/` | `App`, the pure state machine: keys in, `Action`s out, `Answer`s applied to the sheet of the connection that gave them |
 | `tui/actions.rs` | The action runner: hands each `Action` to the backend without waiting; answers come back as `Incoming` |
-| `tui/backend/` | What the runner calls, one part per concern: sessions (a task owns each one, runs its statements in turn, takes cancels by `RunId` while a statement runs, and says when the session is lost), queries, history |
+| `tui/backend/` | What the runner calls, one part per concern: sessions (one per connection opened, a task owns each one, runs its statements in turn, takes cancels by `RunId` while a statement runs, and says when the session is lost), queries, history |
 | `tui/ui.rs`, `tui/*_view.rs` | Drawing: layout in `ui.rs`, one view module per pane or modal |
 | `tui/grid_view/` | The results grid: only the visible rows and columns are drawn |
 | `tui/chart_view/` | Draws a `Series` with ratatui's `BarChart` and `Chart` |
@@ -39,23 +39,24 @@ When a boundary or a flow changes, change this page in the same MR.
 
 Running a statement:
 
-1. The editor hands `App` the statement under the cursor; `App` returns `Action::Run { run, statement }`, and every answer about it carries the same `RunId`, so a late one never lands on the next run.
+1. The editor hands `App` the statement under the cursor; `App` returns `Action::Run { connection, run, statement }`, and every answer about it carries the same connection and `RunId`, so a late one never lands on another connection or the next run.
 2. `db::guard` classifies it; a write on a read-only connection comes back as `Incoming::Refused` and never reaches the server.
 3. The session opens `BEGIN READ ONLY` and binds the statement to a portal (`Transaction::bind`).
    A portal takes any statement the guard admits; `DECLARE CURSOR` takes only a `SELECT` or `VALUES`, not `SHOW` or `EXPLAIN`.
 4. The first page (`query_portal(&portal, 500)`) comes back as `Incoming::Page`; the grid paints it, and more pages are fetched as the grid nears the end.
    Until paging lands, a result keeps its first 10 000 rows and says it is cut.
 5. A server error comes back as a `ServerError` with the server's position; the editor marks that character until the text changes.
-6. `Esc` on a running statement returns `Action::Cancel(run)`; the session task sends the server a cancel request over a link of its own, with the session's TLS, only while that run is on the server, and before the next one starts.
+6. `Esc` on a running statement returns `Action::Cancel { connection, run }`; the session task sends the server a cancel request over a link of its own, with the session's TLS, only while that run is on the server, and before the next one starts.
    The statement fails with the server's words, and the transaction is always rolled back at the end; a run cancelled before it started is never sent.
 7. `ctrl-c` on a running statement cancels it first; pgbg waits 2 seconds at most for the session task before it exits.
 
 Switching connection:
 
-1. `ctrl-o` opens the connection picker; picking one returns `Action::Open { connection }`.
+1. `ctrl-o` opens the connection picker; picking one returns `Action::Open(connection)`.
 2. When the connection has a tunnel, the session task starts it with `Tunnel::start`: it picks a free port, runs the command, and waits until the port answers.
 3. `Session::open` takes the tunnel's `Route`: it connects to `hostaddr=127.0.0.1` and the tunnel's port, and keeps the URL's host for the TLS certificate check; it reads the schema in the background for completion and the sidebar.
 4. The session stays open until pgbg quits, so switching back is instant; its tunnel stops with it.
+   Each sheet keeps its editor text and its result while another one is shown, and the answers of its session land on it alone.
 5. A session whose link is gone, or whose rollback failed, is opened again before the next statement; it is never retried on its own.
 6. Opening sets `statement_timeout`: the connection's own, else its tier's (none on local, 60 s on staging, 30 s on production).
 7. Opening gives up after 10 seconds, TLS and login included, unless the `url` sets `connect_timeout`; and each session asks the server to stop its statement once pgbg is gone (`client_connection_check_interval`).
@@ -70,7 +71,7 @@ Charting a result:
 
 - Only `src/db/` sees a `tokio_postgres` type; everything else uses `db/model/`.
 - Side effects live at the edges: `main.rs`, `commands/`, `tui/mod.rs`, `tui/actions.rs`, `tui/backend/`, `tunnel/`, `secret/`, `config/` when it rewrites the file.
-- `tui/app/` is pure: it reads time from `app.now`, set by the loop, and never does I/O; its tests drive it with keys and `Incoming` values.
+- `tui/app/` is pure: it reads time from `app.now`, set by the loop, and never does I/O; its tests drive it with keys and `Answer` values.
 - `chart/` is pure: a `ResultSet` in, a `Series` out; drawing lives in `tui/chart_view/`.
 - A program that takes the terminal (`$EDITOR` on a saved query) runs from the loop through `Screen::lend`, with the key stream paused.
 - Secrets are read only in `secret/` and sent only by `db::connect` and the keychain write.
@@ -132,6 +133,7 @@ One word per concept, in code, docs and UI.
 | connection | A named database target in the config: where, how to reach it, how to log in |
 | tier | `local`, `staging` or `production`; sets the colour and the timeout |
 | session | An open link to one connection, with its tunnel if it has one |
+| sheet | One connection in the TUI: its editor text, its last result and its session's state |
 | tunnel | The child process that forwards a local port to a database out of reach |
 | statement | One SQL statement, the unit pgbg runs |
 | query | A saved `.sql` file under `.pgbg/queries/` |

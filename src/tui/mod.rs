@@ -13,7 +13,7 @@ mod ui;
 use crate::connection::Connection;
 use crate::query::Roots;
 use anyhow::Result;
-use app::{App, Incoming};
+use app::{Action, Answer, App};
 use backend::Backend;
 use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures_util::StreamExt;
@@ -27,12 +27,12 @@ pub(crate) async fn run(connection: Connection) -> Result<()> {
     let theme = vtui::ground::ask().map_or_else(Theme::default, |ground| Theme::default().with_ground(ground));
     let mut app = App::new(&connection, theme);
     let (answers, mut incoming) = mpsc::unbounded_channel();
-    let backend = Backend::start(connection, find_roots().await?, answers);
-    for action in App::start() {
-        actions::spawn(action, &backend);
+    let mut backend = Backend::new(find_roots().await?, answers);
+    for action in std::iter::once(Action::Open(connection)).chain(App::start()) {
+        actions::spawn(action, &mut backend);
     }
     let (mut terminal, screen) = Screen::enter();
-    let outcome = event_loop(&mut terminal, &mut app, &backend, &mut incoming).await;
+    let outcome = event_loop(&mut terminal, &mut app, &mut backend, &mut incoming).await;
     screen.leave();
     backend.stop().await;
     outcome
@@ -47,8 +47,8 @@ async fn find_roots() -> Result<Roots> {
 async fn event_loop(
     terminal: &mut DefaultTerminal,
     app: &mut App,
-    backend: &Backend,
-    incoming: &mut UnboundedReceiver<Incoming>,
+    backend: &mut Backend,
+    incoming: &mut UnboundedReceiver<Answer>,
 ) -> Result<()> {
     let mut events = EventStream::new();
     while !app.should_quit {

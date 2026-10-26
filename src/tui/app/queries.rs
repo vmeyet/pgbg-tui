@@ -57,10 +57,11 @@ impl App {
     /// Puts the text of `query` in the editor, which it now stands for.
     pub(super) fn opened(&mut self, query: Query, text: &str) {
         self.queries.opened = Some(query);
-        self.editor = Field::new(text);
-        self.colours = syntax::highlight(text);
-        self.error_mark = None;
-        self.forget_sent_place();
+        let sheet = self.sheet_mut();
+        sheet.editor = Field::new(text);
+        sheet.colours = syntax::highlight(text);
+        sheet.error_mark = None;
+        sheet.forget_sent_place();
         self.focus = Focus::Editor;
     }
 }
@@ -68,7 +69,7 @@ impl App {
 #[cfg(test)]
 pub(in crate::tui) mod tests {
     use super::super::tests::app;
-    use super::super::{Incoming, Run};
+    use super::super::{Answer, QueryAnswer, Run};
     use super::*;
     use crate::query::{QueryPath, Source};
 
@@ -78,7 +79,7 @@ pub(in crate::tui) mod tests {
 
     pub(in crate::tui) fn with_queries() -> App {
         let mut app = app();
-        app.apply(Incoming::Queries(vec![query("customers.sql"), query("orders/daily.sql"), query("orders/weekly.sql")]));
+        app.apply(Answer::Queries(QueryAnswer::All(vec![query("customers.sql"), query("orders/daily.sql"), query("orders/weekly.sql")])));
         app
     }
 
@@ -97,7 +98,7 @@ pub(in crate::tui) mod tests {
     fn ctrl_p_finds_a_query_by_a_few_letters_and_enter_opens_it() {
         let mut app = with_queries();
         find(&mut app, "wkly");
-        assert_eq!(app.editor.text(), "");
+        assert_eq!(app.sheet().editor.text(), "");
         assert_eq!(press(&mut app, KeyCode::Enter), [Action::OpenQuery(query("orders/weekly.sql"))]);
         assert_eq!(app.finder, None);
     }
@@ -122,17 +123,17 @@ pub(in crate::tui) mod tests {
     fn an_opened_query_fills_the_editor_and_takes_the_keys() {
         let mut app = with_queries();
         press(&mut app, KeyCode::Tab);
-        app.apply(Incoming::QueryOpened { query: query("customers.sql"), text: "SELECT * FROM customers".into() });
-        assert_eq!(app.editor.text(), "SELECT * FROM customers");
+        app.apply(Answer::Queries(QueryAnswer::Opened { query: query("customers.sql"), text: "SELECT * FROM customers".into() }));
+        assert_eq!(app.sheet().editor.text(), "SELECT * FROM customers");
         assert_eq!(app.queries.opened, Some(query("customers.sql")));
-        assert_eq!(app.colours, syntax::highlight("SELECT * FROM customers"));
+        assert_eq!(app.sheet().colours, syntax::highlight("SELECT * FROM customers"));
         assert_eq!(app.focus, Focus::Editor);
     }
 
     #[test]
     fn a_query_that_cannot_be_read_says_so_in_the_result() {
         let mut app = with_queries();
-        app.apply(Incoming::QueryNotOpened { query: query("customers.sql"), error: "permission denied".into() });
-        assert_eq!(app.run, Run::Failed("could not open customers.sql: permission denied".into()));
+        app.apply(Answer::Queries(QueryAnswer::NotOpened { query: query("customers.sql"), error: "permission denied".into() }));
+        assert_eq!(app.sheet().run, Run::Failed("could not open customers.sql: permission denied".into()));
     }
 }

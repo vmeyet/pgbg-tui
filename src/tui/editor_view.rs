@@ -18,12 +18,13 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
     let block = pane::framed(&app.theme, &title(app), focused).title(badge(app));
     let inside = block.inner(area);
     f.render_widget(block, area);
-    let (before, _, _) = app.editor.split();
+    let sheet = app.sheet();
+    let (before, _, _) = sheet.editor.split();
     let row = before.matches('\n').count() as u16;
     let column = Line::from(before.rsplit('\n').next().unwrap_or_default()).width() as u16;
     let scroll = row.saturating_sub(inside.height.saturating_sub(1));
     let mark = Style::default().fg(app.theme.danger).add_modifier(Modifier::REVERSED);
-    let text = coloured(app.editor.text(), &app.colours, app.error_mark, mark, &app.theme);
+    let text = coloured(sheet.editor.text(), &sheet.colours, sheet.error_mark, mark, &app.theme);
     f.render_widget(Paragraph::new(text).scroll((scroll, 0)), inside);
     if !focused {
         return;
@@ -82,7 +83,7 @@ fn title(app: &App) -> String {
 }
 
 fn badge(app: &App) -> Span<'static> {
-    match app.writes {
+    match app.sheet().writes {
         WritePolicy::ReadOnly => Span::styled(" READ ONLY ", Style::default().fg(app.theme.muted)),
         WritePolicy::Allowed => Span::styled(" WRITES ", Style::default().fg(app.theme.danger).add_modifier(Modifier::BOLD)),
     }

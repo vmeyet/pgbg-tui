@@ -36,10 +36,12 @@ impl RunId {
 /// What the app asks the runner to do.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Action {
-    /// Run this statement on the session.
-    Run { run: RunId, statement: Statement },
-    /// Cancel this run if the session is still on it.
-    Cancel(RunId),
+    /// Open a session on this connection; one already open stays as it is.
+    Open(Connection),
+    /// Run this statement on the connection's session.
+    Run { connection: ConnectionName, run: RunId, statement: Statement },
+    /// Cancel this run if the connection's session is still on it.
+    Cancel { connection: ConnectionName, run: RunId },
     /// List every saved query.
     ListQueries,
     /// Read this query, for the editor.
@@ -47,6 +49,30 @@ pub(super) enum Action {
 }
 
 /// What the backend answers.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum Answer {
+    /// From the session of `connection`, so an answer from one never lands on another.
+    Session { connection: ConnectionName, incoming: Incoming },
+    /// About the saved queries, which every connection shares.
+    Queries(QueryAnswer),
+}
+
+/// What reading the saved queries came to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum QueryAnswer {
+    /// Every saved query, sorted.
+    All(Vec<Query>),
+    Opened {
+        query: Query,
+        text: String,
+    },
+    NotOpened {
+        query: Query,
+        error: String,
+    },
+}
+
+/// What a session answers.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Incoming {
     Opened,
@@ -71,16 +97,6 @@ pub(super) enum Incoming {
         error: String,
         /// A character count from 1 into the statement sent, as PostgreSQL counts.
         position: Option<usize>,
-    },
-    /// Every saved query, sorted.
-    Queries(Vec<Query>),
-    QueryOpened {
-        query: Query,
-        text: String,
-    },
-    QueryNotOpened {
-        query: Query,
-        error: String,
     },
 }
 
@@ -154,10 +170,9 @@ fn help_after(help: Help, key: KeyEvent, focus: Focus) -> Option<Help> {
     }
 }
 
-/// The whole TUI state; `handle_key`, `apply` and `fit_grid` are the only ways it changes.
+/// One connection in the TUI: its editor text, its last run and its session's state, kept while another one is shown.
 #[derive(Debug)]
-pub(super) struct App {
-    pub(super) theme: Theme,
+pub(super) struct Sheet {
     pub(super) name: ConnectionName,
     pub(super) tier: Tier,
     pub(super) writes: WritePolicy,
@@ -168,6 +183,19 @@ pub(super) struct App {
     /// The connection's tunnel, once it has one and its task said where it stands.
     pub(super) tunnel: Option<TunnelState>,
     pub(super) run: Run,
+    sent: Option<Sent>,
+    /// The editor's byte the server's last error points at, until the text changes.
+    pub(super) error_mark: Option<usize>,
+}
+
+/// The whole TUI state; `handle_key`, `apply` and `fit_grid` are the only ways it changes.
+#[derive(Debug)]
+pub(super) struct App {
+    pub(super) theme: Theme,
+    /// A sheet for each connection opened since pgbg started, in the order they were opened.
+    sheets: Vec<Sheet>,
+    /// The index in `sheets` of the one on screen.
+    shown: usize,
     pub(super) focus: Focus,
     /// The `?` overlay while it is open; it takes every key.
     pub(super) help: Option<Help>,
@@ -176,34 +204,32 @@ pub(super) struct App {
     pub(super) finder: Option<Finder>,
     /// The grid rows the last frame had room for: a page, for `PgDn`.
     grid_rows: usize,
-    sent: Option<Sent>,
-    /// The editor's byte the server's last error points at, until the text changes.
-    pub(super) error_mark: Option<usize>,
     pub(super) should_quit: bool,
 }
 
 impl App {
-    /// The app on `connection`, its session still opening.
-    pub(super) fn new(connection: &Connection, theme: Theme) -> Self {
+    /// The app on `first`, its session still opening.
+    pub(super) fn new(first: &Connection, theme: Theme) -> Self {
         Self {
             theme,
-            name: connection.name().clone(),
-            tier: connection.tier(),
-            writes: connection.writes(),
-            editor: Field::default(),
-            colours: Vec::new(),
-            link: Link::Opening,
-            tunnel: None,
-            run: Run::Idle,
+            sheets: vec![Sheet::new(first)],
+            shown: 0,
             focus: Focus::Editor,
             help: None,
             queries: Queries::default(),
             finder: None,
             grid_rows: 0,
-            sent: None,
-            error_mark: None,
             should_quit: false,
         }
+    }
+
+    /// The sheet on screen.
+    pub(super) fn sheet(&self) -> &Sheet {
+        &self.sheets[self.shown]
+    }
+
+    fn sheet_mut(&mut self) -> &mut Sheet {
+        &mut self.sheets[self.shown]
     }
 
     /// What the runner should do as the TUI starts.
@@ -226,16 +252,16 @@ impl App {
             return self.act(act);
         }
         if self.focus == Focus::Editor {
-            self.edit(key);
+            self.sheet_mut().edit(key);
         }
         vec![]
     }
 
     fn act(&mut self, act: Act) -> Vec<Action> {
         match act {
-            Act::Run => return self.run_editor(),
-            Act::Cancel => return self.cancel(),
-            Act::NewLine => self.edit(KeyEvent::from(KeyCode::Enter)),
+            Act::Run => return self.sheet_mut().run_editor(),
+            Act::Cancel => return self.sheet_mut().cancel(),
+            Act::NewLine => self.sheet_mut().edit(KeyEvent::from(KeyCode::Enter)),
             Act::SwitchPane => self.focus = if self.focus == Focus::Editor { Focus::Result } else { Focus::Editor },
             Act::Help => self.help = Some(Help::default()),
             Act::Quit => return self.quit(),
@@ -256,27 +282,65 @@ impl App {
     /// Tells the app how many grid rows the frame just drawn had room for, and keeps the cursor among them.
     pub(super) fn fit_grid(&mut self, rows: usize) {
         self.grid_rows = rows;
-        if let Run::Done { grid, .. } = &mut self.run {
+        if let Run::Done { grid, .. } = &mut self.sheet_mut().run {
             grid.keep_in_view(rows);
         }
     }
 
     fn grid_step(&mut self, step: Move) {
-        if let Run::Done { grid, result, .. } = &mut self.run {
-            grid.step(step, result, self.grid_rows);
+        let rows = self.grid_rows;
+        if let Run::Done { grid, result, .. } = &mut self.sheet_mut().run {
+            grid.step(step, result, rows);
+        }
+    }
+
+    /// Quits, cancelling every running statement first so no server runs one to its end.
+    fn quit(&mut self) -> Vec<Action> {
+        self.should_quit = true;
+        self.sheets.iter().filter_map(Sheet::cancel_of_running).collect()
+    }
+
+    /// Applies one answer: a session's to the sheet of its connection, the saved queries' to the sheet on screen.
+    pub(super) fn apply(&mut self, answer: Answer) {
+        match answer {
+            Answer::Session { connection, incoming } => {
+                if let Some(sheet) = self.sheets.iter_mut().find(|sheet| sheet.name == connection) {
+                    sheet.apply(incoming);
+                }
+            }
+            Answer::Queries(QueryAnswer::All(all)) => self.queries.all = all,
+            Answer::Queries(QueryAnswer::Opened { query, text }) => self.opened(query, &text),
+            Answer::Queries(QueryAnswer::NotOpened { query, error }) => {
+                self.sheet_mut().run = Run::Failed(format!("could not open {}: {error}", query.path));
+            }
+        }
+    }
+}
+
+impl Sheet {
+    fn new(connection: &Connection) -> Self {
+        Self {
+            name: connection.name().clone(),
+            tier: connection.tier(),
+            writes: connection.writes(),
+            editor: Field::default(),
+            colours: Vec::new(),
+            link: Link::Opening,
+            tunnel: None,
+            run: Run::Idle,
+            sent: None,
+            error_mark: None,
         }
     }
 
     fn cancel(&mut self) -> Vec<Action> {
         let Some(run) = self.running_run().filter(|_| self.run == Run::Running) else { return vec![] };
         self.run = Run::Cancelling;
-        vec![Action::Cancel(run)]
+        vec![Action::Cancel { connection: self.name.clone(), run }]
     }
 
-    /// Quits, cancelling the running statement first so the server does not run it to its end.
-    fn quit(&mut self) -> Vec<Action> {
-        self.should_quit = true;
-        self.running_run().map(Action::Cancel).into_iter().collect()
+    fn cancel_of_running(&self) -> Option<Action> {
+        self.running_run().map(|run| Action::Cancel { connection: self.name.clone(), run })
     }
 
     fn is_running(&self) -> bool {
@@ -303,7 +367,7 @@ impl App {
         self.run = Run::Running;
         self.error_mark = None;
         self.sent = Some(Sent { run, start: Some(range.start), statement: statement.clone() });
-        vec![Action::Run { run, statement }]
+        vec![Action::Run { connection: self.name.clone(), run, statement }]
     }
 
     /// The editor's byte at character `position` of the statement sent; the end of it when the server
@@ -315,8 +379,7 @@ impl App {
         Some(sent.start? + offset)
     }
 
-    /// Applies one answer of the backend.
-    pub(super) fn apply(&mut self, incoming: Incoming) {
+    fn apply(&mut self, incoming: Incoming) {
         match incoming {
             Incoming::Opened => self.link = Link::Open,
             Incoming::NotOpened(err) => {
@@ -335,9 +398,6 @@ impl App {
                 self.error_mark = position.and_then(|position| self.editor_byte(position));
                 self.run = Run::Failed(error);
             }
-            Incoming::Queries(all) => self.queries.all = all,
-            Incoming::QueryOpened { query, text } => self.opened(query, &text),
-            Incoming::QueryNotOpened { query, error } => self.run = Run::Failed(format!("could not open {}: {error}", query.path)),
         }
     }
 
@@ -362,8 +422,20 @@ pub(super) mod tests {
         Connection::new("shop", entry).unwrap()
     }
 
+    pub(crate) fn app_on(connection: &Connection) -> App {
+        App::new(connection, Theme::default())
+    }
+
     pub(crate) fn app() -> App {
-        App::new(&connection("local", "read-only"), Theme::default())
+        app_on(&connection("local", "read-only"))
+    }
+
+    pub(crate) fn shop() -> ConnectionName {
+        "shop".parse().unwrap()
+    }
+
+    pub(crate) fn to_shop(incoming: Incoming) -> Answer {
+        Answer::Session { connection: shop(), incoming }
     }
 
     pub(crate) fn typed(text: &str) -> App {
@@ -395,21 +467,21 @@ pub(super) mod tests {
 
     #[test]
     fn typing_goes_to_the_editor() {
-        assert_eq!(typed("SELECT 1").editor.text(), "SELECT 1");
+        assert_eq!(typed("SELECT 1").sheet().editor.text(), "SELECT 1");
     }
 
     #[test]
     fn enter_runs_the_text_of_the_editor() {
         let mut app = typed("SELECT 1");
-        assert_eq!(enter(&mut app), [Action::Run { run: RunId::FIRST, statement: Statement::new("SELECT 1") }]);
-        assert_eq!(app.run, Run::Running);
+        assert_eq!(enter(&mut app), [Action::Run { connection: shop(), run: RunId::FIRST, statement: Statement::new("SELECT 1") }]);
+        assert_eq!(app.sheet().run, Run::Running);
     }
 
     #[test]
     fn enter_on_an_empty_editor_runs_nothing() {
         let mut app = typed("  ");
         assert_eq!(enter(&mut app), []);
-        assert_eq!(app.run, Run::Idle);
+        assert_eq!(app.sheet().run, Run::Idle);
     }
 
     #[test]
@@ -423,15 +495,15 @@ pub(super) mod tests {
     fn enter_runs_only_the_statement_under_the_cursor() {
         let mut app = typed("SELECT 1;\nSELECT 2;\nSELECT 3");
         app.handle_key(KeyEvent::from(KeyCode::Up));
-        assert_eq!(enter(&mut app), [Action::Run { run: RunId::FIRST, statement: Statement::new("SELECT 2") }]);
+        assert_eq!(enter(&mut app), [Action::Run { connection: shop(), run: RunId::FIRST, statement: Statement::new("SELECT 2") }]);
     }
 
     #[test]
     fn esc_cancels_a_running_statement_once() {
         let mut app = typed("SELECT pg_sleep(30)");
         enter(&mut app);
-        assert_eq!(app.handle_key(KeyEvent::from(KeyCode::Esc)), [Action::Cancel(RunId::FIRST)]);
-        assert_eq!(app.run, Run::Cancelling);
+        assert_eq!(app.handle_key(KeyEvent::from(KeyCode::Esc)), [Action::Cancel { connection: shop(), run: RunId::FIRST }]);
+        assert_eq!(app.sheet().run, Run::Cancelling);
         assert_eq!(app.handle_key(KeyEvent::from(KeyCode::Esc)), []);
     }
 
@@ -452,14 +524,14 @@ pub(super) mod tests {
     fn a_result_replaces_the_running_state() {
         let mut app = typed("SELECT 1");
         enter(&mut app);
-        app.apply(Incoming::Result { run: RunId::FIRST, result: orders(), took: Duration::from_millis(38) });
-        assert_eq!(app.run, Run::Done { grid: Grid::new(&orders()), result: orders(), took: Duration::from_millis(38) });
+        app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result: orders(), took: Duration::from_millis(38) }));
+        assert_eq!(app.sheet().run, Run::Done { grid: Grid::new(&orders()), result: orders(), took: Duration::from_millis(38) });
     }
 
     fn with_result() -> App {
         let mut app = typed("SELECT 1");
         enter(&mut app);
-        app.apply(Incoming::Result { run: RunId::FIRST, result: orders(), took: Duration::from_millis(38) });
+        app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result: orders(), took: Duration::from_millis(38) }));
         app
     }
 
@@ -481,28 +553,28 @@ pub(super) mod tests {
         let mut app = with_result();
         press(&mut app, KeyCode::Tab);
         press(&mut app, KeyCode::Char('j'));
-        let Run::Done { grid, .. } = &app.run else { panic!("no result") };
+        let Run::Done { grid, .. } = &app.sheet().run else { panic!("no result") };
         assert_eq!(grid.row, 1);
-        assert_eq!(app.editor.text(), "SELECT 1");
+        assert_eq!(app.sheet().editor.text(), "SELECT 1");
     }
 
     #[test]
     fn a_refused_statement_says_it_was_not_sent() {
         let mut app = typed("DELETE FROM orders");
         enter(&mut app);
-        app.apply(Incoming::Refused { run: RunId::FIRST, why: "`DELETE` is not a read".into() });
-        assert_eq!(app.run, Run::Failed("not sent: `DELETE` is not a read".into()));
+        app.apply(to_shop(Incoming::Refused { run: RunId::FIRST, why: "`DELETE` is not a read".into() }));
+        assert_eq!(app.sheet().run, Run::Failed("not sent: `DELETE` is not a read".into()));
     }
 
     fn failed_at(app: &mut App, position: usize) {
-        app.apply(Incoming::Failed { run: RunId::FIRST, error: "ERROR: syntax error".into(), position: Some(position) });
+        app.apply(to_shop(Incoming::Failed { run: RunId::FIRST, error: "ERROR: syntax error".into(), position: Some(position) }));
     }
 
     #[test]
     fn the_colours_follow_the_text_as_it_is_typed() {
         let mut app = typed("SELECT 1");
         app.handle_key(KeyEvent::from(KeyCode::Backspace));
-        assert_eq!(app.colours, [vec![(0..6, crate::syntax::Token::Keyword)]]);
+        assert_eq!(app.sheet().colours, [vec![(0..6, crate::syntax::Token::Keyword)]]);
     }
 
     #[test]
@@ -510,7 +582,7 @@ pub(super) mod tests {
         let mut app = typed("SELECT 1;\nSELECT * FROM no_such_orders");
         enter(&mut app);
         failed_at(&mut app, 15);
-        assert_eq!(app.error_mark.map(|at| &app.editor.text()[at..]), Some("no_such_orders"));
+        assert_eq!(app.sheet().error_mark.map(|at| &app.sheet().editor.text()[at..]), Some("no_such_orders"));
     }
 
     #[test]
@@ -519,7 +591,7 @@ pub(super) mod tests {
         app.handle_key(KeyEvent::from(KeyCode::Left));
         enter(&mut app);
         failed_at(&mut app, 7);
-        assert_eq!(app.error_mark, Some(6));
+        assert_eq!(app.sheet().error_mark, Some(6));
     }
 
     #[test]
@@ -527,7 +599,7 @@ pub(super) mod tests {
         let mut app = typed("SELECT 'zoë', x");
         enter(&mut app);
         failed_at(&mut app, 15);
-        assert_eq!(app.error_mark.map(|at| &app.editor.text()[at..]), Some("x"));
+        assert_eq!(app.sheet().error_mark.map(|at| &app.sheet().editor.text()[at..]), Some("x"));
     }
 
     #[test]
@@ -536,38 +608,38 @@ pub(super) mod tests {
         enter(&mut app);
         failed_at(&mut app, 8);
         app.handle_key(KeyEvent::from(KeyCode::Left));
-        assert_eq!(app.error_mark, Some(7));
+        assert_eq!(app.sheet().error_mark, Some(7));
         app.handle_key(KeyEvent::from(KeyCode::Char('y')));
-        assert_eq!(app.error_mark, None);
+        assert_eq!(app.sheet().error_mark, None);
     }
 
     #[test]
     fn a_session_that_cannot_open_fails_the_statement_waiting_on_it() {
         let mut app = typed("SELECT 1");
         enter(&mut app);
-        app.apply(Incoming::NotOpened("connection refused".into()));
-        assert_eq!(app.link, Link::Failed("connection refused".into()));
-        assert_eq!(app.run, Run::Failed("connection refused".into()));
+        app.apply(to_shop(Incoming::NotOpened("connection refused".into())));
+        assert_eq!(app.sheet().link, Link::Failed("connection refused".into()));
+        assert_eq!(app.sheet().run, Run::Failed("connection refused".into()));
     }
 
     #[test]
     fn a_session_that_cannot_open_leaves_an_idle_editor_idle() {
         let mut app = app();
-        app.apply(Incoming::NotOpened("connection refused".into()));
-        assert_eq!(app.run, Run::Idle);
+        app.apply(to_shop(Incoming::NotOpened("connection refused".into())));
+        assert_eq!(app.sheet().run, Run::Idle);
     }
 
     #[test]
     fn alt_enter_breaks_the_line_and_runs_nothing() {
         let mut app = typed("SELECT *");
         assert_eq!(app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT)), []);
-        assert_eq!(app.editor.text(), "SELECT *\n");
+        assert_eq!(app.sheet().editor.text(), "SELECT *\n");
     }
 
     #[test]
     fn a_question_mark_in_the_editor_is_typed() {
         let app = typed("SELECT '?'");
-        assert_eq!((app.editor.text(), app.help), ("SELECT '?'", None));
+        assert_eq!((app.sheet().editor.text(), app.help), ("SELECT '?'", None));
     }
 
     #[test]
@@ -579,7 +651,7 @@ pub(super) mod tests {
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Esc);
         assert_eq!(app.help, None);
-        let Run::Done { grid, .. } = &app.run else { panic!("no result") };
+        let Run::Done { grid, .. } = &app.sheet().run else { panic!("no result") };
         assert_eq!(grid.row, 0);
     }
 
@@ -599,27 +671,40 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn an_answer_from_the_session_of_another_connection_is_dropped() {
+        let mut app = typed("SELECT 1");
+        enter(&mut app);
+        let other =
+            Answer::Session { connection: "prod".parse().unwrap(), incoming: Incoming::Refused { run: RunId::FIRST, why: "no".into() } };
+        app.apply(other);
+        assert_eq!(app.sheet().run, Run::Running);
+    }
+
+    #[test]
     fn a_late_answer_to_an_earlier_run_is_dropped() {
         let mut app = with_result();
         enter(&mut app);
-        app.apply(Incoming::Failed { run: RunId::FIRST, error: "ERROR: canceling statement".into(), position: None });
-        assert_eq!(app.run, Run::Running);
+        app.apply(to_shop(Incoming::Failed { run: RunId::FIRST, error: "ERROR: canceling statement".into(), position: None }));
+        assert_eq!(app.sheet().run, Run::Running);
     }
 
     #[test]
     fn ctrl_c_while_a_statement_runs_cancels_it_and_quits() {
         let mut app = typed("SELECT pg_sleep(30)");
         enter(&mut app);
-        assert_eq!(app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)), [Action::Cancel(RunId::FIRST)]);
+        assert_eq!(
+            app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            [Action::Cancel { connection: shop(), run: RunId::FIRST }]
+        );
         assert!(app.should_quit);
     }
 
     #[test]
     fn a_lost_session_says_so_in_the_status_line() {
         let mut app = app();
-        app.apply(Incoming::Opened);
-        app.apply(Incoming::Closed("terminating connection".into()));
-        assert_eq!(app.link, Link::Failed(format!("{LOST_SESSION}: terminating connection")));
+        app.apply(to_shop(Incoming::Opened));
+        app.apply(to_shop(Incoming::Closed("terminating connection".into())));
+        assert_eq!(app.sheet().link, Link::Failed(format!("{LOST_SESSION}: terminating connection")));
     }
 
     #[test]
@@ -629,7 +714,7 @@ pub(super) mod tests {
         app.handle_key(KeyEvent::from(KeyCode::Home));
         app.handle_key(KeyEvent::from(KeyCode::Char(' ')));
         failed_at(&mut app, 8);
-        assert_eq!(app.error_mark, None);
+        assert_eq!(app.sheet().error_mark, None);
     }
 
     #[test]
@@ -637,6 +722,6 @@ pub(super) mod tests {
         let mut app = typed("SELECT 1");
         app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
         assert!(app.should_quit);
-        assert_eq!(app.editor.text(), "SELECT 1");
+        assert_eq!(app.sheet().editor.text(), "SELECT 1");
     }
 }

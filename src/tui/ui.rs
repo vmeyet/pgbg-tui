@@ -31,8 +31,8 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> usize {
 
 /// The outer frame and its `● name` pill in the tier's colour; returns the area inside it.
 fn framed(f: &mut Frame<'_>, app: &App) -> Rect {
-    let colour = theme::tier(&app.theme, app.tier);
-    let pill = Span::styled(format!(" ● {} ", app.name), Style::default().fg(colour).add_modifier(Modifier::BOLD));
+    let colour = theme::tier(&app.theme, app.sheet().tier);
+    let pill = Span::styled(format!(" ● {} ", app.sheet().name), Style::default().fg(colour).add_modifier(Modifier::BOLD));
     let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(colour)).title(pill);
     let inside = block.inner(f.area());
     f.render_widget(block, f.area());
@@ -58,7 +58,7 @@ fn footer(f: &mut Frame<'_>, app: &App, area: Rect) {
 
 /// The tunnel's state, when the connection has one, then the session's, in `width` columns at most.
 fn status(app: &App, width: usize) -> Line<'static> {
-    let tunnel = app.tunnel.as_ref().map(|tunnel| tunnel_state(app, tunnel, width / 2));
+    let tunnel = app.sheet().tunnel.as_ref().map(|tunnel| tunnel_state(app, tunnel, width / 2));
     let link = link(app, width - tunnel.as_ref().map_or(0, Span::width));
     Line::from(tunnel.into_iter().chain([link]).collect::<Vec<_>>())
 }
@@ -72,7 +72,7 @@ fn tunnel_state(app: &App, tunnel: &TunnelState, width: usize) -> Span<'static> 
 }
 
 fn link(app: &App, width: usize) -> Span<'static> {
-    match &app.link {
+    match &app.sheet().link {
         Link::Opening => Span::styled("connecting… ", Style::default().fg(app.theme.muted)),
         Link::Open => Span::styled("connected ", Style::default().fg(app.theme.muted)),
         Link::Failed(err) => failure(app, err, width),
@@ -88,8 +88,8 @@ fn failure(app: &App, err: &str, width: usize) -> Span<'static> {
 #[cfg(test)]
 mod tests {
     use super::super::app::queries::tests::{query, with_queries};
-    use super::super::app::tests::{app, connection, orders, typed};
-    use super::super::app::{App, Incoming, RunId};
+    use super::super::app::tests::{app, app_on, connection, orders, to_shop, typed};
+    use super::super::app::{Answer, App, Incoming, QueryAnswer, RunId};
     use super::*;
     use crate::db::model::LocalPort;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -113,8 +113,8 @@ mod tests {
     fn a_result_shows_its_count_its_time_and_its_rows() {
         let mut app = typed("SELECT id, customer FROM orders");
         app.handle_key(KeyEvent::from(KeyCode::Enter));
-        app.apply(Incoming::Opened);
-        app.apply(Incoming::Result { run: RunId::FIRST, result: orders(), took: Duration::from_millis(38) });
+        app.apply(to_shop(Incoming::Opened));
+        app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result: orders(), took: Duration::from_millis(38) }));
         insta::assert_snapshot!("result", render(&app, 60, 14).backend());
     }
 
@@ -128,29 +128,29 @@ mod tests {
     #[test]
     fn a_tunnel_that_is_up_shows_its_port_beside_the_session() {
         let mut app = app();
-        app.apply(Incoming::Tunnel(TunnelState::Up(LocalPort::new(49213))));
-        app.apply(Incoming::Opened);
+        app.apply(to_shop(Incoming::Tunnel(TunnelState::Up(LocalPort::new(49213)))));
+        app.apply(to_shop(Incoming::Opened));
         insta::assert_snapshot!("tunnel_up", render(&app, 60, 14).backend());
     }
 
     #[test]
     fn a_tunnel_that_died_says_how_in_the_status_line() {
         let mut app = app();
-        app.apply(Incoming::Tunnel(TunnelState::Died("the tunnel `ssh` died, exit status: 255".into())));
-        app.apply(Incoming::Closed("its tunnel died".into()));
+        app.apply(to_shop(Incoming::Tunnel(TunnelState::Died("the tunnel `ssh` died, exit status: 255".into()))));
+        app.apply(to_shop(Incoming::Closed("its tunnel died".into())));
         insta::assert_snapshot!("tunnel_died", render(&app, 100, 14).backend());
     }
 
     #[test]
     fn a_session_that_cannot_open_says_so_in_the_status_line() {
         let mut app = app();
-        app.apply(Incoming::NotOpened("connecting to shop: connection refused".into()));
+        app.apply(to_shop(Incoming::NotOpened("connecting to shop: connection refused".into())));
         insta::assert_snapshot!("not_opened", render(&app, 60, 14).backend());
     }
 
     #[test]
     fn a_connection_that_allows_writes_shows_a_writes_badge() {
-        let app = App::new(&connection("local", "allowed"), Theme::default());
+        let app = app_on(&connection("local", "allowed"));
         insta::assert_snapshot!("writes", render(&app, 60, 6).backend());
     }
 
@@ -165,7 +165,7 @@ mod tests {
     #[test]
     fn an_open_query_names_the_editor() {
         let mut app = with_queries();
-        app.apply(Incoming::QueryOpened { query: query("orders/daily.sql"), text: "SELECT 1".into() });
+        app.apply(Answer::Queries(QueryAnswer::Opened { query: query("orders/daily.sql"), text: "SELECT 1".into() }));
         insta::assert_snapshot!("query_open", render(&app, 60, 6).backend());
     }
 
@@ -173,7 +173,7 @@ mod tests {
     fn the_frame_takes_the_colour_of_the_tier() {
         let theme = Theme::default();
         for (tier, colour) in [("local", theme.success), ("staging", theme.warn), ("production", theme.danger)] {
-            let app = App::new(&connection(tier, "read-only"), theme);
+            let app = app_on(&connection(tier, "read-only"));
             let terminal = render(&app, 40, 6);
             assert_eq!(terminal.backend().buffer()[(0, 0)].fg, colour, "{tier}");
         }
