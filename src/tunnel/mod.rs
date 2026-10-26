@@ -2,7 +2,7 @@
 use crate::connection::TunnelSpec;
 use crate::db::model::{LocalPort, Route};
 use anyhow::{Context, Result, anyhow, bail};
-use rustix::process::{Pid, Signal, kill_process_group};
+use rustix::process::Pid;
 use std::collections::VecDeque;
 use std::fmt;
 use std::net::Ipv4Addr;
@@ -22,6 +22,8 @@ const LAST_WORDS_TIMEOUT: Duration = Duration::from_secs(1);
 const LAST_WORDS_LINES: usize = 5;
 const LAST_WORDS_LINE_CHARS: usize = 200;
 const OWN_GROUP: i32 = 0;
+
+mod groups;
 
 /// A running tunnel; dropping it kills its whole process group.
 #[derive(Debug)]
@@ -66,6 +68,21 @@ impl Tunnel {
         Route::Tunnel(self.port)
     }
 
+    pub(crate) fn port(&self) -> LocalPort {
+        self.port
+    }
+
+    /// Waits until the tunnel ends on its own, then says how; its group is killed on the way.
+    pub(crate) async fn ended(&mut self) -> Died {
+        let status = self.child.wait().await.ok();
+        self.died(status).await
+    }
+
+    /// Whether the tunnel's own process still runs.
+    pub(crate) fn is_running(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
+
     /// Kills the tunnel's whole group and reaps it; safe to call twice.
     pub(crate) async fn stop(&mut self) {
         self.kill_group();
@@ -86,6 +103,9 @@ impl Tunnel {
             .spawn()
             .with_context(|| format!("starting the tunnel `{program}`"))?;
         let group = child.id().and_then(|id| Pid::from_raw(id as i32));
+        if let Some(group) = group {
+            groups::register(group);
+        }
         let last_words = child.stderr.take().map(|stderr| tokio::spawn(keep_last_words(stderr)));
         Ok(Self { port, program: program.clone(), child, group, last_words })
     }
@@ -117,7 +137,7 @@ impl Tunnel {
 
     fn kill_group(&mut self) {
         let Some(group) = self.group.take() else { return };
-        if let Err(err) = kill_process_group(group, Signal::KILL) {
+        if let Err(err) = groups::kill(group) {
             tracing::warn!("the tunnel `{}` could not be killed: {err}", self.program);
         }
     }
@@ -191,16 +211,18 @@ impl fmt::Display for Died {
 impl std::error::Error for Died {}
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::connection::WritePolicy;
     use crate::connection::{Connection, Entry};
     use crate::db::Session;
     use crate::db::guard;
     use crate::db::model::{Statement, Value};
+    use rustix::process::{Signal, kill_process_group};
 
     const LISTEN: &str = "import socket, sys, time; server = socket.create_server(('127.0.0.1', int(sys.argv[1]))); time.sleep(60)";
-    const FORWARD: &str = "
+    /// A forwarder from `127.0.0.1:argv[1]` to `argv[2]:argv[3]`, for tunnels in tests.
+    pub(crate) const FORWARD: &str = "
 import socket, sys, threading
 def pipe(source, sink):
     while data := source.recv(65536):
@@ -214,6 +236,8 @@ while True:
         threading.Thread(target=pipe, args=(source, sink), daemon=True).start()
 ";
     const STOP_TIMEOUT: Duration = Duration::from_secs(5);
+    const PANICKING_CHILD: &str = "PGBG_TEST_PANICKING_TUNNEL";
+    const PANIC_TEST: &str = "tunnel::tests::a_panic_kills_every_live_tunnel_even_where_no_drop_runs";
 
     fn spec(command: &[&str], before: Option<&[&str]>) -> TunnelSpec {
         let list = |args: &[&str]| format!("[{}]", args.iter().map(|arg| format!("{arg:?}")).collect::<Vec<_>>().join(", "));
@@ -287,6 +311,36 @@ while True:
         let port = port_of(&tunnel);
         drop(tunnel);
         assert!(until_silent(port).await);
+    }
+
+    #[tokio::test]
+    async fn a_tunnel_that_ends_on_its_own_says_how() {
+        let mut tunnel = Tunnel::start(&listener()).await.unwrap();
+        assert!(tunnel.is_running());
+        kill_process_group(tunnel.group.unwrap(), Signal::KILL).unwrap();
+        assert!(tunnel.ended().await.to_string().contains("`python3` died"));
+        assert!(!tunnel.is_running());
+    }
+
+    async fn port_of_a_tunnel_left_by_a_panicking_pgbg() -> u16 {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([PANIC_TEST, "--exact", "--nocapture"])
+            .env(PANICKING_CHILD, "1")
+            .output()
+            .await
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        stdout.lines().find_map(|line| line.strip_prefix("port=")).unwrap().parse().unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_panic_kills_every_live_tunnel_even_where_no_drop_runs() {
+        if std::env::var_os(PANICKING_CHILD).is_some() {
+            let leaked = Box::leak(Box::new(Tunnel::start(&listener()).await.unwrap()));
+            println!("port={}", leaked.port);
+            panic!("pgbg panicked with a tunnel open");
+        }
+        assert!(until_silent(port_of_a_tunnel_left_by_a_panicking_pgbg().await).await);
     }
 
     #[tokio::test]

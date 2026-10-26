@@ -2,7 +2,7 @@
 use crate::act::{self, Act, Pane};
 use crate::connection::{Connection, ConnectionName, Tier, WritePolicy};
 use crate::db::guard;
-use crate::db::model::{ResultSet, Statement};
+use crate::db::model::{LocalPort, ResultSet, Statement};
 use crate::syntax::Spans;
 use crossterm::event::{KeyCode, KeyEvent};
 use std::time::Duration;
@@ -47,6 +47,7 @@ pub(super) enum Incoming {
     NotOpened(String),
     /// The open session was lost, and why; the next run opens a new one.
     Closed(String),
+    Tunnel(TunnelState),
     Result {
         run: RunId,
         result: ResultSet,
@@ -80,6 +81,15 @@ pub(super) enum Link {
     Opening,
     Open,
     Failed(String),
+}
+
+/// Where the connection's tunnel stands, as the status line says it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum TunnelState {
+    Starting,
+    Up(LocalPort),
+    /// It did not start, or it ended, and how.
+    Died(String),
 }
 
 /// The last statement run and what came of it.
@@ -138,6 +148,8 @@ pub(super) struct App {
     /// The editor's syntax colours, one entry per line, rebuilt only when its text changes.
     pub(super) colours: Vec<Spans>,
     pub(super) link: Link,
+    /// The connection's tunnel, once it has one and its task said where it stands.
+    pub(super) tunnel: Option<TunnelState>,
     pub(super) run: Run,
     pub(super) focus: Focus,
     /// The `?` overlay while it is open; it takes every key.
@@ -161,6 +173,7 @@ impl App {
             editor: Field::default(),
             colours: Vec::new(),
             link: Link::Opening,
+            tunnel: None,
             run: Run::Idle,
             focus: Focus::Editor,
             help: None,
@@ -279,6 +292,7 @@ impl App {
                 self.link = Link::Failed(err);
             }
             Incoming::Closed(why) => self.link = Link::Failed(format!("{LOST_SESSION}: {why}")),
+            Incoming::Tunnel(state) => self.tunnel = Some(state),
             Incoming::Result { run, .. } | Incoming::Refused { run, .. } | Incoming::Failed { run, .. }
                 if !self.is_answer_to_running(run) => {}
             Incoming::Result { result, took, .. } => self.run = Run::Done { grid: Grid::new(&result), result, took },
