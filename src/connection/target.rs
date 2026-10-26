@@ -25,6 +25,10 @@ impl Target {
         Ok(Self(url))
     }
 
+    pub(crate) fn url(&self) -> &Url {
+        &self.0
+    }
+
     /// The `sslmode` the query asks for, when it does.
     pub(super) fn ssl_mode(&self) -> Option<String> {
         self.0.query_pairs().find(|(key, _)| key == "sslmode").map(|(_, mode)| mode.into_owned())
