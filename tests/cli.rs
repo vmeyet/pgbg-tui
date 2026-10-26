@@ -96,3 +96,17 @@ fn run_json_prints_the_columns_and_rows() {
     assert_eq!(json["columns"][1]["name"], "customer");
     assert_eq!(json["rows"][0], serde_json::json!([7, "nina"]));
 }
+
+#[test]
+fn tui_on_an_unknown_connection_stops_before_taking_the_terminal() {
+    let output = pgbg(SHOP, &["tui", "nope"]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("no connection `nope`"), "{}", stderr(&output));
+}
+
+#[test]
+fn pgbg_alone_without_connections_says_where_to_add_one() {
+    let output = pgbg("", &[]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("[connections.<name>]"), "{}", stderr(&output));
+}
