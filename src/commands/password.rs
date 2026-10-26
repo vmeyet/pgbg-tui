@@ -5,10 +5,10 @@ use anyhow::{Result, bail};
 
 /// Saves the password of the connection `name` in the keychain, typed hidden or piped in; a connection
 /// with no password yet gets `password = { keychain = "pgbg/<name>" }`. Safe to run twice.
-pub fn set(name: &ConnectionName) -> Result<()> {
+pub async fn set(name: &ConnectionName) -> Result<()> {
     let connection = super::connection(Some(name))?;
     let item = keychain_item(&connection)?;
-    let password = Secret::from_stdin(&format!("Password for `{name}` (hidden): "))?;
+    let password = Secret::from_stdin(&format!("Password for `{name}` (hidden): ")).await?;
     Keychain::PGBG.write(&item, &password)?;
     if connection.password().is_none() {
         config::set_password(&config::path(), name, &SecretSource::Keychain(item.clone()))?;

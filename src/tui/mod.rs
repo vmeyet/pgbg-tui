@@ -36,9 +36,9 @@ static PASTE_OFF_ON_PANIC: Once = Once::new();
 
 /// Runs the TUI on `first` until the user quits, with `connections` to switch to, giving the terminal back on the way out.
 pub(crate) async fn run(connections: Vec<Connection>, first: Connection) -> Result<()> {
+    let mut signals = Signals::listen()?;
     let theme = vtui::ground::ask().map_or_else(Theme::default, |ground| Theme::default().with_ground(ground));
     let mut app = App::new(connections, &first, theme);
-    let mut signals = Signals::listen()?;
     let (answers, mut incoming) = mpsc::unbounded_channel();
     let mut backend = Backend::new(find_roots().await?, answers);
     for action in std::iter::once(Action::Open(first)).chain(App::start()) {
@@ -107,7 +107,12 @@ async fn event_loop(
                 app.recolour();
                 vec![]
             }
-            stopped = signals.next() => return Err(stopped.into()),
+            stopped = signals.next() => {
+                for action in app.quit() {
+                    actions::spawn(action, backend);
+                }
+                return Err(stopped.into());
+            }
             else => break,
         };
         for action in actions {

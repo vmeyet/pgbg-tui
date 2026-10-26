@@ -467,12 +467,7 @@ impl Sheet {
     fn apply(&mut self, incoming: Incoming) {
         match incoming {
             Incoming::Opened => self.link = Link::Open,
-            Incoming::NotOpened(err) => {
-                if self.is_running() {
-                    self.run = Run::Failed(err.clone());
-                }
-                self.link = Link::Failed(err);
-            }
+            Incoming::NotOpened(err) => self.link = Link::Failed(err),
             Incoming::Closed(why) => self.link = Link::Failed(format!("{LOST_SESSION}: {why}")),
             Incoming::Tunnel(state) => self.tunnel = Some(state),
             Incoming::Result { run, .. } | Incoming::Refused { run, .. } | Incoming::Failed { run, .. }
@@ -755,12 +750,12 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_session_that_cannot_open_fails_the_statement_waiting_on_it() {
+    fn a_session_that_cannot_open_leaves_the_statement_waiting_on_it_to_its_own_answer() {
         let mut app = typed("SELECT 1");
         enter(&mut app);
         app.apply(to_shop(Incoming::NotOpened("connection refused".into())));
         assert_eq!(app.sheet().link, Link::Failed("connection refused".into()));
-        assert_eq!(app.sheet().run, Run::Failed("connection refused".into()));
+        assert_eq!(app.sheet().run, Run::Running);
     }
 
     #[test]

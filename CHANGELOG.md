@@ -70,6 +70,10 @@ Each entry says what changed, then where, then how to use it.
 
 ### Fixed
 
+- **A statement the TUI shows as failed is never sent**: one sent while its session fails to open fails with it, so `⏎` again never runs a write twice.
+- **A `kill` or a closed terminal stops the TUI as `ctrl-c` does**: the running statement is cancelled, one still waiting is never sent, and pgbg warns when a tunnel's port still answers.
+- **`ctrl-c` quits from the connection picker** too.
+- **`pgbg password set` gives the terminal back** when a `kill` stops it while you type.
 - **Pasting into the TUI editor** inserts the text as it is: a line end in a pasted statement no longer runs the part before it, and a tab no longer moves the keys to the result.
   Typing in a long editor no longer waits on its colours, which follow a moment after you stop.
 - **`esc` cancels only the statement you see running** in the TUI: a cancel that arrives late never stops the next statement, and `esc` while the session is still opening keeps the statement from the server.
