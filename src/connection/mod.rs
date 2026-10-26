@@ -107,7 +107,6 @@ impl Connection {
         self.writes
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "`db::Session::open`, the next step, is its first caller"))]
     pub(crate) fn tls(&self) -> Tls {
         self.tls
     }
