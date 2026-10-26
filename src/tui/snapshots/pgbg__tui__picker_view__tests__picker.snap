@@ -2,7 +2,7 @@
 source: src/tui/picker_view.rs
 expression: terminal.backend()
 ---
-"╭ ● local ──────────╭ Connections ─────────────────────────────────────────────╮───────────────────╮"
+"╭ ● local · local ──╭ Connections ─────────────────────────────────────────────╮───────────────────╮"
 "│╭ Editor ─ READ ONL│ › ▌                                                      │──────────────────╮│"
 "││                  │                                                          │                  ││"
 "││                  │ ▎● local  localhost/shop · read only  open               │                  ││"

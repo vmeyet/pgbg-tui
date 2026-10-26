@@ -9,6 +9,8 @@ mod help_view;
 mod picker_view;
 mod result_view;
 mod sidebar_view;
+#[cfg(test)]
+mod styled;
 mod theme;
 mod ui;
 

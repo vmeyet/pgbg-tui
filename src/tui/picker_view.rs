@@ -63,7 +63,7 @@ fn session_state(app: &App, connection: &Connection) -> (&'static str, Style) {
     match sheet.session {
         SessionState::Opening => ("  opening…", Style::default().fg(app.theme.muted)),
         SessionState::Open => ("  open", Style::default().fg(app.theme.success)),
-        SessionState::Failed(_) => ("  failed", Style::default().fg(app.theme.danger)),
+        SessionState::Failed(_) => ("  failed", Style::default().fg(theme::failure(&app.theme))),
     }
 }
 

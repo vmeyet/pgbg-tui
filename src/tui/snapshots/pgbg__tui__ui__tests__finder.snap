@@ -2,7 +2,7 @@
 source: src/tui/ui.rs
 expression: "render(&app, 60, 16).backend()"
 ---
-"╭ ● shop ─╭ Queries ─────────────────────────────╮─────────╮"
+"╭ ● shop ·╭ Queries ─────────────────────────────╮─────────╮"
 "│╭ Editor │ › o▌                                 │────────╮│"
 "││        │                                      │        ││"
 "││        │ ▎◆ orders/daily.sql                  │        ││"

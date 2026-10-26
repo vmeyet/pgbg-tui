@@ -23,7 +23,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
     let row = before.matches('\n').count() as u16;
     let column = Line::from(before.rsplit('\n').next().unwrap_or_default()).width() as u16;
     let scroll = row.saturating_sub(inside.height.saturating_sub(1));
-    let mark = Style::default().fg(app.theme.danger).add_modifier(Modifier::REVERSED);
+    let mark = Style::default().fg(theme::failure(&app.theme)).add_modifier(Modifier::REVERSED);
     let window = Window { first: usize::from(scroll), rows: usize::from(inside.height) };
     let text = coloured(
         sheet.editor.text(),
@@ -165,10 +165,10 @@ fn header_notes(app: &App) -> Line<'static> {
     Line::from(suggestion.into_iter().chain(warning).collect::<Vec<_>>())
 }
 
-/// Why the last query asked for could not be opened, in the danger colour.
+/// Why the last query asked for could not be opened, in the failure colour.
 fn open_error(app: &App) -> Span<'static> {
     let error = app.sheet().query_error.as_ref().map(|error| format!(" ✗ {error} "));
-    Span::styled(error.unwrap_or_default(), Style::default().fg(app.theme.danger))
+    Span::styled(error.unwrap_or_default(), Style::default().fg(theme::failure(&app.theme)))
 }
 
 fn badge(app: &App) -> Span<'static> {

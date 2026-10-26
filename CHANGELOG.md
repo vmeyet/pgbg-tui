@@ -79,6 +79,9 @@ Each entry says what changed, then where, then how to use it.
 - **A saved query opens in the editor that asked for it**, even when you switched connection while it was read; its error shows there too.
 - **The sidebar keeps its cursor on the same query** when the list of queries changes, and draws a name's control characters escaped.
 - **A queries folder swapped for a link** after pgbg started is no longer listed or read.
+- **The TUI footer keeps `^c quit` and `F1 keys`** however narrow the terminal: the other hints go first, and the status takes at most half the row.
+  The status reads as one chain, `⇄ :49213 · connected`, or gives the one reason the session is down after a `✗`; a narrow screen no longer crashes it.
+- **The frame names the tier** beside the connection, `● shop · production`, and an error is drawn in its own colour, never the production red.
 - **A statement the TUI shows as failed is never sent**: one sent while its session fails to open fails with it, so `⏎` again never runs a write twice.
 - **A `kill` or a closed terminal stops the TUI as `ctrl-c` does**: the running statement is cancelled, one still waiting is never sent, and pgbg warns when a tunnel's port still answers.
 - **`ctrl-c` quits from the connection picker** too.

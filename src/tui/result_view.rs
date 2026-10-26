@@ -2,6 +2,7 @@
 use super::app::{App, Focus, Run, View};
 use super::chart_view;
 use super::grid_view::{self, GridView};
+use super::theme;
 use crate::render;
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -28,7 +29,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) -> usize {
         Run::Idle => Text::styled("⏎ runs the statement under the cursor", Style::default().fg(app.theme.faded)),
         Run::Running { .. } => Text::styled("running… esc cancels it", Style::default().fg(app.theme.muted)),
         Run::Cancelling { .. } => Text::styled("cancelling…", Style::default().fg(app.theme.muted)),
-        Run::Failed(err) => Text::styled(err.as_str(), Style::default().fg(app.theme.danger)),
+        Run::Failed(err) => Text::styled(err.as_str(), Style::default().fg(theme::failure(&app.theme))),
     };
     f.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }), inside);
     0

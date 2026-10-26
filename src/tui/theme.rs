@@ -14,6 +14,12 @@ pub(super) fn tier(theme: &Theme, tier: Tier) -> Color {
     }
 }
 
+/// What failed: an error, a dead tunnel, a refused statement. It borrows the mention role, so an error never reads
+/// as the red of a production frame, and a production frame never reads as an error.
+pub(super) fn failure(theme: &Theme) -> Color {
+    theme.mention
+}
+
 /// vtui's palette has no code colours, so each token borrows the role closest to it.
 pub(super) fn token(theme: &Theme, token: Token) -> Color {
     match token {
