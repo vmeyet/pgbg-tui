@@ -4,6 +4,7 @@ mod app;
 mod backend;
 mod editor_view;
 mod grid_view;
+mod help_view;
 mod result_view;
 mod theme;
 mod ui;

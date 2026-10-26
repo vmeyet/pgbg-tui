@@ -14,6 +14,8 @@ Each entry says what changed, then where, then how to use it.
   With several statements in the editor, `⏎` runs only the one under the cursor, split on `;` outside strings and comments.
   `esc` cancels a running statement on the server.
   When the server refuses a statement, the editor marks the character its error points at, until you edit the text.
+- **The keys of the TUI** on one screen: press `F1`, or `?` in the results grid, to list the keys of the pane you are in; press `?` again for every key.
+  The footer shows the keys of the pane that has them.
 - **The results grid** in the TUI: numbers line up on the right, `▶` marks the current row, and a control character in a value shows escaped.
   Press `tab` to give it the keys, then `j`/`k`, `PgUp`/`PgDn` and `g`/`G` to scroll its rows, `h`/`l` its columns; `tab` again goes back to the editor.
 - **`pgbg run <connection> "<sql>"`** runs one statement and prints its result as a table, with the row count.

@@ -2,8 +2,10 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use vtui::field::Field;
 
-/// Applies `key` to `editor`; a key that edits nothing leaves it as it was.
-pub(super) fn edit(editor: &mut Field, key: KeyEvent) {
+/// Applies `key` to `editor`; returns whether the text changed. A key either inserts or deletes, never
+/// both, so the length says it.
+pub(super) fn edit(editor: &mut Field, key: KeyEvent) -> bool {
+    let length_before = editor.text().len();
     let alt = key.modifiers.contains(KeyModifiers::ALT);
     let control = key.modifiers.contains(KeyModifiers::CONTROL);
     match key.code {
@@ -23,6 +25,7 @@ pub(super) fn edit(editor: &mut Field, key: KeyEvent) {
         KeyCode::End => editor.end(),
         _ => {}
     }
+    editor.text().len() != length_before
 }
 
 #[cfg(test)]

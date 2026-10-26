@@ -1,6 +1,7 @@
 //! Drawing: the frame in the tier's colour, the panes inside it, and the key hints under them.
-use super::app::{App, Focus, Link};
-use super::{editor_view, result_view, theme};
+use super::app::{App, Link};
+use super::{editor_view, help_view, result_view, theme};
+use crate::act;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -9,8 +10,6 @@ use ratatui::widgets::{Block, BorderType, Paragraph};
 use vtui::text::truncate;
 
 const EDITOR_SHARE_PCT: u16 = 40;
-const EDITOR_HINTS: [(&str, &str); 4] = [("⏎", "run"), ("⌥⏎", "new line"), ("⇥", "result"), ("^c", "quit")];
-const RESULT_HINTS: [(&str, &str); 5] = [("j/k", "rows"), ("h/l", "columns"), ("g/G", "ends"), ("⇥", "editor"), ("^c", "quit")];
 
 /// Where each part of the screen goes.
 struct Areas {
@@ -25,6 +24,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> usize {
     editor_view::draw(f, app, areas.editor);
     let grid_rows = result_view::draw(f, app, areas.result);
     footer(f, app, areas.footer);
+    help_view::draw(f, app);
     grid_rows
 }
 
@@ -48,12 +48,9 @@ fn layout(area: Rect) -> Areas {
 fn footer(f: &mut Frame<'_>, app: &App, area: Rect) {
     let key = Style::default().fg(app.theme.accent).add_modifier(Modifier::BOLD);
     let does = Style::default().fg(app.theme.muted);
-    let hints = match app.focus {
-        Focus::Editor => EDITOR_HINTS.as_slice(),
-        Focus::Result => RESULT_HINTS.as_slice(),
-    };
-    let hints: Vec<Span<'_>> =
-        hints.iter().flat_map(|&(keys, what)| [Span::styled(format!(" {keys} "), key), Span::styled(format!("{what} "), does)]).collect();
+    let hints: Vec<Span<'_>> = act::footer(app.focus.pane())
+        .flat_map(|hint| [Span::styled(format!(" {} ", hint.keys), key), Span::styled(format!("{} ", hint.does), does)])
+        .collect();
     f.render_widget(Paragraph::new(Line::from(hints)), area);
     f.render_widget(Paragraph::new(link(app, usize::from(area.width / 2))).right_aligned(), area);
 }
@@ -98,6 +95,13 @@ mod tests {
         app.apply(Incoming::Opened);
         app.apply(Incoming::Result { result: orders(), took: Duration::from_millis(38) });
         insta::assert_snapshot!("result", render(&app, 60, 14).backend());
+    }
+
+    #[test]
+    fn f1_opens_the_keys_of_the_editor_over_the_screen() {
+        let mut app = app();
+        app.handle_key(KeyEvent::from(KeyCode::F(1)));
+        insta::assert_snapshot!("help", render(&app, 60, 20).backend());
     }
 
     #[test]

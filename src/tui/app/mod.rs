@@ -1,10 +1,12 @@
 //! The pure state machine: keys in, actions out, incoming answers applied. No clock, no I/O.
+use crate::act::{self, Act, Pane};
 use crate::connection::{Connection, ConnectionName, Tier, WritePolicy};
 use crate::db::guard;
 use crate::db::model::{ResultSet, Statement};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent};
 use std::time::Duration;
 use vtui::field::Field;
+use vtui::help::Help;
 use vtui::theme::Theme;
 
 pub(super) use grid::Grid;
@@ -82,6 +84,27 @@ pub(super) enum Focus {
     Result,
 }
 
+impl Focus {
+    /// The pane of the action table whose keys work here.
+    pub(super) fn pane(self) -> Pane {
+        match self {
+            Self::Editor => Pane::Editor,
+            Self::Result => Pane::Result,
+        }
+    }
+}
+
+/// The help after `key`: `?` lists every key, `j`/`k` scroll, any other key closes it.
+fn help_after(help: Help, key: KeyEvent, focus: Focus) -> Option<Help> {
+    let last_row = vtui::help::last_row(&act::sections(focus.pane(), help.every_key));
+    match key.code {
+        KeyCode::Char('?') if !help.every_key => Some(Help { scroll: 0, every_key: true }),
+        KeyCode::Char('j') | KeyCode::Down => Some(Help { scroll: (help.scroll + 1).min(last_row), ..help }),
+        KeyCode::Char('k') | KeyCode::Up => Some(Help { scroll: help.scroll.saturating_sub(1), ..help }),
+        _ => None,
+    }
+}
+
 /// The whole TUI state; `handle_key`, `apply` and `fit_grid` are the only ways it changes.
 #[derive(Debug)]
 pub(super) struct App {
@@ -93,6 +116,8 @@ pub(super) struct App {
     pub(super) link: Link,
     pub(super) run: Run,
     pub(super) focus: Focus,
+    /// The `?` overlay while it is open; it takes every key.
+    pub(super) help: Option<Help>,
     /// The grid rows the last frame had room for: a page, for `PgDn`.
     grid_rows: usize,
     sent: Option<Sent>,
@@ -113,6 +138,7 @@ impl App {
             link: Link::Opening,
             run: Run::Idle,
             focus: Focus::Editor,
+            help: None,
             grid_rows: 0,
             sent: None,
             error_mark: None,
@@ -122,31 +148,37 @@ impl App {
 
     /// Takes one key; returns what the runner should do about it.
     pub(super) fn handle_key(&mut self, key: KeyEvent) -> Vec<Action> {
-        let control = key.modifiers.contains(KeyModifiers::CONTROL);
-        match key.code {
-            KeyCode::Char('c') if control => {
-                self.should_quit = true;
-                vec![]
-            }
-            KeyCode::Esc if self.run == Run::Running => {
-                self.run = Run::Cancelling;
-                vec![Action::Cancel]
-            }
-            KeyCode::Tab => {
-                self.focus = match self.focus {
-                    Focus::Editor => Focus::Result,
-                    Focus::Result => Focus::Editor,
-                };
-                vec![]
-            }
-            _ => match self.focus {
-                Focus::Editor => self.editor_key(key),
-                Focus::Result => {
-                    self.grid_key(key);
-                    vec![]
-                }
-            },
+        if let Some(help) = self.help {
+            self.help = help_after(help, key, self.focus);
+            return vec![];
         }
+        if let Some(act) = act::act_for(key, self.focus.pane()) {
+            return self.act(act);
+        }
+        if self.focus == Focus::Editor {
+            self.edit(key);
+        }
+        vec![]
+    }
+
+    fn act(&mut self, act: Act) -> Vec<Action> {
+        match act {
+            Act::Run => return self.run_editor(),
+            Act::Cancel => return self.cancel(),
+            Act::NewLine => self.edit(KeyEvent::from(KeyCode::Enter)),
+            Act::SwitchPane => self.focus = if self.focus == Focus::Editor { Focus::Result } else { Focus::Editor },
+            Act::Help => self.help = Some(Help::default()),
+            Act::Quit => self.should_quit = true,
+            Act::Down => self.grid_step(Move::Down),
+            Act::Up => self.grid_step(Move::Up),
+            Act::PageDown => self.grid_step(Move::PageDown),
+            Act::PageUp => self.grid_step(Move::PageUp),
+            Act::Top => self.grid_step(Move::First),
+            Act::Bottom => self.grid_step(Move::Last),
+            Act::Left => self.grid_step(Move::Left),
+            Act::Right => self.grid_step(Move::Right),
+        }
+        vec![]
     }
 
     /// Tells the app how many grid rows the frame just drawn had room for, and keeps the cursor among them.
@@ -157,22 +189,24 @@ impl App {
         }
     }
 
-    fn editor_key(&mut self, key: KeyEvent) -> Vec<Action> {
-        if key.code == KeyCode::Enter && key.modifiers.is_empty() {
-            return self.run_editor();
-        }
-        let text_before = self.editor.text().to_owned();
-        keys::edit(&mut self.editor, key);
-        if self.editor.text() != text_before {
+    fn edit(&mut self, key: KeyEvent) {
+        if keys::edit(&mut self.editor, key) {
             self.error_mark = None;
         }
-        vec![]
     }
 
-    fn grid_key(&mut self, key: KeyEvent) {
-        if let (Run::Done { grid, .. }, Some(step)) = (&mut self.run, Move::from_key(key)) {
+    fn grid_step(&mut self, step: Move) {
+        if let Run::Done { grid, .. } = &mut self.run {
             grid.step(step, self.grid_rows);
         }
+    }
+
+    fn cancel(&mut self) -> Vec<Action> {
+        if self.run != Run::Running {
+            return vec![];
+        }
+        self.run = Run::Cancelling;
+        vec![Action::Cancel]
     }
 
     fn is_running(&self) -> bool {
@@ -227,6 +261,7 @@ pub(super) mod tests {
     use super::*;
     use crate::connection::Entry;
     use crate::db::model::{Column, ColumnKind, Value};
+    use crossterm::event::KeyModifiers;
 
     pub(crate) fn connection(tier: &str, writes: &str) -> Connection {
         let entry: Entry =
@@ -419,6 +454,40 @@ pub(super) mod tests {
         let mut app = app();
         app.apply(Incoming::NotOpened("connection refused".into()));
         assert_eq!(app.run, Run::Idle);
+    }
+
+    #[test]
+    fn alt_enter_breaks_the_line_and_runs_nothing() {
+        let mut app = typed("SELECT *");
+        assert_eq!(app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT)), []);
+        assert_eq!(app.editor.text(), "SELECT *\n");
+    }
+
+    #[test]
+    fn a_question_mark_in_the_editor_is_typed() {
+        let app = typed("SELECT '?'");
+        assert_eq!((app.editor.text(), app.help), ("SELECT '?'", None));
+    }
+
+    #[test]
+    fn a_question_mark_on_the_result_opens_the_help_and_any_other_key_closes_it() {
+        let mut app = with_result();
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Char('?'));
+        assert_eq!(app.help, Some(Help::default()));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.help, None);
+        let Run::Done { grid, .. } = &app.run else { panic!("no result") };
+        assert_eq!(grid.row, 0);
+    }
+
+    #[test]
+    fn a_second_question_mark_lists_every_key() {
+        let mut app = typed("SELECT 1");
+        press(&mut app, KeyCode::F(1));
+        press(&mut app, KeyCode::Char('?'));
+        assert_eq!(app.help, Some(Help { scroll: 0, every_key: true }));
     }
 
     #[test]
