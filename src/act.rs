@@ -87,6 +87,8 @@ pub(crate) enum Pane {
     Anywhere,
     Editor,
     Result,
+    /// The saved queries in the sidebar.
+    Queries,
     /// The `ctrl-p` finder over every saved query: while open it takes every key, and only its own work.
     Finder,
     /// The `ctrl-o` connection picker, a popup like the finder.
@@ -153,13 +155,17 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Left, Pane::Result, &[key(KeyCode::Char('h')), key(KeyCode::Left)]).help("h l", "column left, right").footer("h/l", "columns"),
     row(Act::Right, Pane::Result, &[key(KeyCode::Char('l')), key(KeyCode::Right)]),
     row(Act::Help, Pane::Result, &[key(KeyCode::Char('?'))]).help("?", "these keys; again for every key"),
+    row(Act::Down, Pane::Queries, &[key(KeyCode::Char('j')), key(KeyCode::Down)]).help("j k", "next, previous query").footer("j/k", "move"),
+    row(Act::Up, Pane::Queries, &[key(KeyCode::Char('k')), key(KeyCode::Up)]),
+    row(Act::Open, Pane::Queries, &[key(KeyCode::Enter)]).help("⏎", "open the query, fold the folder").footer("⏎", "open"),
     row(Act::Down, Pane::Finder, &[key(KeyCode::Down), control('n')]).help("↓ ^n", "next, previous query").footer("↑↓", "pick"),
     row(Act::Up, Pane::Finder, &[key(KeyCode::Up), control('p')]),
     row(Act::Open, Pane::Finder, &[key(KeyCode::Enter)]).help("⏎", "open it in the editor").footer("⏎", "opens"),
+    row(Act::Quit, Pane::Finder, &[control('c')]).help("^c", "quit"),
     row(Act::Close, Pane::Finder, &[key(KeyCode::Esc)]).help("esc", "close the finder").footer("esc", "closes"),
     row(Act::Find, Pane::Anywhere, &[control('p')]).help("^p", "find a saved query").footer("^p", "find"),
     row(Act::Cancel, Pane::Anywhere, &[key(KeyCode::Esc)]).help("esc", "cancel the running statement"),
-    row(Act::SwitchPane, Pane::Anywhere, &[key(KeyCode::Tab)]).help("tab", "editor or result").footer("⇥", "pane"),
+    row(Act::SwitchPane, Pane::Anywhere, &[key(KeyCode::Tab)]).help("tab", "next pane: editor, result, queries").footer("⇥", "pane"),
     row(Act::Help, Pane::Anywhere, &[key(KeyCode::F(1))]).help("F1", "these keys, from the editor too").footer("F1", "keys"),
     row(Act::Down, Pane::Picker, &[key(KeyCode::Down), control('n')]).help("↓ ^n", "next, previous connection").footer("↑↓", "pick"),
     row(Act::Up, Pane::Picker, &[key(KeyCode::Up), control('p')]),
@@ -197,6 +203,7 @@ pub(crate) fn sections(pane: Pane, every_key: bool) -> Vec<Section> {
     let panes = [
         (Pane::Editor, "editor"),
         (Pane::Result, "result"),
+        (Pane::Queries, "queries"),
         (Pane::Finder, "finder"),
         (Pane::Picker, "picker"),
         (Pane::Anywhere, "anywhere"),
@@ -230,7 +237,7 @@ mod tests {
 
     #[test]
     fn no_key_does_two_actions_in_one_pane() {
-        for pane in [Pane::Editor, Pane::Result, Pane::Finder, Pane::Picker] {
+        for pane in [Pane::Editor, Pane::Result, Pane::Queries, Pane::Finder, Pane::Picker] {
             let keys: Vec<&KeyEvent> = ROWS.iter().filter(|row| works_in(row, pane)).flat_map(|row| row.keys).collect();
             for (at, key) in keys.iter().enumerate() {
                 assert!(!keys[at + 1..].contains(key), "{key:?} in {pane:?}");
@@ -267,6 +274,6 @@ mod tests {
     fn the_first_help_lists_the_focused_pane_and_what_works_anywhere() {
         let titles: Vec<&str> = sections(Pane::Result, false).iter().map(|section| section.title).collect();
         assert_eq!(titles, ["result", "anywhere"]);
-        assert_eq!(sections(Pane::Result, true).len(), 5);
+        assert_eq!(sections(Pane::Result, true).len(), 6);
     }
 }

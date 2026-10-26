@@ -9,6 +9,10 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use tokio::io::AsyncReadExt;
 
+pub(crate) use tree::{TreeRow, tree_rows};
+
+mod tree;
+
 const PROJECT_DIR: &str = ".pgbg";
 const QUERIES_DIR: &str = "queries";
 const USER_DIR: &str = "pgbg/queries";
@@ -35,8 +39,12 @@ impl QueryPath {
         Ok(Self(text.to_owned()))
     }
 
+    fn parts(&self) -> impl Iterator<Item = &str> {
+        self.0.split('/')
+    }
+
     fn under(&self, root: &Path) -> PathBuf {
-        self.0.split('/').fold(root.to_path_buf(), |path, part| path.join(part))
+        self.parts().fold(root.to_path_buf(), |path, part| path.join(part))
     }
 }
 

@@ -15,7 +15,7 @@ use vtui::theme::Theme;
 /// The editor in `area`, scrolled so the cursor's line shows, with the terminal's cursor on it when it has the keys.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
     let focused = app.focus == Focus::Editor;
-    let block = pane::framed(&app.theme, &title(app), focused).title(badge(app));
+    let block = pane::framed(&app.theme, &title(app), focused).title(badge(app)).title(open_error(app));
     let inside = block.inner(area);
     f.render_widget(block, area);
     let sheet = app.sheet();
@@ -80,6 +80,12 @@ fn coloured_line<'a>(
 /// `Editor`, then the path of the saved query in it.
 fn title(app: &App) -> String {
     app.sheet().opened.as_ref().map_or_else(|| "Editor".to_owned(), |query| format!("Editor · {}", query.path))
+}
+
+/// Why the last query asked for could not be opened, in the danger colour.
+fn open_error(app: &App) -> Span<'static> {
+    let error = app.queries.error.as_ref().map(|error| format!(" ✗ {error} "));
+    Span::styled(error.unwrap_or_default(), Style::default().fg(app.theme.danger))
 }
 
 fn badge(app: &App) -> Span<'static> {

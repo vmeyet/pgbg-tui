@@ -14,7 +14,7 @@ use vtui::theme::Theme;
 
 pub(super) use grid::Grid;
 pub(super) use picker::Picking;
-pub(super) use queries::{Finder, Queries, found};
+pub(super) use queries::{Finder, Queries};
 
 const LOST_SESSION: &str = "session lost, ⏎ opens a new one";
 use grid::Move;
@@ -150,6 +150,7 @@ pub(super) enum Focus {
     #[default]
     Editor,
     Result,
+    Queries,
 }
 
 impl Focus {
@@ -158,8 +159,18 @@ impl Focus {
         match self {
             Self::Editor => Pane::Editor,
             Self::Result => Pane::Result,
+            Self::Queries => Pane::Queries,
         }
     }
+}
+
+/// What the frame just drawn had room for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct Fit {
+    /// The grid rows: a page, for `PgDn`.
+    pub(super) grid_rows: usize,
+    /// Whether the sidebar of queries was drawn, which a narrow terminal or no query at all leaves out.
+    pub(super) has_sidebar: bool,
 }
 
 /// The help after `key`: `?` lists every key, `j`/`k` scroll, any other key closes it.
@@ -193,7 +204,7 @@ pub(super) struct Sheet {
     pub(super) opened: Option<Query>,
 }
 
-/// The whole TUI state; `handle_key`, `apply` and `fit_grid` are the only ways it changes.
+/// The whole TUI state; `handle_key`, `apply` and `fit` are the only ways it changes.
 #[derive(Debug)]
 pub(super) struct App {
     pub(super) theme: Theme,
@@ -211,8 +222,7 @@ pub(super) struct App {
     pub(super) finder: Option<Finder>,
     /// The `ctrl-o` connection picker while it is open; it takes every key.
     pub(super) picker: Option<Palette<Picking>>,
-    /// The grid rows the last frame had room for: a page, for `PgDn`.
-    grid_rows: usize,
+    fit: Fit,
     pub(super) should_quit: bool,
 }
 
@@ -229,7 +239,7 @@ impl App {
             queries: Queries::default(),
             finder: None,
             picker: None,
-            grid_rows: 0,
+            fit: Fit::default(),
             should_quit: false,
         }
     }
@@ -276,9 +286,11 @@ impl App {
             Act::Run => return self.sheet_mut().run_editor(),
             Act::Cancel => return self.sheet_mut().cancel(),
             Act::NewLine => self.sheet_mut().edit(KeyEvent::from(KeyCode::Enter)),
-            Act::SwitchPane => self.focus = if self.focus == Focus::Editor { Focus::Result } else { Focus::Editor },
+            Act::SwitchPane => self.focus = self.next_pane(),
             Act::Help => self.help = Some(Help::default()),
             Act::Quit => return self.quit(),
+            Act::Down if self.focus == Focus::Queries => self.step_sidebar(1),
+            Act::Up if self.focus == Focus::Queries => self.step_sidebar(-1),
             Act::Down => self.grid_step(Move::Down),
             Act::Up => self.grid_step(Move::Up),
             Act::PageDown => self.grid_step(Move::PageDown),
@@ -287,30 +299,44 @@ impl App {
             Act::Bottom => self.grid_step(Move::Last),
             Act::Left => self.grid_step(Move::Left),
             Act::Right => self.grid_step(Move::Right),
-            Act::Find => self.finder = Some(Finder::default()),
+            Act::Find => return self.find(),
             Act::Connections => self.open_picker(),
-            Act::Open | Act::Close => {}
+            Act::Open => return self.open_in_sidebar(),
+            Act::Close => {}
         }
         vec![]
     }
 
-    /// Tells the app how many grid rows the frame just drawn had room for, and keeps the cursor among them.
-    pub(super) fn fit_grid(&mut self, rows: usize) {
-        self.grid_rows = rows;
+    /// The pane `tab` goes to: editor, result, then the sidebar when it is drawn.
+    fn next_pane(&self) -> Focus {
+        match self.focus {
+            Focus::Editor => Focus::Result,
+            Focus::Result if self.fit.has_sidebar => Focus::Queries,
+            Focus::Result | Focus::Queries => Focus::Editor,
+        }
+    }
+
+    /// Tells the app what the frame just drawn had room for: the grid's cursor stays among its rows, and the keys
+    /// leave a sidebar no longer drawn.
+    pub(super) fn fit(&mut self, fit: Fit) {
+        self.fit = fit;
         if let Run::Done { grid, .. } = &mut self.sheet_mut().run {
-            grid.keep_in_view(rows);
+            grid.keep_in_view(fit.grid_rows);
+        }
+        if !fit.has_sidebar && self.focus == Focus::Queries {
+            self.focus = Focus::Editor;
         }
     }
 
     fn grid_step(&mut self, step: Move) {
-        let rows = self.grid_rows;
+        let rows = self.fit.grid_rows;
         if let Run::Done { grid, result, .. } = &mut self.sheet_mut().run {
             grid.step(step, result, rows);
         }
     }
 
     /// Quits, cancelling every running statement first so no server runs one to its end.
-    fn quit(&mut self) -> Vec<Action> {
+    pub(super) fn quit(&mut self) -> Vec<Action> {
         self.should_quit = true;
         self.sheets.iter().filter_map(Sheet::cancel_of_running).collect()
     }
@@ -323,10 +349,10 @@ impl App {
                     sheet.apply(incoming);
                 }
             }
-            Answer::Queries(QueryAnswer::All(all)) => self.queries.all = all,
+            Answer::Queries(QueryAnswer::All(all)) => self.listed(all),
             Answer::Queries(QueryAnswer::Opened { query, text }) => self.opened(query, &text),
             Answer::Queries(QueryAnswer::NotOpened { query, error }) => {
-                self.sheet_mut().run = Run::Failed(format!("could not open {}: {error}", query.path));
+                self.queries.error = Some(format!("could not open {}: {error}", query.path));
             }
         }
     }

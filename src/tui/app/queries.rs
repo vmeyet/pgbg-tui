@@ -1,9 +1,10 @@
-//! The saved queries in the app: the `ctrl-p` finder over them, and the query open in the editor.
+//! The saved queries in the app: the sidebar's tree and its cursor, the `ctrl-p` finder, and the query open in the editor.
 use super::{Action, App, Focus};
 use crate::act::{self, Act, Pane};
-use crate::query::Query;
+use crate::query::{Query, TreeRow, tree_rows};
 use crate::syntax;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use std::collections::BTreeSet;
 use vtui::field::Field;
 use vtui::palette::{MAX_SHOWN, Palette};
 
@@ -21,32 +22,95 @@ impl vtui::palette::Mode for ByPath {
     }
 }
 
-pub(in crate::tui) type Finder = Palette<ByPath>;
+/// The finder: the line typed, and the queries it matches, ranked again only when the line or the list changes.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(in crate::tui) struct Finder {
+    pub(in crate::tui) palette: Palette<ByPath>,
+    pub(in crate::tui) shown: Vec<Query>,
+}
 
-/// Every saved query.
+impl Finder {
+    fn new(all: &[Query]) -> Self {
+        Self { palette: Palette::default(), shown: found(all, "") }
+    }
+
+    fn rank(&mut self, all: &[Query]) {
+        self.shown = found(all, &self.palette.input);
+        self.palette.move_by(0, self.shown.len());
+    }
+}
+
+/// Every saved query, the folders folded in the sidebar, and its cursor.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(in crate::tui) struct Queries {
     pub(in crate::tui) all: Vec<Query>,
+    closed: BTreeSet<String>,
+    pub(in crate::tui) selected: usize,
+    /// Why the last query asked for could not be opened, until one opens.
+    pub(in crate::tui) error: Option<String>,
+}
+
+impl Queries {
+    pub(in crate::tui) fn rows(&self) -> Vec<TreeRow> {
+        tree_rows(&self.all, &self.closed)
+    }
 }
 
 /// The queries the finder lists for `input`, best first.
-pub(in crate::tui) fn found(all: &[Query], input: &str) -> Vec<Query> {
+fn found(all: &[Query], input: &str) -> Vec<Query> {
     let ranked = vtui::fuzzy::rank(input, all.iter().map(|query| (query.path.to_string(), query)));
     ranked.into_iter().take(MAX_SHOWN).map(|(_, query)| query.clone()).collect()
 }
 
 impl App {
-    /// The finder after `key`, `None` once it closed, and what to do: its own keys move and pick, the rest types.
-    pub(super) fn finder_after(&self, mut finder: Finder, key: KeyEvent) -> (Option<Finder>, Vec<Action>) {
-        let shown = found(&self.queries.all, &finder.input);
+    /// Takes the new list of queries, the sidebar's cursor kept inside it.
+    pub(super) fn listed(&mut self, all: Vec<Query>) {
+        self.queries.all = all;
+        self.step_sidebar(0);
+        if let Some(finder) = &mut self.finder {
+            finder.rank(&self.queries.all);
+        }
+    }
+
+    /// Opens the finder on every query, and lists them again in case a file came or went.
+    pub(super) fn find(&mut self) -> Vec<Action> {
+        self.finder = Some(Finder::new(&self.queries.all));
+        vec![Action::ListQueries]
+    }
+
+    pub(super) fn step_sidebar(&mut self, delta: isize) {
+        let last = self.queries.rows().len().saturating_sub(1);
+        self.queries.selected = self.queries.selected.saturating_add_signed(delta).min(last);
+    }
+
+    /// Opens the query under the sidebar's cursor, or folds and unfolds the folder there.
+    pub(super) fn open_in_sidebar(&mut self) -> Vec<Action> {
+        match self.queries.rows().into_iter().nth(self.queries.selected) {
+            Some(TreeRow::Query { query, .. }) => return vec![Action::OpenQuery(query)],
+            Some(TreeRow::Folder { key, is_open: true, .. }) => _ = self.queries.closed.insert(key),
+            Some(TreeRow::Folder { key, is_open: false, .. }) => _ = self.queries.closed.remove(&key),
+            None => {}
+        }
+        vec![]
+    }
+
+    /// The finder after `key`, `None` once it closed, and what to do: its own keys move, pick and quit, the rest types.
+    pub(super) fn finder_after(&mut self, mut finder: Finder, key: KeyEvent) -> (Option<Finder>, Vec<Action>) {
         match act::act_for(key, Pane::Finder) {
-            Some(Act::Down) => finder.move_by(1, shown.len()),
-            Some(Act::Up) => finder.move_by(-1, shown.len()),
-            Some(Act::Open) => return (None, shown.into_iter().nth(finder.selected).map(Action::OpenQuery).into_iter().collect()),
+            Some(Act::Down) => finder.palette.move_by(1, finder.shown.len()),
+            Some(Act::Up) => finder.palette.move_by(-1, finder.shown.len()),
+            Some(Act::Open) => {
+                return (None, finder.shown.into_iter().nth(finder.palette.selected).map(Action::OpenQuery).into_iter().collect());
+            }
             Some(Act::Close) => return (None, vec![]),
+            Some(Act::Quit) => return (None, self.quit()),
             _ => match key.code {
-                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => finder.type_char(c),
-                KeyCode::Backspace if !finder.backspace() => return (None, vec![]),
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    finder.palette.type_char(c);
+                    finder.rank(&self.queries.all);
+                }
+                KeyCode::Backspace if !finder.palette.backspace() => return (None, vec![]),
+                KeyCode::Backspace => finder.rank(&self.queries.all),
                 _ => {}
             },
         }
@@ -55,6 +119,7 @@ impl App {
 
     /// Puts the text of `query` in the editor, which it now stands for.
     pub(super) fn opened(&mut self, query: Query, text: &str) {
+        self.queries.error = None;
         let sheet = self.sheet_mut();
         sheet.opened = Some(query);
         sheet.editor = Field::new(text);
@@ -68,7 +133,7 @@ impl App {
 #[cfg(test)]
 pub(in crate::tui) mod tests {
     use super::super::tests::app;
-    use super::super::{Answer, QueryAnswer, Run};
+    use super::super::{Answer, Fit, QueryAnswer, Run};
     use super::*;
     use crate::query::{QueryPath, Source};
 
@@ -79,6 +144,7 @@ pub(in crate::tui) mod tests {
     pub(in crate::tui) fn with_queries() -> App {
         let mut app = app();
         app.apply(Answer::Queries(QueryAnswer::All(vec![query("customers.sql"), query("orders/daily.sql"), query("orders/weekly.sql")])));
+        app.fit(Fit { grid_rows: 10, has_sidebar: true });
         app
     }
 
@@ -130,9 +196,84 @@ pub(in crate::tui) mod tests {
     }
 
     #[test]
-    fn a_query_that_cannot_be_read_says_so_in_the_result() {
+    fn a_query_that_cannot_be_read_says_so_and_leaves_the_running_statement_alone() {
         let mut app = with_queries();
+        app.sheet_mut().run = Run::Running;
         app.apply(Answer::Queries(QueryAnswer::NotOpened { query: query("customers.sql"), error: "permission denied".into() }));
-        assert_eq!(app.sheet().run, Run::Failed("could not open customers.sql: permission denied".into()));
+        assert_eq!(app.queries.error.as_deref(), Some("could not open customers.sql: permission denied"));
+        assert_eq!(app.sheet().run, Run::Running);
+    }
+
+    #[test]
+    fn ctrl_c_in_the_finder_quits() {
+        let mut app = with_queries();
+        find(&mut app, "o");
+        press(&mut app, KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn ctrl_p_lists_the_queries_again_and_the_finder_follows_the_new_list() {
+        let mut app = with_queries();
+        assert_eq!(press(&mut app, KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL)), [Action::ListQueries]);
+        app.apply(Answer::Queries(QueryAnswer::All(vec![query("refunds.sql")])));
+        assert_eq!(press(&mut app, KeyCode::Enter), [Action::OpenQuery(query("refunds.sql"))]);
+    }
+
+    fn to_sidebar(app: &mut App) {
+        press(app, KeyCode::Tab);
+        press(app, KeyCode::Tab);
+    }
+
+    #[test]
+    fn tab_reaches_the_sidebar_after_the_result() {
+        let mut app = with_queries();
+        to_sidebar(&mut app);
+        assert_eq!(app.focus, Focus::Queries);
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.focus, Focus::Editor);
+    }
+
+    #[test]
+    fn tab_skips_a_sidebar_that_is_not_drawn() {
+        let mut app = with_queries();
+        app.fit(Fit { grid_rows: 10, has_sidebar: false });
+        to_sidebar(&mut app);
+        assert_eq!(app.focus, Focus::Editor);
+    }
+
+    #[test]
+    fn a_sidebar_no_longer_drawn_gives_the_keys_to_the_editor() {
+        let mut app = with_queries();
+        to_sidebar(&mut app);
+        app.fit(Fit { grid_rows: 10, has_sidebar: false });
+        assert_eq!(app.focus, Focus::Editor);
+    }
+
+    #[test]
+    fn enter_on_a_query_in_the_sidebar_opens_it() {
+        let mut app = with_queries();
+        to_sidebar(&mut app);
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(press(&mut app, KeyCode::Enter), [Action::OpenQuery(query("orders/daily.sql"))]);
+    }
+
+    #[test]
+    fn enter_on_a_folder_folds_it_and_again_unfolds_it() {
+        let mut app = with_queries();
+        to_sidebar(&mut app);
+        assert_eq!(press(&mut app, KeyCode::Enter), []);
+        assert_eq!(app.queries.rows().len(), 2);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.queries.rows().len(), 4);
+    }
+
+    #[test]
+    fn the_sidebar_cursor_stays_inside_a_shorter_list() {
+        let mut app = with_queries();
+        to_sidebar(&mut app);
+        (0..5).for_each(|_| _ = press(&mut app, KeyCode::Char('j')));
+        app.apply(Answer::Queries(QueryAnswer::All(vec![query("customers.sql")])));
+        assert_eq!(app.queries.selected, 0);
     }
 }
