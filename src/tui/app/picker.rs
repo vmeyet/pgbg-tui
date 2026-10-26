@@ -1,6 +1,6 @@
 //! `ctrl-o`, the connection picker: typing narrows the connections as fzf does, and picking one shows its sheet,
 //! opening its session the first time.
-use super::{Action, App, Overlay, Sheet};
+use super::{Action, App, Overlay, SessionState, Sheet};
 use crate::act::{self, Act, Pane};
 use crate::connection::{Connection, ConnectionName};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -77,11 +77,15 @@ impl App {
         Picked::Stay(picker)
     }
 
-    /// Shows the sheet of `connection`, starting one and opening its session when it has none.
+    /// Shows the sheet of `connection`, starting one and opening its session when it has none, or when it failed.
     fn show(&mut self, connection: Connection) -> Vec<Action> {
         if let Some(open) = self.sheets.iter().position(|sheet| &sheet.name == connection.name()) {
             self.shown = open;
-            return vec![];
+            if !matches!(self.sheet().session, SessionState::Failed(_)) {
+                return vec![];
+            }
+            self.sheet_mut().session = SessionState::Opening;
+            return vec![Action::Open(connection)];
         }
         self.sheets.push(Sheet::new(&connection));
         self.shown = self.sheets.len() - 1;
@@ -261,6 +265,17 @@ pub(in crate::tui) mod tests {
         ctrl(&mut app, 'o');
         press(&mut app, "x");
         assert_eq!((app.overlay.is_none(), app.sheet().editor.text()), (true, "x"));
+    }
+
+    #[test]
+    fn picking_a_connection_whose_session_failed_opens_it_again() {
+        let mut app = on_local();
+        switch_to(&mut app, "prod");
+        app.apply(Answer::Session { connection: name("prod"), incoming: Incoming::NotOpened("no route".into()) });
+        switch_to(&mut app, "local");
+        let actions = switch_to(&mut app, "prod");
+        assert!(matches!(&*actions, [Action::Open(prod)] if prod.name() == &name("prod")), "{actions:?}");
+        assert_eq!(app.sheet().session, SessionState::Opening);
     }
 
     #[test]

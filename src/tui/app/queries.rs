@@ -67,9 +67,13 @@ fn found(all: &[Query], input: &str) -> Vec<Query> {
 }
 
 impl App {
-    /// Takes the new list of queries, the sidebar's cursor kept inside it.
+    /// Takes the new list of queries, the sidebar's cursor kept on its row, else inside the list.
     pub(super) fn listed(&mut self, all: Vec<Query>) {
+        let selected = self.queries.rows().into_iter().nth(self.queries.selected);
         self.queries.all = all;
+        let rows = self.queries.rows();
+        let kept = selected.and_then(|selected| rows.iter().position(|row| row.is_at(&selected)));
+        self.queries.selected = kept.unwrap_or(self.queries.selected);
         self.step_sidebar(0);
         if let Some(Overlay::Finder(finder)) = &mut self.overlay {
             finder.rank(&self.queries.all);
@@ -296,6 +300,16 @@ pub(in crate::tui) mod tests {
         assert_eq!(app.queries.rows().len(), 2);
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.queries.rows().len(), 4);
+    }
+
+    #[test]
+    fn the_sidebar_cursor_stays_on_its_query_when_the_list_changes() {
+        let mut app = with_queries();
+        to_sidebar(&mut app);
+        (0..2).for_each(|_| _ = press(&mut app, KeyCode::Char('j')));
+        let all = vec![query("archive/old.sql"), query("customers.sql"), query("orders/daily.sql"), query("orders/weekly.sql")];
+        app.apply(Answer::Queries(QueryAnswer::All(all)));
+        assert_eq!(press(&mut app, KeyCode::Enter), [Action::OpenQuery { connection: shop(), query: query("orders/weekly.sql") }]);
     }
 
     #[test]

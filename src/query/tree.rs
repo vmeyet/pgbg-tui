@@ -20,6 +20,17 @@ pub(crate) enum TreeRow {
     },
 }
 
+impl TreeRow {
+    /// Whether both rows stand for the same query or folder, however deep the tree now draws it.
+    pub(crate) fn is_at(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Folder { key, .. }, Self::Folder { key: other, .. }) => key == other,
+            (Self::Query { query, .. }, Self::Query { query: other, .. }) => query == other,
+            _ => false,
+        }
+    }
+}
+
 #[derive(Default)]
 struct Folder<'a> {
     folders: BTreeMap<&'a str, Folder<'a>>,
