@@ -26,7 +26,7 @@ pub(super) fn file_mode(path: &Path, mode: u32) -> Check {
 
 pub(super) fn tls(connection: &Connection) -> Check {
     let target = connection.target();
-    let asks_private_ca = target.url().query_pairs().any(|(key, _)| key == PRIVATE_CA);
+    let asks_private_ca = target.has_query_key(PRIVATE_CA);
     if asks_private_ca {
         return Check::fail(
             "tls",

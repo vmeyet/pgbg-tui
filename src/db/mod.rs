@@ -3,8 +3,7 @@ use crate::connection::{Connection, StatementTimeout, Target, TimeoutChoice, Tls
 use anyhow::{Context, Result, anyhow};
 use futures_util::{StreamExt, TryStreamExt, future};
 use guard::{Admitted, Mode};
-use model::{CancelToken, LocalPort, ResultSet, Route, ServerError};
-use std::net::Ipv4Addr;
+use model::{CancelToken, ResultSet, Route, ServerError};
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::time::timeout;
@@ -13,7 +12,6 @@ use tokio_postgres::error::{ErrorPosition, SqlState};
 use tokio_postgres::tls::MakeTlsConnect;
 use tokio_postgres::{Client, Config, NoTls, RowStream, Socket, Statement as Prepared, Transaction};
 use tokio_postgres_rustls::MakeRustlsConnect;
-use url::Url;
 
 mod decode;
 pub(crate) mod guard;
@@ -152,35 +150,13 @@ impl CancelToken {
 
 /// The driver's config for `target` along `route`; `sslmode` is left out, since `Tls` decides it.
 fn driver_config(target: &Target, route: Route) -> Result<Config> {
-    let url = without_key(target.url(), "sslmode");
-    let url = match route {
-        Route::Direct => url,
-        Route::Tunnel(port) => through_tunnel(&url, port),
-    };
+    let url = target.along(route);
     url.as_str().trim_end_matches('?').parse().map_err(|err| anyhow!("`url` is not a PostgreSQL URL: {err}"))
 }
 
 /// How long opening a session waits, TLS and login included: the driver's own timeout covers only the TCP connect.
 fn connect_wait(config: &Config) -> Duration {
     config.get_connect_timeout().copied().unwrap_or(CONNECT_TIMEOUT)
-}
-
-fn without_key(url: &Url, dropped: &str) -> Url {
-    let mut url = url.clone();
-    let kept: Vec<(String, String)> =
-        url.query_pairs().filter(|(key, _)| key != dropped).map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
-    url.query_pairs_mut().clear().extend_pairs(kept);
-    url
-}
-
-/// `url` sent to the tunnel's port, with its host kept so TLS still checks the certificate against it.
-fn through_tunnel(url: &Url, port: LocalPort) -> Url {
-    let mut url = without_key(url, "port");
-    url.query_pairs_mut().append_pair("hostaddr", &Ipv4Addr::LOCALHOST.to_string());
-    if url.set_port(Some(port.get())).is_err() {
-        url.query_pairs_mut().append_pair("port", &port.to_string());
-    }
-    url
 }
 
 /// A client, and why its link ended once it has.
@@ -285,8 +261,11 @@ mod tests {
     use super::*;
     use crate::connection::WritePolicy;
     use crate::fixtures;
+    use model::LocalPort;
     use model::{Statement, Value};
+    use std::net::Ipv4Addr;
     use std::time::Duration;
+    use url::Url;
 
     async fn session(writes: WritePolicy) -> Session {
         let writes = if writes == WritePolicy::Allowed { "allowed" } else { "read-only" };

@@ -1,6 +1,8 @@
+use crate::db::model::{LocalPort, Route};
 use anyhow::{Result, anyhow, bail};
 use serde::{Serialize, Serializer};
 use std::fmt;
+use std::net::Ipv4Addr;
 use url::Url;
 
 const SCHEMES: [&str; 2] = ["postgres", "postgresql"];
@@ -29,26 +31,37 @@ impl Target {
         Ok(Self(url))
     }
 
-    pub(crate) fn url(&self) -> &Url {
-        &self.0
+    /// The URL a session dials along `route`, without its `sslmode`, which `Tls` decides: through a tunnel, it goes to
+    /// the tunnel's port on `127.0.0.1` and keeps its host, so TLS still checks the certificate against it.
+    pub(crate) fn along(&self, route: Route) -> Url {
+        let url = without(&self.0, "sslmode");
+        match route {
+            Route::Direct => url,
+            Route::Tunnel(port) => through(&url, port),
+        }
     }
 
     /// `host/database`, as the TUI shows where a connection goes; the host may come from a `host` query key.
     pub(crate) fn place(&self) -> String {
-        let queried = self.0.query_pairs().find(|(key, _)| key == "host").map(|(_, host)| host.into_owned());
+        let queried = query_values(&self.0, "host").next();
         let named = self.0.host_str().filter(|host| !host.is_empty()).map(str::to_owned);
         let host = named.or(queried).unwrap_or_else(|| LOCAL_HOSTS[0].to_owned());
         format!("{host}{}", self.0.path())
     }
 
+    /// Whether the query sets `key`.
+    pub(crate) fn has_query_key(&self, key: &str) -> bool {
+        has_query_key(&self.0, key)
+    }
+
     /// The `sslmode` the query asks for, when it does.
     pub(crate) fn ssl_mode(&self) -> Option<String> {
-        self.0.query_pairs().find(|(key, _)| key == "sslmode").map(|(_, mode)| mode.into_owned())
+        query_values(&self.0, "sslmode").next()
     }
 
     /// True when every host the URL names, in its authority or a `host` query key, is this machine.
     pub(crate) fn is_local(&self) -> bool {
-        let queried = self.0.query_pairs().filter(|(key, _)| key == "host").map(|(_, host)| host.into_owned());
+        let queried = query_values(&self.0, "host");
         self.0.host_str().map(str::to_owned).into_iter().chain(queried).all(|host| is_local_host(&host))
     }
 }
@@ -62,7 +75,29 @@ fn has_password(url: &Url) -> bool {
 }
 
 fn has_query_key(url: &Url, wanted: &str) -> bool {
-    url.query_pairs().any(|(key, _)| key == wanted)
+    query_values(url, wanted).next().is_some()
+}
+
+/// Every value the query of `url` gives `wanted`, in order.
+fn query_values<'a>(url: &'a Url, wanted: &'a str) -> impl Iterator<Item = String> + 'a {
+    url.query_pairs().filter(move |(key, _)| key == wanted).map(|(_, value)| value.into_owned())
+}
+
+fn without(url: &Url, dropped: &str) -> Url {
+    let mut url = url.clone();
+    let kept: Vec<(String, String)> =
+        url.query_pairs().filter(|(key, _)| key != dropped).map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
+    url.query_pairs_mut().clear().extend_pairs(kept);
+    url
+}
+
+fn through(url: &Url, port: LocalPort) -> Url {
+    let mut url = without(url, "port");
+    url.query_pairs_mut().append_pair("hostaddr", &Ipv4Addr::LOCALHOST.to_string());
+    if url.set_port(Some(port.get())).is_err() {
+        url.query_pairs_mut().append_pair("port", &port.to_string());
+    }
+    url
 }
 
 impl fmt::Display for Target {
