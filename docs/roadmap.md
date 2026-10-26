@@ -19,7 +19,7 @@ The MR that ships a step ticks its box.
 
 - [x] Event loop, `App`, `Action`, `Incoming`, screen, theme
 - [x] SQL editor pane and results grid (visible window only), status line with the connection and its tier colour
-- [ ] Run the statement under the cursor, cancel with `Esc`, errors with the server's position marked in the editor
+- [x] Run the statement under the cursor, cancel with `Esc`, errors with the server's position marked in the editor
 
 ## 3. Syntax colours
 

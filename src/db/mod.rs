@@ -3,8 +3,9 @@ use crate::connection::{Connection, Target, Tls};
 use anyhow::{Context, Result, anyhow};
 use futures_util::{TryStreamExt, future};
 use guard::{Admitted, Mode};
-use model::{CancelToken, ResultSet};
+use model::{CancelToken, ResultSet, ServerError};
 use tokio_postgres::config::SslMode;
+use tokio_postgres::error::ErrorPosition;
 use tokio_postgres::tls::MakeTlsConnect;
 use tokio_postgres::{Client, Config, GenericClient, NoTls, Socket};
 use tokio_postgres_rustls::MakeRustlsConnect;
@@ -101,11 +102,20 @@ async fn fetch(client: &impl GenericClient, sql: &str) -> Result<ResultSet> {
     Ok(ResultSet { columns, rows })
 }
 
-/// The server's own words, `ERROR: relation "orders" does not exist`, with its detail and hint.
+/// A `ServerError` when the server answered with one, the driver's error otherwise.
 fn server_error(err: tokio_postgres::Error) -> anyhow::Error {
     let Some(db) = err.as_db_error() else { return anyhow::Error::new(err) };
-    let lines = [Some(format!("{}: {}", db.severity(), db.message())), db.detail().map(str::to_owned), db.hint().map(str::to_owned)];
-    anyhow!(lines.into_iter().flatten().collect::<Vec<_>>().join("\n"))
+    let position = match db.position() {
+        Some(ErrorPosition::Original(position)) => Some(*position as usize),
+        Some(ErrorPosition::Internal { .. }) | None => None,
+    };
+    anyhow::Error::new(ServerError {
+        severity: db.severity().to_owned(),
+        message: db.message().to_owned(),
+        detail: db.detail().map(str::to_owned),
+        hint: db.hint().map(str::to_owned),
+        position,
+    })
 }
 
 #[cfg(test)]
@@ -195,5 +205,12 @@ mod tests {
     async fn a_server_error_says_what_the_server_said() {
         let err = run(WritePolicy::ReadOnly, "SELECT * FROM no_such_orders").await.unwrap_err();
         assert!(err.to_string().contains("relation \"no_such_orders\" does not exist"), "{err}");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_server_error_says_where_in_the_statement_it_stopped() {
+        let err = run(WritePolicy::ReadOnly, "SELECT * FROM no_such_orders").await.unwrap_err();
+        assert_eq!(err.downcast_ref::<ServerError>().and_then(|server| server.position), Some(15));
     }
 }

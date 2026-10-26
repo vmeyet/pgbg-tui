@@ -1,7 +1,7 @@
 //! What the runner calls: the session of the open connection, served by a task that owns it.
 use super::app::Incoming;
 use crate::connection::{Connection, WritePolicy};
-use crate::db::model::{CancelToken, Statement};
+use crate::db::model::{CancelToken, ServerError, Statement};
 use crate::db::{Session, guard};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::watch;
@@ -92,6 +92,8 @@ async fn run(session: &mut Session, writes: WritePolicy, statement: Statement) -
     let started = Instant::now();
     match session.run(&admitted).await {
         Ok(result) => Incoming::Result { result, took: started.elapsed() },
-        Err(err) => Incoming::Failed(format!("{err:#}")),
+        Err(err) => {
+            Incoming::Failed { position: err.downcast_ref::<ServerError>().and_then(|server| server.position), error: format!("{err:#}") }
+        }
     }
 }
