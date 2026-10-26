@@ -6,20 +6,36 @@ use crate::tunnel::Tunnel;
 
 /// An open session, and the tunnel it goes through when its connection has one; the session drops first.
 #[derive(Debug)]
-pub(crate) struct Opened {
-    pub(crate) session: Session,
-    pub(crate) tunnel: Option<Tunnel>,
+struct Opened {
+    session: Session,
+    tunnel: Option<Tunnel>,
 }
 
 /// Why a session did not open: its tunnel did not start, or the login failed, with the tunnel kept for the next try.
 #[derive(Debug)]
-pub(crate) enum NotOpened {
+enum NotOpened {
     Tunnel(anyhow::Error),
     Login { error: anyhow::Error, tunnel: Option<Box<Tunnel>> },
 }
 
+/// One open of a session that is not retried: the session, or why its login failed, and the tunnel it went through.
+#[derive(Debug)]
+pub(crate) struct Attempt {
+    pub(crate) session: anyhow::Result<Session>,
+    pub(crate) tunnel: Option<Tunnel>,
+}
+
+/// Opens a session on `connection` once, starting its tunnel when it has one; fails only when that tunnel does not start.
+pub(crate) async fn open_once(connection: &Connection) -> anyhow::Result<Attempt> {
+    match open_along(connection, None).await {
+        Ok(Opened { session, tunnel }) => Ok(Attempt { session: Ok(session), tunnel }),
+        Err(NotOpened::Tunnel(err)) => Err(err),
+        Err(NotOpened::Login { error, tunnel }) => Ok(Attempt { session: Err(error), tunnel: tunnel.map(|tunnel| *tunnel) }),
+    }
+}
+
 /// Opens a session on `connection`, through `tunnel` while it runs, else through a tunnel started again.
-pub(crate) async fn open_along(connection: &Connection, tunnel: Option<Tunnel>) -> Result<Opened, NotOpened> {
+async fn open_along(connection: &Connection, tunnel: Option<Tunnel>) -> Result<Opened, NotOpened> {
     let tunnel = running_tunnel(connection, tunnel).await.map_err(NotOpened::Tunnel)?;
     let route = tunnel.as_ref().map_or(Route::Direct, Tunnel::route);
     match Session::open(connection, route).await {

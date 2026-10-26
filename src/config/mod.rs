@@ -41,9 +41,13 @@ pub(crate) fn path() -> PathBuf {
     path_from(std::env::var_os(PATH_VARIABLE), dirs::config_dir())
 }
 
+/// The path an environment variable holds; an empty one holds none, as `PGBG_CONFIG=` unsets it in a shell.
+pub(crate) fn named_path(variable: Option<OsString>) -> Option<PathBuf> {
+    variable.filter(|v| !v.is_empty()).map(PathBuf::from)
+}
+
 fn path_from(variable: Option<OsString>, config_dir: Option<PathBuf>) -> PathBuf {
-    let named = variable.filter(|v| !v.is_empty()).map(PathBuf::from);
-    named.unwrap_or_else(|| config_dir.unwrap_or_else(|| PathBuf::from(".")).join("pgbg").join("config.toml"))
+    named_path(variable).unwrap_or_else(|| config_dir.unwrap_or_else(|| PathBuf::from(".")).join("pgbg").join("config.toml"))
 }
 
 impl Config {

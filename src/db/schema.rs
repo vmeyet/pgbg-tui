@@ -5,11 +5,12 @@ use anyhow::{Result, bail};
 use std::collections::HashMap;
 use tokio_postgres::{Row, Transaction};
 
-/// The relations a statement reads from, outside the catalogs, that the role may read at least one column of.
+/// The relations a statement reads from, outside the catalogs, that the role may read at least one column of; a partition
+/// is left to its parent, which reads them all.
 const VISIBLE: &str = "WITH visible AS (
     SELECT c.oid, n.nspname, c.relname, c.relkind, c.reltuples
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE c.relkind IN ('r', 'v', 'm', 'f', 'p')
+    WHERE c.relkind IN ('r', 'v', 'm', 'f', 'p') AND NOT c.relispartition
       AND n.nspname NOT LIKE 'pg\\_%' AND n.nspname <> 'information_schema'
       AND has_schema_privilege(n.oid, 'USAGE') AND has_any_column_privilege(c.oid, 'SELECT')
 )";
@@ -191,6 +192,23 @@ mod tests {
                 ("totals", TableKind::MaterializedView)
             ]
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn the_schema_lists_a_partitioned_table_without_its_partitions() {
+        let mut session = session_on(
+            "shop_parts",
+            &[
+                "CREATE TABLE shop_parts.orders (day date) PARTITION BY RANGE (day)",
+                "CREATE TABLE shop_parts.orders_2026 PARTITION OF shop_parts.orders FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')",
+                "CREATE TABLE shop_parts.orders_2027 PARTITION OF shop_parts.orders FOR VALUES FROM ('2027-01-01') TO ('2028-01-01')",
+            ],
+        )
+        .await;
+        let schema = session.read_schema().await.unwrap();
+        let kinds: Vec<_> = tables_of(&schema, "shop_parts").iter().map(|table| (table.name.as_str(), table.kind)).collect();
+        assert_eq!(kinds, [("orders", TableKind::Partitioned)]);
     }
 
     #[tokio::test]
