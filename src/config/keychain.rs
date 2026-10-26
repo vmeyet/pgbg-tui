@@ -28,10 +28,10 @@ pub(crate) fn replaced_keychain_item<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fixtures;
 
     fn connection(name: &str, password: &str) -> Connection {
-        let text = format!("tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\n{password}");
-        Connection::new(name, toml::from_str(&text).unwrap()).unwrap()
+        fixtures::named(name, &format!("tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\n{password}"))
     }
 
     fn name(name: &str) -> ConnectionName {

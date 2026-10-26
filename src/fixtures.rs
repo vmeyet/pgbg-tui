@@ -45,6 +45,13 @@ pub(crate) fn test_database(tier: &str, extra: &str) -> Connection {
     connection(&format!("tier = \"{tier}\"\nurl = \"{}\"\n{extra}", test_database_url()))
 }
 
+/// `shop` on the test database logged in as `user`, a local one, with the keys of `extra` too.
+pub(crate) fn test_database_by(user: &str, extra: &str) -> Connection {
+    let mut url = url::Url::parse(&test_database_url()).unwrap();
+    url.set_username(user).unwrap();
+    connection(&format!("tier = \"local\"\nurl = \"{url}\"\n{extra}"))
+}
+
 /// `shop` on the test database through a forwarder whose command line carries `marker`, so a test can find it.
 pub(crate) fn tunnelled(marker: &str) -> Connection {
     through_forwarder("\"python3\", \"-c\"", marker, WritePolicy::ReadOnly)
