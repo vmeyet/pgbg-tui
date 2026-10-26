@@ -120,13 +120,17 @@ impl Sheet {
         }
     }
 
+    pub(in crate::tui) fn is_running(&self) -> bool {
+        self.running_run().is_some()
+    }
+
     fn is_answer_to_running(&self, run: RunId) -> bool {
         self.running_run() == Some(run)
     }
 
     /// Runs the statement under the cursor, the editor's other statements left alone.
     pub(super) fn run_editor(&mut self) -> Vec<Action> {
-        if self.running_run().is_some() {
+        if self.is_running() {
             return vec![];
         }
         let (before, _, _) = self.editor.split();
