@@ -11,6 +11,9 @@ Each entry says what changed, then where, then how to use it.
 - **The connection picker** in the TUI: press `ctrl-o`, type a few letters of a connection's name, and `⏎` to switch to it.
   Each connection shows its tier's colour, where it goes, whether it takes writes, and whether its session is open.
   Sessions stay open until you quit, so switching back is instant, and each connection keeps its own editor text, result and saved query.
+- **Charts** in the TUI: on a result, press `v` to see it as a chart, and `v` again for the grid; the title says which one shows.
+  pgbg puts the first text, date or time column across and the numeric columns up: bars for text or a few rows, a line over time otherwise, with gaps in time left as gaps.
+  A result it cannot chart says why, such as no numeric column.
 - **Saved queries** in the TUI: put `.sql` files under `.pgbg/queries/`, in folders if you like, at the top of your project.
   Press `ctrl-p`, type a few letters of a query's path, and `⏎` opens it in the editor; `↑`/`↓` pick another match, `esc` closes the finder.
   pgbg finds the `.pgbg/queries/` nearest the folder you start it in, as git finds `.git`.

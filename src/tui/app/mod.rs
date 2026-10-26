@@ -1,5 +1,6 @@
 //! The pure state machine: keys in, actions out, incoming answers applied. No clock, no I/O.
 use crate::act::{self, Act, Pane};
+use crate::chart::{self, ChartError, Series};
 use crate::connection::{Connection, ConnectionName, Tier, WritePolicy};
 use crate::db::guard;
 use crate::db::model::{LocalPort, ResultSet, Statement};
@@ -140,8 +141,17 @@ pub(super) enum Run {
         result: ResultSet,
         took: Duration,
         grid: Grid,
+        view: View,
     },
     Failed(String),
+}
+
+/// How the result pane shows a result; `v` switches, and a new result starts on the grid.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum View {
+    Grid,
+    /// The chart `chart::infer` picks, built once when `v` is pressed, or why there is none.
+    Chart(Result<Series, ChartError>),
 }
 
 /// The pane that has the keys.
@@ -301,6 +311,7 @@ impl App {
             Act::Right => self.grid_step(Move::Right),
             Act::Find => return self.find(),
             Act::Connections => self.open_picker(),
+            Act::Chart => self.sheet_mut().switch_view(),
             Act::Open => return self.open_in_sidebar(),
             Act::Close => {}
         }
@@ -320,7 +331,7 @@ impl App {
     /// leave a sidebar no longer drawn.
     pub(super) fn fit(&mut self, fit: Fit) {
         self.fit = fit;
-        if let Run::Done { grid, .. } = &mut self.sheet_mut().run {
+        if let Run::Done { grid, view: View::Grid, .. } = &mut self.sheet_mut().run {
             grid.keep_in_view(fit.grid_rows);
         }
         if !fit.has_sidebar && self.focus == Focus::Queries {
@@ -372,6 +383,16 @@ impl Sheet {
             sent: None,
             error_mark: None,
             opened: None,
+        }
+    }
+
+    /// Shows the result as a chart, or as the grid again.
+    fn switch_view(&mut self) {
+        if let Run::Done { result, view, .. } = &mut self.run {
+            *view = match view {
+                View::Grid => View::Chart(chart::infer_series(result)),
+                View::Chart(_) => View::Grid,
+            };
         }
     }
 
@@ -434,7 +455,7 @@ impl Sheet {
             Incoming::Tunnel(state) => self.tunnel = Some(state),
             Incoming::Result { run, .. } | Incoming::Refused { run, .. } | Incoming::Failed { run, .. }
                 if !self.is_answer_to_running(run) => {}
-            Incoming::Result { result, took, .. } => self.run = Run::Done { grid: Grid::new(&result), result, took },
+            Incoming::Result { result, took, .. } => self.run = Run::Done { grid: Grid::new(&result), result, took, view: View::Grid },
             Incoming::Refused { why, .. } => self.run = Run::Failed(format!("not sent: {why}")),
             Incoming::Failed { error, position, .. } => {
                 self.error_mark = position.and_then(|position| self.editor_byte(position));
@@ -567,7 +588,10 @@ pub(super) mod tests {
         let mut app = typed("SELECT 1");
         enter(&mut app);
         app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result: orders(), took: Duration::from_millis(38) }));
-        assert_eq!(app.sheet().run, Run::Done { grid: Grid::new(&orders()), result: orders(), took: Duration::from_millis(38) });
+        assert_eq!(
+            app.sheet().run,
+            Run::Done { grid: Grid::new(&orders()), result: orders(), took: Duration::from_millis(38), view: View::Grid }
+        );
     }
 
     fn with_result() -> App {
@@ -588,6 +612,39 @@ pub(super) mod tests {
         assert_eq!(app.focus, Focus::Result);
         press(&mut app, KeyCode::Tab);
         assert_eq!(app.focus, Focus::Editor);
+    }
+
+    fn view(app: &App) -> &View {
+        let Run::Done { view, .. } = &app.sheet().run else { panic!("no result") };
+        view
+    }
+
+    #[test]
+    fn v_on_the_result_shows_its_chart_then_the_grid_again() {
+        let mut app = with_result();
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Char('v'));
+        assert_eq!(view(&app), &View::Chart(chart::infer_series(&orders())));
+        press(&mut app, KeyCode::Char('v'));
+        assert_eq!(view(&app), &View::Grid);
+    }
+
+    #[test]
+    fn v_in_the_editor_types_a_v() {
+        let mut app = with_result();
+        press(&mut app, KeyCode::Char('v'));
+        assert_eq!((view(&app), app.sheet().editor.text()), (&View::Grid, "SELECT 1v"));
+    }
+
+    #[test]
+    fn a_new_result_starts_on_the_grid() {
+        let mut app = with_result();
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Char('v'));
+        press(&mut app, KeyCode::Tab);
+        enter(&mut app);
+        app.apply(to_shop(Incoming::Result { run: RunId::FIRST.next(), result: orders(), took: Duration::from_millis(5) }));
+        assert_eq!(view(&app), &View::Grid);
     }
 
     #[test]

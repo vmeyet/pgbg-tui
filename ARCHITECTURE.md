@@ -30,7 +30,7 @@ When a boundary or a flow changes, change this page in the same MR.
 | `tui/backend/` | What the runner calls, one part per concern: sessions (one per connection opened, a task owns each one, runs its statements in turn, takes cancels by `RunId` while a statement runs, and says when the session is lost), queries, history |
 | `tui/ui.rs`, `tui/*_view.rs` | Drawing: layout in `ui.rs`, one view module per pane or modal |
 | `tui/grid_view/` | The results grid: only the visible rows and columns are drawn |
-| `tui/chart_view/` | Draws a `Series` with ratatui's `BarChart` and `Chart` |
+| `tui/chart_view/` | Draws a `Series` with ratatui's `BarChart` (bars across, so text labels stay readable) and `Chart` (braille line), one file per kind; a legend in vtui's user colours |
 | `tui/theme.rs` | The tier colours and the SQL token colours on top of vtui's palette |
 | `vtui` (git dependency) | Shared with the sibling TUIs: the terminal in raw mode (`Screen`), the palette (`Theme`), the input box (`Field`), the `ctrl-k` palette, the `?` overlay, fzf-style matching |
 | `log.rs` | The log file; never a secret, never a row |
@@ -69,7 +69,7 @@ Charting a result:
    A header name matches a column whatever its case, as PostgreSQL folds an unquoted name, unless one column has it exactly; a name several columns answer to is refused.
 3. `chart::Series` builds the points: a line over dates, times or integers is placed on their scale and sorted, so a gap shows, and a row with no place on it (NULL, infinity) is left out; bars and a line over text keep the result's order, one point per row.
 4. A y value of NULL, NaN or infinity leaves a gap, and NUMERIC is read as a float; each kind caps its points to what a terminal shows: bars keep the first 64, a line samples 1024 evenly, and the series says when rows were left out.
-5. `chart_view` draws them.
+5. The sheet keeps the series built on `v` with its result, and a new result starts on the grid; `chart_view` draws it, or says why the result has no chart.
 
 ## Boundaries
 

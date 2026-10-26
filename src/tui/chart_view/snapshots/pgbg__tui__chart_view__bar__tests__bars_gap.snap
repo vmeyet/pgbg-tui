@@ -1,0 +1,8 @@
+---
+source: src/tui/chart_view/bar.rs
+expression: "render(&drawn, 40, 4).backend()"
+---
+"nina         1.2k███████████████████████"
+"Zoë Nakamura                            "
+"noel         3                          "
+"                                        "
