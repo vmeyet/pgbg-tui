@@ -1,8 +1,9 @@
 //! What the runner calls: the session of the open connection, served by a task that owns it.
-use super::app::{Incoming, RunId};
+use super::app::{Incoming, RunId, TunnelState};
 use crate::connection::{Connection, WritePolicy};
 use crate::db::model::{CancelToken, Route, ServerError, Statement};
 use crate::db::{Session, guard};
+use crate::tunnel::{Died, Tunnel};
 use std::pin::pin;
 use std::time::Duration;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -12,6 +13,8 @@ use tokio::time::Instant;
 /// How long quitting waits for the session task to finish a cancel, so the terminal comes back soon.
 const STOP_WAIT: Duration = Duration::from_secs(2);
 const CANCELLED_BEFORE_SENT: &str = "cancelled before it was sent";
+const TUNNEL_NOT_STARTED: &str = "its tunnel did not start";
+const TUNNEL_DIED: &str = "its tunnel died";
 
 /// The way to the session task: runs and cancels in, answers out on the loop's channel.
 #[derive(Debug)]
@@ -33,7 +36,7 @@ impl Backend {
     pub(super) fn start(connection: Connection, answers: UnboundedSender<Incoming>) -> Self {
         let (runs, queue) = mpsc::unbounded_channel();
         let (cancels, cancelled) = mpsc::unbounded_channel();
-        let task = tokio::spawn(SessionTask { connection, session: None, cancelled, answers }.serve(queue));
+        let task = tokio::spawn(SessionTask { connection, tunnel: None, session: None, cancelled, answers }.serve(queue));
         Self { runs, cancels, task }
     }
 
@@ -67,11 +70,13 @@ impl Backend {
 enum Woken {
     Queued(Option<Queued>),
     Closed(String),
+    TunnelEnded(Died),
 }
 
-/// The task that owns the session: it opens it, runs each statement in turn, and says when it is lost.
+/// The task that owns the session and its tunnel: it opens them, runs each statement in turn, and says when they are lost.
 struct SessionTask {
     connection: Connection,
+    tunnel: Option<Tunnel>,
     session: Option<Session>,
     cancelled: UnboundedReceiver<RunId>,
     answers: UnboundedSender<Incoming>,
@@ -86,19 +91,27 @@ impl SessionTask {
                 Woken::Queued(Some(queued)) => self.run(queued).await,
                 Woken::Queued(None) => break,
                 Woken::Closed(why) => self.lose(why),
+                Woken::TunnelEnded(died) => self.lose_tunnel(&died),
             }
         }
     }
 
-    async fn woken(&self, queue: &mut UnboundedReceiver<Queued>) -> Woken {
+    async fn woken(&mut self, queue: &mut UnboundedReceiver<Queued>) -> Woken {
+        let Self { session, tunnel, .. } = self;
         tokio::select! {
             queued = queue.recv() => Woken::Queued(queued),
-            why = closed(self.session.as_ref()) => Woken::Closed(why),
+            why = closed(session.as_ref()) => Woken::Closed(why),
+            died = ended(tunnel.as_mut()) => Woken::TunnelEnded(died),
         }
     }
 
     async fn open(&mut self) {
-        self.session = match Session::open(&self.connection, Route::Direct).await {
+        let Some(route) = self.route().await else {
+            self.session = None;
+            self.send(Incoming::NotOpened(TUNNEL_NOT_STARTED.to_owned()));
+            return;
+        };
+        self.session = match Session::open(&self.connection, route).await {
             Ok(session) => {
                 self.send(Incoming::Opened);
                 Some(session)
@@ -127,6 +140,38 @@ impl SessionTask {
         }
     }
 
+    /// The way to the connection: direct, or through its tunnel, started again unless it still runs;
+    /// none when the tunnel does not start, and its state says why.
+    async fn route(&mut self) -> Option<Route> {
+        let Some(spec) = self.connection.tunnel() else { return Some(Route::Direct) };
+        if let Some(tunnel) = self.tunnel.as_mut()
+            && tunnel.is_running()
+        {
+            return Some(tunnel.route());
+        }
+        self.send(Incoming::Tunnel(TunnelState::Starting));
+        match Tunnel::start(spec).await {
+            Ok(tunnel) => {
+                self.send(Incoming::Tunnel(TunnelState::Up(tunnel.port())));
+                Some(self.tunnel.insert(tunnel).route())
+            }
+            Err(err) => {
+                self.tunnel = None;
+                self.send(Incoming::Tunnel(TunnelState::Died(format!("{err:#}"))));
+                None
+            }
+        }
+    }
+
+    /// Closes the session a dead tunnel carried; the next statement starts both again.
+    fn lose_tunnel(&mut self, died: &Died) {
+        self.tunnel = None;
+        self.send(Incoming::Tunnel(TunnelState::Died(died.to_string())));
+        if self.session.is_some() {
+            self.lose(TUNNEL_DIED.to_owned());
+        }
+    }
+
     fn lose(&mut self, why: String) {
         self.session = None;
         self.send(Incoming::Closed(why));
@@ -143,6 +188,14 @@ impl SessionTask {
 async fn closed(session: Option<&Session>) -> String {
     match session {
         Some(session) => session.closed().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// How `tunnel` ended, once it has; never, when there is none.
+async fn ended(tunnel: Option<&mut Tunnel>) -> Died {
+    match tunnel {
+        Some(tunnel) => tunnel.ended().await,
         None => std::future::pending().await,
     }
 }
@@ -211,8 +264,86 @@ mod tests {
     }
 
     fn started() -> (Backend, UnboundedReceiver<Incoming>) {
+        started_on(connection())
+    }
+
+    fn started_on(connection: Connection) -> (Backend, UnboundedReceiver<Incoming>) {
         let (sender, answers) = mpsc::unbounded_channel();
-        (Backend::start(connection(), sender), answers)
+        (Backend::start(connection, sender), answers)
+    }
+
+    /// A connection to the test database through a forwarder whose command line carries `marker`, so a test can kill it.
+    fn tunnelled(marker: &str) -> Connection {
+        let database = url::Url::parse(&std::env::var("PGBG_TEST_DATABASE_URL").unwrap()).unwrap();
+        let (host, port) = (database.host_str().unwrap().to_owned(), database.port().unwrap_or(5432));
+        let command =
+            format!("[\"python3\", \"-c\", {:?}, \"{{port}}\", \"{host}\", \"{port}\", \"{marker}\"]", crate::tunnel::tests::FORWARD);
+        let entry: Entry =
+            toml::from_str(&format!("tier = \"local\"\nurl = \"{database}\"\ntunnel = {{ command = {command} }}\n")).unwrap();
+        Connection::new("shop", entry).unwrap()
+    }
+
+    async fn answers_until(answers: &mut UnboundedReceiver<Incoming>, last: impl Fn(&Incoming) -> bool) -> Vec<Incoming> {
+        let mut seen = vec![];
+        while seen.last().is_none_or(|answer| !last(answer)) {
+            seen.push(answers.recv().await.unwrap());
+        }
+        seen
+    }
+
+    fn is_tunnel_death(answer: &Incoming) -> bool {
+        matches!(answer, Incoming::Tunnel(TunnelState::Died(_)))
+    }
+
+    async fn kill_tunnel_marked(marker: &str) {
+        tokio::process::Command::new("pkill").args(["-f", marker]).status().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_tunnel_that_does_not_start_says_why_and_the_session_does_not_open() {
+        let entry: Entry = toml::from_str(
+            "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\n\
+             tunnel = { command = [\"sh\", \"-c\", \"echo 'bastion.example.com: no route' >&2; exit 255\", \"{port}\"] }\n",
+        )
+        .unwrap();
+        let (_backend, mut answers) = started_on(Connection::new("shop", entry).unwrap());
+        let seen = answers_until(&mut answers, |answer| matches!(answer, Incoming::NotOpened(_))).await;
+        assert_eq!(seen[0], Incoming::Tunnel(TunnelState::Starting));
+        assert!(matches!(&seen[1], Incoming::Tunnel(TunnelState::Died(how)) if how.contains("no route")), "{seen:?}");
+        assert_eq!(seen[2], Incoming::NotOpened(TUNNEL_NOT_STARTED.to_owned()));
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_tunnel_that_dies_closes_its_session_and_says_why() {
+        let marker = "pgbg-test-tunnel-that-dies";
+        let (_backend, mut answers) = started_on(tunnelled(marker));
+        answers_until(&mut answers, |answer| *answer == Incoming::Opened).await;
+        kill_tunnel_marked(marker).await;
+        let mut seen = vec![];
+        while !seen.iter().any(|answer| matches!(answer, Incoming::Closed(_))) || !seen.iter().any(is_tunnel_death) {
+            seen.push(answers.recv().await.unwrap());
+        }
+        assert!(
+            seen.iter().any(|answer| matches!(answer, Incoming::Tunnel(TunnelState::Died(how)) if how.contains("`python3` died"))),
+            "{seen:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_statement_after_the_tunnel_died_starts_it_again() {
+        let marker = "pgbg-test-tunnel-started-again";
+        let (backend, mut answers) = started_on(tunnelled(marker));
+        answers_until(&mut answers, |answer| *answer == Incoming::Opened).await;
+        kill_tunnel_marked(marker).await;
+        answers_until(&mut answers, is_tunnel_death).await;
+        backend.run(RunId::FIRST, Statement::new("SELECT 1"));
+        let seen = answers_until(&mut answers, |answer| matches!(answer, Incoming::Result { .. })).await;
+        let seen: Vec<Incoming> = seen.into_iter().filter(|answer| !matches!(answer, Incoming::Closed(_))).collect();
+        assert_eq!(seen[0], Incoming::Tunnel(TunnelState::Starting));
+        assert!(matches!(seen[1], Incoming::Tunnel(TunnelState::Up(_))), "{seen:?}");
+        assert_eq!(seen[2], Incoming::Opened);
     }
 
     async fn next_answer(answers: &mut UnboundedReceiver<Incoming>) -> Incoming {

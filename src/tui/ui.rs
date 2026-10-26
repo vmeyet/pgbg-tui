@@ -1,5 +1,5 @@
 //! Drawing: the frame in the tier's colour, the panes inside it, and the key hints under them.
-use super::app::{App, Link};
+use super::app::{App, Link, TunnelState};
 use super::{editor_view, help_view, result_view, theme};
 use crate::act;
 use ratatui::Frame;
@@ -52,18 +52,36 @@ fn footer(f: &mut Frame<'_>, app: &App, area: Rect) {
         .flat_map(|hint| [Span::styled(format!(" {} ", hint.keys), key), Span::styled(format!("{} ", hint.does), does)])
         .collect();
     f.render_widget(Paragraph::new(Line::from(hints)), area);
-    f.render_widget(Paragraph::new(link(app, usize::from(area.width / 2))).right_aligned(), area);
+    f.render_widget(Paragraph::new(status(app, usize::from(area.width / 2))).right_aligned(), area);
 }
 
-fn link(app: &App, width: usize) -> Line<'static> {
-    match &app.link {
-        Link::Opening => Line::styled("connecting… ", Style::default().fg(app.theme.muted)),
-        Link::Open => Line::styled("connected ", Style::default().fg(app.theme.muted)),
-        Link::Failed(err) => {
-            let first_line = err.lines().next().unwrap_or_default();
-            Line::styled(truncate(&format!("✗ {first_line} "), width), Style::default().fg(app.theme.danger))
-        }
+/// The tunnel's state, when the connection has one, then the session's, in `width` columns at most.
+fn status(app: &App, width: usize) -> Line<'static> {
+    let tunnel = app.tunnel.as_ref().map(|tunnel| tunnel_state(app, tunnel, width / 2));
+    let link = link(app, width - tunnel.as_ref().map_or(0, Span::width));
+    Line::from(tunnel.into_iter().chain([link]).collect::<Vec<_>>())
+}
+
+fn tunnel_state(app: &App, tunnel: &TunnelState, width: usize) -> Span<'static> {
+    match tunnel {
+        TunnelState::Starting => Span::styled("⇄ tunnel starting… ", Style::default().fg(app.theme.muted)),
+        TunnelState::Up(port) => Span::styled(format!("⇄ tunnel :{port} "), Style::default().fg(app.theme.muted)),
+        TunnelState::Died(how) => failure(app, how, width),
     }
+}
+
+fn link(app: &App, width: usize) -> Span<'static> {
+    match &app.link {
+        Link::Opening => Span::styled("connecting… ", Style::default().fg(app.theme.muted)),
+        Link::Open => Span::styled("connected ", Style::default().fg(app.theme.muted)),
+        Link::Failed(err) => failure(app, err, width),
+    }
+}
+
+/// The first line of `err` after a `✗`, cut to `width`.
+fn failure(app: &App, err: &str, width: usize) -> Span<'static> {
+    let first_line = err.lines().next().unwrap_or_default();
+    Span::styled(truncate(&format!("✗ {first_line} "), width), Style::default().fg(app.theme.danger))
 }
 
 #[cfg(test)]
@@ -71,6 +89,7 @@ mod tests {
     use super::super::app::tests::{app, connection, orders, typed};
     use super::super::app::{App, Incoming, RunId};
     use super::*;
+    use crate::db::model::LocalPort;
     use crossterm::event::{KeyCode, KeyEvent};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -102,6 +121,22 @@ mod tests {
         let mut app = app();
         app.handle_key(KeyEvent::from(KeyCode::F(1)));
         insta::assert_snapshot!("help", render(&app, 60, 20).backend());
+    }
+
+    #[test]
+    fn a_tunnel_that_is_up_shows_its_port_beside_the_session() {
+        let mut app = app();
+        app.apply(Incoming::Tunnel(TunnelState::Up(LocalPort::new(49213))));
+        app.apply(Incoming::Opened);
+        insta::assert_snapshot!("tunnel_up", render(&app, 60, 14).backend());
+    }
+
+    #[test]
+    fn a_tunnel_that_died_says_how_in_the_status_line() {
+        let mut app = app();
+        app.apply(Incoming::Tunnel(TunnelState::Died("the tunnel `ssh` died, exit status: 255".into())));
+        app.apply(Incoming::Closed("its tunnel died".into()));
+        insta::assert_snapshot!("tunnel_died", render(&app, 100, 14).backend());
     }
 
     #[test]

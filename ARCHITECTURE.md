@@ -53,7 +53,7 @@ Running a statement:
 Switching connection:
 
 1. `ctrl-o` opens the connection picker; picking one returns `Action::Open { connection }`.
-2. When the connection has a tunnel, `tunnel::start` picks a free port, runs the command, and waits until the port answers.
+2. When the connection has a tunnel, the session task starts it with `Tunnel::start`: it picks a free port, runs the command, and waits until the port answers.
 3. `Session::open` takes the tunnel's `Route`: it connects to `hostaddr=127.0.0.1` and the tunnel's port, and keeps the URL's host for the TLS certificate check; it reads the schema in the background for completion and the sidebar.
 4. The session stays open until pgbg quits, so switching back is instant; its tunnel stops with it.
 5. A session whose link is gone, or whose rollback failed, is opened again before the next statement; it is never retried on its own.
@@ -103,7 +103,9 @@ On a connection that allows writes, a statement runs as typed, except that one r
 - pgbg picks the free port, so two pgbg can run side by side; the child runs in its own process group, and stopping or dropping the `Tunnel` kills the whole group, so an `ssh` or `gcloud` it started dies too.
 - A tunnel is ready once its port takes a TCP connection, within 30 seconds; one that dies first says how it exited and its last lines of stderr, never its arguments.
 - A session through a tunnel connects to `hostaddr=127.0.0.1` on the tunnel's port, and TLS still checks the certificate against the URL's host; that is why the config refuses a `hostaddr` of its own.
-- The status line shows the tunnel state; a tunnel that dies closes its session and says why.
+- The session task owns the tunnel with the session: the status line shows `⇄ tunnel :<port>`, `starting…` or how it died; a tunnel that dies closes its session and says why, and the next statement starts both again.
+- A session reopened while its tunnel still runs keeps that tunnel.
+- Release builds abort on a panic, so no `Drop` runs: `tunnel/groups.rs` keeps every live process group in a registry, and a panic hook kills them all.
 
 ## Saved queries
 
