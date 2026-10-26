@@ -1,5 +1,26 @@
-//! Where a password comes from; the password itself is never read here yet, nor ever written anywhere.
+//! Where a password comes from, and the password once read: never written anywhere, never printed.
+use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
+use std::env::VarError;
+use std::fmt;
+use std::process::Stdio;
+
+const KEYCHAIN_LATER: &str = "a `keychain` password is not read by this pgbg yet: use `{ env = \"...\" }` or `{ command = [...] }`";
+
+/// A password, read when a session opens and dropped once connected.
+pub(crate) struct Secret(String);
+
+impl Secret {
+    pub(crate) fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for Secret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
 
 /// A pointer to a password: a keychain item, an environment variable, or a command that prints it.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -20,6 +41,15 @@ impl SecretSource {
         }
     }
 
+    /// The password this source holds now; an error never quotes what a command printed.
+    pub(crate) async fn read(&self) -> Result<Secret> {
+        match self {
+            Self::Keychain(_) => bail!(KEYCHAIN_LATER),
+            Self::Env(variable) => from_variable(variable, std::env::var(variable)),
+            Self::Command(argv) => from_command(argv).await,
+        }
+    }
+
     /// Why this source cannot name a password, when it cannot.
     pub(crate) fn problem(&self) -> Option<&'static str> {
         match self {
@@ -29,6 +59,30 @@ impl SecretSource {
             _ => None,
         }
     }
+}
+
+fn from_variable(variable: &str, value: Result<String, VarError>) -> Result<Secret> {
+    match value {
+        Ok(password) if !password.is_empty() => Ok(Secret(password)),
+        Ok(_) | Err(VarError::NotPresent) => bail!("the environment variable `{variable}` is not set"),
+        Err(VarError::NotUnicode(_)) => bail!("the environment variable `{variable}` is not UTF-8"),
+    }
+}
+
+async fn from_command(argv: &[String]) -> Result<Secret> {
+    let (program, args) = argv.split_first().ok_or_else(|| anyhow!("`command` is empty"))?;
+    let output = tokio::process::Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .with_context(|| format!("running `{program}` for the password"))?;
+    if !output.status.success() {
+        bail!("`{program}` failed ({}) instead of printing the password", output.status);
+    }
+    let printed =
+        String::from_utf8(output.stdout).map_err(|_password_bytes| anyhow!("`{program}` printed a password that is not UTF-8"))?;
+    Ok(Secret(printed.trim_end_matches(['\n', '\r']).to_owned()))
 }
 
 #[cfg(test)]
@@ -44,6 +98,33 @@ mod tests {
         assert_eq!(source("password = { keychain = \"pgbg/prod\" }"), SecretSource::Keychain("pgbg/prod".into()));
         assert_eq!(source("password = { env = \"SHOP_PGPASSWORD\" }").kind(), "env");
         assert_eq!(source("password = { command = [\"pass\", \"shop\"] }").kind(), "command");
+    }
+
+    #[tokio::test]
+    async fn a_command_source_reads_what_the_command_prints_without_its_newline() {
+        let secret = SecretSource::Command(vec!["printf".into(), "hunter2\\n".into()]).read().await.unwrap();
+        assert_eq!(secret.expose(), "hunter2");
+    }
+
+    #[tokio::test]
+    async fn a_command_that_fails_is_an_error() {
+        assert!(SecretSource::Command(vec!["false".into()]).read().await.unwrap_err().to_string().contains("`false` failed"));
+    }
+
+    #[test]
+    fn a_variable_source_reads_its_value() {
+        assert_eq!(from_variable("SHOP_PGPASSWORD", Ok("hunter2".into())).unwrap().expose(), "hunter2");
+    }
+
+    #[test]
+    fn an_unset_or_empty_variable_is_an_error_that_names_it() {
+        assert!(from_variable("SHOP_PGPASSWORD", Err(VarError::NotPresent)).unwrap_err().to_string().contains("SHOP_PGPASSWORD"));
+        assert!(from_variable("SHOP_PGPASSWORD", Ok(String::new())).is_err());
+    }
+
+    #[test]
+    fn a_secret_never_shows_in_debug_output() {
+        assert_eq!(format!("{:?}", Secret("hunter2".into())), "<redacted>");
     }
 
     #[test]

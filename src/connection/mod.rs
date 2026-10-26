@@ -5,10 +5,12 @@ use password::PasswordEntry;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 pub(crate) use target::Target;
+pub(crate) use tls::Tls;
 pub(crate) use tunnel::TunnelSpec;
 
 mod password;
 mod target;
+mod tls;
 mod tunnel;
 
 const PLAIN_PASSWORD: &str = "`password` holds a plain password: pgbg never keeps one in the config; use `{ keychain = \"...\" }`, `{ env = \"...\" }` or `{ command = [...] }`";
@@ -24,6 +26,8 @@ pub(crate) struct Entry {
     tunnel: Option<TunnelSpec>,
     #[serde(default)]
     writes: WritePolicy,
+    #[serde(default)]
+    tls: Option<Tls>,
 }
 
 /// A named database target: where it is, how to reach it, how to log in, and whether it takes writes.
@@ -37,6 +41,7 @@ pub(crate) struct Connection {
     #[serde(skip_serializing_if = "Option::is_none")]
     password: Option<SecretSource>,
     writes: WritePolicy,
+    tls: Tls,
 }
 
 /// The name a connection has under `[connections.<name>]`, typed on the command line.
@@ -65,11 +70,13 @@ pub(crate) enum WritePolicy {
 impl Connection {
     /// The connection `[connections.<name>]` describes, or why it is refused.
     pub(crate) fn new(name: &str, entry: Entry) -> Result<Self> {
-        let Entry { tier, url, password, tunnel, writes } = entry;
+        let Entry { tier, url, password, tunnel, writes, tls } = entry;
+        let url = Target::parse(&url)?;
         Ok(Self {
             name: ConnectionName::new(name)?,
             tier,
-            url: Target::parse(&url)?,
+            tls: tls::tls(&url, tls)?,
+            url,
             tunnel,
             password: password.map(secret_source).transpose()?,
             writes,
@@ -98,6 +105,11 @@ impl Connection {
 
     pub(crate) fn writes(&self) -> WritePolicy {
         self.writes
+    }
+
+    #[cfg_attr(not(test), expect(dead_code, reason = "`db::Session::open`, the next step, is its first caller"))]
+    pub(crate) fn tls(&self) -> Tls {
+        self.tls
     }
 }
 
@@ -143,7 +155,7 @@ mod tests {
     }
 
     fn shop(extra: &str) -> Result<Connection> {
-        connection("shop", &format!("tier = \"staging\"\nurl = \"postgres://nina@db.example.com/shop\"\n{extra}"))
+        connection("shop", &format!("tier = \"staging\"\nurl = \"postgres://nina@db.example.com/shop?sslmode=require\"\n{extra}"))
     }
 
     #[test]
@@ -151,7 +163,8 @@ mod tests {
         let shop = shop("").unwrap();
         assert_eq!(shop.name().to_string(), "shop");
         assert_eq!(shop.tier(), Tier::Staging);
-        assert_eq!(shop.target().to_string(), "postgres://nina@db.example.com/shop");
+        assert_eq!(shop.target().to_string(), "postgres://nina@db.example.com/shop?sslmode=require");
+        assert_eq!(shop.tls(), Tls::On);
         assert_eq!(shop.writes(), WritePolicy::ReadOnly);
         assert!(shop.tunnel().is_none() && shop.password().is_none());
     }
@@ -163,7 +176,7 @@ mod tests {
 
     #[test]
     fn a_production_connection_may_allow_writes() {
-        let text = "tier = \"production\"\nurl = \"postgres://nina@db.example.com/shop\"\nwrites = \"allowed\"\n";
+        let text = "tier = \"production\"\nurl = \"postgres://nina@db.example.com/shop?sslmode=require\"\nwrites = \"allowed\"\n";
         assert_eq!(connection("shop", text).unwrap().writes(), WritePolicy::Allowed);
     }
 
