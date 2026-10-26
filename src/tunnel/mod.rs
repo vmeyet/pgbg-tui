@@ -194,7 +194,7 @@ async fn run_before(before: &[String]) -> Result<()> {
         .map_err(|_elapsed| anyhow!("`tunnel.before` (`{program}`) did not end within {}s", BEFORE_TIMEOUT.as_secs()))?
         .with_context(|| format!("running `tunnel.before` (`{program}`)"))?;
     if !output.status.success() {
-        let last_words = last_lines(String::from_utf8_lossy(&output.stderr).lines());
+        let last_words = keep_last_words(output.stderr.as_slice()).await;
         bail!("`tunnel.before` (`{program}`) failed: {}", with_last_words(&output.status.to_string(), &last_words));
     }
     Ok(())
@@ -219,11 +219,12 @@ async fn free_port() -> Result<LocalPort> {
     Ok(LocalPort::new(listener.local_addr()?.port()))
 }
 
-/// Reads `stderr` to its end, so the tunnel never blocks on a full pipe, and keeps its last lines.
+/// Reads `stderr` to its end, so the tunnel never blocks on a full pipe, and keeps its last lines, each cut short;
+/// a byte that is not UTF-8 shows as `�`.
 async fn keep_last_words(stderr: impl AsyncRead + Unpin) -> Vec<String> {
-    let mut lines = BufReader::new(stderr).lines();
+    let mut lines = BufReader::new(stderr).split(b'\n');
     let mut kept = VecDeque::with_capacity(LAST_WORDS_LINES);
-    while let Ok(Some(line)) = lines.next_line().await {
+    while let Ok(Some(line)) = lines.next_segment().await {
         if kept.len() == LAST_WORDS_LINES {
             kept.pop_front();
         }
@@ -232,14 +233,8 @@ async fn keep_last_words(stderr: impl AsyncRead + Unpin) -> Vec<String> {
     kept.into()
 }
 
-fn last_lines<'a>(lines: impl DoubleEndedIterator<Item = &'a str>) -> Vec<String> {
-    let mut kept: Vec<String> = lines.rev().take(LAST_WORDS_LINES).map(shortened).collect();
-    kept.reverse();
-    kept
-}
-
-fn shortened(line: &str) -> String {
-    line.chars().take(LAST_WORDS_LINE_CHARS).collect()
+fn shortened(line: &[u8]) -> String {
+    String::from_utf8_lossy(line).trim_end_matches('\r').chars().take(LAST_WORDS_LINE_CHARS).collect()
 }
 
 fn with_last_words(how: &str, last_words: &[String]) -> String {
@@ -307,6 +302,12 @@ time.sleep(60)
         })
         .await
         .is_ok()
+    }
+
+    #[tokio::test]
+    async fn last_words_keep_the_last_lines_even_past_utf8() {
+        let stderr = b"one\ntwo\nthree\nfour\nfive\n\xffsix\r\nseven";
+        assert_eq!(keep_last_words(&stderr[..]).await, ["three", "four", "five", "\u{fffd}six", "seven"]);
     }
 
     #[tokio::test]
