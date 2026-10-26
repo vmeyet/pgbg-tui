@@ -9,8 +9,10 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use tokio::io::AsyncReadExt;
 
+pub(crate) use header::Header;
 pub(crate) use tree::{TreeRow, tree_rows};
 
+mod header;
 mod tree;
 
 const PROJECT_DIR: &str = ".pgbg";

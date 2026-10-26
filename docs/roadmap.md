@@ -43,7 +43,7 @@ The MR that ships a step ticks its box.
 - [x] `ctrl-p` fuzzy finder over the `.pgbg/queries/` nearest the working directory, opening a query in the editor
 - [x] The user config folder's queries, beside the project's
 - [x] `.pgbg/queries/` tree in a sidebar
-- [ ] Header parsing: `-- name:`, `-- connection:`, `-- chart:`
+- [x] Header parsing: `-- name:`, `-- connection:`, `-- chart:`
 - [ ] Save from the editor, open in `$EDITOR`
 
 ## 7. Big results
@@ -65,7 +65,7 @@ The MR that ships a step ticks its box.
 
 - [x] `chart/`: `ChartSpec`, `chart::infer`, `Series`, all pure and tested
 - [x] Bar chart and line chart views, `v` to switch between grid and chart
-- [ ] `-- chart:` in a saved query's header
+- [x] `-- chart:` in a saved query's header
 
 ## 11. Doctor
 
