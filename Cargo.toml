@@ -32,6 +32,8 @@ toml = "1.1"
 toml_edit = { version = "0.25", features = ["serde"] }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
+tree-sitter-highlight = "0.27"
+tree-sitter-sequel = "0.3"
 url = "2.5"
 uuid = "1"
 vtui = { git = "https://github.com/vmeyet/vtui", tag = "v0.1.0" }

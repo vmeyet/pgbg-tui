@@ -1,12 +1,16 @@
-//! The SQL editor pane: the text, the cursor kept in view, the server's error position, and whether the connection takes writes.
+//! The SQL editor pane: the text in its syntax colours, the cursor kept in view, the server's error position, and whether the connection takes writes.
 use super::app::{App, Focus};
+use super::theme;
 use crate::connection::WritePolicy;
+use crate::syntax::{Spans, Token};
 use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
+use std::ops::Range;
 use vtui::pane;
+use vtui::theme::Theme;
 
 /// The editor in `area`, scrolled so the cursor's line shows, with the terminal's cursor on it when it has the keys.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
@@ -19,7 +23,8 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
     let column = Line::from(before.rsplit('\n').next().unwrap_or_default()).width() as u16;
     let scroll = row.saturating_sub(inside.height.saturating_sub(1));
     let mark = Style::default().fg(app.theme.danger).add_modifier(Modifier::REVERSED);
-    f.render_widget(Paragraph::new(marked(app.editor.text(), app.error_mark, mark)).scroll((scroll, 0)), inside);
+    let text = coloured(app.editor.text(), &app.colours, app.error_mark, mark, &app.theme);
+    f.render_widget(Paragraph::new(text).scroll((scroll, 0)), inside);
     if !focused {
         return;
     }
@@ -27,19 +32,48 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
     f.set_cursor_position(Position { x, y: inside.y + row - scroll });
 }
 
-/// `text` with the character at byte `mark` in `style`; a mark on a line's end draws a space there.
-fn marked(text: &str, mark: Option<usize>, style: Style) -> Text<'_> {
-    let Some((before, rest)) = mark.and_then(|at| text.split_at_checked(at)) else { return Text::raw(text) };
-    let marked_len = rest.chars().next().filter(|&c| c != '\n').map_or(0, char::len_utf8);
-    let (under, after) = rest.split_at(marked_len);
-    let mut lines: Vec<Line<'_>> = before.split('\n').map(Line::raw).collect();
-    let mut after_lines = after.split('\n');
-    let mut joined = lines.pop().unwrap_or_default().spans;
-    joined.push(Span::styled(if under.is_empty() { " " } else { under }, style));
-    joined.extend(Line::raw(after_lines.next().unwrap_or_default()).spans);
-    lines.push(Line::from(joined));
-    lines.extend(after_lines.map(Line::raw));
+/// `text` line by line, each token in its colour, and the character at byte `mark` in `mark_style` on top;
+/// a mark on a line's end draws a space there.
+fn coloured<'a>(text: &'a str, colours: &[Spans], mark: Option<usize>, mark_style: Style, theme: &Theme) -> Text<'a> {
+    let mut line_start = 0;
+    let mut lines = Vec::new();
+    for (index, line) in text.split('\n').enumerate() {
+        let marked = mark.and_then(|at| at.checked_sub(line_start)).filter(|&at| at <= line.len()).map(|at| marked_range(line, at));
+        let spans = colours.get(index).map_or(&[][..], Vec::as_slice);
+        lines.push(coloured_line(line, spans, marked, mark_style, theme));
+        line_start += line.len() + 1;
+    }
     Text::from(lines)
+}
+
+/// The bytes of the character at `at`; empty at the line's end.
+fn marked_range(line: &str, at: usize) -> Range<usize> {
+    at..at + line[at..].chars().next().map_or(0, char::len_utf8)
+}
+
+/// The line cut wherever a token or the mark starts or stops.
+fn coloured_line<'a>(
+    line: &'a str,
+    spans: &[(Range<usize>, Token)],
+    mark: Option<Range<usize>>,
+    mark_style: Style,
+    theme: &Theme,
+) -> Line<'a> {
+    let mut edges: Vec<usize> = spans.iter().map(|(range, _)| range).chain(&mark).flat_map(|range| [range.start, range.end]).collect();
+    edges.extend([0, line.len()]);
+    edges.retain(|&edge| edge <= line.len() && line.is_char_boundary(edge));
+    edges.sort_unstable();
+    edges.dedup();
+    let token_colour = |at: usize| spans.iter().find(|(range, _)| range.contains(&at)).map(|(_, token)| theme::token(theme, *token));
+    let style_at = |at: usize| {
+        let is_marked = mark.as_ref().is_some_and(|range| range.contains(&at));
+        if is_marked { mark_style } else { token_colour(at).map_or_else(Style::default, |colour| Style::default().fg(colour)) }
+    };
+    let mut pieces: Vec<Span<'a>> = edges.windows(2).map(|piece| Span::styled(&line[piece[0]..piece[1]], style_at(piece[0]))).collect();
+    if mark.is_some_and(|range| range.is_empty()) {
+        pieces.push(Span::styled(" ", mark_style));
+    }
+    Line::from(pieces)
 }
 
 fn badge(app: &App) -> Span<'static> {
@@ -53,6 +87,7 @@ fn badge(app: &App) -> Span<'static> {
 mod tests {
     use super::super::app::tests::typed;
     use super::*;
+    use crate::syntax;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
     use ratatui::backend::{Backend as _, TestBackend};
@@ -60,7 +95,15 @@ mod tests {
     fn marked_text(text: &str, mark: usize) -> Vec<String> {
         let style = Style::default().add_modifier(Modifier::REVERSED);
         let shown = |span: &Span<'_>| if span.style == style { format!("[{}]", span.content) } else { span.content.to_string() };
-        marked(text, Some(mark), style).lines.iter().map(|line| line.spans.iter().map(shown).collect()).collect()
+        let text = coloured(text, &[], Some(mark), style, &Theme::default());
+        text.lines.iter().map(|line| line.spans.iter().map(shown).collect()).collect()
+    }
+
+    fn painted(text: &str, mark: Option<usize>) -> String {
+        let mark_style = Style::default().fg(Theme::default().danger).add_modifier(Modifier::REVERSED);
+        let text = coloured(text, &syntax::highlight(text), mark, mark_style, &Theme::default());
+        let piece = |span: &Span<'_>| format!("{:?}/{:?} {:?}", span.style.fg, span.style.add_modifier, span.content);
+        text.lines.iter().map(|line| line.spans.iter().map(piece).collect::<Vec<_>>().join("\n")).collect::<Vec<_>>().join("\n---\n")
     }
 
     #[test]
@@ -72,6 +115,11 @@ mod tests {
     fn a_mark_at_the_end_of_a_line_or_the_text_draws_a_space() {
         assert_eq!(marked_text("SELECT\nFROM", 6), ["SELECT[ ]", "FROM"]);
         assert_eq!(marked_text("SELECT", 6), ["SELECT[ ]"]);
+    }
+
+    #[test]
+    fn the_error_mark_draws_over_a_coloured_token() {
+        insta::assert_snapshot!("coloured_marked", painted("SELECT id, 'paid', 10 -- recent\nFROM ordrs", Some(37)));
     }
 
     #[test]

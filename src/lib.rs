@@ -8,4 +8,5 @@ mod db;
 pub mod log;
 mod render;
 mod secret;
+mod syntax;
 mod tui;

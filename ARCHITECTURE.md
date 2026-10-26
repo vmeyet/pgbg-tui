@@ -31,7 +31,7 @@ When a boundary or a flow changes, change this page in the same MR.
 | `tui/ui.rs`, `tui/*_view.rs` | Drawing: layout in `ui.rs`, one view module per pane or modal |
 | `tui/grid_view/` | The results grid: only the visible rows and columns are drawn |
 | `tui/chart_view/` | Draws a `Series` with ratatui's `BarChart` and `Chart` |
-| `tui/theme.rs` | The tier colours on top of vtui's palette |
+| `tui/theme.rs` | The tier colours and the SQL token colours on top of vtui's palette |
 | `vtui` (git dependency) | Shared with the sibling TUIs: the terminal in raw mode (`Screen`), the palette (`Theme`), the input box (`Field`), the `ctrl-k` palette, the `?` overlay, fzf-style matching |
 | `log.rs` | The log file; never a secret, never a row |
 
@@ -113,7 +113,7 @@ Four layers, outermost first; only the last one is a guarantee.
 - Rows stream through a portal, a page at a time; nothing waits on the whole result.
 - The grid draws only the visible window; column widths come from the first page and the header, capped.
 - Values are decoded once, at the boundary, into `Value`; drawing formats only what is on screen.
-- Syntax colours are rebuilt only when the editor text changes.
+- Syntax colours are rebuilt only when the editor text changes, and kept in `App` as spans the editor view draws.
 
 ## Glossary
 

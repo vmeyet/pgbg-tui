@@ -23,7 +23,7 @@ The MR that ships a step ticks its box.
 
 ## 3. Syntax colours
 
-- [ ] `syntax/` on `tree-sitter-sequel`, rebuilt only on edit
+- [x] `syntax/` on `tree-sitter-sequel`, rebuilt only on edit
 
 ## 4. Connections
 

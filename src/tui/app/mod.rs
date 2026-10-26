@@ -3,6 +3,7 @@ use crate::act::{self, Act, Pane};
 use crate::connection::{Connection, ConnectionName, Tier, WritePolicy};
 use crate::db::guard;
 use crate::db::model::{ResultSet, Statement};
+use crate::syntax::Spans;
 use crossterm::event::{KeyCode, KeyEvent};
 use std::time::Duration;
 use vtui::field::Field;
@@ -134,6 +135,8 @@ pub(super) struct App {
     pub(super) tier: Tier,
     pub(super) writes: WritePolicy,
     pub(super) editor: Field,
+    /// The editor's syntax colours, one entry per line, rebuilt only when its text changes.
+    pub(super) colours: Vec<Spans>,
     pub(super) link: Link,
     pub(super) run: Run,
     pub(super) focus: Focus,
@@ -156,6 +159,7 @@ impl App {
             tier: connection.tier(),
             writes: connection.writes(),
             editor: Field::default(),
+            colours: Vec::new(),
             link: Link::Opening,
             run: Run::Idle,
             focus: Focus::Editor,
@@ -441,6 +445,13 @@ pub(super) mod tests {
 
     fn failed_at(app: &mut App, position: usize) {
         app.apply(Incoming::Failed { run: RunId::FIRST, error: "ERROR: syntax error".into(), position: Some(position) });
+    }
+
+    #[test]
+    fn the_colours_follow_the_text_as_it_is_typed() {
+        let mut app = typed("SELECT 1");
+        app.handle_key(KeyEvent::from(KeyCode::Backspace));
+        assert_eq!(app.colours, [vec![(0..6, crate::syntax::Token::Keyword)]]);
     }
 
     #[test]
