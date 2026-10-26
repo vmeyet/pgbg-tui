@@ -1,0 +1,20 @@
+---
+source: src/tui/form_view.rs
+expression: terminal.backend()
+---
+"╭ ● local · local ─────────────────────────────────────────────────────────────────────────────────╮"
+"│╭ Editor ─ READ ONL╭ Add a connection ────────────────────────────────────────╮──────────────────╮│"
+"││                  │ ▎name            my shop                                 │                  ││"
+"││                  │   ✗ `my shop` is not a connection name: use letters, dig │                  ││"
+"││                  │  tier            ‹ local ›                               │                  ││"
+"│╰──────────────────│  url                                                     │──────────────────╯│"
+"│╭ Result ──────────│   ✗ `url` is not a URL: relative URL without a base      │──────────────────╮│"
+"││ ⏎ runs the statem│  password from   ‹ none ›                                │                  ││"
+"││                  │  tunnel                                                  │                  ││"
+"││                  │  writes          ‹ read only ›                           │                  ││"
+"││                  │                                                          │                  ││"
+"││                  │ ⇥ next · ←→ choose · ⏎ saves · esc                       │                  ││"
+"││                  ╰──────────────────────────────────────────────────────────╯                  ││"
+"│╰────────────────────────────────────────────────────────────────────────────────────────────────╯│"
+"│ ⏎ run  ⌥⏎ new line  ^p find  ⇥ pane  F1 keys  ^o connections  ^c quit                connecting… │"
+"╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"

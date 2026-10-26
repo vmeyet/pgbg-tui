@@ -20,6 +20,7 @@ Each entry says what changed, then where, then how to use it.
   Each connection shows its tier's colour, where it goes, whether it takes writes, and whether its session is open.
   Sessions stay open until you quit, so switching back is instant, and each connection keeps its own editor text, result and saved query.
   In the picker, `ctrl-d` removes the highlighted connection from your `config.toml` once you press `y`, with the keychain item no other connection names; `ctrl-x` closes its session and its tunnel.
+  `ctrl-a` adds a connection and `ctrl-e` edits the highlighted one in a form: tier, url, where the password comes from, the password itself for a keychain item (typed hidden), tunnel and writes; `⇥` moves, `←`/`→` choose, `⏎` saves, and a refused line says why under it.
 - **Charts** in the TUI: on a result, press `v` to see it as a chart, and `v` again for the grid; the title says which one shows.
   pgbg puts the first text, date or time column across and the numeric columns up: bars for text or a few rows, a line over time otherwise, with gaps in time left as gaps.
   A result it cannot chart says why, such as no numeric column.

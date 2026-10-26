@@ -27,6 +27,9 @@ pub(crate) enum Act {
     Chart,
     Delete,
     CloseSession,
+    Add,
+    Edit,
+    Save,
 }
 
 #[cfg(test)]
@@ -58,7 +61,10 @@ impl Act {
             Self::Close => Some(Self::Chart),
             Self::Chart => Some(Self::Delete),
             Self::Delete => Some(Self::CloseSession),
-            Self::CloseSession => None,
+            Self::CloseSession => Some(Self::Add),
+            Self::Add => Some(Self::Edit),
+            Self::Edit => Some(Self::Save),
+            Self::Save => None,
         }
     }
 
@@ -99,6 +105,8 @@ pub(crate) enum Pane {
     Finder,
     /// The `ctrl-o` connection picker, a popup like the finder.
     Picker,
+    /// The form that adds or edits a connection, from the picker.
+    Form,
 }
 
 /// Keys as the help or the footer writes them, and what they do in a few words.
@@ -184,6 +192,13 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Quit, Pane::Picker, &[control('c')]).help("^c", "quit"),
     row(Act::Delete, Pane::Picker, &[control('d')]).help("^d", "remove the connection from the config, once you say yes"),
     row(Act::CloseSession, Pane::Picker, &[control('x')]).help("^x", "close its session and its tunnel"),
+    row(Act::Add, Pane::Picker, &[control('a')]).help("^a", "add a connection"),
+    row(Act::Edit, Pane::Picker, &[control('e')]).help("^e", "edit the connection"),
+    row(Act::Down, Pane::Form, &[key(KeyCode::Tab), key(KeyCode::Down)]).help("⇥ ↓", "next, previous field").footer("⇥", "next"),
+    row(Act::Up, Pane::Form, &[key(KeyCode::BackTab), key(KeyCode::Up)]),
+    row(Act::Save, Pane::Form, &[key(KeyCode::Enter)]).help("⏎", "save the connection").footer("⏎", "saves"),
+    row(Act::Close, Pane::Form, &[key(KeyCode::Esc)]).help("esc", "leave without saving").footer("esc", "closes"),
+    row(Act::Quit, Pane::Form, &[control('c')]).help("^c", "quit"),
     row(Act::Connections, Pane::Anywhere, &[control('o')]).help("^o", "pick a connection").footer("^o", "connections"),
     row(Act::Quit, Pane::Anywhere, &[control('c')]).help("^c", "quit").footer("^c", "quit"),
 ];
@@ -196,7 +211,7 @@ fn is_the_key(own: &KeyEvent, pressed: KeyEvent) -> bool {
 }
 
 fn works_in(row: &Row, pane: Pane) -> bool {
-    row.pane == pane || (row.pane == Pane::Anywhere && !matches!(pane, Pane::Finder | Pane::Picker))
+    row.pane == pane || (row.pane == Pane::Anywhere && !matches!(pane, Pane::Finder | Pane::Picker | Pane::Form))
 }
 
 /// What `key` does while `pane` has the keys; `None` leaves it to the pane, as text for the editor.
@@ -243,6 +258,7 @@ pub(crate) fn sections(pane: Pane, every_key: bool) -> Vec<Section> {
         (Pane::Queries, "queries"),
         (Pane::Finder, "finder"),
         (Pane::Picker, "picker"),
+        (Pane::Form, "form"),
         (Pane::Anywhere, "anywhere"),
     ];
     let shown = panes.into_iter().filter(|&(listed, _)| every_key || listed == pane || listed == Pane::Anywhere);
@@ -291,7 +307,7 @@ mod tests {
 
     #[test]
     fn no_key_does_two_actions_in_one_pane() {
-        for pane in [Pane::Editor, Pane::Result, Pane::Queries, Pane::Finder, Pane::Picker] {
+        for pane in [Pane::Editor, Pane::Result, Pane::Queries, Pane::Finder, Pane::Picker, Pane::Form] {
             let keys: Vec<&KeyEvent> = ROWS.iter().filter(|row| works_in(row, pane)).flat_map(|row| row.keys).collect();
             for (at, key) in keys.iter().enumerate() {
                 assert!(!keys[at + 1..].contains(key), "{key:?} in {pane:?}");
@@ -328,6 +344,6 @@ mod tests {
     fn the_first_help_lists_the_focused_pane_and_what_works_anywhere() {
         let titles: Vec<&str> = sections(Pane::Result, false).iter().map(|section| section.title).collect();
         assert_eq!(titles, ["result", "anywhere"]);
-        assert_eq!(sections(Pane::Result, true).len(), 6);
+        assert_eq!(sections(Pane::Result, true).len(), 7);
     }
 }

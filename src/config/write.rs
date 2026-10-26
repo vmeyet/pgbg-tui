@@ -13,7 +13,7 @@ use toml_edit::{DocumentMut, InlineTable, Item, Table, TableLike, Value};
 
 /// The keys of a connection to set, each left as it is when `None`, each already checked on its own;
 /// the load that follows checks them together. It serializes as the keys it sets, in the config's spelling and order.
-#[derive(Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub(crate) struct ConnectionChange {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) tier: Option<Tier>,

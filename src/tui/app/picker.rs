@@ -1,6 +1,6 @@
 //! `ctrl-o`, the connection picker: typing narrows the connections as fzf does, and picking one shows its sheet,
 //! opening its session the first time.
-use super::{Action, App, Overlay, Run, SessionState, Sheet};
+use super::{Action, App, Form, Overlay, Run, SessionState, Sheet};
 use crate::act::{self, Act, Pane};
 use crate::connection::{Connection, ConnectionName};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -46,6 +46,7 @@ enum Picked {
     Show(Connection),
     Quit,
     Remove(ConnectionName),
+    Form(Box<Form>),
     CloseSession(ConnectionName),
 }
 
@@ -75,6 +76,7 @@ impl App {
             Picked::Close => {}
             Picked::Show(connection) => return self.show(connection),
             Picked::Quit => return self.quit(),
+            Picked::Form(form) => self.overlay = Some(Overlay::Form(form)),
             Picked::Remove(name) => {
                 self.say(format!("removing `{name}`…"));
                 return vec![Action::RemoveConnection(name)];
@@ -111,6 +113,11 @@ impl App {
             }
             Some(Act::Close) => return Picked::Close,
             Some(Act::Quit) => return Picked::Quit,
+            Some(Act::Add) => return Picked::Form(Box::new(Form::adding())),
+            Some(Act::Edit) => match matching.get(palette.selected) {
+                Some(connection) => return Picked::Form(Box::new(Form::editing(connection))),
+                None => None,
+            },
             Some(Act::Delete) => selected.map(|name| self.removal(name)),
             Some(Act::CloseSession) => match selected.filter(|name| self.sheet_of(name).is_some()) {
                 Some(name) if name != *self.sheet().name() => return Picked::CloseSession(name),
@@ -168,6 +175,9 @@ impl App {
         let reopened = self.reopen_changed(&connections);
         self.connections = connections;
         self.clear_said();
+        if matches!(self.overlay, Some(Overlay::Form(_))) {
+            self.overlay = None;
+        }
         closed.into_iter().chain(reopened).collect()
     }
 
@@ -197,6 +207,7 @@ impl App {
     pub(super) fn config_failed(&mut self, error: String) {
         match &mut self.overlay {
             Some(Overlay::Picker(picker)) => picker.note = Some(Note::Failed(error)),
+            Some(Overlay::Form(form)) => form.failed(error),
             _ => self.sheet_mut().run = Run::Failed(error),
         }
     }

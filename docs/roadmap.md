@@ -31,7 +31,7 @@ The MR that ships a step ticks its box.
 - [x] Secret sources: keychain, environment, command
 - [x] `ctrl-o` connection picker; sessions stay open, switching back is instant
 - [x] `pgbg connection add|edit|remove` and `pgbg password set <connection>`: the config rewritten key by key, the password written to the keychain with `security -i`
-- [ ] The same from the picker: a connection form in the TUI
+- [x] The same from the picker: a connection form in the TUI
 
 ## 5. Tunnels
 
