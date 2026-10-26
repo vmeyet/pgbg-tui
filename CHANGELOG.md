@@ -8,6 +8,9 @@ Each entry says what changed, then where, then how to use it.
 
 ### New
 
+- **The connection picker** in the TUI: press `ctrl-o`, type a few letters of a connection's name, and `⏎` to switch to it.
+  Each connection shows its tier's colour, where it goes, whether it takes writes, and whether its session is open.
+  Sessions stay open until you quit, so switching back is instant, and each connection keeps its own editor text, result and saved query.
 - **Saved queries** in the TUI: put `.sql` files under `.pgbg/queries/`, in folders if you like, at the top of your project.
   Press `ctrl-p`, type a few letters of a query's path, and `⏎` opens it in the editor; `↑`/`↓` pick another match, `esc` closes the finder.
   pgbg finds the `.pgbg/queries/` nearest the folder you start it in, as git finds `.git`.

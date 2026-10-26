@@ -79,7 +79,7 @@ fn coloured_line<'a>(
 
 /// `Editor`, then the path of the saved query in it.
 fn title(app: &App) -> String {
-    app.queries.opened.as_ref().map_or_else(|| "Editor".to_owned(), |query| format!("Editor · {}", query.path))
+    app.sheet().opened.as_ref().map_or_else(|| "Editor".to_owned(), |query| format!("Editor · {}", query.path))
 }
 
 fn badge(app: &App) -> Span<'static> {

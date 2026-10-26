@@ -1,6 +1,6 @@
 //! Drawing: the frame in the tier's colour, the panes inside it, and the key hints under them.
 use super::app::{App, Link, TunnelState};
-use super::{editor_view, finder_view, help_view, result_view, theme};
+use super::{editor_view, finder_view, help_view, picker_view, result_view, theme};
 use crate::act;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -25,6 +25,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> usize {
     let grid_rows = result_view::draw(f, app, areas.result);
     footer(f, app, areas.footer);
     finder_view::draw(f, app);
+    picker_view::draw(f, app);
     help_view::draw(f, app);
     grid_rows
 }

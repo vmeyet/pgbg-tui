@@ -23,11 +23,10 @@ impl vtui::palette::Mode for ByPath {
 
 pub(in crate::tui) type Finder = Palette<ByPath>;
 
-/// Every saved query, and the one open in the editor.
+/// Every saved query.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(in crate::tui) struct Queries {
     pub(in crate::tui) all: Vec<Query>,
-    pub(in crate::tui) opened: Option<Query>,
 }
 
 /// The queries the finder lists for `input`, best first.
@@ -56,8 +55,8 @@ impl App {
 
     /// Puts the text of `query` in the editor, which it now stands for.
     pub(super) fn opened(&mut self, query: Query, text: &str) {
-        self.queries.opened = Some(query);
         let sheet = self.sheet_mut();
+        sheet.opened = Some(query);
         sheet.editor = Field::new(text);
         sheet.colours = syntax::highlight(text);
         sheet.error_mark = None;
@@ -125,7 +124,7 @@ pub(in crate::tui) mod tests {
         press(&mut app, KeyCode::Tab);
         app.apply(Answer::Queries(QueryAnswer::Opened { query: query("customers.sql"), text: "SELECT * FROM customers".into() }));
         assert_eq!(app.sheet().editor.text(), "SELECT * FROM customers");
-        assert_eq!(app.queries.opened, Some(query("customers.sql")));
+        assert_eq!(app.sheet().opened, Some(query("customers.sql")));
         assert_eq!(app.sheet().colours, syntax::highlight("SELECT * FROM customers"));
         assert_eq!(app.focus, Focus::Editor);
     }
