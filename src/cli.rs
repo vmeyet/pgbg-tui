@@ -106,10 +106,10 @@ pub enum ConnectionCommand {
 /// The keys `add` and `edit` share.
 #[derive(Args, Debug)]
 pub struct ConnectionKeys {
-    /// One word of the command that forwards a local port, `{port}` where the port goes; repeat it for each word:
-    /// `--tunnel ssh --tunnel -N --tunnel -L --tunnel {port}:localhost:5432 --tunnel bastion`.
-    #[arg(long, allow_hyphen_values = true)]
-    pub tunnel: Vec<String>,
+    /// The command that forwards a local port, `{port}` where the port goes, split as a shell would:
+    /// "ssh -N -o 'ProxyCommand ssh -W %h:%p jump' -L 127.0.0.1:{port}:db.example.com:5432 bastion".
+    #[arg(long)]
+    pub tunnel: Option<String>,
     /// Where the password comes from.
     #[command(flatten)]
     pub password: PasswordFlags,
@@ -125,9 +125,9 @@ pub struct PasswordFlags {
     /// The environment variable that holds it.
     #[arg(long)]
     pub password_env: Option<String>,
-    /// One word of the command that prints it; repeat it for each word: `--password-command pass --password-command shop`.
-    #[arg(long, allow_hyphen_values = true)]
-    pub password_command: Vec<String>,
+    /// The command that prints it, split as a shell would: "pass show 'shop main'".
+    #[arg(long)]
+    pub password_command: Option<String>,
     /// The keychain item that holds it; `pgbg password set` saves it there.
     #[arg(long)]
     pub keychain: Option<String>,
@@ -186,13 +186,6 @@ mod tests {
     fn connection_edit_needs_something_to_change() {
         assert!(parse(&["connection", "edit", "prod"]).is_err());
         assert!(parse(&["connection", "edit", "prod", "--writes", "read-only"]).is_ok());
-    }
-
-    #[test]
-    fn a_tunnel_takes_one_word_per_flag_and_keeps_its_spaces_and_dashes() {
-        let edit = ["connection", "edit", "prod", "--tunnel", "ssh", "--tunnel", "-o", "--tunnel", "ProxyCommand ssh -W %h:%p jump"];
-        let Some(Command::Connection { command: ConnectionCommand::Edit { keys, .. } }) = parse(&edit).unwrap().command else { panic!() };
-        assert_eq!(keys.tunnel, ["ssh", "-o", "ProxyCommand ssh -W %h:%p jump"]);
     }
 
     #[test]

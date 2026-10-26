@@ -65,18 +65,24 @@ fn target(url: &str) -> Result<Target> {
     Target::parse(url).context("in `--url`")
 }
 
+/// `text` split into words as a shell would, quotes kept together; a quoting error names `flag`.
+fn words(text: &str, flag: &str) -> Result<Vec<String>> {
+    shell_words::split(text).with_context(|| format!("in `{flag}`"))
+}
+
+fn tunnel_spec(command: &str) -> Result<TunnelSpec> {
+    TunnelSpec::new(words(command, "--tunnel")?).context("in `--tunnel`")
+}
+
 fn change_from(keys: &ConnectionKeys) -> Result<ConnectionChange> {
-    let tunnel = match keys.tunnel.as_slice() {
-        [] => None,
-        command => Some(TunnelSpec::new(command.to_vec()).context("in `--tunnel`")?),
-    };
+    let tunnel = keys.tunnel.as_deref().map(tunnel_spec).transpose()?;
     Ok(ConnectionChange { tunnel, password: password_source(&keys.password)?, writes: keys.writes, ..ConnectionChange::default() })
 }
 
 fn password_source(flags: &PasswordFlags) -> Result<Option<SecretSource>> {
     let keychain = flags.keychain.as_deref().map(|item| item.parse().context("in `--keychain`")).transpose()?;
     let env = flags.password_env.clone().map(SecretSource::Env);
-    let command = (!flags.password_command.is_empty()).then(|| SecretSource::Command(flags.password_command.clone()));
+    let command = flags.password_command.as_deref().map(|text| words(text, "--password-command")).transpose()?.map(SecretSource::Command);
     let source = env.or(command).or(keychain.map(SecretSource::Keychain));
     match source.as_ref().and_then(SecretSource::problem) {
         Some(problem) => Err(anyhow!(problem).context("in the password flag")),
@@ -120,9 +126,8 @@ mod tests {
         name.parse().unwrap()
     }
 
-    fn flags(password_command: &[&str]) -> PasswordFlags {
-        let password_command = password_command.iter().map(|&word| word.to_owned()).collect();
-        PasswordFlags { password_env: None, password_command, keychain: None }
+    fn flags(password_command: Option<&str>) -> PasswordFlags {
+        PasswordFlags { password_env: None, password_command: password_command.map(str::to_owned), keychain: None }
     }
 
     #[test]
@@ -158,14 +163,19 @@ mod tests {
     }
 
     #[test]
-    fn a_password_command_keeps_each_word_as_given() {
-        let source = password_source(&flags(&["pass", "show", "shop main"])).unwrap();
+    fn a_password_command_is_split_as_a_shell_would() {
+        let source = password_source(&flags(Some("pass  show 'shop main'"))).unwrap();
         assert_eq!(source, Some(SecretSource::Command(vec!["pass".into(), "show".into(), "shop main".into()])));
     }
 
     #[test]
+    fn a_password_command_with_an_open_quote_is_refused_naming_its_flag() {
+        assert!(format!("{:#}", password_source(&flags(Some("pass 'shop"))).unwrap_err()).contains("`--password-command`"));
+    }
+
+    #[test]
     fn a_keychain_item_that_is_not_one_word_is_refused_naming_its_flag() {
-        let flags = PasswordFlags { keychain: Some("pgbg/prod -s other".into()), ..flags(&[]) };
+        let flags = PasswordFlags { keychain: Some("pgbg/prod -s other".into()), ..flags(None) };
         assert!(format!("{:#}", password_source(&flags).unwrap_err()).contains("`--keychain`"));
     }
 }

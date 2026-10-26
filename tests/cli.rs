@@ -161,22 +161,14 @@ fn connection_add_writes_a_connection_the_list_then_shows() {
         "--url",
         "postgres://nina@localhost:5433/shop",
         "--tunnel",
-        "ssh",
-        "--tunnel",
-        "-N",
-        "--tunnel",
-        "-L",
-        "--tunnel",
-        "{port}:localhost:5432",
-        "--tunnel",
-        "db.example.com",
+        "ssh -N -o 'ProxyCommand ssh -W %h:%p jump' -L {port}:localhost:5432 db.example.com",
         "--password-env",
         "STAGING_PGPASSWORD",
     ];
     let (output, config) = pgbg_rewriting(SHOP, &args);
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(config.starts_with(SHOP), "{config}");
-    assert!(config.contains("tunnel = { command = [\"ssh\", \"-N\", \"-L\", \"{port}:localhost:5432\", \"db.example.com\"] }"), "{config}");
+    assert!(config.contains("tunnel = { command = [\"ssh\", \"-N\", \"-o\", \"ProxyCommand ssh -W %h:%p jump\", \"-L\", \"{port}:localhost:5432\", \"db.example.com\"] }"), "{config}");
     assert!(config.ends_with("password = { env = \"STAGING_PGPASSWORD\" }\n"), "{config}");
     assert!(stdout(&pgbg(&config, &["connections"])).contains("staging     postgres://nina@localhost:5433/shop"));
 }
