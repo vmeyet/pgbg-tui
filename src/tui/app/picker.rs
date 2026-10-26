@@ -26,6 +26,7 @@ enum Picked {
     Stay(Palette<Picking>),
     Close,
     Show(Connection),
+    Quit,
 }
 
 impl App {
@@ -50,6 +51,7 @@ impl App {
             Picked::Stay(picker) => self.picker = Some(picker),
             Picked::Close => {}
             Picked::Show(connection) => return self.show(connection),
+            Picked::Quit => return self.quit(),
         }
         vec![]
     }
@@ -62,6 +64,7 @@ impl App {
             Some(Act::Up) => picker.move_by(-1, matching.len()),
             Some(Act::Open) => return matching.get(picker.selected).map_or(Picked::Stay(picker), |&c| Picked::Show(c.clone())),
             Some(Act::Close) => return Picked::Close,
+            Some(Act::Quit) => return Picked::Quit,
             _ => match key.code {
                 KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => picker.type_char(c),
                 KeyCode::Backspace if !picker.backspace() => return Picked::Close,
@@ -232,6 +235,14 @@ pub(in crate::tui) mod tests {
         ctrl(&mut app, 'o');
         press(&mut app, "x");
         assert_eq!((app.picker.is_none(), app.sheet().editor.text()), (true, "x"));
+    }
+
+    #[test]
+    fn ctrl_c_in_the_picker_quits() {
+        let mut app = on_local();
+        ctrl(&mut app, 'o');
+        ctrl(&mut app, 'c');
+        assert!(app.should_quit);
     }
 
     #[test]

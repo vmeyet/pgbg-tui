@@ -59,6 +59,7 @@ Switching connection:
 4. The session stays open until pgbg quits, so switching back is instant; its tunnel stops with it.
    Each sheet keeps its editor text and its result while another one is shown, and the answers of its session land on it alone.
 5. A session whose link is gone, or whose rollback failed, is opened again before the next statement; it is never retried on its own.
+   A statement sent while its session fails to open fails with it, and is never sent on a later open; once pgbg quits, one still queued is never sent.
 6. Opening sets `statement_timeout`: the connection's own, else the stricter of its tier's (none on local, 60 s on staging, 30 s on production) and the one the server already applies, read from `pg_settings`.
    It is a session setting, so behind PgBouncer in transaction pooling it does not follow pgbg's next transaction: there, give the role its own `statement_timeout`.
 7. Opening gives up after 10 seconds, TLS and login included, unless the `url` sets `connect_timeout`; and each session asks the server to stop its statement once pgbg is gone (`client_connection_check_interval`).
@@ -111,7 +112,7 @@ On a connection that allows writes, a statement runs as typed, except that one r
 - Only what stays in that group dies with it: an ssh `ControlMaster` or `ssh -f` keeps the forward elsewhere, so `stop` fails when the port still answers, and a command that ends cleanly before its port answers is said to have handed the forward off.
 - pgbg cannot make the command bind `127.0.0.1` only, nor know who answers on the port: the examples bind it explicitly, and a tunnelled connection needs TLS or `tls = "off"` on purpose, never the clear a local host gets.
 - A tunnel is ready once its port takes a TCP connection, within 30 seconds; one that dies first says how it exited and its last lines of stderr, never its arguments.
-- `SIGINT`, `SIGTERM` and `SIGHUP` stop pgbg through `signal.rs`: `pgbg run` drops its work and the TUI quits its loop, so every `Drop` runs and the tunnel goes; pgbg exits with `128 + n`. Only a `SIGKILL` leaves a tunnel behind.
+- `SIGINT`, `SIGTERM` and `SIGHUP` stop pgbg through `signal.rs`: `pgbg run` drops its work, so every `Drop` runs and the tunnel goes; the TUI quits as `ctrl-c` does, cancelling every running statement, and each session task stops its tunnel, warning when its port still answers; pgbg exits with `128 + n`. Only a `SIGKILL` leaves a tunnel behind.
 - A session through a tunnel connects to `hostaddr=127.0.0.1` on the tunnel's port, and TLS still checks the certificate against the URL's host; that is why the config refuses a `hostaddr` of its own.
 - The session task owns the tunnel with the session: the status line shows `⇄ tunnel :<port>`, `starting…` or how it died; a tunnel that dies closes its session and says why, and the next statement starts both again.
 - A session reopened while its tunnel still runs keeps that tunnel.

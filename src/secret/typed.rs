@@ -1,15 +1,17 @@
 //! A password given to pgbg on its standard input: typed with echo off, or piped in.
 use super::{Secret, without_line_end};
+use crate::signal::Signals;
 use anyhow::{Result, bail};
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
+use futures_util::StreamExt;
 use std::io::{IsTerminal, Read, Write};
 
 impl Secret {
     /// The password typed after `prompt` with echo off, or piped in, without its last newline.
-    pub(crate) fn from_stdin(prompt: &str) -> Result<Self> {
+    pub(crate) async fn from_stdin(prompt: &str) -> Result<Self> {
         let stdin = std::io::stdin();
         let text = if stdin.is_terminal() {
-            typed(prompt)?
+            typed(prompt).await?
         } else {
             let mut piped = String::new();
             stdin.lock().read_to_string(&mut piped)?;
@@ -27,26 +29,31 @@ fn from_text(text: &str) -> Result<Secret> {
     Ok(Secret(password.to_owned()))
 }
 
-fn typed(prompt: &str) -> Result<String> {
+async fn typed(prompt: &str) -> Result<String> {
     eprint!("{prompt}");
     std::io::stderr().flush()?;
-    let password = read_hidden()?;
+    let password = read_hidden().await?;
     eprintln!();
     Ok(password)
 }
 
-/// Reads one line with echo off, restoring the terminal even when the read fails.
-fn read_hidden() -> Result<String> {
+/// Reads one line with echo off, restoring the terminal even when the read fails or a signal stops pgbg.
+async fn read_hidden() -> Result<String> {
+    let mut signals = Signals::listen()?;
     crossterm::terminal::enable_raw_mode()?;
-    let line = read_raw_line();
+    let line = tokio::select! {
+        line = read_raw_line() => line,
+        stopped = signals.next() => Err(stopped.into()),
+    };
     crossterm::terminal::disable_raw_mode()?;
     line
 }
 
-fn read_raw_line() -> Result<String> {
+async fn read_raw_line() -> Result<String> {
+    let mut events = EventStream::new();
     let mut line = String::new();
-    loop {
-        if let Event::Key(key) = crossterm::event::read()? {
+    while let Some(event) = events.next().await {
+        if let Event::Key(key) = event? {
             match typed_key(&line, key) {
                 Typing::Line(typed) => line = typed,
                 Typing::Entered => return Ok(line),
@@ -54,6 +61,7 @@ fn read_raw_line() -> Result<String> {
             }
         }
     }
+    bail!("the terminal closed before the password was entered")
 }
 
 /// Where the hidden line stands after one key.

@@ -134,17 +134,22 @@ struct SessionTask {
 }
 
 impl SessionTask {
-    /// Opens the session at once, and again before a statement when the last try failed or the session was lost.
+    /// Opens the session at once, and again before a statement when the last try failed or the session was lost;
+    /// once pgbg quits, a statement still queued is never sent.
     async fn serve(mut self, mut queue: UnboundedReceiver<Queued>) {
-        self.open().await;
+        if let Err(error) = self.open().await {
+            self.fail_queued(&mut queue, &error);
+        }
         loop {
             match self.woken(&mut queue).await {
+                Woken::Queued(Some(_)) if queue.is_closed() => {}
                 Woken::Queued(Some(queued)) => self.run(queued).await,
                 Woken::Queued(None) => break,
                 Woken::Closed(why) => self.lose(why),
                 Woken::TunnelEnded(died) => self.lose_tunnel(&died),
             }
         }
+        self.stop().await;
     }
 
     async fn woken(&mut self, queue: &mut UnboundedReceiver<Queued>) -> Woken {
@@ -156,27 +161,40 @@ impl SessionTask {
         }
     }
 
-    async fn open(&mut self) {
-        let Some(route) = self.route().await else {
-            self.session = None;
-            self.send(Incoming::NotOpened(TUNNEL_NOT_STARTED.to_owned()));
-            return;
-        };
-        self.session = match Session::open(&self.connection, route).await {
+    /// Opens the session and says how it went; the error, when it did not open.
+    async fn open(&mut self) -> Result<(), String> {
+        match self.connect().await {
             Ok(session) => {
+                self.session = Some(session);
                 self.send(Incoming::Opened);
-                Some(session)
+                Ok(())
             }
-            Err(err) => {
-                self.send(Incoming::NotOpened(format!("{err:#}")));
-                None
+            Err(error) => {
+                self.session = None;
+                self.send(Incoming::NotOpened(error.clone()));
+                Err(error)
             }
-        };
+        }
+    }
+
+    async fn connect(&mut self) -> Result<Session, String> {
+        let route = self.route().await.ok_or_else(|| TUNNEL_NOT_STARTED.to_owned())?;
+        Session::open(&self.connection, route).await.map_err(|err| format!("{err:#}"))
+    }
+
+    /// Fails every statement sent while the session was opening, so the open that comes after never sends one.
+    fn fail_queued(&self, queue: &mut UnboundedReceiver<Queued>, error: &str) {
+        while let Ok(queued) = queue.try_recv() {
+            self.send(Incoming::Failed { run: queued.run, error: error.to_owned(), position: None });
+        }
     }
 
     async fn run(&mut self, queued: Queued) {
-        if self.session.is_none() {
-            self.open().await;
+        if self.session.is_none()
+            && let Err(error) = self.open().await
+        {
+            self.send(Incoming::Failed { run: queued.run, error, position: None });
+            return;
         }
         let Some(session) = self.session.as_mut() else { return };
         let run = queued.run;
@@ -221,6 +239,16 @@ impl SessionTask {
         self.send(Incoming::Tunnel(TunnelState::Died(died.to_string())));
         if self.session.is_some() {
             self.lose(TUNNEL_DIED.to_owned());
+        }
+    }
+
+    /// Closes the session, then stops its tunnel, warning when its port still answers.
+    async fn stop(mut self) {
+        self.session = None;
+        if let Some(tunnel) = self.tunnel.as_mut()
+            && let Err(err) = tunnel.stop().await
+        {
+            tracing::warn!("{err:#}");
         }
     }
 
@@ -346,14 +374,63 @@ mod tests {
 
     /// A connection to the test database through a forwarder whose command line carries `marker`, so a test can kill it.
     fn tunnelled(marker: &str) -> Connection {
+        through_forwarder("\"python3\", \"-c\"", marker, WritePolicy::ReadOnly)
+    }
+
+    /// Like `tunnelled`, the forwarder started once the shell line `first` succeeds, a tunnel that died when it fails.
+    fn tunnelled_after(marker: &str, first: &str, writes: WritePolicy) -> Connection {
+        let script = format!("{first} || exit 1; exec python3 -c \"$0\" \"$@\"");
+        through_forwarder(&format!("\"sh\", \"-c\", {script:?}"), marker, writes)
+    }
+
+    /// A connection whose tunnel is `program` then the forwarder's code and arguments.
+    fn through_forwarder(program: &str, marker: &str, writes: WritePolicy) -> Connection {
         let database = url::Url::parse(&std::env::var("PGBG_TEST_DATABASE_URL").unwrap()).unwrap();
         let (host, port) = (database.host_str().unwrap().to_owned(), database.port().unwrap_or(5432));
-        let command =
-            format!("[\"python3\", \"-c\", {:?}, \"{{port}}\", \"{host}\", \"{port}\", \"{marker}\"]", crate::tunnel::tests::FORWARD);
+        let command = format!("[{program}, {:?}, \"{{port}}\", \"{host}\", \"{port}\", \"{marker}\"]", crate::tunnel::tests::FORWARD);
+        let writes = if writes == WritePolicy::Allowed { "writes = \"allowed\"\n" } else { "" };
         let entry: Entry =
-            toml::from_str(&format!("tier = \"local\"\nurl = \"{database}\"\ntls = \"off\"\ntunnel = {{ command = {command} }}\n"))
+            toml::from_str(&format!("tier = \"local\"\nurl = \"{database}\"\ntls = \"off\"\n{writes}tunnel = {{ command = {command} }}\n"))
                 .unwrap();
         Connection::new("shop", entry).unwrap()
+    }
+
+    /// An empty table `name` in the test database, made again from scratch.
+    async fn empty_table(name: &str) -> String {
+        let mut session = Session::open(&connection(), Route::Direct).await.unwrap();
+        for sql in [format!("DROP TABLE IF EXISTS {name}"), format!("CREATE TABLE {name} (n int)")] {
+            session.run(&guard::admit(Statement::new(&sql), WritePolicy::Allowed).unwrap()).await.unwrap();
+        }
+        name.to_owned()
+    }
+
+    fn is_answer_to(run: RunId, answer: &Incoming) -> bool {
+        matches!(answer, Incoming::Result { run: of, .. } | Incoming::Refused { run: of, .. } | Incoming::Failed { run: of, .. } if *of == run)
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_statement_sent_while_the_session_fails_to_open_never_reaches_the_server() {
+        let flags = tempfile::tempdir().unwrap();
+        let started_once = flags.path().join("started");
+        let fails_the_first_time = format!("[ -e {0:?} ] || {{ touch {0:?}; sleep 3; exit 1; }}", started_once.display().to_string());
+        let table = empty_table("pgbg_sent_while_failing_to_open").await;
+        let (backend, mut answers) = started_on(tunnelled_after("pgbg-test-fails-once", &fails_the_first_time, WritePolicy::Allowed));
+        backend.run(&shop(), RunId::FIRST, Statement::new(format!("INSERT INTO {table} VALUES (1)")));
+        answers_until(&mut answers, |answer| is_answer_to(RunId::FIRST, answer)).await;
+        let rows = on_a_side_session(&format!("SELECT n FROM {table}")).await;
+        assert_eq!(rows.len(), 0, "{rows:?}");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_statement_still_queued_when_the_backend_stops_never_reaches_the_server() {
+        let table = empty_table("pgbg_queued_at_stop").await;
+        let (backend, _answers) = started_on(tunnelled_after("pgbg-test-slow-start", "sleep 1", WritePolicy::Allowed));
+        backend.run(&shop(), RunId::FIRST, Statement::new(format!("INSERT INTO {table} VALUES (1)")));
+        backend.stop().await;
+        let rows = on_a_side_session(&format!("SELECT n FROM {table}")).await;
+        assert_eq!(rows.len(), 0, "{rows:?}");
     }
 
     async fn answers_until(answers: &mut UnboundedReceiver<Answer>, last: impl Fn(&Incoming) -> bool) -> Vec<Incoming> {
@@ -384,6 +461,22 @@ mod tests {
         assert_eq!(seen[0], Incoming::Tunnel(TunnelState::Starting));
         assert!(matches!(&seen[1], Incoming::Tunnel(TunnelState::Died(how)) if how.contains("no route")), "{seen:?}");
         assert_eq!(seen[2], Incoming::NotOpened(TUNNEL_NOT_STARTED.to_owned()));
+    }
+
+    #[tokio::test]
+    async fn a_statement_sent_while_the_tunnel_fails_to_start_fails_with_it() {
+        let entry: Entry = toml::from_str(
+            "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\ntls = \"off\"\n\
+             tunnel = { command = [\"sh\", \"-c\", \"exit 255\", \"{port}\"] }\n",
+        )
+        .unwrap();
+        let shop = Connection::new("shop", entry).unwrap();
+        let name = shop.name().clone();
+        let (backend, mut answers) = started_on(shop);
+        backend.run(&name, RunId::FIRST, Statement::new("SELECT 1"));
+        let seen = answers_until(&mut answers, |answer| is_answer_to(RunId::FIRST, answer)).await;
+        let failed = Incoming::Failed { run: RunId::FIRST, error: TUNNEL_NOT_STARTED.to_owned(), position: None };
+        assert_eq!(seen.last(), Some(&failed));
     }
 
     #[tokio::test]

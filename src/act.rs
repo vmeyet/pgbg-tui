@@ -174,6 +174,7 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Up, Pane::Picker, &[key(KeyCode::Up), control('p')]),
     row(Act::Open, Pane::Picker, &[key(KeyCode::Enter)]).help("⏎", "open it, or switch back to it").footer("⏎", "opens"),
     row(Act::Close, Pane::Picker, &[key(KeyCode::Esc), control('o')]).help("esc ^o", "close the picker").footer("esc", "closes"),
+    row(Act::Quit, Pane::Picker, &[control('c')]).help("^c", "quit"),
     row(Act::Connections, Pane::Anywhere, &[control('o')]).help("^o", "pick a connection").footer("^o", "connections"),
     row(Act::Quit, Pane::Anywhere, &[control('c')]).help("^c", "quit").footer("^c", "quit"),
 ];
