@@ -1,6 +1,6 @@
 use super::report::Check;
 use crate::connection::{Connection, TimeoutChoice, Tls, TunnelSpec, WritePolicy};
-use crate::db::model::{LocalPort, RoleRights, ServerFacts};
+use crate::db::model::{LocalPort, Named, RoleFlag, RolePowers, RoleRights, ServerFacts};
 use std::path::Path;
 
 const PRIVATE_CA: &str = "sslrootcert";
@@ -107,33 +107,44 @@ pub(super) fn timeout(connection: &Connection, facts: &ServerFacts) -> Check {
     Check::ok("timeout", format!("{in_effect}, {why}"))
 }
 
-/// What `rights` lets the role write: each power it holds, then its writable tables, the first ones named.
-fn powers(rights: &RoleRights) -> Vec<String> {
-    let flags = [
-        (rights.is_superuser, "is a superuser"),
-        (rights.can_create_role, "creates roles"),
-        (rights.can_create_db, "creates databases"),
-        (rights.can_bypass_rls, "bypasses row security"),
-        (rights.can_write_all_data, "is in `pg_write_all_data`"),
-    ];
-    let held = flags.into_iter().filter(|(is_held, _)| *is_held).map(|(_, power)| power.to_owned());
-    held.chain(writable_tables(rights)).collect()
+fn flag_power(flag: RoleFlag) -> &'static str {
+    match flag {
+        RoleFlag::Superuser => "is a superuser",
+        RoleFlag::CreateRole => "creates roles",
+        RoleFlag::CreateDatabase => "creates databases",
+        RoleFlag::BypassRls => "bypasses row security",
+        RoleFlag::WriteAllData => "writes every table",
+        RoleFlag::CreateSchema => "creates schemas",
+    }
 }
 
-fn writable_tables(rights: &RoleRights) -> Option<String> {
-    let count = rights.writable_table_count;
-    let unnamed = count.saturating_sub(rights.writable_tables.len() as u64);
+/// `"writes 14 tables: public.customers, public.orders and 12 more"`, or nothing for none.
+fn named_power(verb: &str, kind: &str, named: &Named) -> Option<String> {
+    let count = named.count;
+    let unnamed = count.saturating_sub(named.first.len() as u64);
     let more = if unnamed > 0 { format!(" and {unnamed} more") } else { String::new() };
-    let tables = if count == 1 { "table" } else { "tables" };
-    (count > 0).then(|| format!("writes {count} {tables}: {}{more}", rights.writable_tables.join(", ")))
+    let plural = if count == 1 { "" } else { "s" };
+    (count > 0).then(|| format!("{verb} {count} {kind}{plural}: {}{more}", named.first.join(", ")))
+}
+
+/// What `powers` lets its role write, named: `` `nina` creates databases, writes 1 table: public.orders ``.
+fn role_powers(powers: &RolePowers) -> String {
+    let flags = powers.flags.iter().map(|flag| flag_power(*flag).to_owned());
+    let named = [
+        named_power("creates objects in", "schema", &powers.schemas),
+        named_power("writes", "table", &powers.tables),
+        named_power("advances", "sequence", &powers.sequences),
+    ];
+    let held: Vec<String> = flags.chain(named.into_iter().flatten()).collect();
+    format!("`{}` {}", powers.role, held.join(", "))
 }
 
 pub(super) fn role(writes: WritePolicy, rights: &RoleRights) -> Check {
-    let powers = powers(rights);
-    if powers.is_empty() {
+    if rights.roles.is_empty() {
         return Check::ok("role", "read only: it can write no table");
     }
-    let found = format!("not read only: it {}", powers.join(", "));
+    let powers: Vec<String> = rights.roles.iter().map(role_powers).collect();
+    let found = format!("not read only: {}", powers.join("; "));
     match writes {
         WritePolicy::Allowed => Check::ok("role", format!("{found}; this connection allows writes")),
         WritePolicy::ReadOnly => Check::warn("role", found, READ_ONLY_ROLE),
@@ -257,18 +268,16 @@ mod tests {
     }
 
     fn writer() -> RoleRights {
+        let tables = Named { first: vec!["public.customers".into(), "public.orders".into()], count: 14 };
         RoleRights {
-            can_create_db: true,
-            writable_tables: vec!["public.customers".into(), "public.orders".into()],
-            writable_table_count: 14,
-            ..RoleRights::default()
+            roles: vec![RolePowers { role: "nina".into(), flags: vec![RoleFlag::CreateDatabase], tables, ..RolePowers::default() }],
         }
     }
 
     #[test]
     fn a_role_that_writes_on_a_read_only_connection_is_a_warning_naming_what_it_writes() {
         let check = role(WritePolicy::ReadOnly, &writer());
-        assert_eq!(check.found, "not read only: it creates databases, writes 14 tables: public.customers, public.orders and 12 more");
+        assert_eq!(check.found, "not read only: `nina` creates databases, writes 14 tables: public.customers, public.orders and 12 more");
         assert_eq!(check.fix.as_deref(), Some(READ_ONLY_ROLE));
     }
 
@@ -278,8 +287,23 @@ mod tests {
     }
 
     #[test]
+    fn each_role_that_writes_is_named_with_what_it_writes() {
+        let sequences = Named { first: vec!["public.orders_id_seq".into()], count: 1 };
+        let schemas = Named { first: vec!["public".into()], count: 1 };
+        let rights = RoleRights {
+            roles: vec![
+                RolePowers { role: "nina".into(), sequences, ..RolePowers::default() },
+                RolePowers { role: "PUBLIC".into(), schemas, ..RolePowers::default() },
+            ],
+        };
+        let found = "not read only: `nina` advances 1 sequence: public.orders_id_seq; `PUBLIC` creates objects in 1 schema: public";
+        assert_eq!(role(WritePolicy::ReadOnly, &rights).found, found);
+    }
+
+    #[test]
     fn a_superuser_says_so_first() {
-        let rights = RoleRights { is_superuser: true, ..RoleRights::default() };
-        assert_eq!(role(WritePolicy::ReadOnly, &rights).found, "not read only: it is a superuser");
+        let powers = RolePowers { role: "nina".into(), flags: vec![RoleFlag::Superuser, RoleFlag::CreateRole], ..RolePowers::default() };
+        let rights = RoleRights { roles: vec![powers] };
+        assert_eq!(role(WritePolicy::ReadOnly, &rights).found, "not read only: `nina` is a superuser, creates roles");
     }
 }

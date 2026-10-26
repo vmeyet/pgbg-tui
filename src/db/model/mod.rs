@@ -4,7 +4,7 @@ pub(crate) use error::ServerError;
 pub(crate) use route::{LocalPort, Route};
 pub(crate) use schema::{Index, Schema, SchemaColumn, SchemaNode, Table, TableKind};
 use serde::Serialize;
-pub(crate) use server::{RoleRights, ServerFacts};
+pub(crate) use server::{Named, RoleFlag, RolePowers, RoleRights, ServerFacts};
 pub(crate) use value::Value;
 
 mod cancel;
