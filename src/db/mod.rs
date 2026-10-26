@@ -19,6 +19,8 @@ mod decode;
 pub(crate) mod guard;
 pub(crate) mod model;
 mod open;
+#[cfg_attr(not(test), expect(dead_code, reason = "`pgbg schema`, the next step, prints it"))]
+mod schema;
 
 pub(crate) use open::{NotOpened, Opened, open_along};
 
@@ -121,8 +123,13 @@ impl Session {
     }
 
     async fn run_read_only(&mut self, sql: &str) -> Result<ResultSet> {
+        self.read_only(async |transaction| prepare_and_fetch_from_portal(transaction, sql).await).await
+    }
+
+    /// `read` inside `BEGIN READ ONLY`, always rolled back.
+    async fn read_only<T>(&mut self, read: impl AsyncFnOnce(&Transaction<'_>) -> Result<T>) -> Result<T> {
         let transaction = self.client.build_transaction().read_only(true).start().await.map_err(server_error)?;
-        let result = prepare_and_fetch_from_portal(&transaction, sql).await;
+        let result = read(&transaction).await;
         let rolled_back = transaction.rollback().await;
         self.has_failed_rollback = rolled_back.is_err();
         rolled_back.map_err(server_error)?;
