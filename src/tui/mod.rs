@@ -11,7 +11,7 @@ mod theme;
 mod ui;
 
 use crate::connection::Connection;
-use crate::query::Root;
+use crate::query::Roots;
 use anyhow::Result;
 use app::{App, Incoming};
 use backend::Backend;
@@ -27,7 +27,7 @@ pub(crate) async fn run(connection: Connection) -> Result<()> {
     let theme = vtui::ground::ask().map_or_else(Theme::default, |ground| Theme::default().with_ground(ground));
     let mut app = App::new(&connection, theme);
     let (answers, mut incoming) = mpsc::unbounded_channel();
-    let backend = Backend::start(connection, find_root().await?, answers);
+    let backend = Backend::start(connection, find_roots().await?, answers);
     for action in App::start() {
         actions::spawn(action, &backend);
     }
@@ -38,10 +38,10 @@ pub(crate) async fn run(connection: Connection) -> Result<()> {
     outcome
 }
 
-/// The folder of saved queries nearest the working directory.
-async fn find_root() -> Result<Option<Root>> {
+/// The folders of saved queries: the one nearest the working directory, and the one in the config folder.
+async fn find_roots() -> Result<Roots> {
     let working_dir = std::env::current_dir()?;
-    Ok(tokio::task::spawn_blocking(move || Root::find(&working_dir)).await?)
+    Ok(tokio::task::spawn_blocking(move || Roots::find(&working_dir, dirs::config_dir().as_deref())).await?)
 }
 
 async fn event_loop(

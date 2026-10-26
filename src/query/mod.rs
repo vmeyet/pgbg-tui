@@ -1,9 +1,11 @@
-//! Saved queries: the `.sql` files under the `.pgbg/queries/` nearest the working directory, found the way git finds `.git`.
+//! Saved queries: the `.sql` files under the `.pgbg/queries/` nearest the working directory, found the way git finds
+//! `.git`, and under `pgbg/queries/` in the user's config folder.
 use anyhow::{Context, Result, bail};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
 const ROOT_DIR: &str = ".pgbg/queries";
+const USER_DIR: &str = "pgbg/queries";
 const EXTENSION: &str = ".sql";
 
 /// Where a query sits under its root, as `orders/daily.sql`: relative and without `..`, so it never leaves the root.
@@ -30,26 +32,66 @@ impl fmt::Display for QueryPath {
     }
 }
 
-/// The folder saved queries live in.
-#[derive(Clone, Debug)]
-pub(crate) struct Root(PathBuf);
+/// Which root a query is under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Source {
+    /// The `.pgbg/queries/` nearest the working directory.
+    Project,
+    /// `pgbg/queries/` in the user's config folder.
+    User,
+}
 
-impl Root {
-    /// The nearest `.pgbg/queries/` from `working_dir` up, if any; blocks on the file system.
-    pub(crate) fn find(working_dir: &Path) -> Option<Self> {
-        working_dir.ancestors().map(|dir| dir.join(ROOT_DIR)).find(|dir| dir.is_dir()).map(Self)
+impl fmt::Display for Source {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Project => "project",
+            Self::User => "user",
+        })
+    }
+}
+
+/// One saved query: its root and its path under it.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct Query {
+    pub(crate) source: Source,
+    pub(crate) path: QueryPath,
+}
+
+/// The folders queries live in, each when it exists.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Roots {
+    project: Option<PathBuf>,
+    user: Option<PathBuf>,
+}
+
+impl Roots {
+    /// The nearest `.pgbg/queries/` from `working_dir` up, and `pgbg/queries/` under `config_dir`; blocks on the file system.
+    pub(crate) fn find(working_dir: &Path, config_dir: Option<&Path>) -> Self {
+        let project = working_dir.ancestors().map(|dir| dir.join(ROOT_DIR)).find(|dir| dir.is_dir());
+        let user = config_dir.map(|dir| dir.join(USER_DIR)).filter(|dir| dir.is_dir());
+        Self { project, user }
     }
 
-    /// Every query under the root, sorted; a folder that cannot be read is skipped with a warning. Blocks on the file system.
-    pub(crate) fn list(&self) -> Vec<QueryPath> {
-        let mut paths = files_under(&self.0, "");
-        paths.sort();
-        paths
+    fn dir(&self, source: Source) -> Option<&Path> {
+        match source {
+            Source::Project => self.project.as_deref(),
+            Source::User => self.user.as_deref(),
+        }
     }
 
-    /// The text of the query at `path`, read without blocking.
-    pub(crate) async fn read(&self, path: &QueryPath) -> Result<String> {
-        tokio::fs::read_to_string(path.under(&self.0)).await.with_context(|| format!("reading {path}"))
+    /// Every query under both roots, sorted; a folder that cannot be read is skipped with a warning. Blocks on the file system.
+    pub(crate) fn list(&self) -> Vec<Query> {
+        let found = [Source::Project, Source::User].into_iter().filter_map(|source| Some((source, self.dir(source)?)));
+        let mut queries: Vec<Query> =
+            found.flat_map(|(source, dir)| files_under(dir, "").into_iter().map(move |path| Query { source, path })).collect();
+        queries.sort();
+        queries
+    }
+
+    /// The text of `query`, read without blocking.
+    pub(crate) async fn read(&self, query: &Query) -> Result<String> {
+        let root = self.dir(query.source).with_context(|| format!("no {} queries folder", query.source))?;
+        tokio::fs::read_to_string(query.path.under(root)).await.with_context(|| format!("reading {}", query.path))
     }
 }
 
@@ -87,8 +129,12 @@ mod tests {
         fs::write(at, "SELECT 1").unwrap();
     }
 
-    fn listed(root: &Path) -> Vec<String> {
-        Root(root.into()).list().iter().map(QueryPath::to_string).collect()
+    fn project(root: &Path) -> Roots {
+        Roots { project: Some(root.into()), user: None }
+    }
+
+    fn listed(roots: &Roots) -> Vec<String> {
+        roots.list().iter().map(|query| format!("{} {}", query.source, query.path)).collect()
     }
 
     #[test]
@@ -105,17 +151,27 @@ mod tests {
         write(home.path(), ".pgbg/queries/top.sql");
         write(home.path(), "shop/.pgbg/queries/near.sql");
         fs::create_dir_all(home.path().join("shop/src")).unwrap();
-        let root = Root::find(&home.path().join("shop/src")).unwrap();
-        assert_eq!(root.0, home.path().join("shop/.pgbg/queries"));
+        let roots = Roots::find(&home.path().join("shop/src"), None);
+        assert_eq!(roots.project, Some(home.path().join("shop/.pgbg/queries")));
     }
 
     #[test]
-    fn listing_finds_every_sql_file_sorted() {
-        let root = tempfile::tempdir().unwrap();
+    fn the_user_root_is_under_the_config_folder_when_it_exists() {
+        let config = tempfile::tempdir().unwrap();
+        assert_eq!(Roots::find(config.path(), Some(config.path())).user, None);
+        write(config.path(), "pgbg/queries/mine.sql");
+        assert_eq!(Roots::find(config.path(), Some(config.path())).user, Some(config.path().join("pgbg/queries")));
+    }
+
+    #[test]
+    fn listing_finds_every_sql_file_of_both_roots_sorted() {
+        let (root, user) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         for file in ["orders/daily.sql", "customers.sql", "notes.txt", "orders/weekly/top.sql"] {
             write(root.path(), file);
         }
-        assert_eq!(listed(root.path()), ["customers.sql", "orders/daily.sql", "orders/weekly/top.sql"]);
+        write(user.path(), "mine.sql");
+        let roots = Roots { user: Some(user.path().into()), ..project(root.path()) };
+        assert_eq!(listed(&roots), ["project customers.sql", "project orders/daily.sql", "project orders/weekly/top.sql", "user mine.sql"]);
     }
 
     #[cfg(unix)]
@@ -125,14 +181,15 @@ mod tests {
         write(outside.path(), "secret.sql");
         std::os::unix::fs::symlink(outside.path(), root.path().join("elsewhere")).unwrap();
         std::os::unix::fs::symlink(outside.path().join("secret.sql"), root.path().join("secret.sql")).unwrap();
-        assert_eq!(listed(root.path()), Vec::<String>::new());
+        assert_eq!(listed(&project(root.path())), Vec::<String>::new());
     }
 
     #[tokio::test]
     async fn reading_a_query_gives_its_text() {
         let root = tempfile::tempdir().unwrap();
         write(root.path(), "orders/daily.sql");
-        let text = Root(root.path().into()).read(&QueryPath::parse("orders/daily.sql").unwrap()).await.unwrap();
+        let query = Query { source: Source::Project, path: QueryPath::parse("orders/daily.sql").unwrap() };
+        let text = project(root.path()).read(&query).await.unwrap();
         assert_eq!(text, "SELECT 1");
     }
 }

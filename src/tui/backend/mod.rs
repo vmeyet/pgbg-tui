@@ -3,7 +3,7 @@ use super::app::{Incoming, RunId, TunnelState};
 use crate::connection::{Connection, WritePolicy};
 use crate::db::model::{CancelToken, Route, ServerError, Statement};
 use crate::db::{Session, guard};
-use crate::query::Root;
+use crate::query::Roots;
 use crate::tunnel::{Died, Tunnel};
 use queries::QueryFiles;
 use std::pin::pin;
@@ -37,11 +37,11 @@ struct Queued {
 }
 
 impl Backend {
-    /// Starts the task that opens a session on `connection` and runs each statement in turn; queries are read under `root`.
-    pub(super) fn start(connection: Connection, root: Option<Root>, answers: UnboundedSender<Incoming>) -> Self {
+    /// Starts the task that opens a session on `connection` and runs each statement in turn; queries are read under `roots`.
+    pub(super) fn start(connection: Connection, roots: Roots, answers: UnboundedSender<Incoming>) -> Self {
         let (runs, queue) = mpsc::unbounded_channel();
         let (cancels, cancelled) = mpsc::unbounded_channel();
-        let queries = QueryFiles { root, answers: answers.clone() };
+        let queries = QueryFiles { roots, answers: answers.clone() };
         let task = tokio::spawn(SessionTask { connection, tunnel: None, session: None, cancelled, answers }.serve(queue));
         Self { runs, cancels, task, queries }
     }
@@ -275,7 +275,7 @@ mod tests {
 
     fn started_on(connection: Connection) -> (Backend, UnboundedReceiver<Incoming>) {
         let (sender, answers) = mpsc::unbounded_channel();
-        (Backend::start(connection, None, sender), answers)
+        (Backend::start(connection, Roots::default(), sender), answers)
     }
 
     /// A connection to the test database through a forwarder whose command line carries `marker`, so a test can kill it.

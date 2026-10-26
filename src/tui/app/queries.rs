@@ -1,7 +1,7 @@
 //! The saved queries in the app: the `ctrl-p` finder over them, and the query open in the editor.
 use super::{Action, App, Focus};
 use crate::act::{self, Act, Pane};
-use crate::query::QueryPath;
+use crate::query::Query;
 use crate::syntax;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use vtui::field::Field;
@@ -26,14 +26,14 @@ pub(in crate::tui) type Finder = Palette<ByPath>;
 /// Every saved query, and the one open in the editor.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(in crate::tui) struct Queries {
-    pub(in crate::tui) all: Vec<QueryPath>,
-    pub(in crate::tui) opened: Option<QueryPath>,
+    pub(in crate::tui) all: Vec<Query>,
+    pub(in crate::tui) opened: Option<Query>,
 }
 
 /// The queries the finder lists for `input`, best first.
-pub(in crate::tui) fn found(all: &[QueryPath], input: &str) -> Vec<QueryPath> {
-    let ranked = vtui::fuzzy::rank(input, all.iter().map(|path| (path.to_string(), path)));
-    ranked.into_iter().take(MAX_SHOWN).map(|(_, path)| path.clone()).collect()
+pub(in crate::tui) fn found(all: &[Query], input: &str) -> Vec<Query> {
+    let ranked = vtui::fuzzy::rank(input, all.iter().map(|query| (query.path.to_string(), query)));
+    ranked.into_iter().take(MAX_SHOWN).map(|(_, query)| query.clone()).collect()
 }
 
 impl App {
@@ -55,8 +55,8 @@ impl App {
     }
 
     /// Puts the text of `query` in the editor, which it now stands for.
-    pub(super) fn opened(&mut self, path: QueryPath, text: &str) {
-        self.queries.opened = Some(path);
+    pub(super) fn opened(&mut self, query: Query, text: &str) {
+        self.queries.opened = Some(query);
         self.editor = Field::new(text);
         self.colours = syntax::highlight(text);
         self.error_mark = None;
@@ -70,9 +70,10 @@ pub(in crate::tui) mod tests {
     use super::super::tests::app;
     use super::super::{Incoming, Run};
     use super::*;
+    use crate::query::{QueryPath, Source};
 
-    pub(in crate::tui) fn query(path: &str) -> QueryPath {
-        QueryPath::parse(path).unwrap()
+    pub(in crate::tui) fn query(path: &str) -> Query {
+        Query { source: Source::Project, path: QueryPath::parse(path).unwrap() }
     }
 
     pub(in crate::tui) fn with_queries() -> App {
@@ -121,7 +122,7 @@ pub(in crate::tui) mod tests {
     fn an_opened_query_fills_the_editor_and_takes_the_keys() {
         let mut app = with_queries();
         press(&mut app, KeyCode::Tab);
-        app.apply(Incoming::QueryOpened { path: query("customers.sql"), text: "SELECT * FROM customers".into() });
+        app.apply(Incoming::QueryOpened { query: query("customers.sql"), text: "SELECT * FROM customers".into() });
         assert_eq!(app.editor.text(), "SELECT * FROM customers");
         assert_eq!(app.queries.opened, Some(query("customers.sql")));
         assert_eq!(app.colours, syntax::highlight("SELECT * FROM customers"));
@@ -131,7 +132,7 @@ pub(in crate::tui) mod tests {
     #[test]
     fn a_query_that_cannot_be_read_says_so_in_the_result() {
         let mut app = with_queries();
-        app.apply(Incoming::QueryNotOpened { path: query("customers.sql"), error: "permission denied".into() });
+        app.apply(Incoming::QueryNotOpened { query: query("customers.sql"), error: "permission denied".into() });
         assert_eq!(app.run, Run::Failed("could not open customers.sql: permission denied".into()));
     }
 }

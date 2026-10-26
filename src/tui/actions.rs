@@ -8,6 +8,6 @@ pub(super) fn spawn(action: Action, backend: &Backend) {
         Action::Run { run, statement } => backend.run(run, statement),
         Action::Cancel(run) => backend.cancel(run),
         Action::ListQueries => backend.queries.list(),
-        Action::OpenQuery(path) => backend.queries.open(path),
+        Action::OpenQuery(query) => backend.queries.open(query),
     }
 }

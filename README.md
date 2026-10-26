@@ -49,6 +49,7 @@ ORDER BY 1;
 ```
 
 In the TUI, `ctrl-p` finds a query by a few letters of its path and opens it in the editor.
+Queries of your own, for every project, go under `pgbg/queries/` in your config folder.
 
 ## License
 

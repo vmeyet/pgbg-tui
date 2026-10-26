@@ -11,6 +11,7 @@ Each entry says what changed, then where, then how to use it.
 - **Saved queries** in the TUI: put `.sql` files under `.pgbg/queries/`, in folders if you like, at the top of your project.
   Press `ctrl-p`, type a few letters of a query's path, and `⏎` opens it in the editor; `↑`/`↓` pick another match, `esc` closes the finder.
   pgbg finds the `.pgbg/queries/` nearest the folder you start it in, as git finds `.git`.
+  Queries of your own, for every project, go under `pgbg/queries/` in your config folder; the finder marks them `user`.
 - **Tunnels** for `pgbg run` and the TUI: a connection with `tunnel = { command = [...] }` starts that command on a free local port, put in place of `{port}`, and connects through it.
   TLS still checks the certificate against the host in `url`, so `sslmode=require` works through a tunnel; `before = [...]` runs once first.
   A tunnel that dies says how and quotes its last words; it stops with pgbg, along with any `ssh` or `gcloud` it started, even when pgbg crashes.
