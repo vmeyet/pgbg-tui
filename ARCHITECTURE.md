@@ -72,7 +72,7 @@ Charting a result:
 ## Boundaries
 
 - Only `src/db/` sees a `tokio_postgres` type; everything else uses `db/model/`.
-- Side effects live at the edges: `main.rs`, `commands/`, `tui/mod.rs`, `tui/actions.rs`, `tui/backend/`, `tunnel/`, `secret/`, `config/` when it rewrites the file.
+- Side effects live at the edges: `main.rs`, `commands/`, `tui/mod.rs`, `tui/actions.rs`, `tui/backend/`, `tunnel/`, `secret/`, `config/` when it rewrites the file, `query/` when it lists and reads the queries folders.
 - `tui/app/` is pure: it reads time from `app.now`, set by the loop, and never does I/O; its tests drive it with keys and `Answer` values.
 - `chart/` is pure: a `ResultSet` in, a `Series` out; drawing lives in `tui/chart_view/`.
 - A program that takes the terminal (`$EDITOR` on a saved query) runs from the loop through `Screen::lend`, with the key stream paused.
@@ -114,8 +114,12 @@ On a connection that allows writes, a statement runs as typed, except that one r
 ## Saved queries
 
 - One `.sql` file per query under `.pgbg/queries/`, found by walking up from the working directory like `.git`, then under the user config folder.
+- The walk stops at the home folder or at the first folder holding `.git`, so a folder above the project never gives its queries.
+- A root that is a link, under a `.pgbg` that is a link, or that another user owns is skipped with a warning: a cloned repository cannot point pgbg at the whole disk.
 - Folders nest; the sidebar shows the tree and the fuzzy finder searches every file.
-- Listing walks the folders on a blocking thread and never follows a link, so nothing outside the root is listed; opening reads the file through `tokio::fs`.
+- Listing walks the folders on a blocking thread, keeps only plain files, and never follows a link, so nothing outside the root is listed.
+- Opening reads the file through `tokio::fs`, again only when it is a plain file whose real path stays inside its root, and only up to 1 MiB; a bigger one is too big for the editor.
+- A query path is drawn with its control characters and text-reversing marks escaped.
 - An optional header of `--` lines sets the name, the default connection and the chart; a file without a header is still a query.
 - The file is the source of truth: pgbg reads it when it is opened and writes it back when it is saved, nothing else.
 
