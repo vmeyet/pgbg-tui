@@ -69,7 +69,7 @@ mod tests {
     const SHOP: &str = r#"
 [connections.staging]
 tier = "staging"
-url = "postgres://nina@db.example.com/shop"
+url = "postgres://nina@db.example.com/shop?sslmode=require"
 
 [connections.local]
 tier = "local"

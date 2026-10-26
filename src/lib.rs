@@ -7,4 +7,5 @@ mod connection;
 mod db;
 pub mod log;
 mod render;
+#[cfg_attr(not(test), expect(dead_code, reason = "`db::Session::open`, the next step, reads the password"))]
 mod secret;

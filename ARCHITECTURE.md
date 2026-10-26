@@ -12,8 +12,8 @@ When a boundary or a flow changes, change this page in the same MR.
 | `main.rs`, `cli.rs` | The clap command line and the dispatch to `commands/` |
 | `commands/` | One module per subcommand, each with a `run`; plain output through `render.rs`, JSON with `--json` |
 | `config/` | `config.toml`: connections, theme, keys; load, validate, refuse secrets |
-| `connection/` | `Connection`: name, tier, target, tunnel, secret source, write policy; parsed once from config |
-| `secret.rs` | `Secret` (prints `<redacted>`) and its sources: keychain through `/usr/bin/security`, environment variable, command |
+| `connection/` | `Connection`: name, tier, target, tunnel, secret source, write policy, TLS; parsed once from config |
+| `secret.rs` | `Secret` (prints `<redacted>`) and its sources: keychain through `/usr/bin/security`, environment variable, command; `SecretSource::read` reads one when a session opens |
 | `tunnel/` | `Tunnel`: a child process forwarding a free `127.0.0.1` port to the database; start, wait for the port, stop |
 | `db/` | The only module that sees `tokio_postgres`: connect over rustls, run a statement, stream rows, cancel |
 | `db/model/` | The neutral model: `ResultSet`, `Column`, `ColumnKind`, `Value`, `Page`, `Schema`, `Table` |
