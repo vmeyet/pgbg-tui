@@ -92,6 +92,7 @@ mod tests {
         ResultSet {
             columns: vec![column("id"), column("total"), column("customer")],
             rows: (0..rows).map(|n| vec![Value::Int(n as i64), Value::Int(12), Value::Text("nina".into())]).collect(),
+            is_cut: false,
         }
     }
 

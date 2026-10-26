@@ -286,6 +286,7 @@ pub(super) mod tests {
                 row(103, "3.20", Value::Text("Zoë Nakamura".into())),
                 row(104, "0.99", Value::Text("noel".into())),
             ],
+            is_cut: false,
         }
     }
 

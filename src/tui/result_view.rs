@@ -28,7 +28,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) -> usize {
 
 fn title(run: &Run) -> String {
     match run {
-        Run::Done { result, took, .. } => format!("Result ─ {} · {} ms", render::row_count(result.rows.len()), took.as_millis()),
+        Run::Done { result, took, .. } => format!("Result ─ {} · {} ms", render::row_count(result), took.as_millis()),
         _ => "Result".to_owned(),
     }
 }

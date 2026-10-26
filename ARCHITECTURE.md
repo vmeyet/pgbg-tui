@@ -44,6 +44,7 @@ Running a statement:
 3. The session opens `BEGIN READ ONLY`, sets `statement_timeout` from the tier, and binds the statement to a portal (`Transaction::bind`).
    A portal takes any statement the guard admits; `DECLARE CURSOR` takes only a `SELECT` or `VALUES`, not `SHOW` or `EXPLAIN`.
 4. The first page (`query_portal(&portal, 500)`) comes back as `Incoming::Page`; the grid paints it, and more pages are fetched as the grid nears the end.
+   Until paging lands, a result keeps its first 10 000 rows and says it is cut.
 5. A server error comes back as a `ServerError` with the server's position; the editor marks that character until the text changes.
 6. `Esc` on a running statement sends the server a cancel request over a link of its own, with the session's TLS; the statement fails with the server's words, and the transaction is always rolled back at the end.
 
@@ -53,6 +54,8 @@ Switching connection:
 2. When the connection has a tunnel, `tunnel::start` picks a free port, runs the command, and waits until the port answers.
 3. `db::connect` opens the session through the tunnel and reads the schema in the background for completion and the sidebar.
 4. The session stays open until pgbg quits, so switching back is instant; its tunnel stops with it.
+5. A session whose link is gone, or whose rollback failed, is opened again before the next statement; it is never retried on its own.
+6. Opening gives up after 10 seconds unless the `url` sets `connect_timeout`, and each session asks the server to stop its statement once pgbg is gone (`client_connection_check_interval`).
 
 Charting a result:
 

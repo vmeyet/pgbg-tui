@@ -30,6 +30,14 @@ Each entry says what changed, then where, then how to use it.
 
 ### Fixed
 
+- **A lost session opens again** in the TUI: after the server restarts or the link drops, the next statement you run opens a new session instead of failing for good.
+  The statement that met the dead link fails; press `⏎` to run it again.
+- **Opening a session gives up after 10 seconds** instead of waiting on a server that never answers.
+  Set `connect_timeout` in the connection's `url` to wait longer.
+- **A big result cannot fill the memory**: the TUI and `pgbg run` keep the first 10 000 rows, and say `first 10000 rows` when there were more.
+  Add a `LIMIT` or a `WHERE` to see the rest.
+- **A statement stops when pgbg quits**: the server checks every second that pgbg is still there, on PostgreSQL 14 and later.
+
 - **No more clear text through `hostaddr`**: a `url` with `hostaddr` is refused, since it sent a connection to `localhost` on to another machine without TLS.
   Name the host in the `url` instead; pgbg keeps `hostaddr` for its tunnels.
 - **A password never shows in a config error**: a `password` written as a number, a boolean or a list is refused like a plain one, and a broken line is reported by its number only.

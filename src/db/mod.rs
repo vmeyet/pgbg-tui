@@ -1,13 +1,14 @@
 //! The only module that sees `tokio_postgres`: connect, run one statement, decode its rows, cancel it.
 use crate::connection::{Connection, Target, Tls};
 use anyhow::{Context, Result, anyhow};
-use futures_util::{TryStreamExt, future};
+use futures_util::{StreamExt, TryStreamExt, future};
 use guard::{Admitted, Mode};
 use model::{CancelToken, ResultSet, ServerError};
+use std::time::Duration;
 use tokio_postgres::config::SslMode;
 use tokio_postgres::error::ErrorPosition;
 use tokio_postgres::tls::MakeTlsConnect;
-use tokio_postgres::{Client, Config, GenericClient, NoTls, Socket};
+use tokio_postgres::{Client, Config, NoTls, RowStream, Socket, Statement as Prepared, Transaction};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
 mod decode;
@@ -15,12 +16,20 @@ pub(crate) mod guard;
 pub(crate) mod model;
 
 const NO_PARAMETERS: [&str; 0] = [];
+/// The rows pgbg keeps of a result; past it the result is cut, so a big table cannot fill the memory.
+const ROW_CAP: usize = 10_000;
+/// How long opening a session waits for the server, unless the URL's `connect_timeout` says otherwise.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Has the server stop a statement within a second of pgbg going away, instead of running it to its end.
+const STOP_WHEN_CLIENT_GONE: &str = "SET client_connection_check_interval = '1s'";
 
 /// An open link to one connection.
 #[derive(Debug)]
 pub(crate) struct Session {
     client: Client,
     tls: Tls,
+    /// A `ROLLBACK` failed, so the server may still hold the transaction open.
+    has_failed_rollback: bool,
 }
 
 impl Session {
@@ -35,7 +44,14 @@ impl Session {
             Tls::On => open_client(config.ssl_mode(SslMode::Require), MakeRustlsConnect::with_webpki_roots()).await,
             Tls::Off => open_client(config.ssl_mode(SslMode::Disable), NoTls).await,
         };
-        Ok(Self { client: client.with_context(|| format!("connecting to {}", connection.name()))?, tls })
+        let client = client.with_context(|| format!("connecting to {}", connection.name()))?;
+        stop_statements_when_client_gone(&client).await;
+        Ok(Self { client, tls, has_failed_rollback: false })
+    }
+
+    /// Whether this session can run no more statements: its link is gone, or a rollback failed; open a new one.
+    pub(crate) fn is_closed(&self) -> bool {
+        self.client.is_closed() || self.has_failed_rollback
     }
 
     /// What cancels the statement this session is running, usable while `run` waits.
@@ -43,18 +59,22 @@ impl Session {
         CancelToken { token: self.client.cancel_token(), tls: self.tls }
     }
 
-    /// Runs `admitted` alone and returns everything it printed; a read-only one is always rolled back.
+    /// Runs `admitted` alone and returns its first `ROW_CAP` rows; a read-only one is always rolled back.
     pub(crate) async fn run(&mut self, admitted: &Admitted) -> Result<ResultSet> {
         let sql = admitted.statement.as_str();
         match admitted.mode {
             Mode::Writes => fetch(&self.client, sql).await,
-            Mode::ReadOnly => {
-                let transaction = self.client.build_transaction().read_only(true).start().await.map_err(server_error)?;
-                let result = fetch(&transaction, sql).await;
-                transaction.rollback().await.map_err(server_error)?;
-                result
-            }
+            Mode::ReadOnly => self.run_read_only(sql).await,
         }
+    }
+
+    async fn run_read_only(&mut self, sql: &str) -> Result<ResultSet> {
+        let transaction = self.client.build_transaction().read_only(true).start().await.map_err(server_error)?;
+        let result = fetch_from_portal(&transaction, sql).await;
+        let rolled_back = transaction.rollback().await;
+        self.has_failed_rollback = rolled_back.is_err();
+        rolled_back.map_err(server_error)?;
+        result
     }
 }
 
@@ -76,7 +96,11 @@ fn driver_config(target: &Target) -> Result<Config> {
     let kept: Vec<(String, String)> =
         url.query_pairs().filter(|(key, _)| key != "sslmode").map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
     url.query_pairs_mut().clear().extend_pairs(kept);
-    url.as_str().trim_end_matches('?').parse().map_err(|err| anyhow!("`url` is not a PostgreSQL URL: {err}"))
+    let mut config: Config = url.as_str().trim_end_matches('?').parse().map_err(|err| anyhow!("`url` is not a PostgreSQL URL: {err}"))?;
+    if config.get_connect_timeout().is_none() {
+        config.connect_timeout(CONNECT_TIMEOUT);
+    }
+    Ok(config)
 }
 
 async fn open_client<T>(config: &Config, tls: T) -> Result<Client>
@@ -93,13 +117,36 @@ where
     Ok(client)
 }
 
+/// Best effort: a server older than PostgreSQL 14, or not on Linux, cannot check.
+async fn stop_statements_when_client_gone(client: &Client) {
+    if let Err(err) = client.batch_execute(STOP_WHEN_CLIENT_GONE).await {
+        tracing::warn!("the server will not stop a statement when pgbg is gone: {err}");
+    }
+}
+
 /// Prepares `sql` first, so a result without rows still has its columns, then streams the rows.
-async fn fetch(client: &impl GenericClient, sql: &str) -> Result<ResultSet> {
+async fn fetch(client: &Client, sql: &str) -> Result<ResultSet> {
     let statement = client.prepare(sql).await.map_err(server_error)?;
-    let columns = statement.columns().iter().map(decode::column).collect();
     let rows = client.query_raw(&statement, NO_PARAMETERS).await.map_err(server_error)?;
-    let rows = rows.and_then(|row| future::ready(decode::row(&row))).try_collect().await.map_err(server_error)?;
-    Ok(ResultSet { columns, rows })
+    first_rows(&statement, rows).await
+}
+
+/// Like `fetch`, through a portal: the server sends no row past the cap, so the rollback does not wait on them.
+async fn fetch_from_portal(transaction: &Transaction<'_>, sql: &str) -> Result<ResultSet> {
+    let statement = transaction.prepare(sql).await.map_err(server_error)?;
+    let portal = transaction.bind(&statement, &[]).await.map_err(server_error)?;
+    let rows = transaction.query_portal_raw(&portal, (ROW_CAP + 1) as i32).await.map_err(server_error)?;
+    first_rows(&statement, rows).await
+}
+
+/// The first `ROW_CAP` rows of `rows`, decoded; one more says the result is cut.
+async fn first_rows(statement: &Prepared, rows: RowStream) -> Result<ResultSet> {
+    let columns = statement.columns().iter().map(decode::column).collect();
+    let mut rows: Vec<_> =
+        rows.take(ROW_CAP + 1).and_then(|row| future::ready(decode::row(&row))).try_collect().await.map_err(server_error)?;
+    let is_cut = rows.len() > ROW_CAP;
+    rows.truncate(ROW_CAP);
+    Ok(ResultSet { columns, rows, is_cut })
 }
 
 /// A `ServerError` when the server answered with one, the driver's error otherwise.
@@ -123,6 +170,7 @@ mod tests {
     use super::*;
     use crate::connection::{Entry, WritePolicy};
     use model::{Statement, Value};
+    use std::time::Duration;
 
     const DATABASE_URL: &str = "PGBG_TEST_DATABASE_URL";
 
@@ -148,6 +196,68 @@ mod tests {
         assert_eq!(config.get_application_name(), Some("pgbg"));
         assert_eq!(config.get_dbname(), Some("shop"));
         assert_eq!(config.get_ports(), [6432]);
+    }
+
+    fn driver_config_of(url: &str) -> Config {
+        let entry: Entry = toml::from_str(&format!("tier = \"local\"\nurl = \"{url}\"\n")).unwrap();
+        driver_config(Connection::new("shop", entry).unwrap().target()).unwrap()
+    }
+
+    #[test]
+    fn a_session_gives_up_connecting_after_ten_seconds() {
+        assert_eq!(driver_config_of("postgres://nina@localhost/shop").get_connect_timeout(), Some(&Duration::from_secs(10)));
+    }
+
+    #[test]
+    fn the_connect_timeout_of_the_url_wins() {
+        assert_eq!(
+            driver_config_of("postgres://nina@localhost/shop?connect_timeout=3").get_connect_timeout(),
+            Some(&Duration::from_secs(3))
+        );
+    }
+
+    fn numbers_up_to(count: usize) -> String {
+        format!("SELECT generate_series(1, {count})")
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_result_past_the_row_cap_keeps_its_first_rows_and_says_it_is_cut() {
+        let result = run(WritePolicy::ReadOnly, &numbers_up_to(ROW_CAP + 1)).await.unwrap();
+        assert_eq!((result.rows.len(), result.is_cut), (ROW_CAP, true));
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_result_of_exactly_the_row_cap_is_whole() {
+        let result = run(WritePolicy::ReadOnly, &numbers_up_to(ROW_CAP)).await.unwrap();
+        assert_eq!((result.rows.len(), result.is_cut), (ROW_CAP, false));
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_result_on_a_connection_that_allows_writes_is_cut_too() {
+        let result = run(WritePolicy::Allowed, &numbers_up_to(ROW_CAP + 1)).await.unwrap();
+        assert_eq!((result.rows.len(), result.is_cut), (ROW_CAP, true));
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_session_asks_the_server_to_stop_its_statement_once_pgbg_is_gone() {
+        let result = run(WritePolicy::ReadOnly, "SHOW client_connection_check_interval").await.unwrap();
+        assert_eq!(result.rows, [[Value::Text("1s".into())]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_session_whose_server_side_ended_is_closed() {
+        let mut doomed = session(WritePolicy::ReadOnly).await;
+        let pid =
+            &doomed.run(&guard::admit(Statement::new("SELECT pg_backend_pid()"), WritePolicy::ReadOnly).unwrap()).await.unwrap().rows[0][0];
+        run(WritePolicy::ReadOnly, &format!("SELECT pg_terminate_backend({pid}, 5000)")).await.unwrap();
+        let lost = doomed.run(&guard::admit(Statement::new("SELECT 1"), WritePolicy::ReadOnly).unwrap()).await;
+        assert!(lost.is_err());
+        assert!(doomed.is_closed());
     }
 
     #[tokio::test]
