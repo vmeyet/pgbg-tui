@@ -6,6 +6,7 @@ mod editor_view;
 mod finder_view;
 mod grid_view;
 mod help_view;
+mod picker_view;
 mod result_view;
 mod theme;
 mod ui;
@@ -22,13 +23,13 @@ use tokio::sync::mpsc::{self, UnboundedReceiver};
 use vtui::screen::Screen;
 use vtui::theme::Theme;
 
-/// Runs the TUI on `connection` until the user quits, giving the terminal back on the way out.
-pub(crate) async fn run(connection: Connection) -> Result<()> {
+/// Runs the TUI on `first` until the user quits, with `connections` to switch to, giving the terminal back on the way out.
+pub(crate) async fn run(connections: Vec<Connection>, first: Connection) -> Result<()> {
     let theme = vtui::ground::ask().map_or_else(Theme::default, |ground| Theme::default().with_ground(ground));
-    let mut app = App::new(&connection, theme);
+    let mut app = App::new(connections, &first, theme);
     let (answers, mut incoming) = mpsc::unbounded_channel();
     let mut backend = Backend::new(find_roots().await?, answers);
-    for action in std::iter::once(Action::Open(connection)).chain(App::start()) {
+    for action in std::iter::once(Action::Open(first)).chain(App::start()) {
         actions::spawn(action, &mut backend);
     }
     let (mut terminal, screen) = Screen::enter();

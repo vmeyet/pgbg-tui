@@ -9,9 +9,11 @@ use crossterm::event::{KeyCode, KeyEvent};
 use std::time::Duration;
 use vtui::field::Field;
 use vtui::help::Help;
+use vtui::palette::Palette;
 use vtui::theme::Theme;
 
 pub(super) use grid::Grid;
+pub(super) use picker::Picking;
 pub(super) use queries::{Finder, Queries, found};
 
 const LOST_SESSION: &str = "session lost, ⏎ opens a new one";
@@ -19,6 +21,7 @@ use grid::Move;
 
 mod grid;
 mod keys;
+pub(super) mod picker;
 pub(super) mod queries;
 
 /// Which run of a statement an answer or a cancel is about, so a late one never lands on the next run.
@@ -186,12 +189,16 @@ pub(super) struct Sheet {
     sent: Option<Sent>,
     /// The editor's byte the server's last error points at, until the text changes.
     pub(super) error_mark: Option<usize>,
+    /// The saved query the editor stands for, once one was opened in it.
+    pub(super) opened: Option<Query>,
 }
 
 /// The whole TUI state; `handle_key`, `apply` and `fit_grid` are the only ways it changes.
 #[derive(Debug)]
 pub(super) struct App {
     pub(super) theme: Theme,
+    /// Every connection of the config, by name, for the picker.
+    pub(super) connections: Vec<Connection>,
     /// A sheet for each connection opened since pgbg started, in the order they were opened.
     sheets: Vec<Sheet>,
     /// The index in `sheets` of the one on screen.
@@ -202,22 +209,26 @@ pub(super) struct App {
     pub(super) queries: Queries,
     /// The `ctrl-p` finder while it is open; it takes every key.
     pub(super) finder: Option<Finder>,
+    /// The `ctrl-o` connection picker while it is open; it takes every key.
+    pub(super) picker: Option<Palette<Picking>>,
     /// The grid rows the last frame had room for: a page, for `PgDn`.
     grid_rows: usize,
     pub(super) should_quit: bool,
 }
 
 impl App {
-    /// The app on `first`, its session still opening.
-    pub(super) fn new(first: &Connection, theme: Theme) -> Self {
+    /// The app on `first`, its session still opening, with `connections` to pick from.
+    pub(super) fn new(connections: Vec<Connection>, first: &Connection, theme: Theme) -> Self {
         Self {
             theme,
+            connections,
             sheets: vec![Sheet::new(first)],
             shown: 0,
             focus: Focus::Editor,
             help: None,
             queries: Queries::default(),
             finder: None,
+            picker: None,
             grid_rows: 0,
             should_quit: false,
         }
@@ -248,6 +259,9 @@ impl App {
             (self.finder, actions) = self.finder_after(finder, key);
             return actions;
         }
+        if self.picker.is_some() {
+            return self.picker_key(key);
+        }
         if let Some(act) = act::act_for(key, self.focus.pane()) {
             return self.act(act);
         }
@@ -274,6 +288,7 @@ impl App {
             Act::Left => self.grid_step(Move::Left),
             Act::Right => self.grid_step(Move::Right),
             Act::Find => self.finder = Some(Finder::default()),
+            Act::Connections => self.open_picker(),
             Act::Open | Act::Close => {}
         }
         vec![]
@@ -330,6 +345,7 @@ impl Sheet {
             run: Run::Idle,
             sent: None,
             error_mark: None,
+            opened: None,
         }
     }
 
@@ -423,7 +439,7 @@ pub(super) mod tests {
     }
 
     pub(crate) fn app_on(connection: &Connection) -> App {
-        App::new(connection, Theme::default())
+        App::new(vec![connection.clone()], connection, Theme::default())
     }
 
     pub(crate) fn app() -> App {

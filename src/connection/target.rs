@@ -33,6 +33,14 @@ impl Target {
         &self.0
     }
 
+    /// `host/database`, as the TUI shows where a connection goes; the host may come from a `host` query key.
+    pub(crate) fn place(&self) -> String {
+        let queried = self.0.query_pairs().find(|(key, _)| key == "host").map(|(_, host)| host.into_owned());
+        let named = self.0.host_str().filter(|host| !host.is_empty()).map(str::to_owned);
+        let host = named.or(queried).unwrap_or_else(|| LOCAL_HOSTS[0].to_owned());
+        format!("{host}{}", self.0.path())
+    }
+
     /// The `sslmode` the query asks for, when it does.
     pub(super) fn ssl_mode(&self) -> Option<String> {
         self.0.query_pairs().find(|(key, _)| key == "sslmode").map(|(_, mode)| mode.into_owned())
@@ -81,6 +89,14 @@ mod tests {
     fn a_target_prints_as_its_url() {
         let url = "postgres://nina@db.example.com:5432/shop?sslmode=require";
         assert_eq!(Target::parse(url).unwrap().to_string(), url);
+    }
+
+    #[test]
+    fn a_place_is_the_host_and_the_database() {
+        let place = |url: &str| Target::parse(url).unwrap().place();
+        assert_eq!(place("postgres://nina@db.example.com:5432/shop?sslmode=require"), "db.example.com/shop");
+        assert_eq!(place("postgres:///shop?host=db.example.com"), "db.example.com/shop");
+        assert_eq!(place("postgres:///shop"), "localhost/shop");
     }
 
     #[test]

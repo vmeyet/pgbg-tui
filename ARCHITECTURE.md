@@ -52,7 +52,7 @@ Running a statement:
 
 Switching connection:
 
-1. `ctrl-o` opens the connection picker; picking one returns `Action::Open(connection)`.
+1. `ctrl-o` opens the connection picker; picking one not yet open starts its sheet and returns `Action::Open(connection)`, picking an open one shows its sheet and returns nothing.
 2. When the connection has a tunnel, the session task starts it with `Tunnel::start`: it picks a free port, runs the command, and waits until the port answers.
 3. `Session::open` takes the tunnel's `Route`: it connects to `hostaddr=127.0.0.1` and the tunnel's port, and keeps the URL's host for the TLS certificate check; it reads the schema in the background for completion and the sidebar.
 4. The session stays open until pgbg quits, so switching back is instant; its tunnel stops with it.
@@ -135,7 +135,7 @@ One word per concept, in code, docs and UI.
 | connection | A named database target in the config: where, how to reach it, how to log in |
 | tier | `local`, `staging` or `production`; sets the colour and the timeout |
 | session | An open link to one connection, with its tunnel if it has one |
-| sheet | One connection in the TUI: its editor text, its last result and its session's state |
+| sheet | One connection in the TUI: its editor text and the saved query it stands for, its last result, its session's state |
 | tunnel | The child process that forwards a local port to a database out of reach |
 | statement | One SQL statement, the unit pgbg runs |
 | query | A saved `.sql` file under `.pgbg/queries/` |

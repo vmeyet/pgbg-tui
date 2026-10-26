@@ -11,6 +11,7 @@ pub(crate) enum Act {
     Cancel,
     SwitchPane,
     Help,
+    Connections,
     Quit,
     Down,
     Up,
@@ -38,7 +39,8 @@ impl Act {
             Self::NewLine => Some(Self::Cancel),
             Self::Cancel => Some(Self::SwitchPane),
             Self::SwitchPane => Some(Self::Help),
-            Self::Help => Some(Self::Quit),
+            Self::Help => Some(Self::Connections),
+            Self::Connections => Some(Self::Quit),
             Self::Quit => Some(Self::Down),
             Self::Down => Some(Self::Up),
             Self::Up => Some(Self::PageDown),
@@ -87,6 +89,8 @@ pub(crate) enum Pane {
     Result,
     /// The `ctrl-p` finder over every saved query: while open it takes every key, and only its own work.
     Finder,
+    /// The `ctrl-o` connection picker, a popup like the finder.
+    Picker,
 }
 
 /// Keys as the help or the footer writes them, and what they do in a few words.
@@ -157,6 +161,11 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Cancel, Pane::Anywhere, &[key(KeyCode::Esc)]).help("esc", "cancel the running statement"),
     row(Act::SwitchPane, Pane::Anywhere, &[key(KeyCode::Tab)]).help("tab", "editor or result").footer("⇥", "pane"),
     row(Act::Help, Pane::Anywhere, &[key(KeyCode::F(1))]).help("F1", "these keys, from the editor too").footer("F1", "keys"),
+    row(Act::Down, Pane::Picker, &[key(KeyCode::Down), control('n')]).help("↓ ^n", "next, previous connection").footer("↑↓", "pick"),
+    row(Act::Up, Pane::Picker, &[key(KeyCode::Up), control('p')]),
+    row(Act::Open, Pane::Picker, &[key(KeyCode::Enter)]).help("⏎", "open it, or switch back to it").footer("⏎", "opens"),
+    row(Act::Close, Pane::Picker, &[key(KeyCode::Esc), control('o')]).help("esc ^o", "close the picker").footer("esc", "closes"),
+    row(Act::Connections, Pane::Anywhere, &[control('o')]).help("^o", "pick a connection").footer("^o", "connections"),
     row(Act::Quit, Pane::Anywhere, &[control('c')]).help("^c", "quit").footer("^c", "quit"),
 ];
 
@@ -168,7 +177,7 @@ fn is_the_key(own: &KeyEvent, pressed: KeyEvent) -> bool {
 }
 
 fn works_in(row: &Row, pane: Pane) -> bool {
-    row.pane == pane || (row.pane == Pane::Anywhere && pane != Pane::Finder)
+    row.pane == pane || (row.pane == Pane::Anywhere && !matches!(pane, Pane::Finder | Pane::Picker))
 }
 
 /// What `key` does while `pane` has the keys; `None` leaves it to the pane, as text for the editor.
@@ -185,7 +194,13 @@ pub(crate) fn footer(pane: Pane) -> impl Iterator<Item = Hint> {
 
 /// The `?` help: the keys of `pane` and those that work anywhere, or every pane's with `every_key`.
 pub(crate) fn sections(pane: Pane, every_key: bool) -> Vec<Section> {
-    let panes = [(Pane::Editor, "editor"), (Pane::Result, "result"), (Pane::Finder, "finder"), (Pane::Anywhere, "anywhere")];
+    let panes = [
+        (Pane::Editor, "editor"),
+        (Pane::Result, "result"),
+        (Pane::Finder, "finder"),
+        (Pane::Picker, "picker"),
+        (Pane::Anywhere, "anywhere"),
+    ];
     let shown = panes.into_iter().filter(|&(listed, _)| every_key || listed == pane || listed == Pane::Anywhere);
     shown.map(|(listed, title)| Section { title, rows: help_rows(listed) }).collect()
 }
@@ -215,7 +230,7 @@ mod tests {
 
     #[test]
     fn no_key_does_two_actions_in_one_pane() {
-        for pane in [Pane::Editor, Pane::Result, Pane::Finder] {
+        for pane in [Pane::Editor, Pane::Result, Pane::Finder, Pane::Picker] {
             let keys: Vec<&KeyEvent> = ROWS.iter().filter(|row| works_in(row, pane)).flat_map(|row| row.keys).collect();
             for (at, key) in keys.iter().enumerate() {
                 assert!(!keys[at + 1..].contains(key), "{key:?} in {pane:?}");
@@ -252,6 +267,6 @@ mod tests {
     fn the_first_help_lists_the_focused_pane_and_what_works_anywhere() {
         let titles: Vec<&str> = sections(Pane::Result, false).iter().map(|section| section.title).collect();
         assert_eq!(titles, ["result", "anywhere"]);
-        assert_eq!(sections(Pane::Result, true).len(), 4);
+        assert_eq!(sections(Pane::Result, true).len(), 5);
     }
 }

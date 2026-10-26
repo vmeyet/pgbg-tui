@@ -49,9 +49,14 @@ fn no_connection(name: &ConnectionName, path: &Path) -> anyhow::Error {
 /// The connection named `name` in the config, or its first one when `name` is `None`.
 fn connection(name: Option<&ConnectionName>) -> Result<Connection> {
     let path = config::path();
-    let mut connections = load(&path)?.connections.into_iter();
-    match name {
-        Some(name) => connections.find(|c| c.name() == name).ok_or_else(|| no_connection(name, &path)),
-        None => connections.next().ok_or_else(|| anyhow!("no connections in {}: add one under `[connections.<name>]`", path.display())),
-    }
+    pick(&load(&path)?.connections, name, &path)
+}
+
+/// The connection named `name` among `connections` of the config at `path`, or the first one when `name` is `None`.
+fn pick(connections: &[Connection], name: Option<&ConnectionName>, path: &Path) -> Result<Connection> {
+    let picked = match name {
+        Some(name) => connections.iter().find(|c| c.name() == name).ok_or_else(|| no_connection(name, path)),
+        None => connections.first().ok_or_else(|| anyhow!("no connections in {}: add one under `[connections.<name>]`", path.display())),
+    };
+    picked.cloned()
 }
