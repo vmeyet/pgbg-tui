@@ -74,7 +74,7 @@ Charting a result:
    A header name matches a column whatever its case, as PostgreSQL folds an unquoted name, unless one column has it exactly; a name several columns answer to is refused.
 3. `chart::Series` builds the points: a line over dates, times or integers is placed on their scale and sorted, so a gap shows, and a row with no place on it (NULL, infinity) is left out; bars and a line over text keep the result's order, one point per row.
 4. A y value of NULL, NaN or infinity leaves a gap, and NUMERIC is read as a float; each kind caps its points to what a terminal shows: bars keep the first 64, a line samples 1024 evenly, and the series says when rows were left out.
-5. The sheet keeps the series built on `v` with its result, and a new result starts on the grid, or on the chart of the editor's `-- chart:` header; `chart_view` draws it, or says why the result has no chart.
+5. The sheet keeps the series built on `v` with its result, and a new result starts on the grid, or on the chart of the editor's `-- chart:` header when it fits the result; `chart_view` draws it, or says why the result has no chart.
 
 ## Boundaries
 
@@ -143,9 +143,10 @@ On a connection that allows writes, a statement runs as typed, except that one r
 - Rows stream through a portal, a page at a time; nothing waits on the whole result.
 - The grid draws only the visible window; column widths come from the first page and the header, capped.
 - Values are decoded once, at the boundary, into `Value`; drawing formats only what is on screen.
-- Syntax colours live in `tui/app/editor.rs` with the text they colour: an edit marks them stale, and the loop rebuilds them once the text stayed still for 40 ms, so a key never waits on tree-sitter.
+- Syntax colours live in `tui/app/editor.rs` with the text they colour: an edit or an opened query marks them stale, and the loop rebuilds them once the text stayed still for 40 ms, so a key never waits on tree-sitter.
 - The editor view draws only the lines in view, each in one pass over its spans.
-- The TUI asks the terminal for bracketed paste: a paste comes as one `Event::Paste`, inserted whole, so its line ends never run a statement.
+- The TUI asks the terminal for bracketed paste: a paste comes as one `Event::Paste`, inserted whole, so its line ends never run a statement; it drops control characters and text-reversing marks.
+- Text from the database or the server (grid cells, chart labels and names, a failed run, the status line) is drawn through `render::printable`, its control characters and text-reversing marks escaped.
 
 ## Glossary
 

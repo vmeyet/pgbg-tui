@@ -7,7 +7,7 @@ use crate::render;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::text::Text;
+use ratatui::text::{Line, Text};
 use ratatui::widgets::{Paragraph, Wrap};
 use vtui::pane;
 
@@ -29,10 +29,15 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) -> usize {
         Run::Idle => Text::styled("⏎ runs the statement under the cursor", Style::default().fg(app.theme.faded)),
         Run::Running { .. } => Text::styled("running… esc cancels it", Style::default().fg(app.theme.muted)),
         Run::Cancelling { .. } => Text::styled("cancelling…", Style::default().fg(app.theme.muted)),
-        Run::Failed(err) => Text::styled(err.as_str(), Style::default().fg(theme::failure(&app.theme))),
+        Run::Failed(err) => printable_lines(err).style(Style::default().fg(theme::failure(&app.theme))),
     };
     f.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }), inside);
     0
+}
+
+/// Each line of `text` escaped on its own, so its line breaks still break lines.
+fn printable_lines(text: &str) -> Text<'static> {
+    text.lines().map(|line| Line::from(render::printable(line).into_owned())).collect()
 }
 
 fn title(run: &Run) -> String {

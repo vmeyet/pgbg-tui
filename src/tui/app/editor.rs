@@ -1,6 +1,7 @@
 //! The SQL editor: its text, the editing keys and pastes that change it, and the syntax colours that follow it.
 use super::Sheet;
 use crate::query::Header;
+use crate::render;
 use crate::syntax::{self, Spans};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use vtui::field::Field;
@@ -24,9 +25,9 @@ pub(in crate::tui) struct Editor {
 }
 
 impl Editor {
-    /// An editor on `text`, already coloured.
+    /// An editor on `text`, left for the loop to colour, so opening a big query never waits on tree-sitter.
     pub(super) fn new(text: &str) -> Self {
-        Self { field: Field::new(text), colours: syntax::highlight(text), has_stale_colours: false }
+        Self { field: Field::new(text), colours: vec![], has_stale_colours: true }
     }
 
     pub(in crate::tui) fn text(&self) -> &str {
@@ -66,10 +67,11 @@ impl Editor {
         edited
     }
 
-    /// Inserts `text` at the cursor as typed, its line ends as `\n`, its tabs as spaces, without other control characters.
+    /// Inserts `text` at the cursor as typed, its line ends as `\n`, its tabs as spaces, without other control characters
+    /// or marks that reverse text.
     pub(super) fn paste(&mut self, text: &str) -> Edited {
         let typed = text.replace("\r\n", "\n").replace('\r', "\n").replace('\t', PASTED_TAB);
-        let mut inserted = typed.chars().filter(|&c| c == '\n' || !c.is_control()).peekable();
+        let mut inserted = typed.chars().filter(|&c| c == '\n' || !render::is_unprintable(c)).peekable();
         if inserted.peek().is_none() {
             return Edited::Cursor;
         }
@@ -189,8 +191,16 @@ mod tests {
     }
 
     #[test]
-    fn an_editor_is_coloured_from_the_start() {
-        assert_eq!(Editor::new("SELECT").colours(), [vec![Painted { bytes: 0..6, token: Token::Keyword }]]);
+    fn a_paste_drops_the_marks_that_reverse_text() {
+        assert_eq!(shown(&pasted("", "id\u{202e}latot\u{2066}")), "idlatot|");
+    }
+
+    #[test]
+    fn a_new_editor_waits_for_its_colours() {
+        let mut editor = Editor::new("SELECT");
+        assert!(editor.has_stale_colours());
+        editor.recolour();
+        assert_eq!(editor.colours(), [vec![Painted { bytes: 0..6, token: Token::Keyword }]]);
     }
 
     #[test]
@@ -205,6 +215,7 @@ mod tests {
     #[test]
     fn a_cursor_move_leaves_the_colours_fresh() {
         let mut editor = Editor::new("SELECT 1");
+        editor.recolour();
         editor.edit(KeyEvent::from(KeyCode::Left));
         assert!(!editor.has_stale_colours());
     }

@@ -1,5 +1,6 @@
 //! The result pane as a chart: a `Series` drawn as bars or a line, one colour per y column, or why there is none.
 use crate::chart::{ChartError, ChartKind, Series};
+use crate::render::printable;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
@@ -21,7 +22,7 @@ pub(super) fn draw(f: &mut Frame<'_>, chart: &Result<Series, ChartError>, theme:
 }
 
 fn no_chart<'a>(error: &ChartError, theme: &Theme) -> Paragraph<'a> {
-    let why = Line::styled(format!("no chart: {error}"), Style::default().fg(theme.warn));
+    let why = Line::styled(printable(&format!("no chart: {error}")).into_owned(), Style::default().fg(theme.warn));
     let back = Line::styled("v shows the grid again", Style::default().fg(theme.faded));
     Paragraph::new(vec![why, back]).wrap(Wrap { trim: false })
 }
@@ -41,7 +42,7 @@ fn legend(series: &Series, theme: &Theme) -> Line<'static> {
     let entries = series.y.iter().enumerate().flat_map(|(column, y)| {
         [
             Span::styled("■ ", Style::default().fg(colour(theme, column))),
-            Span::styled(format!("{}  ", y.name), Style::default().fg(theme.muted)),
+            Span::styled(format!("{}  ", printable(&y.name)), Style::default().fg(theme.muted)),
         ]
     });
     Line::from(entries.collect::<Vec<_>>())
@@ -98,6 +99,22 @@ mod tests {
     #[test]
     fn several_y_columns_get_a_legend() {
         insta::assert_snapshot!("legend", render(&series(&sales(), "bar"), 40, 8).backend());
+    }
+
+    #[test]
+    fn a_label_or_a_column_name_cannot_reverse_the_text_around_it() {
+        let result = ResultSet {
+            columns: vec![
+                column("customer", ColumnKind::Text),
+                column("total\u{202e}", ColumnKind::Int),
+                column("refunds", ColumnKind::Int),
+            ],
+            rows: vec![vec![Value::Text("nina\u{2067}".into()), Value::Int(12), Value::Int(1)]],
+            is_cut: false,
+        };
+        let drawn = render(&series(&result, "bar"), 60, 6).backend().to_string();
+        assert!(drawn.contains("\\u{2067}") && drawn.contains("\\u{202e}"), "{drawn}");
+        assert!(!drawn.contains(['\u{202e}', '\u{2067}']), "{drawn}");
     }
 
     #[test]

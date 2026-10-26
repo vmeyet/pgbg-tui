@@ -1,6 +1,7 @@
 //! A line in braille dots, x and y labelled at their ends and between, a gap where a value is missing.
 use super::{colour, short_number};
 use crate::chart::{Series, YColumn};
+use crate::render::printable;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -55,7 +56,7 @@ fn spread([low, high]: [f64; 2], count: u16) -> impl Iterator<Item = f64> {
 fn x_labels(series: &Series, x: [f64; 2], width: u16) -> Vec<Line<'static>> {
     let widest = series.x_label_at(x[0]).chars().count().max(series.x_label_at(x[1]).chars().count()) as u16;
     let count = (width / (widest + X_LABEL_GAP)).clamp(MIN_X_LABELS, MAX_X_LABELS);
-    spread(x, count).map(|position| Line::from(series.x_label_at(position))).collect()
+    spread(x, count).map(|position| Line::from(printable(&series.x_label_at(position)).into_owned())).collect()
 }
 
 #[cfg(test)]

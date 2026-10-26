@@ -46,11 +46,12 @@ pub(in crate::tui) enum Run {
     Failed(String),
 }
 
-/// How the result pane shows a result; `v` switches, and a new result starts on the grid, or on the chart its header asks for.
+/// How the result pane shows a result; `v` switches, and a new result starts on the grid, or on the chart its header asks
+/// for when that chart fits the result.
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::tui) enum View {
     Grid,
-    /// The chart of the header's `-- chart:`, or the one `chart::infer` picks when `v` is pressed, or why there is none.
+    /// The chart of the header's `-- chart:`, or the one `chart::infer` picks when `v` is pressed, or why `v` has none.
     Chart(Result<Series, ChartError>),
 }
 
@@ -173,7 +174,8 @@ impl Sheet {
             Incoming::Result { run, .. } | Incoming::Refused { run, .. } | Incoming::Failed { run, .. }
                 if !self.is_answer_to_running(run) => {}
             Incoming::Result { result, took, .. } => {
-                let view = self.header.chart.as_ref().map_or(View::Grid, |spec| View::Chart(Series::from_result(&result, spec)));
+                let header_chart = self.header.chart.as_ref().and_then(|spec| Series::from_result(&result, spec).ok());
+                let view = header_chart.map_or(View::Grid, |series| View::Chart(Ok(series)));
                 self.run = Run::Done { grid: Grid::new(&result), result, took, view };
             }
             Incoming::Refused { why, .. } => self.run = Run::Failed(format!("not sent: {why}")),

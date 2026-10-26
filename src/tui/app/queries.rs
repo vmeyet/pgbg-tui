@@ -152,7 +152,6 @@ pub(in crate::tui) mod tests {
     use super::*;
     use crate::chart::Series;
     use crate::query::{QueryPath, Source};
-    use crate::syntax;
     use std::time::Duration;
 
     pub(in crate::tui) fn query(path: &str) -> Query {
@@ -221,7 +220,6 @@ pub(in crate::tui) mod tests {
         }));
         assert_eq!(app.sheet().editor.text(), "SELECT * FROM customers");
         assert_eq!(app.sheet().opened, Some(query("customers.sql")));
-        assert_eq!(app.sheet().editor.colours(), syntax::highlight("SELECT * FROM customers"));
         assert_eq!(app.focus, Focus::Editor);
     }
 
@@ -336,6 +334,21 @@ pub(in crate::tui) mod tests {
         let Run::Done { view, .. } = &app.sheet().run else { panic!("no result") };
         assert!(matches!(view, View::Chart(Ok(_))), "{view:?}");
         assert_eq!(view, &View::Chart(Series::from_result(&orders(), &spec)));
+    }
+
+    #[test]
+    fn a_chart_header_that_does_not_fit_the_result_starts_on_the_grid() {
+        let (mut app, _) = opened_and_run("-- chart: bar x=day y=refunds\nSELECT customer, total FROM orders");
+        app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result: orders(), took: Duration::from_millis(38) }));
+        let Run::Done { view, .. } = &app.sheet().run else { panic!("no result") };
+        assert_eq!(view, &View::Grid);
+    }
+
+    #[test]
+    fn an_opened_query_is_coloured_by_the_loop_not_on_opening() {
+        let mut app = with_queries();
+        app.apply(Answer::Queries(QueryAnswer::Opened { connection: shop(), query: query("orders/daily.sql"), text: "SELECT 1".into() }));
+        assert!(app.sheet().editor.has_stale_colours());
     }
 
     #[test]
