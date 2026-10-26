@@ -32,7 +32,7 @@ Each session gets a statement timeout from its tier: none on local, a minute on 
 
 ## Check a connection
 
-`pgbg doctor prod` checks the config, TLS, the tunnel, the login and the statement timeout, one line each with how to fix it; it exits 1 when a check fails.
+`pgbg doctor prod` checks the config, TLS, the tunnel, the login, the statement timeout and whether the role can write, one line each with how to fix it; it exits 1 when a check fails.
 
 ## Run a statement
 

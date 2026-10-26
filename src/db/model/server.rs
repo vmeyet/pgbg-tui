@@ -12,3 +12,18 @@ pub(crate) struct ServerFacts {
     /// The one the server applies before pgbg sets its own: a role's or a database's default, or the URL's `options`.
     pub(crate) server_statement_timeout: StatementTimeout,
 }
+
+/// What the session's role could write, whatever transaction it runs in.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RoleRights {
+    pub(crate) is_superuser: bool,
+    pub(crate) can_create_role: bool,
+    pub(crate) can_create_db: bool,
+    pub(crate) can_bypass_rls: bool,
+    /// A member of `pg_write_all_data`, which writes every table.
+    pub(crate) can_write_all_data: bool,
+    /// The first tables it may insert into, update, delete from or truncate, as `schema.table`.
+    pub(crate) writable_tables: Vec<String>,
+    /// How many tables it may write, past the ones listed too.
+    pub(crate) writable_table_count: u64,
+}

@@ -10,6 +10,7 @@ Each entry says what changed, then where, then how to use it.
 
 - **`pgbg doctor <connection>`** checks a connection, one line per check: `✓` fine, `!` worth a look, `✗` broken, each with how to fix it.
   It reads the config and the mode of `config.toml`, says whether TLS is on and why, starts and stops the tunnel, logs in, and shows the server's version and the statement timeout in effect, with where it comes from: the connection, its tier or the server.
+  It says what the role can write: superuser, `CREATEROLE`, `CREATEDB`, `BYPASSRLS`, `pg_write_all_data` and the tables it may change; a read-only connection whose role can write gets `!`, since only a read-only role truly stops a write.
   `--json` prints the same checks; pgbg exits 1 when one fails, so a script can run it.
 
 - **History** of every statement `pgbg run` sends: `pgbg history <connection>` lists the newest first, with when, how long and what came of it; `--limit n` and `--json` too.

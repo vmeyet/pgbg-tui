@@ -36,7 +36,7 @@ pub enum Command {
         /// One SQL statement.
         sql: String,
     },
-    /// Checks a connection: its config, TLS, tunnel, login and timeout; exits 1 when a check fails.
+    /// Checks a connection: its config, TLS, tunnel, login, timeout, and whether its role can write; exits 1 when a check fails.
     Doctor {
         /// The connection's name in `config.toml`.
         connection: ConnectionName,
