@@ -1,9 +1,8 @@
 use crate::connection::{Connection, ConnectionName};
+use crate::db::guard;
 use crate::db::model::{ResultSet, Statement};
-use crate::db::{NotOpened, Opened, guard, open_along};
 use crate::history::{Entry, Outcome, Store};
 use crate::render;
-use crate::tunnel::Tunnel;
 use anyhow::Result;
 use chrono::Utc;
 use std::time::Instant;
@@ -33,21 +32,7 @@ async fn record(entry: Entry) {
 
 async fn run_statement(connection: &Connection, sql: &str) -> Result<ResultSet> {
     let admitted = guard::admit(Statement::new(sql), connection.writes())?;
-    let (result, tunnel) = match open_along(connection, None).await {
-        Ok(Opened { mut session, tunnel }) => (session.run(&admitted).await, tunnel),
-        Err(NotOpened::Tunnel(err)) => return Err(err),
-        Err(NotOpened::Login { error, tunnel }) => (Err(error), tunnel.map(|tunnel| *tunnel)),
-    };
-    stop(tunnel).await;
-    result
-}
-
-/// Stops `tunnel` and warns when its forward outlives it.
-async fn stop(tunnel: Option<Tunnel>) {
-    let Some(mut tunnel) = tunnel else { return };
-    if let Err(err) = tunnel.stop().await {
-        super::warn(&format!("{err:#}"));
-    }
+    super::on_session(connection, async |session| session.run(&admitted).await).await
 }
 
 fn print(result: &ResultSet, json: bool) -> Result<()> {

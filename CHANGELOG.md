@@ -60,6 +60,8 @@ Each entry says what changed, then where, then how to use it.
   The footer shows the keys of the pane that has them.
 - **The results grid** in the TUI: numbers line up on the right, `▶` marks the current row, and a control character in a value shows escaped.
   Press `tab` to give it the keys, then `j`/`k`, `PgUp`/`PgDn` and `g`/`G` to scroll its rows, `h`/`l` its columns; `tab` again goes back to the editor.
+- **`pgbg schema <connection>`** prints every table your role can read, with its columns, their types and defaults, and its indexes.
+  Add a few letters to see only the tables whose name holds them, `pgbg schema prod orders`, and `--json` for a script.
 - **`pgbg run <connection> "<sql>"`** runs one statement and prints its result as a table, with the row count.
   Add `--json` for a script: `{"columns": [...], "rows": [[...]], "is_cut": false}`; `is_cut` is `true` when only the first 10 000 rows came back.
   A connection is read only unless it says `writes = "allowed"`: a statement that is not a read is refused before it is sent, and every read runs in a read-only transaction that is rolled back.

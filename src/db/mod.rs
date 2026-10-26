@@ -17,7 +17,6 @@ mod decode;
 pub(crate) mod guard;
 pub(crate) mod model;
 mod open;
-#[cfg_attr(not(test), expect(dead_code, reason = "`pgbg schema`, the next step, prints it"))]
 mod schema;
 mod server;
 

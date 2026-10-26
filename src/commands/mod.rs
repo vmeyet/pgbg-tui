@@ -11,12 +11,16 @@ pub mod history;
 pub mod password;
 /// `pgbg run`.
 pub mod run;
+/// `pgbg schema`.
+pub mod schema;
 /// `pgbg`, or `pgbg tui`.
 pub mod tui;
 
 use crate::config::{self, Config};
 use crate::connection::{Connection, ConnectionName};
+use crate::db::{NotOpened, Opened, Session, open_along};
 use crate::render::printable;
+use crate::tunnel::Tunnel;
 use anyhow::{Result, anyhow};
 use std::path::Path;
 
@@ -31,6 +35,25 @@ pub fn print_error(err: &anyhow::Error) {
 /// `text` on stderr as a warning, escaped.
 fn warn(text: &str) {
     eprintln!("! {}", printable(text));
+}
+
+/// `work` on a session opened on `connection` along its route; its tunnel, when it has one, stops once it is done.
+async fn on_session<T>(connection: &Connection, work: impl AsyncFnOnce(&mut Session) -> Result<T>) -> Result<T> {
+    let (result, tunnel) = match open_along(connection, None).await {
+        Ok(Opened { mut session, tunnel }) => (work(&mut session).await, tunnel),
+        Err(NotOpened::Tunnel(err)) => return Err(err),
+        Err(NotOpened::Login { error, tunnel }) => (Err(error), tunnel.map(|tunnel| *tunnel)),
+    };
+    stop(tunnel).await;
+    result
+}
+
+/// Stops `tunnel` and warns when its forward outlives it.
+async fn stop(tunnel: Option<Tunnel>) {
+    let Some(mut tunnel) = tunnel else { return };
+    if let Err(err) = tunnel.stop().await {
+        warn(&format!("{err:#}"));
+    }
 }
 
 /// Each key of the config this pgbg ignores, on stderr.

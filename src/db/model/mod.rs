@@ -10,7 +10,7 @@ pub(crate) use value::Value;
 mod cancel;
 mod error;
 mod route;
-#[cfg_attr(not(test), expect(dead_code, reason = "`pgbg schema`, the next step, prints it"))]
+#[cfg_attr(not(test), expect(dead_code, reason = "`Schema::complete` waits for the editor's completion, the next step"))]
 mod schema;
 mod server;
 mod value;

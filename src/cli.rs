@@ -49,6 +49,13 @@ pub enum Command {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
+    /// The tables the connection's role can read, with their columns and indexes.
+    Schema {
+        /// The connection's name in `config.toml`.
+        connection: ConnectionName,
+        /// Only the tables whose name, or `schema.table`, holds this text, whatever its case.
+        filter: Option<String>,
+    },
     /// Adds, changes or removes a connection in `config.toml`, keeping the rest of the file as written.
     Connection {
         /// What to do with it.
