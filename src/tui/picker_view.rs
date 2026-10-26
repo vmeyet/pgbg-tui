@@ -32,7 +32,6 @@ fn note_line(app: &App, note: &Note, room: usize) -> Line<'static> {
             Style::default().fg(theme::failure(&app.theme)).add_modifier(Modifier::BOLD),
         ),
         Note::Said(said) => (format!("  {said}"), Style::default().fg(app.theme.muted)),
-        Note::Failed(why) => (format!("  ✗ {why}"), Style::default().fg(theme::failure(&app.theme))),
     };
     Line::styled(truncate(&text, room + 2), style)
 }

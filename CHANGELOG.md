@@ -85,6 +85,11 @@ Each entry says what changed, then where, then how to use it.
 
 - **Closing a session stops its running statement**: `ctrl-x` in the picker, a connection removed or edited, or quitting cancels it on the server, and a write on a connection that allows writes never commits after it.
   pgbg waits 2 seconds for the cancel, then cuts the link, so the server stops the statement within a second; a statement still queued is never sent.
+- **The connection form saves a new password for the keychain item the connection already names**; it kept the old one.
+  Adding a connection under a name already taken is refused beside its line, and never touches the keychain item it names.
+- **A failed change to the config says why in the status line** until the next key, unless the form that asked is open; it no longer replaces the result on screen.
+  A second `⏎` while the form saves sends nothing.
+- **`ctrl-x` in the connection picker keeps it open** and says which session it closed.
 - **The finder and the connection picker always show their keys** at the bottom, however many matches or a question under the list; the picker follows a connection added or removed while it is open.
 - **A URL whose `options` or `application_name` hold `%20`** reaches the server as written, as in `options=-c%20role%3Dnina`; it failed with `unrecognized configuration parameter "+role"`.
 - **The editor colours SQL by meaning**: `NULL` as a constant, `1e3` as a number, and table names plain.

@@ -4,7 +4,7 @@ use crate::connection::{Connection, ConnectionName};
 use crate::db::model::{LocalPort, ResultSet, Statement};
 use crate::history::Entry;
 use crate::query::{Query, QueryPath};
-use crate::secret::Secret;
+use crate::secret::{KeychainItem, Secret};
 use std::time::Duration;
 
 /// Which run of a statement an answer or a cancel is about, so a late one never lands on the next run.
@@ -12,6 +12,18 @@ use std::time::Duration;
 pub(in crate::tui) struct RunId(u64);
 
 impl RunId {
+    pub(in crate::tui) const FIRST: Self = Self(1);
+
+    pub(in crate::tui) fn next(self) -> Self {
+        Self(self.0 + 1)
+    }
+}
+
+/// Which change to the config an answer is about, so only the form or the picker that asked for it reacts to it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::tui) struct ConfigChangeId(u64);
+
+impl ConfigChangeId {
     pub(in crate::tui) const FIRST: Self = Self(1);
 
     pub(in crate::tui) fn next(self) -> Self {
@@ -44,7 +56,7 @@ pub(in crate::tui) enum Action {
     /// Close the connection's session and open one on it as the config now says.
     Reopen(Connection),
     /// Remove the connection from the config, with the keychain item no other connection names.
-    RemoveConnection(ConnectionName),
+    RemoveConnection { id: ConfigChangeId, connection: ConnectionName },
     /// Write a connection the form filled in.
     SaveConnection(SaveConnection),
     /// Read the history of the connection, for `ctrl-r`.
@@ -54,11 +66,19 @@ pub(in crate::tui) enum Action {
 /// A connection to add or edit: the keys it sets, and the password typed for its keychain item.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::tui) struct SaveConnection {
+    pub(in crate::tui) id: ConfigChangeId,
     pub(in crate::tui) name: ConnectionName,
     pub(in crate::tui) saving: Saving,
     pub(in crate::tui) change: ConnectionChange,
-    /// Written to the keychain item `change` names before the config, when one was typed.
-    pub(in crate::tui) password: Option<Secret>,
+    /// Written to its keychain item once the config took the change, when one was typed.
+    pub(in crate::tui) password: Option<KeychainPassword>,
+}
+
+/// A password typed for the keychain item the connection names, whether that item is new or already in the config.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::tui) struct KeychainPassword {
+    pub(in crate::tui) item: KeychainItem,
+    pub(in crate::tui) password: Secret,
 }
 
 /// Whether the form adds a connection or changes one already there.
@@ -75,8 +95,8 @@ pub(in crate::tui) enum Answer {
     Session { connection: ConnectionName, incoming: Incoming },
     /// About the saved queries: the list every connection shares, or a query read for one sheet.
     Queries(QueryAnswer),
-    /// About a change to the config.
-    Config(ConfigAnswer),
+    /// About the change to the config `id` names.
+    Config { id: ConfigChangeId, answer: ConfigAnswer },
     /// The history of `connection`: each statement once, newest first.
     History { connection: ConnectionName, entries: Vec<Entry> },
 }

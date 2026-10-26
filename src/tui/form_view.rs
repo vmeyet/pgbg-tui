@@ -17,7 +17,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) {
     let Some(Overlay::Form(form)) = &app.overlay else { return };
     let mut lines: Vec<Line<'static>> = form.slots().into_iter().flat_map(|slot| slot_lines(app, form, slot)).collect();
     lines.push(Line::default());
-    lines.extend(form.is_saving.then(|| Line::styled("saving…", Style::default().fg(app.theme.muted))));
+    lines.extend(form.is_saving().then(|| Line::styled("saving…", Style::default().fg(app.theme.muted))));
     lines.extend(form.failure.as_ref().map(|why| Line::styled(format!("✗ {why}"), Style::default().fg(theme::failure(&app.theme)))));
     lines.push(Line::styled(FOOTER, Style::default().fg(app.theme.faded)));
     let area = centred(f.area(), lines.len() as u16 + 2);

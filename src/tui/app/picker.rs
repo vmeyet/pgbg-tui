@@ -1,7 +1,7 @@
 //! `ctrl-o`, the connection picker: typing narrows the connections as fzf does, and picking one shows its sheet,
 //! opening its session the first time.
 use super::search::{Search, Searching};
-use super::{Action, App, Form, Overlay, Run, SessionState, Sheet};
+use super::{Action, App, ConfigChangeId, Form, Overlay, SessionState, Sheet};
 use crate::act::{Act, Pane};
 use crate::connection::{Connection, ConnectionName};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -20,8 +20,6 @@ pub(in crate::tui) enum Note {
     ConfirmRemove(ConnectionName),
     /// Something to read, gone at the next key.
     Said(String),
-    /// Why the config did not change, gone at the next key.
-    Failed(String),
 }
 
 /// What a key does in the picker.
@@ -32,7 +30,7 @@ enum Picked {
     Quit,
     Remove(ConnectionName),
     Form(Box<Form>),
-    CloseSession(ConnectionName),
+    CloseSession { search: Search<Connection>, name: ConnectionName },
 }
 
 impl App {
@@ -57,12 +55,13 @@ impl App {
             Picked::Quit => return self.quit(),
             Picked::Form(form) => self.overlay = Some(Overlay::Form(form)),
             Picked::Remove(name) => {
-                self.say(format!("removing `{name}`…"));
-                return vec![Action::RemoveConnection(name)];
+                let id = self.new_config_change();
+                return vec![Action::RemoveConnection { id, connection: name }];
             }
-            Picked::CloseSession(name) => {
+            Picked::CloseSession { search, name } => {
                 self.drop_sheet(&name);
-                self.say(format!("closed the session of `{name}`"));
+                let note = Some(Note::Said(format!("closed the session of `{name}`")));
+                self.overlay = Some(Overlay::Picker(Picker { search, note }));
                 return vec![Action::Close(name)];
             }
         }
@@ -97,7 +96,7 @@ impl App {
             },
             Act::Delete => name.map(|name| self.removal(name)),
             Act::CloseSession => match name.filter(|name| self.sheet_of(name).is_some()) {
-                Some(name) if name != *self.sheet().name() => return Picked::CloseSession(name),
+                Some(name) if name != *self.sheet().name() => return Picked::CloseSession { search, name },
                 Some(name) => Some(on_screen(&name)),
                 None => None,
             },
@@ -109,12 +108,6 @@ impl App {
     /// The question before removing `name`; the connection on screen cannot go.
     fn removal(&self, name: ConnectionName) -> Note {
         if name == *self.sheet().name() { on_screen(&name) } else { Note::ConfirmRemove(name) }
-    }
-
-    fn say(&mut self, said: String) {
-        if let Some(Overlay::Picker(picker)) = &mut self.overlay {
-            picker.note = Some(Note::Said(said));
-        }
     }
 
     /// Shows the sheet of `connection`, starting one and opening its session when it has none, or when it failed.
@@ -139,8 +132,9 @@ impl App {
         self.shown = self.sheets.iter().position(|sheet| *sheet.name() == shown).unwrap_or_default();
     }
 
-    /// Takes the connections the config holds now: the sheet of one gone closes, the sheet of one changed opens again.
-    pub(super) fn take_connections(&mut self, connections: Vec<Connection>) -> Vec<Action> {
+    /// Takes the connections the config holds now, after the change `id`: the sheet of one gone closes, the sheet of one
+    /// changed opens again, and the form that sent `id` closes.
+    pub(super) fn take_connections(&mut self, id: ConfigChangeId, connections: Vec<Connection>) -> Vec<Action> {
         let closed = self.close_gone(&connections);
         let reopened = self.reopen_changed(&connections);
         self.connections = connections;
@@ -148,7 +142,7 @@ impl App {
             picker.search.rank(&self.connections);
         }
         self.clear_said();
-        if matches!(self.overlay, Some(Overlay::Form(_))) {
+        if self.is_form_waiting_on(id) {
             self.overlay = None;
         }
         closed.into_iter().chain(reopened).collect()
@@ -176,13 +170,16 @@ impl App {
         self.sheets.iter_mut().filter_map(reopen).collect()
     }
 
-    /// Says why the config did not change: in the picker when it is open, else in the result.
-    pub(super) fn config_failed(&mut self, error: String) {
+    /// Says why the change `id` did not happen: in the form that sent it, else in the status line.
+    pub(super) fn config_failed(&mut self, id: ConfigChangeId, error: String) {
         match &mut self.overlay {
-            Some(Overlay::Picker(picker)) => picker.note = Some(Note::Failed(error)),
-            Some(Overlay::Form(form)) => form.failed(error),
-            _ => self.sheet_mut().run = Run::Failed(error),
+            Some(Overlay::Form(form)) if form.is_waiting_on(id) => form.failed(error),
+            _ => self.config_failure = Some(error),
         }
+    }
+
+    fn is_form_waiting_on(&self, id: ConfigChangeId) -> bool {
+        matches!(&self.overlay, Some(Overlay::Form(form)) if form.is_waiting_on(id))
     }
 
     fn clear_said(&mut self) {
@@ -387,7 +384,7 @@ pub(in crate::tui) mod tests {
         ctrl(&mut app, 'o');
         let mut connections = app.connections.clone();
         connections.push(named("replica", "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\n"));
-        app.take_connections(connections);
+        app.take_connections(ConfigChangeId::FIRST, connections);
         assert_eq!(names(&app), ["local", "prod", "staging", "replica"]);
     }
 
@@ -431,7 +428,7 @@ pub(in crate::tui) mod tests {
         let mut app = on_prod_with_local_open();
         ctrl(&mut app, 'd');
         assert_eq!(picker(&app).note, Some(Note::ConfirmRemove(name("local"))));
-        assert_eq!(press(&mut app, "y"), [Action::RemoveConnection(name("local"))]);
+        assert_eq!(press(&mut app, "y"), [Action::RemoveConnection { id: ConfigChangeId::FIRST, connection: name("local") }]);
     }
 
     #[test]
@@ -460,20 +457,44 @@ pub(in crate::tui) mod tests {
     }
 
     #[test]
+    fn ctrl_x_keeps_the_picker_open_and_says_the_session_closed() {
+        let mut app = on_prod_with_local_open();
+        ctrl(&mut app, 'x');
+        assert_eq!(picker(&app).note, Some(Note::Said("closed the session of `local`".into())));
+    }
+
+    #[test]
     fn a_connection_gone_from_the_config_closes_and_one_changed_opens_again_as_it_is_now() {
         let mut app = on_prod_with_local_open();
         let prod =
             named("prod", "tier = \"production\"\nurl = \"postgres://nina@db.example.com/shop?sslmode=require\"\nwrites = \"allowed\"\n");
-        let actions = app.apply(Answer::Config(ConfigAnswer::Changed(vec![prod.clone()])));
+        let actions = app.apply(Answer::Config { id: ConfigChangeId::FIRST, answer: ConfigAnswer::Changed(vec![prod.clone()]) });
         assert_eq!(actions, [Action::Close(name("local")), Action::Reopen(prod)]);
         assert_eq!(app.sheet().connection.writes(), WritePolicy::Allowed);
         assert_eq!(app.connections.len(), 1);
     }
 
+    fn failed(why: &str) -> Answer {
+        Answer::Config { id: ConfigChangeId::FIRST, answer: ConfigAnswer::Failed(why.into()) }
+    }
+
     #[test]
-    fn a_change_that_failed_says_why_in_the_picker() {
+    fn a_removal_that_failed_says_why_in_the_status_line_until_the_next_key() {
         let mut app = on_prod_with_local_open();
-        app.apply(Answer::Config(ConfigAnswer::Failed("permission denied".into())));
-        assert_eq!(picker(&app).note, Some(Note::Failed("permission denied".into())));
+        ctrl(&mut app, 'd');
+        press(&mut app, "y");
+        app.apply(failed("permission denied"));
+        assert_eq!(app.config_failure.as_deref(), Some("permission denied"));
+        press(&mut app, "x");
+        assert_eq!(app.config_failure, None);
+    }
+
+    #[test]
+    fn a_change_that_failed_leaves_the_running_statement_as_it_is() {
+        let mut app = on_local();
+        press(&mut app, "SELECT 1");
+        key(&mut app, KeyCode::Enter);
+        app.apply(failed("permission denied"));
+        assert!(matches!(app.sheet().run, Run::Running { .. }), "{:?}", app.sheet().run);
     }
 }

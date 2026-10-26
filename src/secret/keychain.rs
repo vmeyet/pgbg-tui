@@ -77,6 +77,9 @@ pub(crate) struct Keychain {
 impl Keychain {
     /// pgbg's own items.
     pub(crate) const PGBG: Self = Self { service: "pgbg" };
+    /// A throwaway service, so a test never touches pgbg's own items.
+    #[cfg(test)]
+    pub(crate) const TEST: Self = Self { service: "pgbg-test" };
 
     /// The password the item `account` holds.
     pub(crate) async fn read(&self, account: &KeychainItem) -> Result<Secret> {
@@ -236,7 +239,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "touches the real login keychain"]
     async fn a_written_password_reads_back_a_second_write_replaces_it_and_a_delete_removes_it() {
-        let keychain = Keychain { service: "pgbg-test" };
+        let keychain = Keychain::TEST;
         keychain.write(&item("probe"), &Secret("hunter2 \"one\"".into())).unwrap();
         assert_eq!(keychain.read(&item("probe")).await.unwrap().expose(), "hunter2 \"one\"");
         keychain.write(&item("probe"), &Secret("é\ttwo".into())).unwrap();

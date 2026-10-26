@@ -93,8 +93,12 @@ fn hint_text(hint: Hint) -> [String; 2] {
     [format!(" {} ", hint.keys), format!("{} ", hint.does)]
 }
 
-/// One chain: the tunnel then the session, `⇄ :49213 · connected`, or the one reason they are down, in `width` columns.
+/// One chain: the tunnel then the session, `⇄ :49213 · connected`, or the one reason they are down, in `width` columns;
+/// a change to the config that just failed says why first.
 fn status(app: &App, width: usize) -> Line<'static> {
+    if let Some(why) = &app.config_failure {
+        return failure(app, why, width);
+    }
     let sheet = app.sheet();
     let muted = Style::default().fg(app.theme.muted);
     let text = match (&sheet.tunnel, &sheet.session) {
