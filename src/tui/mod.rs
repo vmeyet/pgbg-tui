@@ -11,7 +11,7 @@ mod theme;
 mod ui;
 
 use crate::connection::Connection;
-use crate::query::Roots;
+use crate::query::{Places, Roots};
 use anyhow::Result;
 use app::{Action, Answer, App};
 use backend::Backend;
@@ -41,7 +41,9 @@ pub(crate) async fn run(connection: Connection) -> Result<()> {
 /// The folders of saved queries: the one nearest the working directory, and the one in the config folder.
 async fn find_roots() -> Result<Roots> {
     let working_dir = std::env::current_dir()?;
-    Ok(tokio::task::spawn_blocking(move || Roots::find(&working_dir, dirs::config_dir().as_deref())).await?)
+    let (home, config_dir) = (dirs::home_dir(), dirs::config_dir());
+    let found = move || Roots::find(&Places { working_dir: &working_dir, home: home.as_deref(), config_dir: config_dir.as_deref() });
+    Ok(tokio::task::spawn_blocking(found).await?)
 }
 
 async fn event_loop(
