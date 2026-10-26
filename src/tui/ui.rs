@@ -1,7 +1,7 @@
 //! Drawing: the frame in the tier's colour, the panes inside it, and the key hints under them.
 use super::app::{App, Fit, SessionState, TunnelState};
 use super::{editor_view, finder_view, help_view, picker_view, result_view, sidebar_view, theme};
-use crate::act;
+use crate::act::{self, Hint};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -11,6 +11,8 @@ use vtui::text::truncate;
 
 const EDITOR_SHARE_PCT: u16 = 40;
 const SIDEBAR_COLUMNS: u16 = 30;
+/// The status takes at most half the footer, so the hints keep the other half.
+const STATUS_SHARE_OF_ROW: u16 = 2;
 /// A terminal narrower than this leaves the sidebar out, so the editor and the grid keep their room.
 const SIDEBAR_MIN_SCREEN_COLUMNS: u16 = 80;
 
@@ -38,10 +40,12 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> Fit {
     Fit { grid_rows, has_sidebar }
 }
 
-/// The outer frame and its `● name` pill in the tier's colour; returns the area inside it.
+/// The outer frame and its `● name · tier` pill in the tier's colour, so the tier reads without its colour; returns
+/// the area inside it.
 fn framed(f: &mut Frame<'_>, app: &App) -> Rect {
-    let colour = theme::tier(&app.theme, app.sheet().tier);
-    let pill = Span::styled(format!(" ● {} ", app.sheet().name), Style::default().fg(colour).add_modifier(Modifier::BOLD));
+    let sheet = app.sheet();
+    let colour = theme::tier(&app.theme, sheet.tier);
+    let pill = Span::styled(format!(" ● {} · {} ", sheet.name, sheet.tier), Style::default().fg(colour).add_modifier(Modifier::BOLD));
     let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(colour)).title(pill);
     let inside = block.inner(f.area());
     f.render_widget(block, f.area());
@@ -56,44 +60,64 @@ fn layout(area: Rect, has_sidebar: bool) -> Areas {
     Areas { sidebar: has_sidebar.then_some(sidebar), editor, result, footer }
 }
 
-/// The keys that exist on the left, the session's state on the right.
+/// The session's state on the right, as wide as it needs up to half the row, and the keys that fit on the left.
 fn footer(f: &mut Frame<'_>, app: &App, area: Rect) {
+    let status = status(app, usize::from(area.width / STATUS_SHARE_OF_ROW));
+    let status_columns = u16::try_from(status.width()).unwrap_or(area.width);
+    let [hints_area, status_area] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(status_columns)]).areas(area);
+    f.render_widget(Paragraph::new(hints(app, usize::from(hints_area.width))), hints_area);
+    f.render_widget(Paragraph::new(status), status_area);
+}
+
+fn hints(app: &App, columns: usize) -> Line<'static> {
     let key = Style::default().fg(app.theme.accent).add_modifier(Modifier::BOLD);
     let does = Style::default().fg(app.theme.muted);
-    let hints: Vec<Span<'_>> = act::footer(app.focus.pane())
-        .flat_map(|hint| [Span::styled(format!(" {} ", hint.keys), key), Span::styled(format!("{} ", hint.does), does)])
-        .collect();
-    f.render_widget(Paragraph::new(Line::from(hints)), area);
-    f.render_widget(Paragraph::new(status(app, usize::from(area.width / 2))).right_aligned(), area);
+    let width = |hint: Hint| hint_text(hint).iter().map(|text| text.chars().count()).sum();
+    let spans = act::footer_within(app.focus.pane(), columns, width).into_iter().flat_map(|hint| {
+        let [keys, what] = hint_text(hint);
+        [Span::styled(keys, key), Span::styled(what, does)]
+    });
+    Line::from(spans.collect::<Vec<_>>())
 }
 
-/// The tunnel's state, when the connection has one, then the session's, in `width` columns at most.
+/// ` ⏎ ` and `run `: a hint's keys and what they do, as the footer writes them.
+fn hint_text(hint: Hint) -> [String; 2] {
+    [format!(" {} ", hint.keys), format!("{} ", hint.does)]
+}
+
+/// One chain: the tunnel then the session, `⇄ :49213 · connected`, or the one reason they are down, in `width` columns.
 fn status(app: &App, width: usize) -> Line<'static> {
-    let tunnel = app.sheet().tunnel.as_ref().map(|tunnel| tunnel_state(app, tunnel, width / 2));
-    let link = link(app, width - tunnel.as_ref().map_or(0, Span::width));
-    Line::from(tunnel.into_iter().chain([link]).collect::<Vec<_>>())
+    let sheet = app.sheet();
+    let muted = Style::default().fg(app.theme.muted);
+    let text = match (&sheet.tunnel, &sheet.session) {
+        (Some(TunnelState::Died(how)), _) => return failure(app, how, width),
+        (_, SessionState::Failed(err)) => return failure(app, err, width),
+        (Some(tunnel), session) => format!("{} · {} ", tunnel_text(tunnel), session_text(session)),
+        (None, session) => format!("{} ", session_text(session)),
+    };
+    Line::styled(truncate(&text, width), muted)
 }
 
-fn tunnel_state(app: &App, tunnel: &TunnelState, width: usize) -> Span<'static> {
+fn tunnel_text(tunnel: &TunnelState) -> String {
     match tunnel {
-        TunnelState::Starting => Span::styled("⇄ tunnel starting… ", Style::default().fg(app.theme.muted)),
-        TunnelState::Up(port) => Span::styled(format!("⇄ tunnel :{port} "), Style::default().fg(app.theme.muted)),
-        TunnelState::Died(how) => failure(app, how, width),
+        TunnelState::Starting => "⇄ starting…".to_owned(),
+        TunnelState::Up(port) => format!("⇄ :{port}"),
+        TunnelState::Died(_) => "⇄ died".to_owned(),
     }
 }
 
-fn link(app: &App, width: usize) -> Span<'static> {
-    match &app.sheet().session {
-        SessionState::Opening => Span::styled("connecting… ", Style::default().fg(app.theme.muted)),
-        SessionState::Open => Span::styled("connected ", Style::default().fg(app.theme.muted)),
-        SessionState::Failed(err) => failure(app, err, width),
+fn session_text(session: &SessionState) -> &'static str {
+    match session {
+        SessionState::Opening => "connecting…",
+        SessionState::Open => "connected",
+        SessionState::Failed(_) => "failed",
     }
 }
 
 /// The first line of `err` after a `✗`, cut to `width`.
-fn failure(app: &App, err: &str, width: usize) -> Span<'static> {
+fn failure(app: &App, err: &str, width: usize) -> Line<'static> {
     let first_line = err.lines().next().unwrap_or_default();
-    Span::styled(truncate(&format!("✗ {first_line} "), width), Style::default().fg(app.theme.danger))
+    Line::styled(truncate(&format!("✗ {first_line} "), width), Style::default().fg(theme::failure(&app.theme)))
 }
 
 #[cfg(test)]
@@ -101,6 +125,7 @@ mod tests {
     use super::super::app::queries::tests::{query, with_queries};
     use super::super::app::tests::{app, app_on, connection, orders, to_shop, typed};
     use super::super::app::{Answer, App, Incoming, QueryAnswer, RunId};
+    use super::super::styled;
     use super::*;
     use crate::db::model::LocalPort;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -213,6 +238,72 @@ mod tests {
             text: "SELECT 1".into(),
         }));
         insta::assert_snapshot!("query_open", render(&app, 60, 6).backend());
+    }
+
+    fn row_of(terminal: &Terminal<TestBackend>, y: u16) -> String {
+        let buffer = terminal.backend().buffer();
+        (buffer.area.left()..buffer.area.right()).map(|x| buffer[(x, y)].symbol()).collect()
+    }
+
+    fn footer_of(terminal: &Terminal<TestBackend>) -> String {
+        row_of(terminal, terminal.backend().buffer().area.bottom() - 2)
+    }
+
+    fn connected_through_a_tunnel() -> App {
+        let mut app = app();
+        app.apply(to_shop(Incoming::Tunnel(TunnelState::Up(LocalPort::new(49213)))));
+        app.apply(to_shop(Incoming::Opened));
+        app
+    }
+
+    #[test]
+    fn the_status_chains_the_tunnel_and_the_session() {
+        assert!(footer_of(&render(&connected_through_a_tunnel(), 100, 8)).contains("⇄ :49213 · connected"));
+    }
+
+    #[test]
+    fn quit_and_the_keys_stay_in_the_footer_when_the_hints_do_not_fit() {
+        for width in [100, 60, 44] {
+            let footer = footer_of(&render(&connected_through_a_tunnel(), width, 8));
+            assert!(footer.contains("^c quit") && footer.contains("F1 keys") && footer.contains("connected"), "{width}: {footer}");
+        }
+    }
+
+    #[test]
+    fn a_dead_tunnel_gives_the_one_reason_the_session_is_down() {
+        let mut app = app();
+        app.apply(to_shop(Incoming::Tunnel(TunnelState::Died("the tunnel `ssh` died, exit status: 255".into()))));
+        app.apply(to_shop(Incoming::Closed("its tunnel died".into())));
+        let footer = footer_of(&render(&app, 100, 8));
+        assert_eq!(footer.matches('✗').count(), 1, "{footer}");
+        assert!(footer.contains("✗ the tunnel `ssh` died"), "{footer}");
+    }
+
+    #[test]
+    fn a_starting_tunnel_fits_a_narrow_screen() {
+        let mut app = app();
+        app.apply(to_shop(Incoming::Tunnel(TunnelState::Starting)));
+        insta::assert_snapshot!("tunnel_starting_narrow", render(&app, 36, 8).backend());
+    }
+
+    #[test]
+    fn the_pill_names_the_tier() {
+        let terminal = render(&app_on(&connection("production", "read-only")), 60, 6);
+        assert!(row_of(&terminal, 0).contains("● shop · production"));
+    }
+
+    #[test]
+    fn a_production_frame_and_an_error_never_share_a_colour() {
+        let mut app = app_on(&connection("production", "read-only"));
+        app.apply(to_shop(Incoming::NotOpened("connecting to shop: connection refused".into())));
+        insta::assert_snapshot!("production_error_styled", styled::runs(render(&app, 60, 6).backend().buffer()));
+    }
+
+    #[test]
+    fn the_pane_with_the_keys_has_the_focused_frame() {
+        let mut app = typed("SELECT 1");
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        insta::assert_snapshot!("focus_styled", styled::runs(render(&app, 40, 10).backend().buffer()));
     }
 
     #[test]

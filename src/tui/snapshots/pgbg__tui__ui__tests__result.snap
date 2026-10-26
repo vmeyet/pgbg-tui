@@ -2,7 +2,7 @@
 source: src/tui/ui.rs
 expression: "render(&app, 60, 14).backend()"
 ---
-"╭ ● shop ──────────────────────────────────────────────────╮"
+"╭ ● shop · local ──────────────────────────────────────────╮"
 "│╭ Editor ─ READ ONLY ────────────────────────────────────╮│"
 "││ SELECT id, customer FROM orders                        ││"
 "││                                                        ││"
@@ -14,5 +14,5 @@ expression: "render(&app, 60, 14).backend()"
 "││    103     3.20  Zoë Nakamura                          ││"
 "││    104     0.99  noel                                  ││"
 "│╰────────────────────────────────────────────────────────╯│"
-"│ ⏎ run  ⌥⏎ new line  ^p find  ⇥ pane  F1 keys  ^connected │"
+"│ ⏎ run  ⌥⏎ new line  ^p find  F1 keys  ^c quit  connected │"
 "╰──────────────────────────────────────────────────────────╯"

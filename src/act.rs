@@ -138,6 +138,9 @@ impl Row {
     }
 }
 
+/// The actions whose footer hint stays when the others no longer fit, the one kept longest first.
+const FOOTER_KEPT_LONGEST: [Act; 2] = [Act::Quit, Act::Help];
+
 /// Every action, in the order the help and the footer list them; where two rows share a key in a pane, the first wins.
 pub(crate) const ROWS: &[Row] = &[
     row(Act::Run, Pane::Editor, &[key(KeyCode::Enter)]).help("⏎", "run the statement under the cursor").footer("⏎", "run"),
@@ -197,9 +200,33 @@ pub(crate) fn act_for(key: KeyEvent, pane: Pane) -> Option<Act> {
 
 /// The footer's hints while `pane` has the keys: its own, then those that work anywhere.
 pub(crate) fn footer(pane: Pane) -> impl Iterator<Item = Hint> {
+    footer_rows(pane).filter_map(|row| row.footer)
+}
+
+fn footer_rows(pane: Pane) -> impl Iterator<Item = &'static Row> {
     let own = ROWS.iter().filter(move |row| row.pane == pane);
     let anywhere = ROWS.iter().filter(move |row| row.pane == Pane::Anywhere && works_in(row, pane));
-    own.chain(anywhere).filter_map(|row| row.footer)
+    own.chain(anywhere).filter(|row| row.footer.is_some())
+}
+
+/// The footer's hints for `pane` that fit in `columns`, `width` saying what each takes, in the footer's order: the
+/// way out and the way to every other key are the last to go, then the others go from the end.
+pub(crate) fn footer_within(pane: Pane, columns: usize, width: impl Fn(Hint) -> usize) -> Vec<Hint> {
+    let rows: Vec<&Row> = footer_rows(pane).collect();
+    let mut by_priority: Vec<usize> = (0..rows.len()).collect();
+    by_priority
+        .sort_by_key(|&index| FOOTER_KEPT_LONGEST.iter().position(|&act| act == rows[index].act).unwrap_or(FOOTER_KEPT_LONGEST.len()));
+    let mut left = columns;
+    let mut kept = vec![false; rows.len()];
+    for index in by_priority {
+        let taken = rows[index].footer.map_or(0, &width);
+        if taken > left {
+            break;
+        }
+        left -= taken;
+        kept[index] = true;
+    }
+    rows.iter().zip(kept).filter(|(_, is_kept)| *is_kept).filter_map(|(row, _)| row.footer).collect()
 }
 
 /// The `?` help: the keys of `pane` and those that work anywhere, or every pane's with `every_key`.
@@ -224,6 +251,23 @@ fn help_rows(pane: Pane) -> Vec<HelpRow> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hint_width(hint: Hint) -> usize {
+        hint.keys.chars().count() + hint.does.chars().count() + 2
+    }
+
+    #[test]
+    fn a_narrow_footer_keeps_quit_and_the_keys_first() {
+        let kept: Vec<&str> = footer_within(Pane::Editor, 16, hint_width).iter().map(|hint| hint.does).collect();
+        assert_eq!(kept, ["keys", "quit"]);
+        let kept: Vec<&str> = footer_within(Pane::Editor, 8, hint_width).iter().map(|hint| hint.does).collect();
+        assert_eq!(kept, ["quit"]);
+    }
+
+    #[test]
+    fn a_wide_footer_keeps_every_hint_in_order() {
+        assert_eq!(footer_within(Pane::Editor, 500, hint_width), footer(Pane::Editor).collect::<Vec<_>>());
+    }
 
     #[test]
     fn every_action_is_listed_once() {

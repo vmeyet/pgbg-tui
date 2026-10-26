@@ -1,0 +1,12 @@
+---
+source: src/tui/ui.rs
+expression: "render(&app, 36, 8).backend()"
+---
+"╭ ● shop · local ──────────────────╮"
+"│╭ Editor ─ READ ONLY ────────────╮│"
+"│╰────────────────────────────────╯│"
+"│╭ Result ────────────────────────╮│"
+"││ ⏎ runs the statement under the ││"
+"│╰────────────────────────────────╯│"
+"│ ^c quit         ⇄ starting… · co…│"
+"╰──────────────────────────────────╯"

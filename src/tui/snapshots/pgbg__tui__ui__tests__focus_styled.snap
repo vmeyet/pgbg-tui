@@ -1,0 +1,62 @@
+---
+source: src/tui/ui.rs
+expression: "styled::runs(render(&app, 40, 10).backend().buffer())"
+---
+Green/NONE "╭"
+Green/BOLD " ● shop · local "
+Green/NONE "──────────────────────╮"
+---
+Green/NONE "│"
+Indexed(236)/NONE "╭"
+Indexed(240)/NONE " Editor "
+Indexed(236)/NONE "─"
+Indexed(245)/NONE " READ ONLY "
+Indexed(236)/NONE "────────────────╮"
+Green/NONE "│"
+---
+Green/NONE "│"
+Indexed(236)/NONE "│"
+Reset/NONE " SELECT 1                           "
+Indexed(236)/NONE "│"
+Green/NONE "│"
+---
+Green/NONE "│"
+Indexed(236)/NONE "╰────────────────────────────────────╯"
+Green/NONE "│"
+---
+Green/NONE "│"
+Indexed(238)/NONE "╭"
+Cyan/BOLD " Result "
+Indexed(238)/NONE "────────────────────────────╮"
+Green/NONE "│"
+---
+Green/NONE "│"
+Indexed(238)/NONE "│"
+Reset/NONE " "
+Indexed(240)/NONE "⏎ runs the statement under the"
+Reset/NONE "     "
+Indexed(238)/NONE "│"
+Green/NONE "│"
+---
+Green/NONE "│"
+Indexed(238)/NONE "│"
+Reset/NONE " "
+Indexed(240)/NONE "cursor"
+Reset/NONE "                             "
+Indexed(238)/NONE "│"
+Green/NONE "│"
+---
+Green/NONE "│"
+Indexed(238)/NONE "╰────────────────────────────────────╯"
+Green/NONE "│"
+---
+Green/NONE "│"
+Cyan/BOLD " F1 "
+Indexed(245)/NONE "keys "
+Cyan/BOLD " ^c "
+Indexed(245)/NONE "quit "
+Reset/NONE "        "
+Indexed(245)/NONE "connecting… "
+Green/NONE "│"
+---
+Green/NONE "╰──────────────────────────────────────╯"
