@@ -8,6 +8,9 @@ Each entry says what changed, then where, then how to use it.
 
 ### New
 
+- **Tunnels** for `pgbg run`: a connection with `tunnel = { command = [...] }` starts that command on a free local port, put in place of `{port}`, and connects through it.
+  TLS still checks the certificate against the host in `url`, so `sslmode=require` works through a tunnel; `before = [...]` runs once first.
+  A tunnel that dies says how and quotes its last words; it stops with pgbg, along with any `ssh` or `gcloud` it started.
 - **`pgbg connection add|edit|remove`** writes `config.toml` for you, one key at a time, keeping your comments and order.
   `add <name> --tier <tier> --url <url>` takes `--tunnel "<command>"`, one of `--password-env`, `--password-command` or `--keychain`, and `--writes allowed`; `edit` changes only the flags you give.
   `remove` deletes the connection's keychain item too; add `--keep-password` to leave it.

@@ -35,7 +35,7 @@ The MR that ships a step ticks its box.
 
 ## 5. Tunnels
 
-- [ ] `tunnel/`: free port, command with `{port}`, wait for the port, process group, stop on quit
+- [x] `tunnel/`: free port, command with `{port}`, wait for the port, process group, stop on quit
 - [ ] `before` command; tunnel state in the status line
 
 ## 6. Saved queries

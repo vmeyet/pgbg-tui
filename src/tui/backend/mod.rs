@@ -1,7 +1,7 @@
 //! What the runner calls: the session of the open connection, served by a task that owns it.
 use super::app::{Incoming, RunId};
 use crate::connection::{Connection, WritePolicy};
-use crate::db::model::{CancelToken, ServerError, Statement};
+use crate::db::model::{CancelToken, Route, ServerError, Statement};
 use crate::db::{Session, guard};
 use std::pin::pin;
 use std::time::Duration;
@@ -98,7 +98,7 @@ impl SessionTask {
     }
 
     async fn open(&mut self) {
-        self.session = match Session::open(&self.connection).await {
+        self.session = match Session::open(&self.connection, Route::Direct).await {
             Ok(session) => {
                 self.send(Incoming::Opened);
                 Some(session)
@@ -230,7 +230,7 @@ mod tests {
     }
 
     async fn on_a_side_session(sql: &str) -> Vec<Vec<Value>> {
-        let mut session = Session::open(&connection()).await.unwrap();
+        let mut session = Session::open(&connection(), Route::Direct).await.unwrap();
         session.run(&guard::admit(Statement::new(sql), WritePolicy::ReadOnly).unwrap()).await.unwrap().rows
     }
 

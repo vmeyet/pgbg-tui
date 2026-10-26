@@ -1,3 +1,4 @@
+use crate::db::model::LocalPort;
 use serde::{Deserialize, Serialize};
 
 const PORT: &str = "{port}";
@@ -17,6 +18,17 @@ pub(crate) struct TunnelSpec {
     command: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     before: Option<Vec<String>>,
+}
+
+impl TunnelSpec {
+    /// The tunnel's command with `port` in place of every `{port}`.
+    pub(crate) fn command_on(&self, port: LocalPort) -> Vec<String> {
+        self.command.iter().map(|arg| arg.replace(PORT, &port.to_string())).collect()
+    }
+
+    pub(crate) fn before(&self) -> Option<&[String]> {
+        self.before.as_deref()
+    }
 }
 
 impl TryFrom<TunnelEntry> for TunnelSpec {
@@ -51,6 +63,12 @@ mod tests {
     #[test]
     fn the_port_placeholder_may_sit_inside_a_flag() {
         assert!(tunnel("tunnel = { command = [\"proxy\", \"--local-host-port=localhost:{port}\"] }").is_ok());
+    }
+
+    #[test]
+    fn the_command_on_a_port_says_that_port_wherever_it_said_the_placeholder() {
+        let spec = tunnel("tunnel = { command = [\"proxy\", \"--port\", \"{port}\", \"--local-host-port=localhost:{port}\"] }").unwrap();
+        assert_eq!(spec.command_on(LocalPort::new(49213)), ["proxy", "--port", "49213", "--local-host-port=localhost:49213"]);
     }
 
     #[test]

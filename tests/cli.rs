@@ -90,6 +90,15 @@ fn run_on_an_unknown_connection_says_where_to_find_them() {
 }
 
 #[test]
+fn run_through_a_tunnel_that_dies_says_why_before_connecting() {
+    let config = "[connections.shop]\ntier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\n\
+                  tunnel = { command = [\"sh\", \"-c\", \"echo 'bastion.example.com: no route' >&2; exit 255\", \"{port}\"] }\n";
+    let output = pgbg(config, &["run", "shop", "SELECT 1"]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("tunnel `sh` died") && stderr(&output).contains("no route"), "{}", stderr(&output));
+}
+
+#[test]
 #[ignore = "needs PGBG_TEST_DATABASE_URL"]
 fn run_json_prints_the_columns_and_rows() {
     let url = std::env::var("PGBG_TEST_DATABASE_URL").unwrap();

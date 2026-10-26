@@ -3,7 +3,8 @@ use crate::connection::{Connection, Target, Tls};
 use anyhow::{Context, Result, anyhow};
 use futures_util::{StreamExt, TryStreamExt, future};
 use guard::{Admitted, Mode};
-use model::{CancelToken, ResultSet, ServerError};
+use model::{CancelToken, LocalPort, ResultSet, Route, ServerError};
+use std::net::Ipv4Addr;
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio_postgres::config::SslMode;
@@ -11,6 +12,7 @@ use tokio_postgres::error::ErrorPosition;
 use tokio_postgres::tls::MakeTlsConnect;
 use tokio_postgres::{Client, Config, NoTls, RowStream, Socket, Statement as Prepared, Transaction};
 use tokio_postgres_rustls::MakeRustlsConnect;
+use url::Url;
 
 mod decode;
 pub(crate) mod guard;
@@ -39,9 +41,9 @@ pub(crate) struct Session {
 }
 
 impl Session {
-    /// Logs in to `connection`, reading its password just for that.
-    pub(crate) async fn open(connection: &Connection) -> Result<Self> {
-        let mut config = driver_config(connection.target())?;
+    /// Logs in to `connection` along `route`, reading its password just for that.
+    pub(crate) async fn open(connection: &Connection, route: Route) -> Result<Self> {
+        let mut config = driver_config(connection.target(), route)?;
         if let Some(source) = connection.password() {
             config.password(source.read().await?.expose());
         }
@@ -108,17 +110,36 @@ impl CancelToken {
     }
 }
 
-/// The driver's config for `target`; `sslmode` is left out, since `Tls` decides it.
-fn driver_config(target: &Target) -> Result<Config> {
-    let mut url = target.url().clone();
-    let kept: Vec<(String, String)> =
-        url.query_pairs().filter(|(key, _)| key != "sslmode").map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
-    url.query_pairs_mut().clear().extend_pairs(kept);
+/// The driver's config for `target` along `route`; `sslmode` is left out, since `Tls` decides it.
+fn driver_config(target: &Target, route: Route) -> Result<Config> {
+    let url = without_key(target.url(), "sslmode");
+    let url = match route {
+        Route::Direct => url,
+        Route::Tunnel(port) => through_tunnel(&url, port),
+    };
     let mut config: Config = url.as_str().trim_end_matches('?').parse().map_err(|err| anyhow!("`url` is not a PostgreSQL URL: {err}"))?;
     if config.get_connect_timeout().is_none() {
         config.connect_timeout(CONNECT_TIMEOUT);
     }
     Ok(config)
+}
+
+fn without_key(url: &Url, dropped: &str) -> Url {
+    let mut url = url.clone();
+    let kept: Vec<(String, String)> =
+        url.query_pairs().filter(|(key, _)| key != dropped).map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
+    url.query_pairs_mut().clear().extend_pairs(kept);
+    url
+}
+
+/// `url` sent to the tunnel's port, with its host kept so TLS still checks the certificate against it.
+fn through_tunnel(url: &Url, port: LocalPort) -> Url {
+    let mut url = without_key(url, "port");
+    url.query_pairs_mut().append_pair("hostaddr", &Ipv4Addr::LOCALHOST.to_string());
+    if url.set_port(Some(port.get())).is_err() {
+        url.query_pairs_mut().append_pair("port", &port.to_string());
+    }
+    url
 }
 
 /// A client, and why its link ended once it has.
@@ -209,7 +230,7 @@ mod tests {
         let url = std::env::var(DATABASE_URL).unwrap();
         let writes = if writes == WritePolicy::Allowed { "allowed" } else { "read-only" };
         let entry: Entry = toml::from_str(&format!("tier = \"local\"\nurl = \"{url}\"\nwrites = \"{writes}\"\n")).unwrap();
-        Session::open(&Connection::new("shop", entry).unwrap()).await.unwrap()
+        Session::open(&Connection::new("shop", entry).unwrap(), Route::Direct).await.unwrap()
     }
 
     async fn run(writes: WritePolicy, sql: &str) -> Result<ResultSet> {
@@ -223,7 +244,7 @@ mod tests {
             "tier = \"staging\"\nurl = \"postgres://nina@db.example.com:6432/shop?sslmode=verify-full&application_name=pgbg\"\n",
         )
         .unwrap();
-        let config = driver_config(Connection::new("shop", entry).unwrap().target()).unwrap();
+        let config = driver_config(Connection::new("shop", entry).unwrap().target(), Route::Direct).unwrap();
         assert_eq!(config.get_application_name(), Some("pgbg"));
         assert_eq!(config.get_dbname(), Some("shop"));
         assert_eq!(config.get_ports(), [6432]);
@@ -231,7 +252,41 @@ mod tests {
 
     fn driver_config_of(url: &str) -> Config {
         let entry: Entry = toml::from_str(&format!("tier = \"local\"\nurl = \"{url}\"\n")).unwrap();
-        driver_config(Connection::new("shop", entry).unwrap().target()).unwrap()
+        driver_config(Connection::new("shop", entry).unwrap().target(), Route::Direct).unwrap()
+    }
+
+    #[test]
+    fn a_port_in_the_query_is_kept_without_a_tunnel() {
+        assert!(driver_config_of("postgres://nina@localhost/shop?port=6432").get_ports().contains(&6432));
+    }
+
+    fn tunnelled_config_of(url: &str) -> Config {
+        let entry: Entry = toml::from_str(&format!("tier = \"staging\"\nurl = \"{url}\"\n")).unwrap();
+        driver_config(Connection::new("shop", entry).unwrap().target(), Route::Tunnel(LocalPort::new(49213))).unwrap()
+    }
+
+    #[test]
+    fn through_a_tunnel_the_link_goes_to_its_local_port() {
+        let config = tunnelled_config_of("postgres://nina@db.example.com:6432/shop?sslmode=require");
+        assert_eq!(config.get_hostaddrs(), [Ipv4Addr::LOCALHOST]);
+        assert_eq!(config.get_ports(), [49213]);
+    }
+
+    #[test]
+    fn through_a_tunnel_the_host_stays_for_the_certificate_check() {
+        let config = tunnelled_config_of("postgres://nina@db.example.com/shop?sslmode=require");
+        assert_eq!(config.get_hosts(), [tokio_postgres::config::Host::Tcp("db.example.com".to_owned())]);
+    }
+
+    #[test]
+    fn through_a_tunnel_a_host_named_in_the_query_goes_to_its_local_port_too() {
+        let config = tunnelled_config_of("postgres:///shop?host=db.example.com&sslmode=require");
+        assert_eq!((config.get_hostaddrs().len(), config.get_ports()), (1, [49213].as_slice()));
+    }
+
+    #[test]
+    fn through_a_tunnel_a_port_in_the_query_gives_way_to_the_tunnels() {
+        assert_eq!(tunnelled_config_of("postgres://nina@db.example.com/shop?sslmode=require&port=6432").get_ports(), [49213]);
     }
 
     #[test]

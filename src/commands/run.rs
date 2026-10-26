@@ -1,14 +1,20 @@
 use crate::connection::ConnectionName;
-use crate::db::model::{ResultSet, Statement};
+use crate::db::model::{ResultSet, Route, Statement};
 use crate::db::{Session, guard};
 use crate::render;
+use crate::tunnel::Tunnel;
 use anyhow::Result;
 
 /// Runs one statement on the connection named `connection` and prints its result: a plain table, or JSON with `json`.
 pub async fn run(connection: &ConnectionName, sql: &str, json: bool) -> Result<()> {
     let connection = super::connection(Some(connection))?;
     let admitted = guard::admit(Statement::new(sql), connection.writes())?;
-    let result = Session::open(&connection).await?.run(&admitted).await?;
+    let tunnel = match connection.tunnel() {
+        Some(spec) => Some(Tunnel::start(spec).await?),
+        None => None,
+    };
+    let route = tunnel.as_ref().map_or(Route::Direct, Tunnel::route);
+    let result = Session::open(&connection, route).await?.run(&admitted).await?;
     if json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
