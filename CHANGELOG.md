@@ -29,6 +29,7 @@ Each entry says what changed, then where, then how to use it.
   The TUI's status line shows `⇄ tunnel :<port>`; when the tunnel dies, its session closes, and `⏎` starts both again.
 - **A statement timeout on every session**, set by the connection's tier: none on local, a minute on staging, 30 seconds on production.
   The server cancels a statement that runs longer; set `statement_timeout = "2min"` on a connection to choose its own, `"0s"` for none.
+  A stricter timeout the server already sets, for your role or your database, is kept; one you set on the connection always wins.
 - **`pgbg connection add|edit|remove`** writes `config.toml` for you, one key at a time, keeping your comments and order.
   `add <name> --tier <tier> --url <url>` takes `--tunnel "<command>"`, one of `--password-env`, `--password-command "<command>"` or `--keychain`, and `--writes allowed`; a command splits as a shell would, so quote a word with spaces: `--tunnel "ssh -N -o 'ProxyCommand ssh -W %h:%p jump' -L 127.0.0.1:{port}:db.example.com:5432 bastion"`; `edit` changes only the flags you give.
   An error names the flag it is about, and `edit` can fix a config that does not load.
@@ -78,18 +79,15 @@ Each entry says what changed, then where, then how to use it.
   Nothing to do: the next session reads it right.
 - **A password too long for the keychain is refused before it is saved**, instead of replacing the item with a cut one.
   A keychain error now gives the exit status of `security` only, never what it printed.
-- **Errors cannot talk to your terminal**: an escape code a server error quotes from your data prints as `\u{1b}`, and so does a control character in a config key.
-  Values and errors also escape the Unicode marks that reverse the order of text.
+- **Values and errors cannot talk to your terminal**: `pgbg run` prints a newline, a tab or an escape code inside a value as `\n`, `\t` or `\u{1b}`, and so do a server error that quotes your data and a control character in a config key.
+  The Unicode marks that reverse the order of text are escaped too; use `--json` to get a value's exact text.
 - **`ctrl-u` or `alt` with a letter at the hidden password prompt adds nothing** to the password, instead of the letter.
 - **A config path that links to a missing file is refused** by `pgbg connection` and `pgbg password set`, instead of the link being replaced by a new file.
   The rewritten file reaches the disk before it replaces the old one.
-
 - **No more clear text through `hostaddr`**: a `url` with `hostaddr` is refused, since it sent a connection to `localhost` on to another machine without TLS.
   Name the host in the `url` instead; pgbg keeps `hostaddr` for its tunnels.
 - **A password never shows in a config error**: a `password` written as a number, a boolean or a list is refused like a plain one, and a broken line is reported by its number only.
   Fix the line the error names in your `config.toml`.
-- **Values cannot talk to your terminal**: `pgbg run` prints a newline, a tab or an escape code inside a value as `\n`, `\t` or `\u{1b}`.
-  Use `--json` to get the exact text.
 - **Dates and timestamps of `infinity` show as `infinity`** in `pgbg run` and the TUI, instead of failing the whole statement; a value out of range shows as `<unsupported>` in its own cell.
 - **Floats that are not numbers print as PostgreSQL spells them**: `NaN`, `Infinity` and `-Infinity`, in the table and in `--json`, where they were `null`.
 - **A column of a domain type shows its values**, decoded like the type the domain is built on, and a `void` result such as `pg_sleep` shows `NULL`.

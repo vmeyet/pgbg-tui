@@ -200,6 +200,7 @@ impl SessionTask {
         {
             return Some(tunnel.route());
         }
+        self.tunnel = None;
         self.send(Incoming::Tunnel(TunnelState::Starting));
         match Tunnel::start(spec).await {
             Ok(tunnel) => {
@@ -229,9 +230,14 @@ impl SessionTask {
     }
 
     fn send(&self, incoming: Incoming) {
-        if self.answers.send(Answer::Session { connection: self.connection.name().clone(), incoming }).is_err() {
-            tracing::warn!("the loop is gone: an answer is dropped");
-        }
+        send(&self.answers, Answer::Session { connection: self.connection.name().clone(), incoming });
+    }
+}
+
+/// Hands `answer` to the loop; one that comes after the loop ended is dropped with a warning.
+fn send(answers: &UnboundedSender<Answer>, answer: Answer) {
+    if answers.send(answer).is_err() {
+        tracing::warn!("the loop is gone: an answer is dropped");
     }
 }
 

@@ -87,9 +87,14 @@ impl Tunnel {
         self.died(status).await
     }
 
-    /// Whether the tunnel's own process still runs.
+    /// Whether the tunnel's own process still runs; once it is seen ended, its group is killed at once, while its id
+    /// cannot yet be reused.
     pub(crate) fn is_running(&mut self) -> bool {
-        matches!(self.child.try_wait(), Ok(None))
+        let is_running = matches!(self.child.try_wait(), Ok(None));
+        if !is_running {
+            self.kill_group();
+        }
+        is_running
     }
 
     /// Kills the tunnel's whole group and reaps it, then fails if its port still answers: a process outside
@@ -153,11 +158,16 @@ impl Tunnel {
 
     async fn died(&mut self, status: Option<ExitStatus>) -> Died {
         self.kill_group();
-        let last_words = match self.last_words.take() {
-            Some(reader) => timeout(LAST_WORDS_TIMEOUT, reader).await.ok().and_then(Result::ok).unwrap_or_default(),
-            None => vec![],
-        };
+        let last_words = self.last_words().await;
         Died { program: self.program.clone(), status, last_words }
+    }
+
+    /// The last lines of stderr, waited for `LAST_WORDS_TIMEOUT` at most; a wait dropped halfway leaves them for the next.
+    async fn last_words(&mut self) -> Vec<String> {
+        let Some(reader) = self.last_words.as_mut() else { return vec![] };
+        let read = timeout(LAST_WORDS_TIMEOUT, reader).await;
+        self.last_words = None;
+        read.ok().and_then(Result::ok).unwrap_or_default()
     }
 
     fn kill_group(&mut self) {
@@ -379,6 +389,36 @@ time.sleep(60)
         assert!(until_silent(port).await);
     }
 
+    async fn until_ended(tunnel: &mut Tunnel) -> bool {
+        timeout(STOP_TIMEOUT, async {
+            while tunnel.is_running() {
+                sleep(READY_POLL).await;
+            }
+        })
+        .await
+        .is_ok()
+    }
+
+    #[tokio::test]
+    async fn a_tunnel_seen_ended_takes_the_processes_it_started_with_it() {
+        let forking = spec(&["sh", "-c", &format!("python3 -c \"{LISTEN}\" \"$0\"; true"), "{port}"], None);
+        let mut tunnel = Tunnel::start(&forking).await.unwrap();
+        let leader = Pid::from_raw(tunnel.child.id().unwrap() as i32).unwrap();
+        rustix::process::kill_process(leader, Signal::KILL).unwrap();
+        assert!(until_ended(&mut tunnel).await);
+        assert!(until_silent(port_of(&tunnel)).await);
+    }
+
+    #[tokio::test]
+    async fn last_words_wait_cut_short_are_still_there_on_the_next_wait() {
+        let talking =
+            spec(&["sh", "-c", &format!("echo 'bastion.example.com: no route' >&2; exec python3 -c \"{LISTEN}\" \"$0\""), "{port}"], None);
+        let mut tunnel = Tunnel::start(&talking).await.unwrap();
+        assert!(timeout(Duration::from_millis(50), tunnel.last_words()).await.is_err());
+        tunnel.kill_group();
+        assert_eq!(tunnel.last_words().await, ["bastion.example.com: no route"]);
+    }
+
     #[tokio::test]
     async fn a_tunnel_that_ends_on_its_own_says_how() {
         let mut tunnel = Tunnel::start(&listener()).await.unwrap();
@@ -404,7 +444,9 @@ time.sleep(60)
         if std::env::var_os(PANICKING_CHILD).is_some() {
             let leaked = Box::leak(Box::new(Tunnel::start(&listener()).await.unwrap()));
             println!("port={}", leaked.port);
-            panic!("pgbg panicked with a tunnel open");
+            let on_the_main_thread = std::thread::Builder::new().name("main".into());
+            _ = on_the_main_thread.spawn(|| panic!("pgbg panicked with a tunnel open")).unwrap().join();
+            return;
         }
         assert!(until_silent(port_of_a_tunnel_left_by_a_panicking_pgbg().await).await);
     }
