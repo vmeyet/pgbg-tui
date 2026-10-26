@@ -327,6 +327,24 @@ mod tests {
     }
 
     #[test]
+    fn options_with_an_encoded_space_reach_the_driver_as_typed() {
+        let config = driver_config_of("postgres://nina@localhost/shop?sslmode=disable&options=-c%20role%3Dnina");
+        assert_eq!(config.get_options(), Some("-c role=nina"));
+    }
+
+    #[test]
+    fn an_application_name_with_an_encoded_space_reaches_the_driver_as_typed() {
+        let config = driver_config_of("postgres://nina@localhost/shop?application_name=my%20app&sslmode=disable");
+        assert_eq!(config.get_application_name(), Some("my app"));
+    }
+
+    #[test]
+    fn through_a_tunnel_options_with_an_encoded_space_reach_the_driver_as_typed() {
+        let config = tunnelled_config_of("postgres://nina@db.example.com/shop?options=-c%20role%3Dnina&port=6432&sslmode=require");
+        assert_eq!(config.get_options(), Some("-c role=nina"));
+    }
+
+    #[test]
     fn a_session_gives_up_connecting_after_ten_seconds() {
         assert_eq!(connect_wait(&driver_config_of("postgres://nina@localhost/shop")), Duration::from_secs(10));
     }
