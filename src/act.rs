@@ -25,6 +25,59 @@ pub(crate) enum Act {
     Close,
 }
 
+#[cfg(test)]
+impl Act {
+    /// Every action, in the order [`Act::after`] chains them.
+    pub(crate) const ALL: [Self; Self::COUNT] = Self::chained();
+    const COUNT: usize = Self::chain_length();
+
+    /// The action listed after this one: the match makes a new action name its place before the crate builds.
+    const fn after(self) -> Option<Self> {
+        match self {
+            Self::Run => Some(Self::NewLine),
+            Self::NewLine => Some(Self::Cancel),
+            Self::Cancel => Some(Self::SwitchPane),
+            Self::SwitchPane => Some(Self::Help),
+            Self::Help => Some(Self::Quit),
+            Self::Quit => Some(Self::Down),
+            Self::Down => Some(Self::Up),
+            Self::Up => Some(Self::PageDown),
+            Self::PageDown => Some(Self::PageUp),
+            Self::PageUp => Some(Self::Top),
+            Self::Top => Some(Self::Bottom),
+            Self::Bottom => Some(Self::Left),
+            Self::Left => Some(Self::Right),
+            Self::Right => Some(Self::Find),
+            Self::Find => Some(Self::Open),
+            Self::Open => Some(Self::Close),
+            Self::Close => None,
+        }
+    }
+
+    const fn chain_length() -> usize {
+        let mut count = 1;
+        let mut act = Self::Run;
+        while let Some(next) = act.after() {
+            act = next;
+            count += 1;
+        }
+        count
+    }
+
+    const fn chained() -> [Self; Self::COUNT] {
+        let mut all = [Self::Run; Self::COUNT];
+        let mut at = 1;
+        while at < Self::COUNT {
+            all[at] = match all[at - 1].after() {
+                Some(next) => next,
+                None => Self::Run,
+            };
+            at += 1;
+        }
+        all
+    }
+}
+
 /// Where an action's keys work.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Pane {
@@ -146,29 +199,16 @@ fn help_rows(pane: Pane) -> Vec<HelpRow> {
 mod tests {
     use super::*;
 
-    const EVERY_ACT: [Act; 17] = [
-        Act::Run,
-        Act::NewLine,
-        Act::Cancel,
-        Act::SwitchPane,
-        Act::Help,
-        Act::Quit,
-        Act::Down,
-        Act::Up,
-        Act::PageDown,
-        Act::PageUp,
-        Act::Top,
-        Act::Bottom,
-        Act::Left,
-        Act::Right,
-        Act::Find,
-        Act::Open,
-        Act::Close,
-    ];
+    #[test]
+    fn every_action_is_listed_once() {
+        for (at, act) in Act::ALL.iter().enumerate() {
+            assert!(!Act::ALL[at + 1..].contains(act), "{act:?}");
+        }
+    }
 
     #[test]
     fn every_action_has_a_key() {
-        for act in EVERY_ACT {
+        for act in Act::ALL {
             assert!(ROWS.iter().any(|row| row.act == act && !row.keys.is_empty()), "{act:?}");
         }
     }
