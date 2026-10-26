@@ -31,6 +31,7 @@ pub(crate) enum Act {
     Edit,
     Save,
     EditOutside,
+    History,
 }
 
 #[cfg(test)]
@@ -66,7 +67,8 @@ impl Act {
             Self::Add => Some(Self::Edit),
             Self::Edit => Some(Self::Save),
             Self::Save => Some(Self::EditOutside),
-            Self::EditOutside => None,
+            Self::EditOutside => Some(Self::History),
+            Self::History => None,
         }
     }
 
@@ -208,6 +210,7 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Quit, Pane::Prompt, &[control('c')]).help("^c", "quit"),
     row(Act::EditOutside, Pane::Editor, &[control('e')]).help("^e", "edit the saved query in $EDITOR"),
     row(Act::Save, Pane::Anywhere, &[control('s')]).help("^s", "save the query, naming a new one").footer("^s", "save"),
+    row(Act::History, Pane::Anywhere, &[control('r')]).help("^r", "search the statements run on this connection"),
     row(Act::Connections, Pane::Anywhere, &[control('o')]).help("^o", "pick a connection").footer("^o", "connections"),
     row(Act::Quit, Pane::Anywhere, &[control('c')]).help("^c", "quit").footer("^c", "quit"),
 ];

@@ -20,13 +20,11 @@ pub async fn run(connection: &ConnectionName, sql: &str, json: bool) -> Result<(
     print(&result?, json)
 }
 
-/// Adds `entry` to its connection's history on a blocking thread; a history that cannot be written is logged, not fatal.
+/// Adds `entry` to its connection's history, waiting for it before pgbg exits.
 async fn record(entry: Entry) {
     let Some(store) = Store::from_env() else { return };
-    match tokio::task::spawn_blocking(move || store.append(&entry)).await {
-        Ok(Ok(())) => {}
-        Ok(Err(err)) => tracing::warn!("the history was not written: {err}"),
-        Err(err) => tracing::warn!("the history writer stopped: {err}"),
+    if let Err(err) = store.record(entry).await {
+        tracing::warn!("the history writer stopped: {err}");
     }
 }
 

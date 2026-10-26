@@ -14,6 +14,7 @@ use std::fs::{DirBuilder, File, OpenOptions};
 use std::io::{self, Write};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
+use tokio::task::JoinHandle;
 
 const PATH_VARIABLE: &str = "PGBG_DATA_DIR";
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
@@ -78,19 +79,11 @@ pub(crate) struct History {
 }
 
 impl History {
-    /// The entries whose statement holds every word of `query`, whatever their case, newest first, each statement once.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the TUI's `ctrl-r`, a later step, searches with it"))]
-    pub(crate) fn search(&self, query: &str) -> Vec<&Entry> {
-        let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+    /// Each statement once, at its newest run, newest first: what `ctrl-r` searches.
+    pub(crate) fn distinct(self) -> Vec<Entry> {
         let mut seen = HashSet::new();
-        self.entries.iter().filter(|entry| holds_every(&entry.statement, &words)).filter(|entry| seen.insert(&entry.statement)).collect()
+        self.entries.into_iter().filter(|entry| seen.insert(entry.statement.clone())).collect()
     }
-}
-
-#[cfg_attr(not(test), expect(dead_code, reason = "the TUI's `ctrl-r`, a later step, searches with it"))]
-fn holds_every(statement: &str, words: &[String]) -> bool {
-    let statement = statement.to_lowercase();
-    words.iter().all(|word| statement.contains(word.as_str()))
 }
 
 /// The history files, one per connection, each rolled over to `<connection>.jsonl.1` once past its cap.
@@ -124,11 +117,22 @@ impl Store {
         locked(path)
     }
 
-    /// The history of `connection`, its rolled-over file included; a line pgbg cannot read is left out.
+    /// Appends `entry` on a blocking thread, logging a failure: the history is best effort and never stops a run.
+    pub(crate) fn record(&self, entry: Entry) -> JoinHandle<()> {
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Err(err) = store.append(&entry) {
+                tracing::warn!("the history was not written: {err}");
+            }
+        })
+    }
+
+    /// The history of `connection`, its rolled-over file included, newest first; a line pgbg cannot read is left out.
     pub(crate) fn read(&self, connection: &ConnectionName) -> io::Result<History> {
         let text = read_or_empty(self.rolled(connection))? + &read_or_empty(self.file(connection))?;
         let mut entries: Vec<Entry> = text.lines().filter_map(parsed).collect();
         entries.reverse();
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.started_at));
         Ok(History { entries })
     }
 
@@ -323,17 +327,25 @@ mod tests {
     }
 
     #[test]
-    fn a_search_matches_every_word_whatever_its_case_and_order() {
-        let history = History { entries: vec![entry("shop", "SELECT total FROM orders", 2), entry("shop", "SELECT * FROM customers", 1)] };
-        let found: Vec<&str> = history.search("orders select").iter().map(|entry| entry.statement.as_str()).collect();
-        assert_eq!(found, ["SELECT total FROM orders"]);
+    fn a_statement_run_twice_is_listed_once_at_its_newest() {
+        let history = History { entries: vec![entry("shop", "SELECT 1", 3), entry("shop", "SELECT 2", 2), entry("shop", "SELECT 1", 1)] };
+        let minutes: Vec<u32> = history.distinct().iter().map(|entry| chrono::Timelike::minute(&entry.started_at)).collect();
+        assert_eq!(minutes, [3, 2]);
     }
 
     #[test]
-    fn a_search_lists_a_statement_run_twice_once_at_its_newest() {
-        let history = History { entries: vec![entry("shop", "SELECT 1", 3), entry("shop", "SELECT 2", 2), entry("shop", "SELECT 1", 1)] };
-        let found: Vec<u32> = history.search("").iter().map(|entry| chrono::Timelike::minute(&entry.started_at)).collect();
-        assert_eq!(found, [3, 2]);
+    fn entries_written_out_of_order_are_read_newest_first() {
+        let dir = tempfile::tempdir().unwrap();
+        store(&dir).append(&entry("shop", "SELECT 2", 2)).unwrap();
+        store(&dir).append(&entry("shop", "SELECT 1", 1)).unwrap();
+        assert_eq!(statements(&store(&dir).read(&shop()).unwrap()), ["SELECT 2", "SELECT 1"]);
+    }
+
+    #[tokio::test]
+    async fn a_recorded_entry_is_appended() {
+        let dir = tempfile::tempdir().unwrap();
+        store(&dir).record(entry("shop", "SELECT 1", 1)).await.unwrap();
+        assert_eq!(statements(&store(&dir).read(&shop()).unwrap()), ["SELECT 1"]);
     }
 
     #[test]
