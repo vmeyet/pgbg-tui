@@ -45,7 +45,7 @@ The MR that ships a step ticks its box.
 
 ## 7. Big results
 
-- [ ] Cursor pages fetched as the grid scrolls
+- [ ] Portal pages fetched as the grid scrolls
 - [ ] History per connection, searched with `ctrl-r`
 
 ## 8. Schema

@@ -164,6 +164,15 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn infinite_dates_and_special_floats_decode_in_their_row() {
+        let sql = "SELECT 'infinity'::date, '-infinity'::timestamptz, 'NaN'::float8, pg_sleep(0), 7";
+        let result = run(WritePolicy::ReadOnly, sql).await.unwrap();
+        let shown: Vec<String> = result.rows[0].iter().map(Value::to_string).collect();
+        assert_eq!(shown, ["infinity", "-infinity", "NaN", "NULL", "7"]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_result_without_rows_keeps_its_columns() {
         let result = run(WritePolicy::ReadOnly, "SELECT 1 AS id WHERE false").await.unwrap();
         assert_eq!(result.columns.len(), 1);

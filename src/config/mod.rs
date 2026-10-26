@@ -53,7 +53,7 @@ impl Config {
 }
 
 fn parse(text: &str) -> Result<Loaded> {
-    let (file, warnings) = ignored::parse::<ConfigFile>(text)?;
+    let ignored::Parsed { value: file, warnings } = ignored::parse::<ConfigFile>(text)?;
     let connections = file
         .connections
         .into_iter()

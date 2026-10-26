@@ -12,12 +12,24 @@ const NUMERIC_NEGATIVE_INFINITY: u16 = 0xF000;
 
 /// A column as `ResultSet` holds it.
 pub(super) fn column(column: &tokio_postgres::Column) -> Column {
-    Column { name: column.name().to_owned(), kind: kind(column.type_()), type_name: column.type_().name().to_owned() }
+    Column { name: column.name().to_owned(), kind: column_kind(column.type_()), type_name: column.type_().name().to_owned() }
 }
 
-/// Every value of `row`, in column order.
+/// Every value of `row`, in column order; a value pgbg cannot decode is `Value::Unsupported`, never an error.
 pub(super) fn row(row: &Row) -> Result<Vec<Value>, tokio_postgres::Error> {
     row.columns().iter().enumerate().map(|(index, column)| value(row, index, column.type_())).collect()
+}
+
+fn column_kind(ty: &Type) -> ColumnKind {
+    kind(base_type(ty))
+}
+
+/// The type a domain is built on, through every level; any other type as itself.
+fn base_type(ty: &Type) -> &Type {
+    match ty.kind() {
+        Kind::Domain(base) => base_type(base),
+        _ => ty,
+    }
 }
 
 fn kind(ty: &Type) -> ColumnKind {
@@ -40,29 +52,55 @@ fn kind(ty: &Type) -> ColumnKind {
 }
 
 fn value(row: &Row, index: usize, ty: &Type) -> Result<Value, tokio_postgres::Error> {
+    let raw: Option<Raw<'_>> = row.try_get(index)?;
+    Ok(raw.map_or(Value::Null, |Raw(bytes)| cell(ty, bytes)))
+}
+
+/// The value of a non-null `raw` of type `ty`.
+fn cell(ty: &Type, raw: &[u8]) -> Value {
+    let ty = base_type(ty);
     match kind(ty) {
-        ColumnKind::Bool => get(row, index, Value::Bool),
-        ColumnKind::Int if *ty == Type::INT2 => get(row, index, |int: i16| Value::Int(int.into())),
-        ColumnKind::Int if *ty == Type::INT4 => get(row, index, |int: i32| Value::Int(int.into())),
-        ColumnKind::Int if *ty == Type::OID => get(row, index, |oid: u32| Value::Int(oid.into())),
-        ColumnKind::Int => get(row, index, Value::Int),
-        ColumnKind::Float if *ty == Type::FLOAT4 => get(row, index, |float: f32| Value::Float(float.into())),
-        ColumnKind::Float => get(row, index, Value::Float),
-        ColumnKind::Numeric => get(row, index, |Raw(bytes)| numeric_text(bytes).map_or(Value::Unsupported, Value::Numeric)),
-        ColumnKind::Text => get(row, index, |Raw(bytes)| Value::Text(String::from_utf8_lossy(bytes).into_owned())),
-        ColumnKind::Json => get(row, index, Value::Json),
-        ColumnKind::Uuid => get(row, index, Value::Uuid),
-        ColumnKind::Date => get(row, index, Value::Date),
-        ColumnKind::Time => get(row, index, Value::Time),
-        ColumnKind::Timestamp => get(row, index, Value::Timestamp),
-        ColumnKind::TimestampTz => get(row, index, |at: DateTime<Utc>| Value::TimestampTz(at)),
-        ColumnKind::Bytes => get(row, index, Value::Bytes),
-        ColumnKind::Other => get(row, index, |Raw(_)| Value::Unsupported),
+        ColumnKind::Bool => typed(ty, raw, Value::Bool),
+        ColumnKind::Int if *ty == Type::INT2 => typed(ty, raw, |int: i16| Value::Int(int.into())),
+        ColumnKind::Int if *ty == Type::INT4 => typed(ty, raw, |int: i32| Value::Int(int.into())),
+        ColumnKind::Int if *ty == Type::OID => typed(ty, raw, |oid: u32| Value::Int(oid.into())),
+        ColumnKind::Int => typed(ty, raw, Value::Int),
+        ColumnKind::Float if *ty == Type::FLOAT4 => typed(ty, raw, |float: f32| Value::Float(float.into())),
+        ColumnKind::Float => typed(ty, raw, Value::Float),
+        ColumnKind::Numeric => numeric_text(raw).map_or(Value::Unsupported, Value::Numeric),
+        ColumnKind::Text => Value::Text(String::from_utf8_lossy(raw).into_owned()),
+        ColumnKind::Json => typed(ty, raw, Value::Json),
+        ColumnKind::Uuid => typed(ty, raw, Value::Uuid),
+        ColumnKind::Date => date(raw),
+        ColumnKind::Time => typed(ty, raw, Value::Time),
+        ColumnKind::Timestamp => timestamp(ty, raw, Value::Timestamp),
+        ColumnKind::TimestampTz => timestamp(ty, raw, |at: DateTime<Utc>| Value::TimestampTz(at)),
+        ColumnKind::Bytes => typed(ty, raw, Value::Bytes),
+        ColumnKind::Other if *ty == Type::VOID => Value::Null,
+        ColumnKind::Other => Value::Unsupported,
     }
 }
 
-fn get<'a, T: FromSql<'a>>(row: &'a Row, index: usize, wrap: fn(T) -> Value) -> Result<Value, tokio_postgres::Error> {
-    Ok(row.try_get::<_, Option<T>>(index)?.map_or(Value::Null, wrap))
+fn typed<'a, T: FromSql<'a>>(ty: &Type, raw: &'a [u8], wrap: fn(T) -> Value) -> Value {
+    T::from_sql(ty, raw).map_or(Value::Unsupported, wrap)
+}
+
+/// The server sends `infinity` and `-infinity` as the largest and smallest day count, which no `NaiveDate` holds.
+fn date(raw: &[u8]) -> Value {
+    match raw.try_into().map(i32::from_be_bytes) {
+        Ok(i32::MAX) => Value::Infinity,
+        Ok(i32::MIN) => Value::NegativeInfinity,
+        _ => typed(&Type::DATE, raw, Value::Date),
+    }
+}
+
+/// The server sends `infinity` and `-infinity` as the largest and smallest microsecond count.
+fn timestamp<'a, T: FromSql<'a>>(ty: &Type, raw: &'a [u8], wrap: fn(T) -> Value) -> Value {
+    match raw.try_into().map(i64::from_be_bytes) {
+        Ok(i64::MAX) => Value::Infinity,
+        Ok(i64::MIN) => Value::NegativeInfinity,
+        _ => typed(ty, raw, wrap),
+    }
 }
 
 /// The bytes of any value as the server sent them.
@@ -148,6 +186,33 @@ mod tests {
     #[test]
     fn a_truncated_numeric_is_none() {
         assert_eq!(numeric(&[2, 0, 0, 0, 1]), None);
+    }
+
+    fn domain(base: Type) -> Type {
+        Type::new("amount".into(), 90002, Kind::Domain(base), "shop".into())
+    }
+
+    #[test]
+    fn infinite_dates_and_timestamps_decode_as_infinity() {
+        assert_eq!(cell(&Type::DATE, &i32::MAX.to_be_bytes()), Value::Infinity);
+        assert_eq!(cell(&Type::TIMESTAMP, &i64::MAX.to_be_bytes()), Value::Infinity);
+        assert_eq!(cell(&Type::TIMESTAMPTZ, &i64::MIN.to_be_bytes()), Value::NegativeInfinity);
+    }
+
+    #[test]
+    fn a_timestamp_out_of_range_is_unsupported_and_the_row_still_decodes() {
+        assert_eq!(cell(&Type::TIMESTAMP, &(i64::MAX - 1).to_be_bytes()), Value::Unsupported);
+    }
+
+    #[test]
+    fn a_void_value_is_null() {
+        assert_eq!(cell(&Type::VOID, &[]), Value::Null);
+    }
+
+    #[test]
+    fn a_domain_decodes_as_its_base_type() {
+        assert_eq!(cell(&domain(Type::INT4), &7_i32.to_be_bytes()), Value::Int(7));
+        assert_eq!(column_kind(&domain(Type::INT4)), ColumnKind::Int);
     }
 
     #[test]

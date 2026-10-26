@@ -1,4 +1,5 @@
 //! The command line `pgbg` parses, with the help text each flag shows.
+use crate::connection::ConnectionName;
 use clap::{Parser, Subcommand};
 
 /// The command line: global flags, then one subcommand.
@@ -24,14 +25,14 @@ pub enum Command {
     /// Opens the TUI on a connection: the one named, else the first in `config.toml`.
     Tui {
         /// The connection's name in `config.toml`.
-        connection: Option<String>,
+        connection: Option<ConnectionName>,
     },
     /// The connections in `config.toml`: name, tier, URL, and how pgbg reaches each one.
     Connections,
     /// Runs one statement on a connection and prints its result; read only unless the connection allows writes.
     Run {
         /// The connection's name in `config.toml`.
-        connection: String,
+        connection: ConnectionName,
         /// One SQL statement.
         sql: String,
     },
@@ -58,8 +59,16 @@ mod tests {
     }
 
     #[test]
+    fn a_connection_name_the_config_cannot_hold_is_refused_while_parsing() {
+        assert!(parse(&["run", "my shop", "SELECT 1"]).is_err());
+        assert!(parse(&["tui", "shop/eu"]).is_err());
+    }
+
+    #[test]
     fn tui_takes_an_optional_connection() {
-        assert!(matches!(parse(&["tui", "prod"]).unwrap().command, Some(Command::Tui { connection: Some(name) }) if name == "prod"));
+        assert!(
+            matches!(parse(&["tui", "prod"]).unwrap().command, Some(Command::Tui { connection: Some(name) }) if name.to_string() == "prod")
+        );
         assert!(matches!(parse(&["tui"]).unwrap().command, Some(Command::Tui { connection: None })));
     }
 }

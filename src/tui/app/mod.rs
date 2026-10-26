@@ -189,12 +189,6 @@ impl App {
         }
     }
 
-    fn edit(&mut self, key: KeyEvent) {
-        if keys::edit(&mut self.editor, key) {
-            self.error_mark = None;
-        }
-    }
-
     fn grid_step(&mut self, step: Move) {
         if let Run::Done { grid, .. } = &mut self.run {
             grid.step(step, self.grid_rows);

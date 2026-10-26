@@ -4,6 +4,7 @@ use anyhow::{Result, bail};
 use password::PasswordEntry;
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::str::FromStr;
 pub(crate) use target::Target;
 pub(crate) use tls::Tls;
 pub(crate) use tunnel::TunnelSpec;
@@ -47,7 +48,7 @@ pub(crate) struct Connection {
 /// The name a connection has under `[connections.<name>]`, typed on the command line.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(transparent)]
-pub(crate) struct ConnectionName(String);
+pub struct ConnectionName(String);
 
 /// Sets the colour and the timeout of a connection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -126,6 +127,14 @@ impl ConnectionName {
             bail!("`{name}` is not a connection name: use letters, digits, `-`, `_` and `.`");
         }
         Ok(Self(name.to_owned()))
+    }
+}
+
+impl FromStr for ConnectionName {
+    type Err = anyhow::Error;
+
+    fn from_str(name: &str) -> Result<Self> {
+        Self::new(name)
     }
 }
 
