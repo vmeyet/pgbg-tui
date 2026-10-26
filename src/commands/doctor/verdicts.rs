@@ -110,18 +110,15 @@ pub(super) fn timeout(connection: &Connection, facts: &ServerFacts) -> Check {
 mod tests {
     use super::*;
     use crate::commands::doctor::report::Verdict;
-    use crate::connection::{Entry, StatementTimeout};
+    use crate::connection::StatementTimeout;
+    use crate::fixtures;
 
     fn connection(extra: &str) -> Connection {
-        let entry: Entry =
-            toml::from_str(&format!("tier = \"production\"\nurl = \"postgres://nina@db.example.com/shop?sslmode=require\"\n{extra}"))
-                .unwrap();
-        Connection::new("prod", entry).unwrap()
+        fixtures::named("prod", &format!("tier = \"production\"\nurl = \"postgres://nina@db.example.com/shop?sslmode=require\"\n{extra}"))
     }
 
     fn local(url: &str, extra: &str) -> Connection {
-        let entry: Entry = toml::from_str(&format!("tier = \"local\"\nurl = \"{url}\"\n{extra}")).unwrap();
-        Connection::new("local", entry).unwrap()
+        fixtures::named("local", &format!("tier = \"local\"\nurl = \"{url}\"\n{extra}"))
     }
 
     #[test]

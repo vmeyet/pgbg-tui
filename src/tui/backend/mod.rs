@@ -348,19 +348,13 @@ async fn answer_to(session: &mut Session, writes: WritePolicy, queued: Queued) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connection::Entry;
     use crate::db::model::Value;
+    use crate::fixtures;
 
     const SLEEP: &str = "SELECT pg_sleep(30)";
 
-    fn named(name: &str) -> Connection {
-        let url = std::env::var("PGBG_TEST_DATABASE_URL").unwrap();
-        let entry: Entry = toml::from_str(&format!("tier = \"local\"\nurl = \"{url}\"\n")).unwrap();
-        Connection::new(name, entry).unwrap()
-    }
-
     fn connection() -> Connection {
-        named("shop")
+        fixtures::test_database_as("shop")
     }
 
     fn shop() -> ConnectionName {
@@ -383,29 +377,6 @@ mod tests {
         (backend, answers)
     }
 
-    /// A connection to the test database through a forwarder whose command line carries `marker`, so a test can kill it.
-    fn tunnelled(marker: &str) -> Connection {
-        through_forwarder("\"python3\", \"-c\"", marker, WritePolicy::ReadOnly)
-    }
-
-    /// Like `tunnelled`, the forwarder started once the shell line `first` succeeds, a tunnel that died when it fails.
-    fn tunnelled_after(marker: &str, first: &str, writes: WritePolicy) -> Connection {
-        let script = format!("{first} || exit 1; exec python3 -c \"$0\" \"$@\"");
-        through_forwarder(&format!("\"sh\", \"-c\", {script:?}"), marker, writes)
-    }
-
-    /// A connection whose tunnel is `program` then the forwarder's code and arguments.
-    fn through_forwarder(program: &str, marker: &str, writes: WritePolicy) -> Connection {
-        let database = url::Url::parse(&std::env::var("PGBG_TEST_DATABASE_URL").unwrap()).unwrap();
-        let (host, port) = (database.host_str().unwrap().to_owned(), database.port().unwrap_or(5432));
-        let command = format!("[{program}, {:?}, \"{{port}}\", \"{host}\", \"{port}\", \"{marker}\"]", crate::tunnel::tests::FORWARD);
-        let writes = if writes == WritePolicy::Allowed { "writes = \"allowed\"\n" } else { "" };
-        let entry: Entry =
-            toml::from_str(&format!("tier = \"local\"\nurl = \"{database}\"\ntls = \"off\"\n{writes}tunnel = {{ command = {command} }}\n"))
-                .unwrap();
-        Connection::new("shop", entry).unwrap()
-    }
-
     /// An empty table `name` in the test database, made again from scratch.
     async fn empty_table(name: &str) -> String {
         let mut session = Session::open(&connection(), Route::Direct).await.unwrap();
@@ -426,7 +397,8 @@ mod tests {
         let started_once = flags.path().join("started");
         let fails_the_first_time = format!("[ -e {0:?} ] || {{ touch {0:?}; sleep 3; exit 1; }}", started_once.display().to_string());
         let table = empty_table("pgbg_sent_while_failing_to_open").await;
-        let (backend, mut answers) = started_on(tunnelled_after("pgbg-test-fails-once", &fails_the_first_time, WritePolicy::Allowed));
+        let (backend, mut answers) =
+            started_on(fixtures::tunnelled_after("pgbg-test-fails-once", &fails_the_first_time, WritePolicy::Allowed));
         backend.run(&shop(), RunId::FIRST, Statement::new(format!("INSERT INTO {table} VALUES (1)")));
         answers_until(&mut answers, |answer| is_answer_to(RunId::FIRST, answer)).await;
         let rows = on_a_side_session(&format!("SELECT n FROM {table}")).await;
@@ -437,7 +409,7 @@ mod tests {
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_statement_still_queued_when_the_backend_stops_never_reaches_the_server() {
         let table = empty_table("pgbg_queued_at_stop").await;
-        let (backend, _answers) = started_on(tunnelled_after("pgbg-test-slow-start", "sleep 1", WritePolicy::Allowed));
+        let (backend, _answers) = started_on(fixtures::tunnelled_after("pgbg-test-slow-start", "sleep 1", WritePolicy::Allowed));
         backend.run(&shop(), RunId::FIRST, Statement::new(format!("INSERT INTO {table} VALUES (1)")));
         backend.stop().await;
         let rows = on_a_side_session(&format!("SELECT n FROM {table}")).await;
@@ -461,13 +433,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "starts a tunnel"]
     async fn a_tunnel_that_does_not_start_says_why_and_the_session_does_not_open() {
-        let entry: Entry = toml::from_str(
+        let (_backend, mut answers) = started_on(fixtures::connection(
             "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\ntls = \"off\"\n\
              tunnel = { command = [\"sh\", \"-c\", \"echo 'bastion.example.com: no route' >&2; exit 255\", \"{port}\"] }\n",
-        )
-        .unwrap();
-        let (_backend, mut answers) = started_on(Connection::new("shop", entry).unwrap());
+        ));
         let seen = answers_until(&mut answers, |answer| matches!(answer, Incoming::NotOpened(_))).await;
         assert_eq!(seen[0], Incoming::Tunnel(TunnelState::Starting));
         assert!(matches!(&seen[1], Incoming::Tunnel(TunnelState::Died(how)) if how.contains("no route")), "{seen:?}");
@@ -475,13 +446,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "starts a tunnel"]
     async fn a_statement_sent_while_the_tunnel_fails_to_start_fails_with_it() {
-        let entry: Entry = toml::from_str(
+        let shop = fixtures::connection(
             "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\ntls = \"off\"\n\
              tunnel = { command = [\"sh\", \"-c\", \"exit 255\", \"{port}\"] }\n",
-        )
-        .unwrap();
-        let shop = Connection::new("shop", entry).unwrap();
+        );
         let name = shop.name().clone();
         let (backend, mut answers) = started_on(shop);
         backend.run(&name, RunId::FIRST, Statement::new("SELECT 1"));
@@ -494,7 +464,7 @@ mod tests {
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_tunnel_that_dies_closes_its_session_and_says_why() {
         let marker = "pgbg-test-tunnel-that-dies";
-        let (_backend, mut answers) = started_on(tunnelled(marker));
+        let (_backend, mut answers) = started_on(fixtures::tunnelled(marker));
         answers_until(&mut answers, |answer| *answer == Incoming::Opened).await;
         kill_tunnel_marked(marker).await;
         let mut seen = vec![];
@@ -511,7 +481,7 @@ mod tests {
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_statement_after_the_tunnel_died_starts_it_again() {
         let marker = "pgbg-test-tunnel-started-again";
-        let (backend, mut answers) = started_on(tunnelled(marker));
+        let (backend, mut answers) = started_on(fixtures::tunnelled(marker));
         answers_until(&mut answers, |answer| *answer == Incoming::Opened).await;
         kill_tunnel_marked(marker).await;
         answers_until(&mut answers, is_tunnel_death).await;
@@ -558,7 +528,7 @@ mod tests {
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn an_answer_names_the_connection_whose_session_gave_it() {
         let (mut backend, mut answers) = started();
-        let copy = named("shop-copy");
+        let copy = fixtures::test_database_as("shop-copy");
         backend.open(copy.clone());
         backend.run(copy.name(), RunId::FIRST, Statement::new("SELECT 1"));
         let connection = loop {

@@ -283,17 +283,14 @@ fn server_error(err: tokio_postgres::Error) -> anyhow::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connection::{Entry, WritePolicy};
+    use crate::connection::WritePolicy;
+    use crate::fixtures;
     use model::{Statement, Value};
     use std::time::Duration;
 
-    const DATABASE_URL: &str = "PGBG_TEST_DATABASE_URL";
-
     async fn session(writes: WritePolicy) -> Session {
-        let url = std::env::var(DATABASE_URL).unwrap();
         let writes = if writes == WritePolicy::Allowed { "allowed" } else { "read-only" };
-        let entry: Entry = toml::from_str(&format!("tier = \"local\"\nurl = \"{url}\"\nwrites = \"{writes}\"\n")).unwrap();
-        Session::open(&Connection::new("shop", entry).unwrap(), Route::Direct).await.unwrap()
+        Session::open(&fixtures::test_database("local", &format!("writes = \"{writes}\"\n")), Route::Direct).await.unwrap()
     }
 
     async fn run(writes: WritePolicy, sql: &str) -> Result<ResultSet> {
@@ -303,19 +300,18 @@ mod tests {
 
     #[test]
     fn the_driver_config_drops_sslmode_and_keeps_the_rest() {
-        let entry: Entry = toml::from_str(
+        let connection = fixtures::connection(
             "tier = \"staging\"\nurl = \"postgres://nina@db.example.com:6432/shop?sslmode=verify-full&application_name=pgbg\"\n",
-        )
-        .unwrap();
-        let config = driver_config(Connection::new("shop", entry).unwrap().target(), Route::Direct).unwrap();
+        );
+        let config = driver_config(connection.target(), Route::Direct).unwrap();
         assert_eq!(config.get_application_name(), Some("pgbg"));
         assert_eq!(config.get_dbname(), Some("shop"));
         assert_eq!(config.get_ports(), [6432]);
     }
 
     fn driver_config_of(url: &str) -> Config {
-        let entry: Entry = toml::from_str(&format!("tier = \"local\"\nurl = \"{url}\"\n")).unwrap();
-        driver_config(Connection::new("shop", entry).unwrap().target(), Route::Direct).unwrap()
+        let connection = fixtures::connection(&format!("tier = \"local\"\nurl = \"{url}\"\n"));
+        driver_config(connection.target(), Route::Direct).unwrap()
     }
 
     #[test]
@@ -324,8 +320,8 @@ mod tests {
     }
 
     fn tunnelled_config_of(url: &str) -> Config {
-        let entry: Entry = toml::from_str(&format!("tier = \"staging\"\nurl = \"{url}\"\n")).unwrap();
-        driver_config(Connection::new("shop", entry).unwrap().target(), Route::Tunnel(LocalPort::new(49213))).unwrap()
+        let connection = fixtures::connection(&format!("tier = \"staging\"\nurl = \"{url}\"\n"));
+        driver_config(connection.target(), Route::Tunnel(LocalPort::new(49213))).unwrap()
     }
 
     #[test]
@@ -366,8 +362,8 @@ mod tests {
     async fn a_server_that_accepts_but_never_answers_is_given_up() {
         let silent = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
         let port = silent.local_addr().unwrap().port();
-        let entry: Entry = toml::from_str(&format!("tier = \"local\"\nurl = \"postgres://nina@localhost:{port}/shop\"\n")).unwrap();
-        let err = Session::open(&Connection::new("shop", entry).unwrap(), Route::Direct).await.unwrap_err();
+        let connection = fixtures::connection(&format!("tier = \"local\"\nurl = \"postgres://nina@localhost:{port}/shop\"\n"));
+        let err = Session::open(&connection, Route::Direct).await.unwrap_err();
         assert!(format!("{err:#}").contains("did not answer within 10s"), "{err:#}");
     }
 
@@ -442,9 +438,7 @@ mod tests {
     }
 
     async fn session_on(tier: &str, extra: &str) -> Session {
-        let url = std::env::var(DATABASE_URL).unwrap();
-        let entry: Entry = toml::from_str(&format!("tier = \"{tier}\"\nurl = \"{url}\"\n{extra}")).unwrap();
-        Session::open(&Connection::new("shop", entry).unwrap(), Route::Direct).await.unwrap()
+        Session::open(&fixtures::test_database(tier, extra), Route::Direct).await.unwrap()
     }
 
     async fn on(mut session: Session, sql: &str) -> Result<ResultSet> {
@@ -466,10 +460,10 @@ mod tests {
     }
 
     async fn shown_timeout_with_a_server_default(tier: &str, extra: &str) -> Vec<Vec<Value>> {
-        let mut url = Url::parse(&std::env::var(DATABASE_URL).unwrap()).unwrap();
+        let mut url = Url::parse(&fixtures::test_database_url()).unwrap();
         url.query_pairs_mut().append_pair("options", "-cstatement_timeout=5s");
-        let entry: Entry = toml::from_str(&format!("tier = \"{tier}\"\nurl = \"{url}\"\n{extra}")).unwrap();
-        let session = Session::open(&Connection::new("shop", entry).unwrap(), Route::Direct).await.unwrap();
+        let connection = fixtures::connection(&format!("tier = \"{tier}\"\nurl = \"{url}\"\n{extra}"));
+        let session = Session::open(&connection, Route::Direct).await.unwrap();
         on(session, "SHOW statement_timeout").await.unwrap().rows
     }
 

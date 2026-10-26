@@ -111,9 +111,7 @@ mod tests {
     use super::*;
     use crate::db::model::Value;
 
-    pub(super) fn column(name: &str, kind: ColumnKind) -> Column {
-        Column { name: name.to_owned(), kind, type_name: String::new() }
-    }
+    pub(super) use crate::fixtures::column;
 
     pub(super) fn result(columns: Vec<Column>, rows: Vec<Vec<Value>>) -> ResultSet {
         ResultSet { columns, rows, is_cut: false }

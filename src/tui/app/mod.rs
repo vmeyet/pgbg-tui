@@ -259,15 +259,16 @@ pub(super) mod tests {
     use super::sheet::LOST_SESSION;
     use super::*;
     use crate::chart;
-    use crate::connection::{ConnectionName, Entry};
-    use crate::db::model::{Column, ColumnKind, ResultSet, Statement, Value};
+    use crate::connection::ConnectionName;
+    use crate::db::model::Statement;
+    use crate::fixtures;
     use crossterm::event::KeyModifiers;
     use std::time::Duration;
 
+    pub(crate) use crate::fixtures::orders;
+
     pub(crate) fn connection(tier: &str, writes: &str) -> Connection {
-        let entry: Entry =
-            toml::from_str(&format!("tier = \"{tier}\"\nurl = \"postgres://nina@localhost/shop\"\nwrites = \"{writes}\"\n")).unwrap();
-        Connection::new("shop", entry).unwrap()
+        fixtures::connection(&format!("tier = \"{tier}\"\nurl = \"postgres://nina@localhost/shop\"\nwrites = \"{writes}\"\n"))
     }
 
     pub(crate) fn app_on(connection: &Connection) -> App {
@@ -292,21 +293,6 @@ pub(super) mod tests {
             app.handle_key(KeyEvent::from(KeyCode::Char(c)));
         }
         app
-    }
-
-    pub(crate) fn orders() -> ResultSet {
-        let column = |name: &str, kind| Column { name: name.to_owned(), kind, type_name: String::new() };
-        let row = |id: i64, total: &str, customer: Value| vec![Value::Int(id), Value::Numeric(total.into()), customer];
-        ResultSet {
-            columns: vec![column("id", ColumnKind::Int), column("total", ColumnKind::Numeric), column("customer", ColumnKind::Text)],
-            rows: vec![
-                row(7, "12.50", Value::Text("nina".into())),
-                row(12, "1499.00", Value::Null),
-                row(103, "3.20", Value::Text("Zoë Nakamura".into())),
-                row(104, "0.99", Value::Text("noel".into())),
-            ],
-            is_cut: false,
-        }
     }
 
     fn enter(app: &mut App) -> Vec<Action> {

@@ -65,7 +65,8 @@ fn short_number(value: f64) -> String {
 mod tests {
     use super::*;
     use crate::chart::ChartSpec;
-    use crate::db::model::{Column, ColumnKind, ResultSet, Value};
+    use crate::db::model::{ColumnKind, ResultSet, Value};
+    use crate::fixtures::column;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -80,7 +81,6 @@ mod tests {
     }
 
     pub(super) fn sales() -> ResultSet {
-        let column = |name: &str, kind| Column { name: name.to_owned(), kind, type_name: String::new() };
         let row = |customer: &str, orders: i64, refunds: i64| vec![Value::Text(customer.into()), Value::Int(orders), Value::Int(refunds)];
         ResultSet {
             columns: vec![column("customer", ColumnKind::Text), column("orders", ColumnKind::Int), column("refunds", ColumnKind::Int)],

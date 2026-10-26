@@ -1,0 +1,85 @@
+//! Invented fixtures the tests share: the connection `shop`, the test database, tunnels to it, and results of `orders`.
+use crate::connection::{Connection, Entry, WritePolicy};
+use crate::db::model::{Column, ColumnKind, ResultSet, Value};
+
+/// The environment variable naming the throwaway database the `#[ignore]`d tests run against.
+const DATABASE_URL: &str = "PGBG_TEST_DATABASE_URL";
+
+/// A forwarder from `127.0.0.1:argv[1]` to `argv[2]:argv[3]`, for tunnels in tests.
+pub(crate) const FORWARD: &str = "
+import socket, sys, threading
+def pipe(source, sink):
+    while data := source.recv(65536):
+        sink.sendall(data)
+    sink.shutdown(socket.SHUT_WR)
+server = socket.create_server(('127.0.0.1', int(sys.argv[1])))
+while True:
+    client, _ = server.accept()
+    upstream = socket.create_connection((sys.argv[2], int(sys.argv[3])))
+    for source, sink in ((client, upstream), (upstream, client)):
+        threading.Thread(target=pipe, args=(source, sink), daemon=True).start()
+";
+
+/// The connection named `name` that the TOML table `entry` describes.
+pub(crate) fn named(name: &str, entry: &str) -> Connection {
+    let entry: Entry = toml::from_str(entry).unwrap();
+    Connection::new(name, entry).unwrap()
+}
+
+/// The connection `shop` that the TOML table `entry` describes.
+pub(crate) fn connection(entry: &str) -> Connection {
+    named("shop", entry)
+}
+
+pub(crate) fn test_database_url() -> String {
+    std::env::var(DATABASE_URL).unwrap()
+}
+
+/// The connection `name` on the test database, a local one.
+pub(crate) fn test_database_as(name: &str) -> Connection {
+    named(name, &format!("tier = \"local\"\nurl = \"{}\"\n", test_database_url()))
+}
+
+/// `shop` on the test database, of `tier`, with the keys of `extra` too.
+pub(crate) fn test_database(tier: &str, extra: &str) -> Connection {
+    connection(&format!("tier = \"{tier}\"\nurl = \"{}\"\n{extra}", test_database_url()))
+}
+
+/// `shop` on the test database through a forwarder whose command line carries `marker`, so a test can find it.
+pub(crate) fn tunnelled(marker: &str) -> Connection {
+    through_forwarder("\"python3\", \"-c\"", marker, WritePolicy::ReadOnly)
+}
+
+/// Like `tunnelled`, the forwarder started once the shell line `first` succeeds, a tunnel that died when it fails.
+pub(crate) fn tunnelled_after(marker: &str, first: &str, writes: WritePolicy) -> Connection {
+    let script = format!("{first} || exit 1; exec python3 -c \"$0\" \"$@\"");
+    through_forwarder(&format!("\"sh\", \"-c\", {script:?}"), marker, writes)
+}
+
+/// `shop` on the test database through a tunnel that runs `program`, then the forwarder's code and arguments.
+fn through_forwarder(program: &str, marker: &str, writes: WritePolicy) -> Connection {
+    let database = url::Url::parse(&test_database_url()).unwrap();
+    let (host, port) = (database.host_str().unwrap().to_owned(), database.port().unwrap_or(5432));
+    let command = format!("[{program}, {FORWARD:?}, \"{{port}}\", \"{host}\", \"{port}\", \"{marker}\"]");
+    let writes = if writes == WritePolicy::Allowed { "writes = \"allowed\"\n" } else { "" };
+    connection(&format!("tier = \"local\"\nurl = \"{database}\"\ntls = \"off\"\n{writes}tunnel = {{ command = {command} }}\n"))
+}
+
+pub(crate) fn column(name: &str, kind: ColumnKind) -> Column {
+    Column { name: name.to_owned(), kind, type_name: String::new() }
+}
+
+/// Four orders: an id, a total and the customer, one of them `NULL`, one with a name past ASCII.
+pub(crate) fn orders() -> ResultSet {
+    let row = |id: i64, total: &str, customer: Value| vec![Value::Int(id), Value::Numeric(total.into()), customer];
+    ResultSet {
+        columns: vec![column("id", ColumnKind::Int), column("total", ColumnKind::Numeric), column("customer", ColumnKind::Text)],
+        rows: vec![
+            row(7, "12.50", Value::Text("nina".into())),
+            row(12, "1499.00", Value::Null),
+            row(103, "3.20", Value::Text("Zoë Nakamura".into())),
+            row(104, "0.99", Value::Text("noel".into())),
+        ],
+        is_cut: false,
+    }
+}
