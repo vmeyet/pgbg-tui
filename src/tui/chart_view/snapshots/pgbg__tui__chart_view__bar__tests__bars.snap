@@ -1,0 +1,8 @@
+---
+source: src/tui/chart_view/bar.rs
+expression: "render(&series(&sales(), \"bar y=orders\"), 40, 4).backend()"
+---
+"nina         1.2k███████████████████████"
+"Zoë Nakamura 450███████                 "
+"noel         3                          "
+"                                        "

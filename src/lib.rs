@@ -1,6 +1,6 @@
 //! PostgreSQL in your terminal, read only by default: the library behind the `pgbg` binary.
 mod act;
-#[cfg_attr(not(test), expect(dead_code, reason = "`tui/chart_view/`, the next step, draws it"))]
+#[cfg_attr(not(test), expect(dead_code, reason = "a saved query's `-- chart:` header, the next step, reads a `ChartSpec`"))]
 mod chart;
 pub mod cli;
 pub mod commands;

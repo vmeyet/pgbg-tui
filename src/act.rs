@@ -24,6 +24,7 @@ pub(crate) enum Act {
     Find,
     Open,
     Close,
+    Chart,
 }
 
 #[cfg(test)]
@@ -52,7 +53,8 @@ impl Act {
             Self::Right => Some(Self::Find),
             Self::Find => Some(Self::Open),
             Self::Open => Some(Self::Close),
-            Self::Close => None,
+            Self::Close => Some(Self::Chart),
+            Self::Chart => None,
         }
     }
 
@@ -154,6 +156,7 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Bottom, Pane::Result, &[key(KeyCode::Char('G'))]),
     row(Act::Left, Pane::Result, &[key(KeyCode::Char('h')), key(KeyCode::Left)]).help("h l", "column left, right").footer("h/l", "columns"),
     row(Act::Right, Pane::Result, &[key(KeyCode::Char('l')), key(KeyCode::Right)]),
+    row(Act::Chart, Pane::Result, &[key(KeyCode::Char('v'))]).help("v", "the result as a grid or a chart").footer("v", "chart"),
     row(Act::Help, Pane::Result, &[key(KeyCode::Char('?'))]).help("?", "these keys; again for every key"),
     row(Act::Down, Pane::Queries, &[key(KeyCode::Char('j')), key(KeyCode::Down)]).help("j k", "next, previous query").footer("j/k", "move"),
     row(Act::Up, Pane::Queries, &[key(KeyCode::Char('k')), key(KeyCode::Up)]),

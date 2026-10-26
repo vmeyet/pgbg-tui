@@ -1,0 +1,7 @@
+---
+source: src/tui/chart_view/mod.rs
+expression: "render(&Err(ChartError::NoX), 50, 3).backend()"
+---
+"no chart: no text, date or time column to put on x"
+"v shows the grid again                            "
+"                                                  "

@@ -2,6 +2,7 @@
 mod actions;
 mod app;
 mod backend;
+mod chart_view;
 mod editor_view;
 mod finder_view;
 mod grid_view;

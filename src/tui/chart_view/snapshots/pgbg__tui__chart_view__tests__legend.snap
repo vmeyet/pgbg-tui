@@ -1,0 +1,12 @@
+---
+source: src/tui/chart_view/mod.rs
+expression: "render(&series(&sales(), \"bar\"), 40, 8).backend()"
+---
+"■ orders  ■ refunds                     "
+"nina         1.2k███████████████████████"
+"             30                         "
+"                                        "
+"Zoë Nakamura 450███████                 "
+"             0                          "
+"                                        "
+"noel         3                          "

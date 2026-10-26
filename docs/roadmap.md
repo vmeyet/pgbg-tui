@@ -64,7 +64,7 @@ The MR that ships a step ticks its box.
 ## 10. Charts
 
 - [x] `chart/`: `ChartSpec`, `chart::infer`, `Series`, all pure and tested
-- [ ] Bar chart and line chart views, `v` to switch between grid and chart
+- [x] Bar chart and line chart views, `v` to switch between grid and chart
 - [ ] `-- chart:` in a saved query's header
 
 ## 11. Doctor

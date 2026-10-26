@@ -1,5 +1,5 @@
 //! What to chart and the points to draw, from a result: pure, drawing lives in `tui/chart_view/`.
-pub(crate) use series::{ChartError, Series};
+pub(crate) use series::{ChartError, Series, YColumn};
 pub(crate) use spec::ChartSpec;
 
 use crate::db::model::{Column, ColumnKind, ResultSet, Value};
