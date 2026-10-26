@@ -26,6 +26,10 @@ impl TunnelSpec {
         Self::try_from(TunnelEntry { command, before: None }).map_err(anyhow::Error::msg)
     }
 
+    pub(crate) fn command(&self) -> &[String] {
+        &self.command
+    }
+
     /// The tunnel's command with `port` in place of every `{port}`.
     pub(crate) fn command_on(&self, port: LocalPort) -> Vec<String> {
         self.command.iter().map(|arg| arg.replace(PORT, &port.to_string())).collect()
