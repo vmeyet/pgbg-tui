@@ -1,6 +1,6 @@
 //! The saved queries in the app: the sidebar's tree and its cursor, the `ctrl-p` finder, and the query open in the editor.
 use super::editor::Editor;
-use super::{Action, App, Focus};
+use super::{Action, App, Focus, Overlay};
 use crate::act::{self, Act, Pane};
 use crate::query::{Query, TreeRow, tree_rows};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -72,14 +72,14 @@ impl App {
     pub(super) fn listed(&mut self, all: Vec<Query>) {
         self.queries.all = all;
         self.step_sidebar(0);
-        if let Some(finder) = &mut self.finder {
+        if let Some(Overlay::Finder(finder)) = &mut self.overlay {
             finder.rank(&self.queries.all);
         }
     }
 
     /// Opens the finder on every query, and lists them again in case a file came or went.
     pub(super) fn find(&mut self) -> Vec<Action> {
-        self.finder = Some(Finder::new(&self.queries.all));
+        self.overlay = Some(Overlay::Finder(Finder::new(&self.queries.all)));
         vec![Action::ListQueries]
     }
 
@@ -171,7 +171,7 @@ pub(in crate::tui) mod tests {
         find(&mut app, "wkly");
         assert_eq!(app.sheet().editor.text(), "");
         assert_eq!(press(&mut app, KeyCode::Enter), [Action::OpenQuery(query("orders/weekly.sql"))]);
-        assert_eq!(app.finder, None);
+        assert_eq!(app.overlay, None);
     }
 
     #[test]
@@ -195,7 +195,7 @@ pub(in crate::tui) mod tests {
         let mut app = with_queries();
         find(&mut app, "");
         assert_eq!(press(&mut app, KeyCode::Esc), []);
-        assert_eq!(app.finder, None);
+        assert_eq!(app.overlay, None);
     }
 
     #[test]
@@ -212,10 +212,10 @@ pub(in crate::tui) mod tests {
     #[test]
     fn a_query_that_cannot_be_read_says_so_and_leaves_the_running_statement_alone() {
         let mut app = with_queries();
-        app.sheet_mut().run = Run::Running;
+        app.sheet_mut().run = Run::Running { run: RunId::FIRST };
         app.apply(Answer::Queries(QueryAnswer::NotOpened { query: query("customers.sql"), error: "permission denied".into() }));
         assert_eq!(app.queries.error.as_deref(), Some("could not open customers.sql: permission denied"));
-        assert_eq!(app.sheet().run, Run::Running);
+        assert_eq!(app.sheet().run, Run::Running { run: RunId::FIRST });
     }
 
     #[test]

@@ -12,25 +12,24 @@ When a boundary or a flow changes, change this page in the same MR.
 | `main.rs`, `cli.rs` | The clap command line and the dispatch to `commands/` |
 | `commands/` | One module per subcommand, each with a `run`; plain output through `render.rs`, JSON with `--json` |
 | `commands/doctor/` | `pgbg doctor`: a list of named checks in `mod.rs`, each verdict (`✓`, `!`, `✗`) and its fix a pure function in `verdicts.rs`, the lines and the JSON in `report.rs` |
-| `config/` | `config.toml`: connections, theme, keys; load, validate, refuse secrets; rewrite key by key with `toml_edit` from a `ConnectionChange` of keys each parsed on its own (`Tier`, `Target`, `TunnelSpec`, `SecretSource`, `WritePolicy`), checked as a load would, through a temp file only its owner reads |
+| `config/` | `config.toml`: connections, and theme and keys (planned); load, validate, refuse secrets; rewrite key by key with `toml_edit` from a `ConnectionChange` of keys each parsed on its own (`Tier`, `Target`, `TunnelSpec`, `SecretSource`, `WritePolicy`), checked as a load would, through a temp file only its owner reads |
 | `connection/` | `Connection`: name, tier, target, tunnel, secret source, write policy, TLS, statement timeout; parsed once from config |
 | `secret/` | `Secret` (prints `<redacted>`) and its sources (a `KeychainItem` is one word `security -i` cannot split): keychain through `/usr/bin/security`, environment variable, command; `SecretSource::read` reads one when a session opens; `Secret::from_stdin` reads one typed hidden or piped in |
 | `tunnel/` | `Tunnel`: a child process forwarding a free `127.0.0.1` port to the database; start, wait for the port, stop; its `Route` is what a session opens along |
 | `db/` | The only module that sees `tokio_postgres`: connect over rustls, open a session along its route (`open_along`: through the connection's tunnel, started again unless it still runs), run a statement, stream rows, cancel |
-| `db/model/` | The neutral model: `ResultSet`, `Column`, `ColumnKind`, `Value`, `Page`, `Schema` (its tables, their columns and indexes), `Table`, `ServerError`, `Route` (direct, or a tunnel's `LocalPort`), and `CancelToken`, whose driver part only `db/` reads |
+| `db/model/` | The neutral model: `ResultSet`, `Column`, `ColumnKind`, `Value`, `Page` (planned), `Schema` (its tables, their columns and indexes), `Table`, `ServerError`, `Route` (direct, or a tunnel's `LocalPort`), and `CancelToken`, whose driver part only `db/` reads |
 | `db/schema.rs` | `Session::read_schema`: every schema, table, column and index the role can read, from `pg_class`, `pg_attribute` and `pg_index` in one read-only transaction; the TUI reads it on a second session along the same route, so its statements never wait on it |
 | `db/server.rs` | What the server says of a session (`ServerFacts`: user, version, the `statement_timeout` in effect and the server's own, from `pg_settings`), read with `Session::read_only` like the schema |
 | `db/guard.rs` | Classifies a statement before it is sent: read, write, or more than one statement; `admit` turns a statement into an `Admitted`, the only kind a session runs; `statement_at` finds the statement under the editor's cursor with the same tokenizer |
 | `db/decode.rs` | Wire values to `Value`, by column type, a domain by its base type; a value it cannot decode is `Unsupported`, never an error |
-| `query/` | Saved queries: the `.pgbg/queries/` tree, the header (`-- name:`, `-- chart:`), load and save |
+| `query/` | Saved queries: the `.pgbg/queries/` tree, the header (`-- name:`, `-- chart:`), load, and save (planned) |
 | `history.rs` | Every statement run, per connection: one JSON line each in `<data folder>/pgbg/history/<connection>.jsonl` (folder `0700`, file `0600`), rolled over to `.1` past 4 MB; the text, when, how long and what came of it, never a row, the server's words or a statement holding `PASSWORD`; `History::search` for `ctrl-r` |
 | `chart/` | `ChartSpec` (kind, x column, y columns) and `Series` built from a `ResultSet`, both pure; one file per chart kind |
 | `syntax/` | SQL colours from tree-sitter, loaded on first use |
-| `act.rs`, `keymap.rs` | Every action in one table (name, default keys, help, palette verb, pane); the user's `[keys]` on top |
+| `act.rs`, `keymap.rs` (planned) | Every action in one table (name, default keys, help, pane, and palette verb (planned)); the user's `[keys]` on top (planned) |
 | `tui/mod.rs` | The event loop: terminal events, answers and ticks in, frames out |
-| `tui/app/` | `App`, the pure state machine: keys in, `Action`s out, `Answer`s applied to the sheet of the connection that gave them |
-| `tui/actions.rs` | The action runner: hands each `Action` to the backend without waiting; answers come back as `Incoming` |
-| `tui/backend/` | What the runner calls, one part per concern: sessions (one per connection opened, a task owns each one, runs its statements in turn, takes cancels by `RunId` while a statement runs, and says when the session is lost), queries, history |
+| `tui/app/` | `App`, the pure state machine: keys in, `Action`s out, `Answer`s applied to the sheet of the connection that gave them; `protocol.rs` holds what the app and the backend say to each other, `sheet.rs` one connection's state; one `Overlay` at most (help, finder, picker) takes the keys |
+| `tui/backend/` | `Backend::dispatch` hands each `Action` over without waiting, to one part per concern: sessions (one per connection opened, a task owns each one, runs its statements in turn, takes cancels by `RunId` while a statement runs, and says when the session is lost), queries, and history (planned) |
 | `tui/ui.rs`, `tui/*_view.rs` | Drawing: layout in `ui.rs`, one view module per pane or modal |
 | `tui/grid_view/` | The results grid: only the visible rows and columns are drawn |
 | `tui/chart_view/` | Draws a `Series` with ratatui's `BarChart` (bars across, so text labels stay readable) and `Chart` (braille line), one file per kind; a legend in vtui's user colours |
@@ -44,7 +43,7 @@ When a boundary or a flow changes, change this page in the same MR.
 Running a statement:
 
 1. The editor hands `App` the statement under the cursor; `App` returns `Action::Run { connection, run, statement }`, and every answer about it carries the same connection and `RunId`, so a late one never lands on another connection or the next run.
-2. `db::guard` classifies it; a write on a read-only connection comes back as `Incoming::Refused` and never reaches the server.
+2. `db::guard` classifies it; a write on a read-only connection comes back as `Incoming::Refused` in an `Answer` and never reaches the server.
 3. The session opens `BEGIN READ ONLY` and binds the statement to a portal (`Transaction::bind`).
    A portal takes any statement the guard admits; `DECLARE CURSOR` takes only a `SELECT` or `VALUES`, not `SHOW` or `EXPLAIN`.
 4. The first page (`query_portal(&portal, 500)`) comes back as `Incoming::Page`; the grid paints it, and more pages are fetched as the grid nears the end.
@@ -79,7 +78,7 @@ Charting a result:
 ## Boundaries
 
 - Only `src/db/` sees a `tokio_postgres` type; everything else uses `db/model/`.
-- Side effects live at the edges: `main.rs`, `signal.rs`, `commands/`, `tui/mod.rs`, `tui/actions.rs`, `tui/backend/`, `tunnel/`, `secret/`, `config/` when it rewrites the file, `query/` when it lists and reads the queries folders, `history.rs` when it appends and reads its files.
+- Side effects live at the edges: `main.rs`, `signal.rs`, `commands/`, `tui/mod.rs`, `tui/backend/`, `tunnel/`, `secret/`, `config/` when it rewrites the file, `query/` when it lists and reads the queries folders, `history.rs` when it appends and reads its files.
 - `tui/app/` is pure: it reads time from `app.now`, set by the loop, and never does I/O; its tests drive it with keys and `Answer` values.
 - `chart/` is pure: a `ResultSet` in, a `Series` out; drawing lives in `tui/chart_view/`.
 - A program that takes the terminal (`$EDITOR` on a saved query) runs from the loop through `Screen::lend`, with the key stream paused.
@@ -154,8 +153,12 @@ One word per concept, in code, docs and UI.
 |---|---|
 | connection | A named database target in the config: where, how to reach it, how to log in |
 | tier | `local`, `staging` or `production`; sets the colour and the timeout |
-| session | An open link to one connection, with its tunnel if it has one |
-| sheet | One connection in the TUI: its editor text and the saved query it stands for, its last result, its session's state |
+| session | An open link to one connection, with its tunnel if it has one; its `SessionState` (opening, open, failed) is what the status line says |
+| sheet | One connection in the TUI: its editor text and the saved query it stands for, its last run, its session's state |
+| act | A thing a key does: a row of `act.rs`; the app turns acts into actions |
+| action | What the app asks the backend to do: open a session, run or cancel a statement, list or read queries |
+| answer | What comes back from the backend: a session's `Incoming`, tagged with its connection, or the saved queries' |
+| run | One sending of a statement, named by its `RunId`: running, cancelling, done or failed |
 | tunnel | The child process that forwards a local port to a database out of reach |
 | statement | One SQL statement, the unit pgbg runs |
 | query | A saved `.sql` file under `.pgbg/queries/` |

@@ -1,6 +1,6 @@
 //! `ctrl-o`, the connection picker: typing narrows the connections as fzf does, and picking one shows its sheet,
 //! opening its session the first time.
-use super::{Action, App, Sheet};
+use super::{Action, App, Overlay, Sheet};
 use crate::act::{self, Act, Pane};
 use crate::connection::{Connection, ConnectionName};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -31,7 +31,7 @@ enum Picked {
 
 impl App {
     pub(super) fn open_picker(&mut self) {
-        self.picker = Some(Palette::new(Picking, vec![]));
+        self.overlay = Some(Overlay::Picker(Palette::new(Picking, vec![])));
     }
 
     /// The connections whose name matches `typed`, best first; every one, by name, when nothing is typed.
@@ -45,10 +45,9 @@ impl App {
         self.sheets.iter().find(|sheet| &sheet.name == name)
     }
 
-    pub(super) fn picker_key(&mut self, key: KeyEvent) -> Vec<Action> {
-        let Some(picker) = self.picker.take() else { return vec![] };
+    pub(super) fn picker_key(&mut self, picker: Palette<Picking>, key: KeyEvent) -> Vec<Action> {
         match self.picked(picker, key) {
-            Picked::Stay(picker) => self.picker = Some(picker),
+            Picked::Stay(picker) => self.overlay = Some(Overlay::Picker(picker)),
             Picked::Close => {}
             Picked::Show(connection) => return self.show(connection),
             Picked::Quit => return self.quit(),
@@ -89,7 +88,7 @@ impl App {
 #[cfg(test)]
 pub(in crate::tui) mod tests {
     use super::super::tests::orders;
-    use super::super::{Answer, Incoming, Link, QueryAnswer, Run, RunId};
+    use super::super::{Answer, Incoming, QueryAnswer, Run, RunId, SessionState};
     use super::*;
     use crate::connection::Entry;
     use crate::db::model::Statement;
@@ -128,8 +127,13 @@ pub(in crate::tui) mod tests {
         app.handle_key(KeyEvent::from(code))
     }
 
+    fn picker(app: &App) -> &Palette<Picking> {
+        let Some(Overlay::Picker(picker)) = &app.overlay else { panic!("no picker") };
+        picker
+    }
+
     fn names(app: &App) -> Vec<String> {
-        app.matching(&app.picker.as_ref().unwrap().input).iter().map(|c| c.name().to_string()).collect()
+        app.matching(&picker(app).input).iter().map(|c| c.name().to_string()).collect()
     }
 
     fn switch_to(app: &mut App, typed: &str) -> Vec<Action> {
@@ -159,7 +163,7 @@ pub(in crate::tui) mod tests {
         let mut app = on_local();
         let actions = switch_to(&mut app, "prod");
         assert!(matches!(&*actions, [Action::Open(prod)] if prod.name() == &name("prod")), "{actions:?}");
-        assert_eq!((&app.sheet().name, &app.sheet().link, app.picker.is_none()), (&name("prod"), &Link::Opening, true));
+        assert_eq!((&app.sheet().name, &app.sheet().session, app.overlay.is_none()), (&name("prod"), &SessionState::Opening, true));
     }
 
     #[test]
@@ -234,7 +238,7 @@ pub(in crate::tui) mod tests {
         ctrl(&mut app, 'o');
         ctrl(&mut app, 'o');
         press(&mut app, "x");
-        assert_eq!((app.picker.is_none(), app.sheet().editor.text()), (true, "x"));
+        assert_eq!((app.overlay.is_none(), app.sheet().editor.text()), (true, "x"));
     }
 
     #[test]
@@ -251,7 +255,7 @@ pub(in crate::tui) mod tests {
         ctrl(&mut app, 'o');
         press(&mut app, "zz");
         assert_eq!(key(&mut app, KeyCode::Enter), []);
-        assert!(app.picker.is_some());
+        assert!(matches!(app.overlay, Some(Overlay::Picker(_))));
     }
 
     #[test]
@@ -262,6 +266,6 @@ pub(in crate::tui) mod tests {
         ctrl(&mut app, 'n');
         ctrl(&mut app, 'n');
         key(&mut app, KeyCode::Up);
-        assert_eq!(app.picker.as_ref().unwrap().selected, 1);
+        assert_eq!(picker(&app).selected, 1);
     }
 }

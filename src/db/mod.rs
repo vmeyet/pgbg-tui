@@ -59,11 +59,11 @@ impl Session {
             config.password(source.read().await?.expose());
         }
         let tls = connection.tls();
-        let link = match tls {
+        let connected = match tls {
             Tls::On => open_client(config.ssl_mode(SslMode::Require), MakeRustlsConnect::with_webpki_roots()).await,
             Tls::Off => open_client(config.ssl_mode(SslMode::Disable), NoTls).await,
         };
-        let Link { client, ended } = link.with_context(|| format!("connecting to {}", connection.name()))?;
+        let Connected { client, ended } = connected.with_context(|| format!("connecting to {}", connection.name()))?;
         stop_statements_when_client_gone(&client).await;
         let timeout = statement_timeout_in_effect(&client, connection.statement_timeout()).await?;
         set_statement_timeout(&client, timeout).await?;
@@ -184,12 +184,12 @@ fn through_tunnel(url: &Url, port: LocalPort) -> Url {
 }
 
 /// A client, and why its link ended once it has.
-struct Link {
+struct Connected {
     client: Client,
     ended: watch::Receiver<Option<String>>,
 }
 
-async fn open_client<T>(config: &Config, tls: T) -> Result<Link>
+async fn open_client<T>(config: &Config, tls: T) -> Result<Connected>
 where
     T: MakeTlsConnect<Socket>,
     T::Stream: Send + 'static,
@@ -211,7 +211,7 @@ where
         };
         end.send_replace(Some(reason));
     });
-    Ok(Link { client, ended })
+    Ok(Connected { client, ended })
 }
 
 /// Best effort: a server older than PostgreSQL 14, or not on Linux, cannot check.

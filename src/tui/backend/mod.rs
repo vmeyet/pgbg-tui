@@ -1,5 +1,5 @@
 //! What the runner calls: a session for each connection opened, each served by a task that owns it, and the saved queries.
-use super::app::{Answer, Incoming, RunId, TunnelState};
+use super::app::{Action, Answer, Incoming, RunId, TunnelState};
 use crate::connection::{Connection, ConnectionName, WritePolicy};
 use crate::db::model::{CancelToken, Route, ServerError, Statement};
 use crate::db::{Session, guard};
@@ -27,7 +27,7 @@ const TUNNEL_DIED: &str = "its tunnel died";
 pub(super) struct Backend {
     sessions: BTreeMap<ConnectionName, SessionLink>,
     answers: UnboundedSender<Answer>,
-    pub(super) queries: QueryFiles,
+    queries: QueryFiles,
 }
 
 /// The way to one session task: runs and cancels in.
@@ -52,14 +52,25 @@ impl Backend {
         Self { sessions: BTreeMap::new(), answers, queries }
     }
 
+    /// Hands `action` over without waiting on it; the loop never awaits the database.
+    pub(super) fn dispatch(&mut self, action: Action) {
+        match action {
+            Action::Open(connection) => self.open(connection),
+            Action::Run { connection, run, statement } => self.run(&connection, run, statement),
+            Action::Cancel { connection, run } => self.cancel(&connection, run),
+            Action::ListQueries => self.queries.list(),
+            Action::OpenQuery(query) => self.queries.open(query),
+        }
+    }
+
     /// Starts the task that opens a session on `connection`, unless one already serves it.
-    pub(super) fn open(&mut self, connection: Connection) {
+    fn open(&mut self, connection: Connection) {
         let answers = &self.answers;
         self.sessions.entry(connection.name().clone()).or_insert_with(|| SessionLink::start(connection, answers.clone()));
     }
 
     /// Queues `statement` on the session of `connection`; its answer comes back as an `Answer`.
-    pub(super) fn run(&self, connection: &ConnectionName, run: RunId, statement: Statement) {
+    fn run(&self, connection: &ConnectionName, run: RunId, statement: Statement) {
         let Some(session) = self.sessions.get(connection) else {
             tracing::warn!("no session for `{connection}`: the statement is dropped");
             return;
@@ -68,7 +79,7 @@ impl Backend {
     }
 
     /// Cancels `run` on the session of `connection`; see `SessionLink::cancel`.
-    pub(super) fn cancel(&self, connection: &ConnectionName, run: RunId) {
+    fn cancel(&self, connection: &ConnectionName, run: RunId) {
         let Some(session) = self.sessions.get(connection) else {
             tracing::warn!("no session for `{connection}`: the cancel is dropped");
             return;

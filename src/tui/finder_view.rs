@@ -1,5 +1,5 @@
 //! The `ctrl-p` finder: a vtui palette over every saved query, best match first.
-use super::app::App;
+use super::app::{App, Overlay};
 use crate::act::{self, Pane};
 use crate::query::{Query, Source};
 use ratatui::Frame;
@@ -17,7 +17,7 @@ fn pick<'a>(app: &App, query: &Query, label: &'a str) -> Pick<'a> {
 
 /// The finder over the whole screen when it is open.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App) {
-    let Some(finder) = &app.finder else { return };
+    let Some(Overlay::Finder(finder)) = &app.overlay else { return };
     let theme = &app.theme;
     let labels: Vec<String> = finder.shown.iter().map(|query| query.path.to_string()).collect();
     let picks: Vec<Pick<'_>> = finder.shown.iter().zip(&labels).map(|(query, label)| pick(app, query, label)).collect();
