@@ -30,12 +30,20 @@ pub(super) struct Backend {
     queries: QueryFiles,
 }
 
-/// The way to one session task: runs and cancels in.
+/// The way to one session task: jobs and cancels in.
 #[derive(Debug)]
 struct SessionLink {
-    runs: UnboundedSender<Queued>,
+    jobs: UnboundedSender<Job>,
     cancels: UnboundedSender<RunId>,
     task: JoinHandle<()>,
+}
+
+/// What the session task is asked to do, in turn.
+#[derive(Debug)]
+enum Job {
+    Run(Queued),
+    /// Open the session again, unless it is open.
+    Open,
 }
 
 /// A statement waiting for the session, and its run.
@@ -59,14 +67,16 @@ impl Backend {
             Action::Run { connection, run, statement } => self.run(&connection, run, statement),
             Action::Cancel { connection, run } => self.cancel(&connection, run),
             Action::ListQueries => self.queries.list(),
-            Action::OpenQuery(query) => self.queries.open(query),
+            Action::OpenQuery { connection, query } => self.queries.open(connection, query),
         }
     }
 
-    /// Starts the task that opens a session on `connection`, unless one already serves it.
+    /// Starts the task that opens a session on `connection`, or asks the one that serves it to open it again unless it is open.
     fn open(&mut self, connection: Connection) {
-        let answers = &self.answers;
-        self.sessions.entry(connection.name().clone()).or_insert_with(|| SessionLink::start(connection, answers.clone()));
+        match self.sessions.get(connection.name()) {
+            Some(session) => session.send(Job::Open),
+            None => _ = self.sessions.insert(connection.name().clone(), SessionLink::start(connection, self.answers.clone())),
+        }
     }
 
     /// Queues `statement` on the session of `connection`; its answer comes back as an `Answer`.
@@ -75,7 +85,7 @@ impl Backend {
             tracing::warn!("no session for `{connection}`: the statement is dropped");
             return;
         };
-        session.run(run, statement);
+        session.send(Job::Run(Queued { run, statement }));
     }
 
     /// Cancels `run` on the session of `connection`; see `SessionLink::cancel`.
@@ -96,16 +106,16 @@ impl Backend {
 impl SessionLink {
     /// Starts the task that opens a session on `connection` and runs each statement in turn.
     fn start(connection: Connection, answers: UnboundedSender<Answer>) -> Self {
-        let (runs, queue) = mpsc::unbounded_channel();
+        let (jobs, queue) = mpsc::unbounded_channel();
         let (cancels, cancelled) = mpsc::unbounded_channel();
         let task = tokio::spawn(SessionTask { connection, tunnel: None, session: None, cancelled, answers }.serve(queue));
-        Self { runs, cancels, task }
+        Self { jobs, cancels, task }
     }
 
-    /// Queues `statement` behind the one running.
-    fn run(&self, run: RunId, statement: Statement) {
-        if self.runs.send(Queued { run, statement }).is_err() {
-            tracing::warn!("the session task is gone: the statement is dropped");
+    /// Queues `job` behind the one running.
+    fn send(&self, job: Job) {
+        if self.jobs.send(job).is_err() {
+            tracing::warn!("the session task is gone: a statement or an open is dropped");
         }
     }
 
@@ -118,8 +128,8 @@ impl SessionLink {
 
     /// Lets the session task finish what it was asked, a cancel included, waiting `STOP_WAIT` at most.
     async fn stop(self) {
-        let Self { runs, cancels, task } = self;
-        drop((runs, cancels));
+        let Self { jobs, cancels, task } = self;
+        drop((jobs, cancels));
         match tokio::time::timeout(STOP_WAIT, task).await {
             Ok(Ok(())) => {}
             Ok(Err(err)) => tracing::warn!("the session task failed: {err}"),
@@ -130,7 +140,7 @@ impl SessionLink {
 
 /// What woke the session task.
 enum Woken {
-    Queued(Option<Queued>),
+    Queued(Option<Job>),
     Closed(String),
     TunnelEnded(Died),
 }
@@ -147,14 +157,14 @@ struct SessionTask {
 impl SessionTask {
     /// Opens the session at once, and again before a statement when the last try failed or the session was lost;
     /// once pgbg quits, a statement still queued is never sent.
-    async fn serve(mut self, mut queue: UnboundedReceiver<Queued>) {
-        if let Err(error) = self.open().await {
-            self.fail_queued(&mut queue, &error);
-        }
+    async fn serve(mut self, mut queue: UnboundedReceiver<Job>) {
+        self.open_or_fail_queued(&mut queue).await;
         loop {
             match self.woken(&mut queue).await {
                 Woken::Queued(Some(_)) if queue.is_closed() => {}
-                Woken::Queued(Some(queued)) => self.run(queued).await,
+                Woken::Queued(Some(Job::Run(queued))) => self.run(queued).await,
+                Woken::Queued(Some(Job::Open)) if self.session.is_none() => self.open_or_fail_queued(&mut queue).await,
+                Woken::Queued(Some(Job::Open)) => {}
                 Woken::Queued(None) => break,
                 Woken::Closed(why) => self.lose(why),
                 Woken::TunnelEnded(died) => self.lose_tunnel(&died),
@@ -163,7 +173,7 @@ impl SessionTask {
         self.stop().await;
     }
 
-    async fn woken(&mut self, queue: &mut UnboundedReceiver<Queued>) -> Woken {
+    async fn woken(&mut self, queue: &mut UnboundedReceiver<Job>) -> Woken {
         let Self { session, tunnel, .. } = self;
         tokio::select! {
             queued = queue.recv() => Woken::Queued(queued),
@@ -193,10 +203,13 @@ impl SessionTask {
         Session::open(&self.connection, route).await.map_err(|err| format!("{err:#}"))
     }
 
-    /// Fails every statement sent while the session was opening, so the open that comes after never sends one.
-    fn fail_queued(&self, queue: &mut UnboundedReceiver<Queued>, error: &str) {
-        while let Ok(queued) = queue.try_recv() {
-            self.send(Incoming::Failed { run: queued.run, error: error.to_owned(), position: None });
+    /// Opens the session; when it does not open, every statement sent meanwhile fails with it, so a later open never sends one.
+    async fn open_or_fail_queued(&mut self, queue: &mut UnboundedReceiver<Job>) {
+        let Err(error) = self.open().await else { return };
+        while let Ok(job) = queue.try_recv() {
+            if let Job::Run(queued) = job {
+                self.send(Incoming::Failed { run: queued.run, error: error.clone(), position: None });
+            }
         }
     }
 
@@ -443,6 +456,20 @@ mod tests {
         assert_eq!(seen[0], Incoming::Tunnel(TunnelState::Starting));
         assert!(matches!(&seen[1], Incoming::Tunnel(TunnelState::Died(how)) if how.contains("no route")), "{seen:?}");
         assert_eq!(seen[2], Incoming::NotOpened(TUNNEL_NOT_STARTED.to_owned()));
+    }
+
+    #[tokio::test]
+    #[ignore = "starts a tunnel"]
+    async fn opening_again_a_connection_that_failed_tries_again() {
+        let shop = fixtures::connection(
+            "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\ntls = \"off\"\n\
+             tunnel = { command = [\"sh\", \"-c\", \"exit 255\", \"{port}\"] }\n",
+        );
+        let (mut backend, mut answers) = started_on(shop.clone());
+        answers_until(&mut answers, |answer| matches!(answer, Incoming::NotOpened(_))).await;
+        backend.open(shop);
+        let again = answers_until(&mut answers, |answer| matches!(answer, Incoming::NotOpened(_))).await;
+        assert_eq!(again[0], Incoming::Tunnel(TunnelState::Starting));
     }
 
     #[tokio::test]

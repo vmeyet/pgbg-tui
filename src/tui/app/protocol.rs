@@ -27,8 +27,8 @@ pub(in crate::tui) enum Action {
     Cancel { connection: ConnectionName, run: RunId },
     /// List every saved query.
     ListQueries,
-    /// Read this query, for the editor.
-    OpenQuery(Query),
+    /// Read this query into the editor of the connection's sheet.
+    OpenQuery { connection: ConnectionName, query: Query },
 }
 
 /// What the backend answers.
@@ -36,7 +36,7 @@ pub(in crate::tui) enum Action {
 pub(in crate::tui) enum Answer {
     /// From the session of `connection`, so an answer from one never lands on another.
     Session { connection: ConnectionName, incoming: Incoming },
-    /// About the saved queries, which every connection shares.
+    /// About the saved queries: the list every connection shares, or a query read for one sheet.
     Queries(QueryAnswer),
 }
 
@@ -45,11 +45,14 @@ pub(in crate::tui) enum Answer {
 pub(in crate::tui) enum QueryAnswer {
     /// Every saved query, sorted.
     All(Vec<Query>),
+    /// The text of `query`, for the sheet of `connection`, which asked for it.
     Opened {
+        connection: ConnectionName,
         query: Query,
         text: String,
     },
     NotOpened {
+        connection: ConnectionName,
         query: Query,
         error: String,
     },

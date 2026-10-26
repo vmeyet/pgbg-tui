@@ -1,6 +1,7 @@
 //! The saved queries on disk: listed and read off the loop, each answer sent back as `Answer::Queries`.
 use super::super::app::{Answer, QueryAnswer};
 use super::send;
+use crate::connection::ConnectionName;
 use crate::query::{Query, Roots};
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -18,13 +19,13 @@ impl QueryFiles {
         tokio::task::spawn_blocking(move || send(&answers, Answer::Queries(QueryAnswer::All(roots.list()))));
     }
 
-    /// Reads `query`; its text comes back as `QueryAnswer::Opened`.
-    pub(in crate::tui) fn open(&self, query: Query) {
+    /// Reads `query` for the sheet of `connection`; its text comes back as `QueryAnswer::Opened`.
+    pub(in crate::tui) fn open(&self, connection: ConnectionName, query: Query) {
         let (roots, answers) = (self.roots.clone(), self.answers.clone());
         tokio::spawn(async move {
             let answer = match roots.read(&query).await {
-                Ok(text) => QueryAnswer::Opened { query, text },
-                Err(err) => QueryAnswer::NotOpened { query, error: format!("{err:#}") },
+                Ok(text) => QueryAnswer::Opened { connection, query, text },
+                Err(err) => QueryAnswer::NotOpened { connection, query, error: format!("{err:#}") },
             };
             send(&answers, Answer::Queries(answer));
         });

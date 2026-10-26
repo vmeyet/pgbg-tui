@@ -71,6 +71,8 @@ pub(in crate::tui) struct Sheet {
     pub(in crate::tui) error_mark: Option<usize>,
     /// The saved query the editor stands for, once one was opened in it.
     pub(in crate::tui) opened: Option<Query>,
+    /// Why the last query asked for could not be opened, until one opens.
+    pub(in crate::tui) query_error: Option<String>,
     /// The header of the editor's text: its `-- chart:` draws each result of the sheet.
     pub(in crate::tui) header: Header,
 }
@@ -89,6 +91,7 @@ impl Sheet {
             last_run: None,
             error_mark: None,
             opened: None,
+            query_error: None,
             header: Header::default(),
         }
     }
@@ -120,13 +123,17 @@ impl Sheet {
         }
     }
 
+    pub(in crate::tui) fn is_running(&self) -> bool {
+        self.running_run().is_some()
+    }
+
     fn is_answer_to_running(&self, run: RunId) -> bool {
         self.running_run() == Some(run)
     }
 
     /// Runs the statement under the cursor, the editor's other statements left alone.
     pub(super) fn run_editor(&mut self) -> Vec<Action> {
-        if self.running_run().is_some() {
+        if self.is_running() {
             return vec![];
         }
         let (before, _, _) = self.editor.split();

@@ -237,18 +237,20 @@ impl App {
         self.sheets.iter().filter_map(Sheet::cancel_of_running).collect()
     }
 
-    /// Applies one answer: a session's to the sheet of its connection, the saved queries' to the sheet on screen.
+    /// Applies one answer: a session's or a query read to the sheet of its connection, the list of queries to the app.
     pub(super) fn apply(&mut self, answer: Answer) {
         match answer {
             Answer::Session { connection, incoming } => {
-                if let Some(sheet) = self.sheets.iter_mut().find(|sheet| sheet.name == connection) {
+                if let Some(sheet) = self.sheet_of_mut(&connection) {
                     sheet.apply(incoming);
                 }
             }
             Answer::Queries(QueryAnswer::All(all)) => self.listed(all),
-            Answer::Queries(QueryAnswer::Opened { query, text }) => self.opened(query, &text),
-            Answer::Queries(QueryAnswer::NotOpened { query, error }) => {
-                self.queries.error = Some(format!("could not open {}: {error}", query.path));
+            Answer::Queries(QueryAnswer::Opened { connection, query, text }) => self.opened(&connection, query, &text),
+            Answer::Queries(QueryAnswer::NotOpened { connection, query, error }) => {
+                if let Some(sheet) = self.sheet_of_mut(&connection) {
+                    sheet.query_error = Some(format!("could not open {}: {error}", query.path));
+                }
             }
         }
     }

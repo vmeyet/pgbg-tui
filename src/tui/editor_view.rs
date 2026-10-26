@@ -167,7 +167,7 @@ fn header_notes(app: &App) -> Line<'static> {
 
 /// Why the last query asked for could not be opened, in the danger colour.
 fn open_error(app: &App) -> Span<'static> {
-    let error = app.queries.error.as_ref().map(|error| format!(" ✗ {error} "));
+    let error = app.sheet().query_error.as_ref().map(|error| format!(" ✗ {error} "));
     Span::styled(error.unwrap_or_default(), Style::default().fg(app.theme.danger))
 }
 

@@ -28,7 +28,7 @@ When a boundary or a flow changes, change this page in the same MR.
 | `syntax/` | SQL colours from tree-sitter, loaded on first use |
 | `act.rs`, `keymap.rs` (planned) | Every action in one table (name, default keys, help, pane, and palette verb (planned)); the user's `[keys]` on top (planned) |
 | `tui/mod.rs` | The event loop: terminal events, answers and ticks in, frames out |
-| `tui/app/` | `App`, the pure state machine: keys in, `Action`s out, `Answer`s applied to the sheet of the connection that gave them; `protocol.rs` holds what the app and the backend say to each other, `sheet.rs` one connection's state; one `Overlay` at most (help, finder, picker) takes the keys |
+| `tui/app/` | `App`, the pure state machine: keys in, `Action`s out, `Answer`s applied to the sheet of the connection that gave them, a saved query read to the sheet that asked for it; `protocol.rs` holds what the app and the backend say to each other, `sheet.rs` one connection's state; one `Overlay` at most (help, finder, picker) takes the keys |
 | `tui/backend/` | `Backend::dispatch` hands each `Action` over without waiting, to one part per concern: sessions (one per connection opened, a task owns each one, runs its statements in turn, takes cancels by `RunId` while a statement runs, and says when the session is lost), queries, and history (planned) |
 | `tui/ui.rs`, `tui/*_view.rs` | Drawing: layout in `ui.rs`, one view module per pane or modal |
 | `tui/grid_view/` | The results grid: only the visible rows and columns are drawn |
@@ -55,7 +55,7 @@ Running a statement:
 
 Switching connection:
 
-1. `ctrl-o` opens the connection picker; picking one not yet open starts its sheet and returns `Action::Open(connection)`, picking an open one shows its sheet and returns nothing.
+1. `ctrl-o` opens the connection picker; picking one not yet open starts its sheet and returns `Action::Open(connection)`, picking one whose session failed returns it again so its task opens it again, picking an open one shows its sheet and returns nothing.
 2. When the connection has a tunnel, the session task starts it with `Tunnel::start`: it picks a free port, runs the command, and waits until the port answers.
 3. `Session::open` takes the tunnel's `Route`: it connects to `hostaddr=127.0.0.1` and the tunnel's port, and keeps the URL's host for the TLS certificate check; it reads the schema in the background for completion and the sidebar.
 4. The session stays open until pgbg quits, so switching back is instant; its tunnel stops with it.
@@ -127,6 +127,7 @@ On a connection that allows writes, a statement runs as typed, except that one r
 - One `.sql` file per query under `.pgbg/queries/`, found by walking up from the working directory like `.git`, then under the user config folder.
 - The walk stops at the home folder or at the first folder holding `.git`, so a folder above the project never gives its queries.
 - A root that is a link, under a `.pgbg` that is a link, or that another user owns is skipped with a warning: a cloned repository cannot point pgbg at the whole disk.
+- Each list and each read checks the root again, and that it still leads to the real path it had when found: a folder swapped for a link since then is skipped.
 - Folders nest; the sidebar shows the tree and the fuzzy finder searches every file.
 - Listing walks the folders on a blocking thread, keeps only plain files, and never follows a link, so nothing outside the root is listed.
 - Opening reads the file through `tokio::fs`, again only when it is a plain file whose real path stays inside its root, and only up to 1 MiB; a bigger one is too big for the editor.

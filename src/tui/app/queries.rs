@@ -2,6 +2,7 @@
 use super::editor::Editor;
 use super::{Action, App, Focus, Overlay};
 use crate::act::{self, Act, Pane};
+use crate::connection::ConnectionName;
 use crate::query::{Query, TreeRow, tree_rows};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::collections::BTreeSet;
@@ -51,8 +52,6 @@ pub(in crate::tui) struct Queries {
     pub(in crate::tui) all: Vec<Query>,
     closed: BTreeSet<String>,
     pub(in crate::tui) selected: usize,
-    /// Why the last query asked for could not be opened, until one opens.
-    pub(in crate::tui) error: Option<String>,
 }
 
 impl Queries {
@@ -68,9 +67,13 @@ fn found(all: &[Query], input: &str) -> Vec<Query> {
 }
 
 impl App {
-    /// Takes the new list of queries, the sidebar's cursor kept inside it.
+    /// Takes the new list of queries, the sidebar's cursor kept on its row, else inside the list.
     pub(super) fn listed(&mut self, all: Vec<Query>) {
+        let selected = self.queries.rows().into_iter().nth(self.queries.selected);
         self.queries.all = all;
+        let rows = self.queries.rows();
+        let kept = selected.and_then(|selected| rows.iter().position(|row| row.is_at(&selected)));
+        self.queries.selected = kept.unwrap_or(self.queries.selected);
         self.step_sidebar(0);
         if let Some(Overlay::Finder(finder)) = &mut self.overlay {
             finder.rank(&self.queries.all);
@@ -91,7 +94,7 @@ impl App {
     /// Opens the query under the sidebar's cursor, or folds and unfolds the folder there.
     pub(super) fn open_in_sidebar(&mut self) -> Vec<Action> {
         match self.queries.rows().into_iter().nth(self.queries.selected) {
-            Some(TreeRow::Query { query, .. }) => return vec![Action::OpenQuery(query)],
+            Some(TreeRow::Query { query, .. }) => return vec![self.open_query(query)],
             Some(TreeRow::Folder { key, is_open: true, .. }) => _ = self.queries.closed.insert(key),
             Some(TreeRow::Folder { key, is_open: false, .. }) => _ = self.queries.closed.remove(&key),
             None => {}
@@ -105,7 +108,8 @@ impl App {
             Some(Act::Down) => finder.palette.move_by(1, finder.shown.len()),
             Some(Act::Up) => finder.palette.move_by(-1, finder.shown.len()),
             Some(Act::Open) => {
-                return (None, finder.shown.into_iter().nth(finder.palette.selected).map(Action::OpenQuery).into_iter().collect());
+                let picked = finder.shown.into_iter().nth(finder.palette.selected);
+                return (None, picked.map(|query| self.open_query(query)).into_iter().collect());
             }
             Some(Act::Close) => return (None, vec![]),
             Some(Act::Quit) => return (None, self.quit()),
@@ -122,14 +126,22 @@ impl App {
         (Some(finder), vec![])
     }
 
-    /// Puts the text of `query` in the editor, which it now stands for.
-    pub(super) fn opened(&mut self, query: Query, text: &str) {
-        self.queries.error = None;
-        let sheet = self.sheet_mut();
+    /// Reads `query` into the editor on screen.
+    fn open_query(&self, query: Query) -> Action {
+        Action::OpenQuery { connection: self.sheet().name.clone(), query }
+    }
+
+    /// Puts the text of `query` in the editor of `connection`, which it now stands for; the keys go to it when it is on screen.
+    pub(super) fn opened(&mut self, connection: &ConnectionName, query: Query, text: &str) {
+        let is_on_screen = self.sheet().name == *connection;
+        let Some(sheet) = self.sheet_of_mut(connection) else { return };
+        sheet.query_error = None;
         sheet.opened = Some(query);
         sheet.editor = Editor::new(text);
         sheet.text_changed();
-        self.focus = Focus::Editor;
+        if is_on_screen {
+            self.focus = Focus::Editor;
+        }
     }
 }
 
@@ -170,7 +182,7 @@ pub(in crate::tui) mod tests {
         let mut app = with_queries();
         find(&mut app, "wkly");
         assert_eq!(app.sheet().editor.text(), "");
-        assert_eq!(press(&mut app, KeyCode::Enter), [Action::OpenQuery(query("orders/weekly.sql"))]);
+        assert_eq!(press(&mut app, KeyCode::Enter), [Action::OpenQuery { connection: shop(), query: query("orders/weekly.sql") }]);
         assert_eq!(app.overlay, None);
     }
 
@@ -179,7 +191,7 @@ pub(in crate::tui) mod tests {
         let mut app = with_queries();
         find(&mut app, "orders");
         press(&mut app, KeyCode::Down);
-        assert_eq!(press(&mut app, KeyCode::Enter), [Action::OpenQuery(query("orders/weekly.sql"))]);
+        assert_eq!(press(&mut app, KeyCode::Enter), [Action::OpenQuery { connection: shop(), query: query("orders/weekly.sql") }]);
     }
 
     #[test]
@@ -187,7 +199,7 @@ pub(in crate::tui) mod tests {
         let mut app = with_queries();
         find(&mut app, "");
         app.paste("wkly\n");
-        assert_eq!(press(&mut app, KeyCode::Enter), [Action::OpenQuery(query("orders/weekly.sql"))]);
+        assert_eq!(press(&mut app, KeyCode::Enter), [Action::OpenQuery { connection: shop(), query: query("orders/weekly.sql") }]);
     }
 
     #[test]
@@ -202,7 +214,11 @@ pub(in crate::tui) mod tests {
     fn an_opened_query_fills_the_editor_and_takes_the_keys() {
         let mut app = with_queries();
         press(&mut app, KeyCode::Tab);
-        app.apply(Answer::Queries(QueryAnswer::Opened { query: query("customers.sql"), text: "SELECT * FROM customers".into() }));
+        app.apply(Answer::Queries(QueryAnswer::Opened {
+            connection: shop(),
+            query: query("customers.sql"),
+            text: "SELECT * FROM customers".into(),
+        }));
         assert_eq!(app.sheet().editor.text(), "SELECT * FROM customers");
         assert_eq!(app.sheet().opened, Some(query("customers.sql")));
         assert_eq!(app.sheet().editor.colours(), syntax::highlight("SELECT * FROM customers"));
@@ -213,8 +229,12 @@ pub(in crate::tui) mod tests {
     fn a_query_that_cannot_be_read_says_so_and_leaves_the_running_statement_alone() {
         let mut app = with_queries();
         app.sheet_mut().run = Run::Running { run: RunId::FIRST };
-        app.apply(Answer::Queries(QueryAnswer::NotOpened { query: query("customers.sql"), error: "permission denied".into() }));
-        assert_eq!(app.queries.error.as_deref(), Some("could not open customers.sql: permission denied"));
+        app.apply(Answer::Queries(QueryAnswer::NotOpened {
+            connection: shop(),
+            query: query("customers.sql"),
+            error: "permission denied".into(),
+        }));
+        assert_eq!(app.sheet().query_error.as_deref(), Some("could not open customers.sql: permission denied"));
         assert_eq!(app.sheet().run, Run::Running { run: RunId::FIRST });
     }
 
@@ -231,7 +251,7 @@ pub(in crate::tui) mod tests {
         let mut app = with_queries();
         assert_eq!(press(&mut app, KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL)), [Action::ListQueries]);
         app.apply(Answer::Queries(QueryAnswer::All(vec![query("refunds.sql")])));
-        assert_eq!(press(&mut app, KeyCode::Enter), [Action::OpenQuery(query("refunds.sql"))]);
+        assert_eq!(press(&mut app, KeyCode::Enter), [Action::OpenQuery { connection: shop(), query: query("refunds.sql") }]);
     }
 
     fn to_sidebar(app: &mut App) {
@@ -269,7 +289,7 @@ pub(in crate::tui) mod tests {
         let mut app = with_queries();
         to_sidebar(&mut app);
         press(&mut app, KeyCode::Char('j'));
-        assert_eq!(press(&mut app, KeyCode::Enter), [Action::OpenQuery(query("orders/daily.sql"))]);
+        assert_eq!(press(&mut app, KeyCode::Enter), [Action::OpenQuery { connection: shop(), query: query("orders/daily.sql") }]);
     }
 
     #[test]
@@ -283,6 +303,16 @@ pub(in crate::tui) mod tests {
     }
 
     #[test]
+    fn the_sidebar_cursor_stays_on_its_query_when_the_list_changes() {
+        let mut app = with_queries();
+        to_sidebar(&mut app);
+        (0..2).for_each(|_| _ = press(&mut app, KeyCode::Char('j')));
+        let all = vec![query("archive/old.sql"), query("customers.sql"), query("orders/daily.sql"), query("orders/weekly.sql")];
+        app.apply(Answer::Queries(QueryAnswer::All(all)));
+        assert_eq!(press(&mut app, KeyCode::Enter), [Action::OpenQuery { connection: shop(), query: query("orders/weekly.sql") }]);
+    }
+
+    #[test]
     fn the_sidebar_cursor_stays_inside_a_shorter_list() {
         let mut app = with_queries();
         to_sidebar(&mut app);
@@ -293,7 +323,7 @@ pub(in crate::tui) mod tests {
 
     fn opened_and_run(text: &str) -> (App, Vec<Action>) {
         let mut app = with_queries();
-        app.apply(Answer::Queries(QueryAnswer::Opened { query: query("orders/daily.sql"), text: text.into() }));
+        app.apply(Answer::Queries(QueryAnswer::Opened { connection: shop(), query: query("orders/daily.sql"), text: text.into() }));
         let actions = press(&mut app, KeyCode::Enter);
         (app, actions)
     }
