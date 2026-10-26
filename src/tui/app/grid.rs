@@ -1,7 +1,6 @@
 //! The results grid's state: the current row, the first row and column in view, and each column's width.
 use crate::db::model::{ResultSet, Value};
 use crate::render;
-use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::text::Span;
 
 /// No column is drawn wider, so one long text never hides the others.
@@ -20,23 +19,6 @@ pub(super) enum Move {
     Last,
     Left,
     Right,
-}
-
-impl Move {
-    /// The move `key` asks for, if any.
-    pub(super) fn from_key(key: KeyEvent) -> Option<Self> {
-        match key.code {
-            KeyCode::Char('j') | KeyCode::Down => Some(Self::Down),
-            KeyCode::Char('k') | KeyCode::Up => Some(Self::Up),
-            KeyCode::PageDown => Some(Self::PageDown),
-            KeyCode::PageUp => Some(Self::PageUp),
-            KeyCode::Char('g') => Some(Self::First),
-            KeyCode::Char('G') => Some(Self::Last),
-            KeyCode::Char('h') | KeyCode::Left => Some(Self::Left),
-            KeyCode::Char('l') | KeyCode::Right => Some(Self::Right),
-            _ => None,
-        }
-    }
 }
 
 /// Where the grid's cursor stands in a result; the widths are measured once, when the result arrives.

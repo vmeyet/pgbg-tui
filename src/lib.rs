@@ -1,4 +1,5 @@
 //! PostgreSQL in your terminal, read only by default: the library behind the `pgbg` binary.
+mod act;
 pub mod cli;
 pub mod commands;
 mod config;
