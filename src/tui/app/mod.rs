@@ -3,6 +3,7 @@ use crate::act::{self, Act, Pane};
 use crate::connection::{Connection, ConnectionName, Tier, WritePolicy};
 use crate::db::guard;
 use crate::db::model::{LocalPort, ResultSet, Statement};
+use crate::query::QueryPath;
 use crate::syntax::Spans;
 use crossterm::event::{KeyCode, KeyEvent};
 use std::time::Duration;
@@ -11,12 +12,14 @@ use vtui::help::Help;
 use vtui::theme::Theme;
 
 pub(super) use grid::Grid;
+pub(super) use queries::{Finder, Queries, found};
 
 const LOST_SESSION: &str = "session lost, ⏎ opens a new one";
 use grid::Move;
 
 mod grid;
 mod keys;
+pub(super) mod queries;
 
 /// Which run of a statement an answer or a cancel is about, so a late one never lands on the next run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,6 +40,10 @@ pub(super) enum Action {
     Run { run: RunId, statement: Statement },
     /// Cancel this run if the session is still on it.
     Cancel(RunId),
+    /// List every saved query.
+    ListQueries,
+    /// Read this query, for the editor.
+    OpenQuery(QueryPath),
 }
 
 /// What the backend answers.
@@ -64,6 +71,16 @@ pub(super) enum Incoming {
         error: String,
         /// A character count from 1 into the statement sent, as PostgreSQL counts.
         position: Option<usize>,
+    },
+    /// Every saved query, sorted.
+    Queries(Vec<QueryPath>),
+    QueryOpened {
+        path: QueryPath,
+        text: String,
+    },
+    QueryNotOpened {
+        path: QueryPath,
+        error: String,
     },
 }
 
@@ -154,6 +171,9 @@ pub(super) struct App {
     pub(super) focus: Focus,
     /// The `?` overlay while it is open; it takes every key.
     pub(super) help: Option<Help>,
+    pub(super) queries: Queries,
+    /// The `ctrl-p` finder while it is open; it takes every key.
+    pub(super) finder: Option<Finder>,
     /// The grid rows the last frame had room for: a page, for `PgDn`.
     grid_rows: usize,
     sent: Option<Sent>,
@@ -177,6 +197,8 @@ impl App {
             run: Run::Idle,
             focus: Focus::Editor,
             help: None,
+            queries: Queries::default(),
+            finder: None,
             grid_rows: 0,
             sent: None,
             error_mark: None,
@@ -184,11 +206,21 @@ impl App {
         }
     }
 
+    /// What the runner should do as the TUI starts.
+    pub(super) fn start() -> Vec<Action> {
+        vec![Action::ListQueries]
+    }
+
     /// Takes one key; returns what the runner should do about it.
     pub(super) fn handle_key(&mut self, key: KeyEvent) -> Vec<Action> {
         if let Some(help) = self.help {
             self.help = help_after(help, key, self.focus);
             return vec![];
+        }
+        if let Some(finder) = self.finder.take() {
+            let actions;
+            (self.finder, actions) = self.finder_after(finder, key);
+            return actions;
         }
         if let Some(act) = act::act_for(key, self.focus.pane()) {
             return self.act(act);
@@ -215,6 +247,8 @@ impl App {
             Act::Bottom => self.grid_step(Move::Last),
             Act::Left => self.grid_step(Move::Left),
             Act::Right => self.grid_step(Move::Right),
+            Act::Find => self.finder = Some(Finder::default()),
+            Act::Open | Act::Close => {}
         }
         vec![]
     }
@@ -301,6 +335,9 @@ impl App {
                 self.error_mark = position.and_then(|position| self.editor_byte(position));
                 self.run = Run::Failed(error);
             }
+            Incoming::Queries(all) => self.queries.all = all,
+            Incoming::QueryOpened { path, text } => self.opened(path, &text),
+            Incoming::QueryNotOpened { path, error } => self.run = Run::Failed(format!("could not open {path}: {error}")),
         }
     }
 

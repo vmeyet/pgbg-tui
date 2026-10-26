@@ -7,5 +7,7 @@ pub(super) fn spawn(action: Action, backend: &Backend) {
     match action {
         Action::Run { run, statement } => backend.run(run, statement),
         Action::Cancel(run) => backend.cancel(run),
+        Action::ListQueries => backend.queries.list(),
+        Action::OpenQuery(path) => backend.queries.open(path),
     }
 }

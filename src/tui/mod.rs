@@ -3,6 +3,7 @@ mod actions;
 mod app;
 mod backend;
 mod editor_view;
+mod finder_view;
 mod grid_view;
 mod help_view;
 mod result_view;
@@ -10,6 +11,7 @@ mod theme;
 mod ui;
 
 use crate::connection::Connection;
+use crate::query::Root;
 use anyhow::Result;
 use app::{App, Incoming};
 use backend::Backend;
@@ -25,12 +27,21 @@ pub(crate) async fn run(connection: Connection) -> Result<()> {
     let theme = vtui::ground::ask().map_or_else(Theme::default, |ground| Theme::default().with_ground(ground));
     let mut app = App::new(&connection, theme);
     let (answers, mut incoming) = mpsc::unbounded_channel();
-    let backend = Backend::start(connection, answers);
+    let backend = Backend::start(connection, find_root().await?, answers);
+    for action in App::start() {
+        actions::spawn(action, &backend);
+    }
     let (mut terminal, screen) = Screen::enter();
     let outcome = event_loop(&mut terminal, &mut app, &backend, &mut incoming).await;
     screen.leave();
     backend.stop().await;
     outcome
+}
+
+/// The folder of saved queries nearest the working directory.
+async fn find_root() -> Result<Option<Root>> {
+    let working_dir = std::env::current_dir()?;
+    Ok(tokio::task::spawn_blocking(move || Root::find(&working_dir)).await?)
 }
 
 async fn event_loop(

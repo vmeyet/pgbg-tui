@@ -1,6 +1,6 @@
 //! Drawing: the frame in the tier's colour, the panes inside it, and the key hints under them.
 use super::app::{App, Link, TunnelState};
-use super::{editor_view, help_view, result_view, theme};
+use super::{editor_view, finder_view, help_view, result_view, theme};
 use crate::act;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -24,6 +24,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> usize {
     editor_view::draw(f, app, areas.editor);
     let grid_rows = result_view::draw(f, app, areas.result);
     footer(f, app, areas.footer);
+    finder_view::draw(f, app);
     help_view::draw(f, app);
     grid_rows
 }
@@ -86,11 +87,12 @@ fn failure(app: &App, err: &str, width: usize) -> Span<'static> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::app::queries::tests::{query, with_queries};
     use super::super::app::tests::{app, connection, orders, typed};
     use super::super::app::{App, Incoming, RunId};
     use super::*;
     use crate::db::model::LocalPort;
-    use crossterm::event::{KeyCode, KeyEvent};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use std::time::Duration;
@@ -150,6 +152,21 @@ mod tests {
     fn a_connection_that_allows_writes_shows_a_writes_badge() {
         let app = App::new(&connection("local", "allowed"), Theme::default());
         insta::assert_snapshot!("writes", render(&app, 60, 6).backend());
+    }
+
+    #[test]
+    fn ctrl_p_opens_the_finder_over_the_screen() {
+        let mut app = with_queries();
+        app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+        app.handle_key(KeyEvent::from(KeyCode::Char('o')));
+        insta::assert_snapshot!("finder", render(&app, 60, 16).backend());
+    }
+
+    #[test]
+    fn an_open_query_names_the_editor() {
+        let mut app = with_queries();
+        app.apply(Incoming::QueryOpened { path: query("orders/daily.sql"), text: "SELECT 1".into() });
+        insta::assert_snapshot!("query_open", render(&app, 60, 6).backend());
     }
 
     #[test]

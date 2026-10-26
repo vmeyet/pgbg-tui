@@ -111,6 +111,7 @@ On a connection that allows writes, a statement runs as typed, except that one r
 
 - One `.sql` file per query under `.pgbg/queries/`, found by walking up from the working directory like `.git`, then under the user config folder.
 - Folders nest; the sidebar shows the tree and the fuzzy finder searches every file.
+- Listing walks the folders on a blocking thread and never follows a link, so nothing outside the root is listed; opening reads the file through `tokio::fs`.
 - An optional header of `--` lines sets the name, the default connection and the chart; a file without a header is still a query.
 - The file is the source of truth: pgbg reads it when it is opened and writes it back when it is saved, nothing else.
 
