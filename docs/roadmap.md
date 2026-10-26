@@ -17,7 +17,7 @@ The MR that ships a step ticks its box.
 
 ## 2. The TUI shell
 
-- [ ] Event loop, `App`, `Action`, `Incoming`, screen, theme
+- [x] Event loop, `App`, `Action`, `Incoming`, screen, theme
 - [ ] SQL editor pane and results grid (visible window only), status line with the connection and its tier colour
 - [ ] Run the statement under the cursor, cancel with `Esc`, errors with the server's position marked in the editor
 

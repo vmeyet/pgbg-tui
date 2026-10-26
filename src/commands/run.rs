@@ -19,11 +19,7 @@ pub async fn run(connection: &str, sql: &str, json: bool) -> Result<()> {
 fn text(result: &ResultSet) -> String {
     let header = result.columns.iter().map(|column| column.name.clone()).collect();
     let rows = result.rows.iter().map(|row| row.iter().map(ToString::to_string).collect());
-    let count = match result.rows.len() {
-        1 => "(1 row)\n".to_owned(),
-        count => format!("({count} rows)\n"),
-    };
-    render::table(&std::iter::once(header).chain(rows).collect::<Vec<_>>()) + &count
+    render::table(&std::iter::once(header).chain(rows).collect::<Vec<_>>()) + &format!("({})\n", render::row_count(result.rows.len()))
 }
 
 #[cfg(test)]
