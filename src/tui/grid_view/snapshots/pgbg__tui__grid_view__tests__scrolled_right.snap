@@ -1,0 +1,7 @@
+---
+source: src/tui/grid_view/mod.rs
+expression: "render(&result, &grid, 40, 3).backend()"
+---
+"     total  customer                    "
+"▶    12.50  nina                        "
+"   1499.00  NULL                        "

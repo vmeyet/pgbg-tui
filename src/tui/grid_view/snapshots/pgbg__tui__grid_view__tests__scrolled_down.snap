@@ -1,0 +1,7 @@
+---
+source: src/tui/grid_view/mod.rs
+expression: "render(&result, &grid, 40, 3).backend()"
+---
+"    id    total  customer               "
+"   103     3.20  Zoë Nakamura           "
+"▶  104     0.99  noel                   "

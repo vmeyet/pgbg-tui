@@ -6,6 +6,11 @@ use std::time::Duration;
 use vtui::field::Field;
 use vtui::theme::Theme;
 
+pub(super) use grid::Grid;
+use grid::Move;
+pub(super) use grid::cell_text;
+
+mod grid;
 mod keys;
 
 /// What the app asks the runner to do.
@@ -48,11 +53,20 @@ pub(super) enum Run {
     Done {
         result: ResultSet,
         took: Duration,
+        grid: Grid,
     },
     Failed(String),
 }
 
-/// The whole TUI state; `handle_key` and `apply` are the only ways it changes.
+/// The pane that has the keys.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum Focus {
+    #[default]
+    Editor,
+    Result,
+}
+
+/// The whole TUI state; `handle_key`, `apply` and `fit_grid` are the only ways it changes.
 #[derive(Debug)]
 pub(super) struct App {
     pub(super) theme: Theme,
@@ -62,6 +76,9 @@ pub(super) struct App {
     pub(super) editor: Field,
     pub(super) link: Link,
     pub(super) run: Run,
+    pub(super) focus: Focus,
+    /// The grid rows the last frame had room for: a page, for `PgDn`.
+    grid_rows: usize,
     pub(super) should_quit: bool,
 }
 
@@ -76,6 +93,8 @@ impl App {
             editor: Field::default(),
             link: Link::Opening,
             run: Run::Idle,
+            focus: Focus::Editor,
+            grid_rows: 0,
             should_quit: false,
         }
     }
@@ -88,11 +107,42 @@ impl App {
                 self.should_quit = true;
                 vec![]
             }
-            KeyCode::Enter if key.modifiers.is_empty() => self.run_editor(),
-            _ => {
-                keys::edit(&mut self.editor, key);
+            KeyCode::Tab => {
+                self.focus = match self.focus {
+                    Focus::Editor => Focus::Result,
+                    Focus::Result => Focus::Editor,
+                };
                 vec![]
             }
+            _ => match self.focus {
+                Focus::Editor => self.editor_key(key),
+                Focus::Result => {
+                    self.grid_key(key);
+                    vec![]
+                }
+            },
+        }
+    }
+
+    /// Tells the app how many grid rows the frame just drawn had room for, and keeps the cursor among them.
+    pub(super) fn fit_grid(&mut self, rows: usize) {
+        self.grid_rows = rows;
+        if let Run::Done { grid, .. } = &mut self.run {
+            grid.keep_in_view(rows);
+        }
+    }
+
+    fn editor_key(&mut self, key: KeyEvent) -> Vec<Action> {
+        if key.code == KeyCode::Enter && key.modifiers.is_empty() {
+            return self.run_editor();
+        }
+        keys::edit(&mut self.editor, key);
+        vec![]
+    }
+
+    fn grid_key(&mut self, key: KeyEvent) {
+        if let (Run::Done { grid, .. }, Some(step)) = (&mut self.run, Move::from_key(key)) {
+            grid.step(step, self.grid_rows);
         }
     }
 
@@ -115,7 +165,7 @@ impl App {
                 }
                 self.link = Link::Failed(err);
             }
-            Incoming::Result { result, took } => self.run = Run::Done { result, took },
+            Incoming::Result { result, took } => self.run = Run::Done { grid: Grid::new(&result), result, took },
             Incoming::Refused(why) => self.run = Run::Failed(format!("not sent: {why}")),
             Incoming::Failed(err) => self.run = Run::Failed(err),
         }
@@ -148,9 +198,15 @@ pub(super) mod tests {
 
     pub(crate) fn orders() -> ResultSet {
         let column = |name: &str, kind| Column { name: name.to_owned(), kind, type_name: String::new() };
+        let row = |id: i64, total: &str, customer: Value| vec![Value::Int(id), Value::Numeric(total.into()), customer];
         ResultSet {
-            columns: vec![column("id", ColumnKind::Int), column("customer", ColumnKind::Text)],
-            rows: vec![vec![Value::Int(7), Value::Text("nina".into())], vec![Value::Int(12), Value::Null]],
+            columns: vec![column("id", ColumnKind::Int), column("total", ColumnKind::Numeric), column("customer", ColumnKind::Text)],
+            rows: vec![
+                row(7, "12.50", Value::Text("nina".into())),
+                row(12, "1499.00", Value::Null),
+                row(103, "3.20", Value::Text("Zoë Nakamura".into())),
+                row(104, "0.99", Value::Text("noel".into())),
+            ],
         }
     }
 
@@ -189,7 +245,37 @@ pub(super) mod tests {
         let mut app = typed("SELECT 1");
         enter(&mut app);
         app.apply(Incoming::Result { result: orders(), took: Duration::from_millis(38) });
-        assert_eq!(app.run, Run::Done { result: orders(), took: Duration::from_millis(38) });
+        assert_eq!(app.run, Run::Done { grid: Grid::new(&orders()), result: orders(), took: Duration::from_millis(38) });
+    }
+
+    fn with_result() -> App {
+        let mut app = typed("SELECT 1");
+        enter(&mut app);
+        app.apply(Incoming::Result { result: orders(), took: Duration::from_millis(38) });
+        app
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    #[test]
+    fn tab_moves_the_keys_to_the_result_and_back() {
+        let mut app = with_result();
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.focus, Focus::Result);
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.focus, Focus::Editor);
+    }
+
+    #[test]
+    fn j_on_the_result_moves_its_cursor_and_types_nothing() {
+        let mut app = with_result();
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Char('j'));
+        let Run::Done { grid, .. } = &app.run else { panic!("no result") };
+        assert_eq!(grid.row, 1);
+        assert_eq!(app.editor.text(), "SELECT 1");
     }
 
     #[test]

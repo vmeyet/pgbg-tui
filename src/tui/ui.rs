@@ -1,5 +1,5 @@
 //! Drawing: the frame in the tier's colour, the panes inside it, and the key hints under them.
-use super::app::{App, Link};
+use super::app::{App, Focus, Link};
 use super::{editor_view, result_view, theme};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -9,7 +9,8 @@ use ratatui::widgets::{Block, BorderType, Paragraph};
 use vtui::text::truncate;
 
 const EDITOR_SHARE_PCT: u16 = 40;
-const HINTS: [(&str, &str); 3] = [("⏎", "run"), ("⌥⏎", "new line"), ("^c", "quit")];
+const EDITOR_HINTS: [(&str, &str); 4] = [("⏎", "run"), ("⌥⏎", "new line"), ("⇥", "result"), ("^c", "quit")];
+const RESULT_HINTS: [(&str, &str); 5] = [("j/k", "rows"), ("h/l", "columns"), ("g/G", "ends"), ("⇥", "editor"), ("^c", "quit")];
 
 /// Where each part of the screen goes.
 struct Areas {
@@ -18,12 +19,13 @@ struct Areas {
     footer: Rect,
 }
 
-/// The whole screen for `app`.
-pub(super) fn draw(f: &mut Frame<'_>, app: &App) {
+/// The whole screen for `app`; returns the grid rows it had room for.
+pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> usize {
     let areas = layout(framed(f, app));
     editor_view::draw(f, app, areas.editor);
-    result_view::draw(f, app, areas.result);
+    let grid_rows = result_view::draw(f, app, areas.result);
     footer(f, app, areas.footer);
+    grid_rows
 }
 
 /// The outer frame and its `● name` pill in the tier's colour; returns the area inside it.
@@ -46,8 +48,12 @@ fn layout(area: Rect) -> Areas {
 fn footer(f: &mut Frame<'_>, app: &App, area: Rect) {
     let key = Style::default().fg(app.theme.accent).add_modifier(Modifier::BOLD);
     let does = Style::default().fg(app.theme.muted);
+    let hints = match app.focus {
+        Focus::Editor => EDITOR_HINTS.as_slice(),
+        Focus::Result => RESULT_HINTS.as_slice(),
+    };
     let hints: Vec<Span<'_>> =
-        HINTS.iter().flat_map(|&(keys, what)| [Span::styled(format!(" {keys} "), key), Span::styled(format!("{what} "), does)]).collect();
+        hints.iter().flat_map(|&(keys, what)| [Span::styled(format!(" {keys} "), key), Span::styled(format!("{what} "), does)]).collect();
     f.render_widget(Paragraph::new(Line::from(hints)), area);
     f.render_widget(Paragraph::new(link(app, usize::from(area.width / 2))).right_aligned(), area);
 }
@@ -76,7 +82,7 @@ mod tests {
 
     fn render(app: &App, width: u16, height: u16) -> Terminal<TestBackend> {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal.draw(|f| draw(f, app)).unwrap();
+        terminal.draw(|f| _ = draw(f, app)).unwrap();
         terminal
     }
 

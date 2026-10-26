@@ -1,0 +1,9 @@
+---
+source: src/tui/grid_view/mod.rs
+expression: "render(&result, &Grid::new(&result), 22, 5).backend()"
+---
+"    id    total  cust…"
+"▶    7    12.50  nina "
+"    12  1499.00  NULL "
+"   103     3.20  Zoë …"
+"   104     0.99  noel "
