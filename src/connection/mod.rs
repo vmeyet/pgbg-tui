@@ -51,8 +51,8 @@ pub(crate) struct Connection {
 }
 
 /// The name a connection has under `[connections.<name>]`, typed on the command line.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(transparent)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct ConnectionName(String);
 
 /// Sets the colour and the timeout of a connection.
@@ -158,6 +158,20 @@ impl FromStr for ConnectionName {
 
     fn from_str(name: &str) -> Result<Self> {
         Self::new(name)
+    }
+}
+
+impl TryFrom<String> for ConnectionName {
+    type Error = anyhow::Error;
+
+    fn try_from(name: String) -> Result<Self> {
+        Self::new(&name)
+    }
+}
+
+impl From<ConnectionName> for String {
+    fn from(name: ConnectionName) -> Self {
+        name.0
     }
 }
 

@@ -1,21 +1,45 @@
-use crate::connection::ConnectionName;
+use crate::connection::{Connection, ConnectionName};
 use crate::db::model::{ResultSet, Statement};
 use crate::db::{NotOpened, Opened, guard, open_along};
+use crate::history::{Entry, Outcome, Store};
 use crate::render;
 use crate::tunnel::Tunnel;
 use anyhow::Result;
+use chrono::Utc;
+use std::time::Instant;
 
-/// Runs one statement on the connection named `connection` and prints its result: a plain table, or JSON with `json`.
+/// Runs one statement on the connection named `connection`, adds it to the connection's history, and prints its result:
+/// a plain table, or JSON with `json`.
 pub async fn run(connection: &ConnectionName, sql: &str, json: bool) -> Result<()> {
     let connection = super::connection(Some(connection))?;
+    let (started_at, clock) = (Utc::now(), Instant::now());
+    let result = run_statement(&connection, sql).await;
+    let took_ms = u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let entry =
+        Entry { statement: sql.to_owned(), connection: connection.name().clone(), started_at, took_ms, outcome: Outcome::of(&result) };
+    record(entry).await;
+    print(&result?, json)
+}
+
+/// Adds `entry` to its connection's history on a blocking thread; a history that cannot be written is logged, not fatal.
+async fn record(entry: Entry) {
+    let Some(store) = Store::from_env() else { return };
+    match tokio::task::spawn_blocking(move || store.append(&entry)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => tracing::warn!("the history was not written: {err}"),
+        Err(err) => tracing::warn!("the history writer stopped: {err}"),
+    }
+}
+
+async fn run_statement(connection: &Connection, sql: &str) -> Result<ResultSet> {
     let admitted = guard::admit(Statement::new(sql), connection.writes())?;
-    let (result, tunnel) = match open_along(&connection, None).await {
+    let (result, tunnel) = match open_along(connection, None).await {
         Ok(Opened { mut session, tunnel }) => (session.run(&admitted).await, tunnel),
         Err(NotOpened::Tunnel(err)) => return Err(err),
         Err(NotOpened::Login { error, tunnel }) => (Err(error), tunnel.map(|tunnel| *tunnel)),
     };
     stop(tunnel).await;
-    print(&result?, json)
+    result
 }
 
 /// Stops `tunnel` and warns when its forward outlives it.

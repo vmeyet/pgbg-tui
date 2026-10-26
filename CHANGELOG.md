@@ -8,6 +8,8 @@ Each entry says what changed, then where, then how to use it.
 
 ### New
 
+- **History** of every statement `pgbg run` sends: `pgbg history <connection>` lists the newest first, with when, how long and what came of it; `--limit n` and `--json` too.
+  It lives in `pgbg/history/` in your data folder, readable by you only; it never keeps a row, the server's words or a statement that holds a password.
 - **The connection picker** in the TUI: press `ctrl-o`, type a few letters of a connection's name, and `⏎` to switch to it.
   Each connection shows its tier's colour, where it goes, whether it takes writes, and whether its session is open.
   Sessions stay open until you quit, so switching back is instant, and each connection keeps its own editor text, result and saved query.
