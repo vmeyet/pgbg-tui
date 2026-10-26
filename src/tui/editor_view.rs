@@ -1,7 +1,7 @@
 //! The SQL editor pane: the text in its syntax colours, the cursor kept in view, the server's error position, and whether the connection takes writes.
 use super::app::{App, Focus};
 use super::theme;
-use crate::connection::WritePolicy;
+use crate::connection::{ConnectionName, Tier, WritePolicy};
 use crate::syntax::{Spans, Token};
 use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
@@ -15,7 +15,7 @@ use vtui::theme::Theme;
 /// The editor in `area`, scrolled so the cursor's line shows, with the terminal's cursor on it when it has the keys.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
     let focused = app.focus == Focus::Editor;
-    let block = pane::framed(&app.theme, &title(app), focused).title(badge(app)).title(open_error(app));
+    let block = pane::framed(&app.theme, &title(app), focused).title(badge(app)).title(header_notes(app)).title(open_error(app));
     let inside = block.inner(area);
     f.render_widget(block, area);
     let sheet = app.sheet();
@@ -77,9 +77,32 @@ fn coloured_line<'a>(
     Line::from(pieces)
 }
 
-/// `Editor`, then the path of the saved query in it.
+/// `Editor`, then the name the header gives, or else the path of the saved query in it.
 fn title(app: &App) -> String {
-    app.sheet().opened.as_ref().map_or_else(|| "Editor".to_owned(), |query| format!("Editor · {}", query.path))
+    let sheet = app.sheet();
+    let path = sheet.opened.as_ref().map(|query| query.path.to_string());
+    sheet.header.name.clone().or(path).map_or_else(|| "Editor".to_owned(), |named| format!("Editor · {named}"))
+}
+
+fn suggested(app: &App, named: &ConnectionName) -> Span<'static> {
+    let is_production = app.connections.iter().any(|known| known.name() == named && known.tier() == Tier::Production);
+    if is_production {
+        return Span::styled(
+            format!(" ⚠ written for production {named} "),
+            Style::default().fg(app.theme.danger).add_modifier(Modifier::BOLD),
+        );
+    }
+    Span::styled(format!(" written for {named} "), Style::default().fg(app.theme.muted))
+}
+
+/// The connection the header suggests when it is not the one on screen, loud when it is a production one, then the
+/// first header line pgbg could not read. The statement still runs on the connection on screen.
+fn header_notes(app: &App) -> Line<'static> {
+    let sheet = app.sheet();
+    let elsewhere = sheet.header.connection.as_ref().filter(|&named| *named != sheet.name);
+    let suggestion = elsewhere.map(|named| suggested(app, named));
+    let warning = sheet.header.warnings.first().map(|warning| Span::styled(format!(" ⚠ {warning} "), Style::default().fg(app.theme.warn)));
+    Line::from(suggestion.into_iter().chain(warning).collect::<Vec<_>>())
 }
 
 /// Why the last query asked for could not be opened, in the danger colour.

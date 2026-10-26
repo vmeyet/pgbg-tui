@@ -21,6 +21,9 @@ Each entry says what changed, then where, then how to use it.
   The search stops at your home folder or at the top of your repository, where `.git` is; a queries folder that is a link, or that another user owns, is skipped.
   Only a plain file of 1 MiB at most opens: a pipe, a link or a dump says why it does not.
   The sidebar on the left lists them as a tree, `●` on the one in the editor: `tab` reaches it, `j`/`k` move, `⏎` opens a query or folds a folder; a terminal under 80 columns leaves it out.
+  A header of `--` lines names the query and draws its result: `-- name: Orders per day`, `-- chart: bar x=day y=orders`.
+  `-- connection: prod` only says which connection the query was written for: the editor's title shows it, in red for a production one, and the statement still runs on the connection on screen.
+  A header line pgbg cannot read shows as a warning in the editor's title; the query opens and runs all the same.
 - **Tunnels** for `pgbg run` and the TUI: a connection with `tunnel = { command = [...] }` starts that command on a free local port, put in place of `{port}`, and connects through it.
   TLS still checks the certificate against the host in `url`, so `sslmode=require` works through a tunnel; a tunnel without it needs `tls = "off"` on purpose, even to `localhost`.
   `before = [...]` runs once first, and is given up after 2 minutes.

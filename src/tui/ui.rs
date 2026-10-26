@@ -186,6 +186,17 @@ mod tests {
     }
 
     #[test]
+    fn a_query_written_for_production_says_so_while_another_connection_is_on_screen() {
+        let entry: crate::connection::Entry =
+            toml::from_str("tier = \"production\"\nurl = \"postgres://nina@db.example.com/shop?sslmode=require\"\n").unwrap();
+        let shop = connection("local", "read-only");
+        let mut app = App::new(vec![shop.clone(), crate::connection::Connection::new("prod", entry).unwrap()], &shop, Theme::default());
+        let text = "-- name: daily orders\n-- connection: prod\n-- owner: nina\nSELECT 1";
+        app.apply(Answer::Queries(QueryAnswer::Opened { query: query("orders/daily.sql"), text: text.into() }));
+        insta::assert_snapshot!("query_header", render(&app, 100, 6).backend());
+    }
+
+    #[test]
     fn an_open_query_names_the_editor() {
         let mut app = with_queries();
         app.apply(Answer::Queries(QueryAnswer::Opened { query: query("orders/daily.sql"), text: "SELECT 1".into() }));

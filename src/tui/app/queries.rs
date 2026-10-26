@@ -2,7 +2,6 @@
 use super::{Action, App, Focus};
 use crate::act::{self, Act, Pane};
 use crate::query::{Query, TreeRow, tree_rows};
-use crate::syntax;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::collections::BTreeSet;
 use vtui::field::Field;
@@ -123,19 +122,19 @@ impl App {
         let sheet = self.sheet_mut();
         sheet.opened = Some(query);
         sheet.editor = Field::new(text);
-        sheet.colours = syntax::highlight(text);
-        sheet.error_mark = None;
-        sheet.forget_sent_place();
+        sheet.text_changed();
         self.focus = Focus::Editor;
     }
 }
 
 #[cfg(test)]
 pub(in crate::tui) mod tests {
-    use super::super::tests::app;
-    use super::super::{Answer, Fit, QueryAnswer, Run};
+    use super::super::tests::{app, orders, shop, to_shop, typed};
+    use super::super::{Answer, Fit, Incoming, QueryAnswer, Run, RunId, View};
     use super::*;
+    use crate::chart::Series;
     use crate::query::{QueryPath, Source};
+    use std::time::Duration;
 
     pub(in crate::tui) fn query(path: &str) -> Query {
         Query { source: Source::Project, path: QueryPath::parse(path).unwrap() }
@@ -191,7 +190,7 @@ pub(in crate::tui) mod tests {
         app.apply(Answer::Queries(QueryAnswer::Opened { query: query("customers.sql"), text: "SELECT * FROM customers".into() }));
         assert_eq!(app.sheet().editor.text(), "SELECT * FROM customers");
         assert_eq!(app.sheet().opened, Some(query("customers.sql")));
-        assert_eq!(app.sheet().colours, syntax::highlight("SELECT * FROM customers"));
+        assert_eq!(app.sheet().colours, crate::syntax::highlight("SELECT * FROM customers"));
         assert_eq!(app.focus, Focus::Editor);
     }
 
@@ -275,5 +274,34 @@ pub(in crate::tui) mod tests {
         (0..5).for_each(|_| _ = press(&mut app, KeyCode::Char('j')));
         app.apply(Answer::Queries(QueryAnswer::All(vec![query("customers.sql")])));
         assert_eq!(app.queries.selected, 0);
+    }
+
+    fn opened_and_run(text: &str) -> (App, Vec<Action>) {
+        let mut app = with_queries();
+        app.apply(Answer::Queries(QueryAnswer::Opened { query: query("orders/daily.sql"), text: text.into() }));
+        let actions = press(&mut app, KeyCode::Enter);
+        (app, actions)
+    }
+
+    #[test]
+    fn a_chart_header_draws_the_result_of_the_query_as_that_chart() {
+        let (mut app, _) = opened_and_run("-- chart: bar x=customer y=total\nSELECT customer, total FROM orders");
+        app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result: orders(), took: Duration::from_millis(38) }));
+        let spec = "bar x=customer y=total".parse().unwrap();
+        let Run::Done { view, .. } = &app.sheet().run else { panic!("no result") };
+        assert!(matches!(view, View::Chart(Ok(_))), "{view:?}");
+        assert_eq!(view, &View::Chart(Series::from_result(&orders(), &spec)));
+    }
+
+    #[test]
+    fn the_header_follows_the_text_as_it_is_typed() {
+        let app = typed("-- name: daily\nSELECT 1");
+        assert_eq!(app.sheet().header.name.as_deref(), Some("daily"));
+    }
+
+    #[test]
+    fn a_suggested_connection_never_moves_the_run_off_the_session_on_screen() {
+        let (_, actions) = opened_and_run("-- connection: prod\nSELECT 1");
+        assert!(matches!(actions.as_slice(), [Action::Run { connection, .. }] if *connection == shop()), "{actions:?}");
     }
 }

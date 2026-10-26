@@ -4,7 +4,7 @@ use crate::chart::{self, ChartError, Series};
 use crate::connection::{Connection, ConnectionName, Tier, WritePolicy};
 use crate::db::guard;
 use crate::db::model::{LocalPort, ResultSet, Statement};
-use crate::query::Query;
+use crate::query::{Header, Query};
 use crate::syntax::Spans;
 use crossterm::event::{KeyCode, KeyEvent};
 use std::time::Duration;
@@ -146,11 +146,11 @@ pub(super) enum Run {
     Failed(String),
 }
 
-/// How the result pane shows a result; `v` switches, and a new result starts on the grid.
+/// How the result pane shows a result; `v` switches, and a new result starts on the grid, or on the chart its header asks for.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum View {
     Grid,
-    /// The chart `chart::infer` picks, built once when `v` is pressed, or why there is none.
+    /// The chart of the header's `-- chart:`, or the one `chart::infer` picks when `v` is pressed, or why there is none.
     Chart(Result<Series, ChartError>),
 }
 
@@ -212,6 +212,8 @@ pub(super) struct Sheet {
     pub(super) error_mark: Option<usize>,
     /// The saved query the editor stands for, once one was opened in it.
     pub(super) opened: Option<Query>,
+    /// The header of the editor's text: its `-- chart:` draws each result of the sheet.
+    pub(super) header: Header,
 }
 
 /// The whole TUI state; `handle_key`, `apply` and `fit` are the only ways it changes.
@@ -383,6 +385,7 @@ impl Sheet {
             sent: None,
             error_mark: None,
             opened: None,
+            header: Header::default(),
         }
     }
 
@@ -455,7 +458,10 @@ impl Sheet {
             Incoming::Tunnel(state) => self.tunnel = Some(state),
             Incoming::Result { run, .. } | Incoming::Refused { run, .. } | Incoming::Failed { run, .. }
                 if !self.is_answer_to_running(run) => {}
-            Incoming::Result { result, took, .. } => self.run = Run::Done { grid: Grid::new(&result), result, took, view: View::Grid },
+            Incoming::Result { result, took, .. } => {
+                let view = self.header.chart.as_ref().map_or(View::Grid, |spec| View::Chart(Series::from_result(&result, spec)));
+                self.run = Run::Done { grid: Grid::new(&result), result, took, view };
+            }
             Incoming::Refused { why, .. } => self.run = Run::Failed(format!("not sent: {why}")),
             Incoming::Failed { error, position, .. } => {
                 self.error_mark = position.and_then(|position| self.editor_byte(position));

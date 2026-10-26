@@ -129,6 +129,8 @@ On a connection that allows writes, a statement runs as typed, except that one r
 - Opening reads the file through `tokio::fs`, again only when it is a plain file whose real path stays inside its root, and only up to 1 MiB; a bigger one is too big for the editor.
 - A query path is drawn with its control characters and text-reversing marks escaped.
 - An optional header of `--` lines sets the name, the default connection and the chart; a file without a header is still a query.
+- The header is read again whenever the editor's text changes; a line it cannot read is a warning in the editor's title, never a failure.
+- `-- connection:` only suggests: the editor's title names it, in red when it is a production connection, and a statement always runs on the session on screen.
 - The file is the source of truth: pgbg reads it when it is opened and writes it back when it is saved, nothing else.
 
 ## Performance
