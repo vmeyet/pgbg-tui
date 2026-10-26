@@ -1,6 +1,6 @@
 use crate::cli::{ConnectionKeys, PasswordFlags};
 use crate::config::{self, ConnectionChange};
-use crate::connection::{Connection, ConnectionName, Target, Tier, TunnelSpec};
+use crate::connection::{ConnectionName, Target, Tier, TunnelSpec};
 use crate::secret::{Keychain, KeychainItem, SecretSource};
 use anyhow::{Context, Result, anyhow};
 use std::path::Path;
@@ -20,7 +20,7 @@ pub fn edit(name: &ConnectionName, tier: Option<Tier>, url: Option<&str>, keys: 
     let path = config::path();
     let change = ConnectionChange { tier, url: url.map(target).transpose()?, ..change_from(keys)? };
     let replaced = match &change.password {
-        Some(source) => replaced_keychain_item(&super::load(&path)?.connections, name, source).cloned(),
+        Some(source) => config::replaced_keychain_item(&super::load(&path)?.connections, name, source).cloned(),
         None => None,
     };
     config::edit_connection(&path, name, &change)?;
@@ -49,7 +49,7 @@ fn delete_its_keychain_item(path: &Path, name: &ConnectionName) -> Result<()> {
     if !connections.iter().any(|c| c.name() == name) {
         return Err(super::no_connection(name, path));
     }
-    match keychain_item_to_delete(&connections, name) {
+    match config::keychain_item_to_delete(&connections, name) {
         Some(item) => delete_keychain_item(item),
         None => Ok(()),
     }
@@ -76,7 +76,15 @@ fn tunnel_spec(command: &str) -> Result<TunnelSpec> {
 
 fn change_from(keys: &ConnectionKeys) -> Result<ConnectionChange> {
     let tunnel = keys.tunnel.as_deref().map(tunnel_spec).transpose()?;
-    Ok(ConnectionChange { tunnel, password: password_source(&keys.password)?, writes: keys.writes, ..ConnectionChange::default() })
+    let password = password_source(&keys.password)?;
+    Ok(ConnectionChange {
+        tunnel,
+        password,
+        writes: keys.writes,
+        tls: keys.tls,
+        statement_timeout: keys.statement_timeout,
+        ..ConnectionChange::default()
+    })
 }
 
 fn password_source(flags: &PasswordFlags) -> Result<Option<SecretSource>> {
@@ -90,76 +98,12 @@ fn password_source(flags: &PasswordFlags) -> Result<Option<SecretSource>> {
     }
 }
 
-fn keychain_item(connection: &Connection) -> Option<&KeychainItem> {
-    match connection.password() {
-        Some(SecretSource::Keychain(item)) => Some(item),
-        _ => None,
-    }
-}
-
-/// The keychain item of the connection `name`, when it has one no other connection names.
-fn keychain_item_to_delete<'a>(connections: &'a [Connection], name: &ConnectionName) -> Option<&'a KeychainItem> {
-    let removed = keychain_item(connections.iter().find(|c| c.name() == name)?)?;
-    let is_shared = connections.iter().filter(|c| c.name() != name).any(|c| keychain_item(c) == Some(removed));
-    (!is_shared).then_some(removed)
-}
-
-/// The keychain item of the connection `name` that `new` replaces, when no other connection names it.
-fn replaced_keychain_item<'a>(connections: &'a [Connection], name: &ConnectionName, new: &SecretSource) -> Option<&'a KeychainItem> {
-    keychain_item_to_delete(connections, name).filter(|&old| *new != SecretSource::Keychain(old.clone()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn connection(name: &str, password: &str) -> Connection {
-        let text = format!("tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\n{password}");
-        Connection::new(name, toml::from_str(&text).unwrap()).unwrap()
-    }
-
-    fn name(name: &str) -> ConnectionName {
-        name.parse().unwrap()
-    }
-
-    fn item(name: &str) -> KeychainItem {
-        name.parse().unwrap()
-    }
-
     fn flags(password_command: Option<&str>) -> PasswordFlags {
         PasswordFlags { password_env: None, password_command: password_command.map(str::to_owned), keychain: None }
-    }
-
-    #[test]
-    fn a_removed_connection_takes_its_keychain_item_with_it() {
-        let connections = [connection("prod", "password = { keychain = \"pgbg/prod\" }"), connection("local", "")];
-        assert_eq!(keychain_item_to_delete(&connections, &name("prod")), Some(&item("pgbg/prod")));
-    }
-
-    #[test]
-    fn a_keychain_item_another_connection_names_stays() {
-        let shared = "password = { keychain = \"pgbg/shop\" }";
-        let connections = [connection("prod", shared), connection("replica", shared)];
-        assert_eq!(keychain_item_to_delete(&connections, &name("prod")), None);
-    }
-
-    #[test]
-    fn a_password_from_elsewhere_leaves_the_keychain_alone() {
-        let connections = [connection("prod", "password = { env = \"PROD_PGPASSWORD\" }")];
-        assert_eq!(keychain_item_to_delete(&connections, &name("prod")), None);
-    }
-
-    #[test]
-    fn a_new_password_source_replaces_the_keychain_item_it_had() {
-        let connections = [connection("prod", "password = { keychain = \"pgbg/prod\" }")];
-        let new = SecretSource::Keychain(item("shop/main"));
-        assert_eq!(replaced_keychain_item(&connections, &name("prod"), &new), Some(&item("pgbg/prod")));
-    }
-
-    #[test]
-    fn the_same_keychain_item_again_replaces_nothing() {
-        let connections = [connection("prod", "password = { keychain = \"pgbg/prod\" }")];
-        assert_eq!(replaced_keychain_item(&connections, &name("prod"), &SecretSource::Keychain(item("pgbg/prod"))), None);
     }
 
     #[test]

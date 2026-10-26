@@ -44,6 +44,7 @@ Each entry says what changed, then where, then how to use it.
   `add <name> --tier <tier> --url <url>` takes `--tunnel "<command>"`, one of `--password-env`, `--password-command "<command>"` or `--keychain`, and `--writes allowed`; a command splits as a shell would, so quote a word with spaces: `--tunnel "ssh -N -o 'ProxyCommand ssh -W %h:%p jump' -L 127.0.0.1:{port}:db.example.com:5432 bastion"`; `edit` changes only the flags you give.
   An error names the flag it is about, and `edit` can fix a config that does not load.
   `edit --keychain` deletes the item it replaces, unless another connection names it.
+  `--statement-timeout 2min` sets the connection's own statement timeout, `0s` none; `--tls off` talks to a remote host in clear on purpose.
   `remove` deletes the connection's keychain item too; add `--keep-password` to leave it, or to remove a connection from a config that does not load.
 - **`pgbg password set <connection>`** saves a connection's password in the macOS keychain.
   Type it at the hidden prompt, or pipe it in: `pass shop | pgbg password set prod`; no flag takes a password, so `ps` never shows one.

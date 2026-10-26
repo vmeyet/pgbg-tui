@@ -2,26 +2,37 @@
 //! as `Config::read` loads it before it replaces the file, so an edit may fix a config that does not load.
 //! The helpers below change the `toml_edit` document through `&mut`, the way its API works.
 use super::parse;
-use crate::connection::{ConnectionName, Target, Tier, TunnelSpec, WritePolicy};
+use crate::connection::{ConnectionName, StatementTimeout, Target, Tier, Tls, TunnelSpec, WritePolicy};
 use crate::secret::SecretSource;
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Serialize;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use toml_edit::ser::ValueSerializer;
-use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, TableLike, Value};
+use toml_edit::{DocumentMut, InlineTable, Item, Table, TableLike, Value};
 
 /// The keys of a connection to set, each left as it is when `None`, each already checked on its own;
-/// the load that follows checks them together.
-#[derive(Debug, Default)]
+/// the load that follows checks them together. It serializes as the keys it sets, in the config's spelling and order.
+#[derive(Debug, Default, Serialize)]
 pub(crate) struct ConnectionChange {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) tier: Option<Tier>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) url: Option<Target>,
     /// Sets the tunnel's `command`, keeping the `before` the config already has.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) tunnel: Option<TunnelSpec>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) password: Option<SecretSource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) writes: Option<WritePolicy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) tls: Option<Tls>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) statement_timeout: Option<StatementTimeout>,
 }
+
+const TUNNEL: &str = "tunnel";
 
 /// Adds the connection `name` at the end of the config, creating the file when there is none.
 pub(crate) fn add_connection(path: &Path, name: &ConnectionName, change: &ConnectionChange) -> Result<()> {
@@ -56,21 +67,14 @@ pub(crate) fn set_password(path: &Path, name: &ConnectionName, source: &SecretSo
     edit_connection(path, name, &change)
 }
 
+/// Each key `change` sets, in place of the old one; a tunnel sets only its `command`.
 fn apply(table: &mut dyn TableLike, change: &ConnectionChange) -> Result<()> {
-    if let Some(tier) = &change.tier {
-        set_value(table, "tier", value_of(tier)?);
-    }
-    if let Some(url) = &change.url {
-        set_value(table, "url", value_of(url)?);
-    }
-    if let Some(tunnel) = &change.tunnel {
-        set_tunnel_command(table, tunnel.command());
-    }
-    if let Some(source) = &change.password {
-        set_value(table, "password", value_of(source)?);
-    }
-    if let Some(writes) = &change.writes {
-        set_value(table, "writes", value_of(writes)?);
+    let Value::InlineTable(keys) = value_of(change)? else { bail!("a connection change is not a table") };
+    for (key, value) in &keys {
+        match value.as_inline_table().and_then(|tunnel| tunnel.get("command")).filter(|_| key == TUNNEL) {
+            Some(command) => set_tunnel_command(table, command.clone()),
+            None => set_value(table, key, value.clone()),
+        }
     }
     Ok(())
 }
@@ -88,11 +92,10 @@ fn set_value(table: &mut dyn TableLike, key: &str, mut value: Value) {
 }
 
 /// The tunnel's `command`, keeping its `before` when it has one.
-fn set_tunnel_command(table: &mut dyn TableLike, command: &[String]) {
-    let command = Value::Array(command.iter().collect::<Array>());
-    match table.get_mut("tunnel").and_then(Item::as_table_like_mut) {
+fn set_tunnel_command(table: &mut dyn TableLike, command: Value) {
+    match table.get_mut(TUNNEL).and_then(Item::as_table_like_mut) {
         Some(tunnel) => set_value(tunnel, "command", command),
-        None => set_value(table, "tunnel", Value::InlineTable(InlineTable::from_iter([("command", command)]))),
+        None => set_value(table, TUNNEL, Value::InlineTable(InlineTable::from_iter([("command", command)]))),
     }
 }
 
@@ -296,6 +299,20 @@ mod tests {
         let (_dir, path) = typed_config(TYPED);
         edit_connection(&path, &"local".parse().unwrap(), &change(|c| c.tier = Some(Tier::Staging))).unwrap();
         assert_eq!(read(&path), TYPED.replace("tier = \"local\" # docker", "tier = \"staging\" # docker"));
+    }
+
+    #[test]
+    fn editing_the_statement_timeout_writes_it_as_the_config_spells_it() {
+        let (_dir, path) = typed_config(TYPED);
+        edit_connection(&path, &prod(), &change(|c| c.statement_timeout = Some("2min".parse().unwrap()))).unwrap();
+        assert!(read(&path).ends_with("statement_timeout = \"2min\"\n"), "{}", read(&path));
+    }
+
+    #[test]
+    fn editing_tls_writes_it_as_the_config_spells_it() {
+        let (_dir, path) = typed_config(TYPED);
+        edit_connection(&path, &"local".parse().unwrap(), &change(|c| c.tls = Some(Tls::On))).unwrap();
+        assert!(read(&path).contains("url = \"postgres://nina@localhost:5432/shop\"\ntls = \"on\"\n"), "{}", read(&path));
     }
 
     #[test]

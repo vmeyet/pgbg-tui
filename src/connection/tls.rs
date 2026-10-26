@@ -9,9 +9,9 @@ const TLS_MISSING_THROUGH_TUNNEL: &str = "the connection goes through a tunnel a
 const TLS_CONTRADICTED: &str = "`tls = \"off\"` contradicts the `sslmode` of `url`: keep one";
 
 /// Whether a session talks TLS, with the server's certificate checked, or in clear.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum Tls {
+pub enum Tls {
     On,
     Off,
 }

@@ -1,5 +1,5 @@
 //! The command line `pgbg` parses, with the help text each flag shows.
-use crate::connection::{ConnectionName, Tier, WritePolicy};
+use crate::connection::{ConnectionName, StatementTimeout, Tier, Tls, WritePolicy};
 use clap::{Args, Parser, Subcommand};
 
 /// The command line: global flags, then one subcommand.
@@ -92,7 +92,7 @@ pub enum ConnectionCommand {
     },
     /// Changes the keys given and leaves the others as they are.
     #[command(group(clap::ArgGroup::new("change").required(true).multiple(true)
-        .args(["tier", "url", "tunnel", "password_env", "password_command", "keychain", "writes"])))]
+        .args(["tier", "url", "tunnel", "password_env", "password_command", "keychain", "writes", "tls", "statement_timeout"])))]
     Edit {
         /// The connection's name in `config.toml`.
         connection: ConnectionName,
@@ -129,6 +129,12 @@ pub struct ConnectionKeys {
     /// `allowed` lets statements other than reads run.
     #[arg(long)]
     pub writes: Option<WritePolicy>,
+    /// `off` talks to a host that is not this machine in clear, on purpose; `on` asks for TLS whatever `url` says.
+    #[arg(long)]
+    pub tls: Option<Tls>,
+    /// How long the server lets a statement run, such as "2min"; "0s" for no limit. Else the tier's.
+    #[arg(long)]
+    pub statement_timeout: Option<StatementTimeout>,
 }
 
 /// One place the password comes from; no flag takes the password itself, which `ps` would show.
@@ -193,6 +199,12 @@ mod tests {
         let edit = ["connection", "edit", "prod", "--password-env", "PROD_PGPASSWORD"];
         assert!(parse(&edit).is_ok());
         assert!(parse(&[&edit[..], &["--keychain", "pgbg/prod"]].concat()).is_err());
+    }
+
+    #[test]
+    fn a_statement_timeout_is_checked_while_parsing() {
+        assert!(parse(&["connection", "edit", "prod", "--statement-timeout", "2min"]).is_ok());
+        assert!(parse(&["connection", "edit", "prod", "--statement-timeout", "soon"]).is_err());
     }
 
     #[test]
