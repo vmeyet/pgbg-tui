@@ -34,6 +34,7 @@ When a boundary or a flow changes, change this page in the same MR.
 | `tui/theme.rs` | The tier colours and the SQL token colours on top of vtui's palette |
 | `vtui` (git dependency) | Shared with the sibling TUIs: the terminal in raw mode (`Screen`), the palette (`Theme`), the input box (`Field`), the `ctrl-k` palette, the `?` overlay, fzf-style matching |
 | `log.rs` | The log file; never a secret, never a row |
+| `signal.rs` | The signals that stop pgbg (`SIGINT`, `SIGTERM`, `SIGHUP`) and the exit code each gives |
 
 ## Data flow
 
@@ -73,7 +74,7 @@ Charting a result:
 ## Boundaries
 
 - Only `src/db/` sees a `tokio_postgres` type; everything else uses `db/model/`.
-- Side effects live at the edges: `main.rs`, `commands/`, `tui/mod.rs`, `tui/actions.rs`, `tui/backend/`, `tunnel/`, `secret/`, `config/` when it rewrites the file, `query/` when it lists and reads the queries folders.
+- Side effects live at the edges: `main.rs`, `signal.rs`, `commands/`, `tui/mod.rs`, `tui/actions.rs`, `tui/backend/`, `tunnel/`, `secret/`, `config/` when it rewrites the file, `query/` when it lists and reads the queries folders.
 - `tui/app/` is pure: it reads time from `app.now`, set by the loop, and never does I/O; its tests drive it with keys and `Answer` values.
 - `chart/` is pure: a `ResultSet` in, a `Series` out; drawing lives in `tui/chart_view/`.
 - A program that takes the terminal (`$EDITOR` on a saved query) runs from the loop through `Screen::lend`, with the key stream paused.
@@ -103,10 +104,13 @@ On a connection that allows writes, a statement runs as typed, except that one r
 
 ## Tunnels
 
-- A tunnel is a command with a `{port}` placeholder: `ssh -N -L {port}:localhost:5432 bastion`, `gcloud compute start-iap-tunnel ... --local-host-port=localhost:{port}`, `cloud-sql-proxy --port {port} ...`.
-- An optional `before` command runs first, once, and is safe to run twice (starting a stopped bastion).
+- A tunnel is a command with a `{port}` placeholder: `ssh -N -o ControlPath=none -o ExitOnForwardFailure=yes -L 127.0.0.1:{port}:localhost:5432 bastion`, `gcloud compute start-iap-tunnel ... --local-host-port=localhost:{port}`, `cloud-sql-proxy --port {port} ...`.
+- An optional `before` command runs first, once, within 2 minutes, and is safe to run twice (starting a stopped bastion).
 - pgbg picks the free port, so two pgbg can run side by side; the child runs in its own process group, and stopping or dropping the `Tunnel` kills the whole group, so an `ssh` or `gcloud` it started dies too.
+- Only what stays in that group dies with it: an ssh `ControlMaster` or `ssh -f` keeps the forward elsewhere, so `stop` fails when the port still answers, and a command that ends cleanly before its port answers is said to have handed the forward off.
+- pgbg cannot make the command bind `127.0.0.1` only, nor know who answers on the port: the examples bind it explicitly, and a tunnelled connection needs TLS or `tls = "off"` on purpose, never the clear a local host gets.
 - A tunnel is ready once its port takes a TCP connection, within 30 seconds; one that dies first says how it exited and its last lines of stderr, never its arguments.
+- `SIGINT`, `SIGTERM` and `SIGHUP` stop pgbg through `signal.rs`: `pgbg run` drops its work and the TUI quits its loop, so every `Drop` runs and the tunnel goes; pgbg exits with `128 + n`. Only a `SIGKILL` leaves a tunnel behind.
 - A session through a tunnel connects to `hostaddr=127.0.0.1` on the tunnel's port, and TLS still checks the certificate against the URL's host; that is why the config refuses a `hostaddr` of its own.
 - The session task owns the tunnel with the session: the status line shows `⇄ tunnel :<port>`, `starting…` or how it died; a tunnel that dies closes its session and says why, and the next statement starts both again.
 - A session reopened while its tunnel still runs keeps that tunnel.

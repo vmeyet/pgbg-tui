@@ -345,7 +345,8 @@ mod tests {
         let command =
             format!("[\"python3\", \"-c\", {:?}, \"{{port}}\", \"{host}\", \"{port}\", \"{marker}\"]", crate::tunnel::tests::FORWARD);
         let entry: Entry =
-            toml::from_str(&format!("tier = \"local\"\nurl = \"{database}\"\ntunnel = {{ command = {command} }}\n")).unwrap();
+            toml::from_str(&format!("tier = \"local\"\nurl = \"{database}\"\ntls = \"off\"\ntunnel = {{ command = {command} }}\n"))
+                .unwrap();
         Connection::new("shop", entry).unwrap()
     }
 
@@ -368,7 +369,7 @@ mod tests {
     #[tokio::test]
     async fn a_tunnel_that_does_not_start_says_why_and_the_session_does_not_open() {
         let entry: Entry = toml::from_str(
-            "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\n\
+            "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\ntls = \"off\"\n\
              tunnel = { command = [\"sh\", \"-c\", \"echo 'bastion.example.com: no route' >&2; exit 255\", \"{port}\"] }\n",
         )
         .unwrap();

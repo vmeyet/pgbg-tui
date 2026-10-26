@@ -1,6 +1,10 @@
 //! End-to-end runs of the `pgbg` binary against invented configs.
 #![cfg(test)]
-use std::process::{Command, Output};
+use rustix::process::{Pid, Signal, kill_process};
+use std::net::{Ipv4Addr, TcpStream};
+use std::path::Path;
+use std::process::{Child, Command, Output};
+use std::time::{Duration, Instant};
 
 const SHOP: &str = r#"
 [connections.local]
@@ -98,7 +102,7 @@ fn run_on_an_unknown_connection_says_where_to_find_them() {
 
 #[test]
 fn run_through_a_tunnel_that_dies_says_why_before_connecting() {
-    let config = "[connections.shop]\ntier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\n\
+    let config = "[connections.shop]\ntier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\ntls = \"off\"\n\
                   tunnel = { command = [\"sh\", \"-c\", \"echo 'bastion.example.com: no route' >&2; exit 255\", \"{port}\"] }\n";
     let output = pgbg(config, &["run", "shop", "SELECT 1"]);
     assert!(!output.status.success());
@@ -159,7 +163,7 @@ fn connection_add_writes_a_connection_the_list_then_shows() {
         "--tier",
         "staging",
         "--url",
-        "postgres://nina@localhost:5433/shop",
+        "postgres://nina@localhost:5433/shop?sslmode=require",
         "--tunnel",
         "ssh -N -o 'ProxyCommand ssh -W %h:%p jump' -L {port}:localhost:5432 db.example.com",
         "--password-env",
@@ -170,7 +174,7 @@ fn connection_add_writes_a_connection_the_list_then_shows() {
     assert!(config.starts_with(SHOP), "{config}");
     assert!(config.contains("tunnel = { command = [\"ssh\", \"-N\", \"-o\", \"ProxyCommand ssh -W %h:%p jump\", \"-L\", \"{port}:localhost:5432\", \"db.example.com\"] }"), "{config}");
     assert!(config.ends_with("password = { env = \"STAGING_PGPASSWORD\" }\n"), "{config}");
-    assert!(stdout(&pgbg(&config, &["connections"])).contains("staging     postgres://nina@localhost:5433/shop"));
+    assert!(stdout(&pgbg(&config, &["connections"])).contains("staging     postgres://nina@localhost:5433/shop?sslmode=require"));
 }
 
 #[test]
@@ -203,4 +207,80 @@ fn connection_remove_with_keep_password_drops_only_the_table() {
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(!stdout(&output).contains("keychain"), "{}", stdout(&output));
     assert_eq!(config, SHOP.split("\n[connections.prod]").next().unwrap());
+}
+
+/// A tunnel that writes its port to `argv[2]` and takes every link without a word, so `pgbg run` waits on it.
+const SILENT_TUNNEL: &str = "
+import socket, sys
+server = socket.create_server(('127.0.0.1', int(sys.argv[1])))
+open(sys.argv[2], 'w').write(sys.argv[1])
+links = []
+while True:
+    links.append(server.accept())
+";
+const TUNNEL_WAIT: Duration = Duration::from_secs(10);
+
+fn answers(port: u16) -> bool {
+    TcpStream::connect((Ipv4Addr::LOCALHOST, port)).is_ok()
+}
+
+fn within(wait: Duration, done: impl Fn() -> bool) -> bool {
+    let deadline = Instant::now() + wait;
+    while !done() {
+        if Instant::now() > deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    true
+}
+
+/// `pgbg run` through `SILENT_TUNNEL`, and the port of that tunnel once it answers.
+fn waiting_on_a_tunnel(dir: &Path) -> (Child, u16) {
+    let written = dir.join("port");
+    let config = format!(
+        "[connections.shop]\ntier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\ntls = \"off\"\n\
+         tunnel = {{ command = [\"python3\", \"-c\", {SILENT_TUNNEL:?}, \"{{port}}\", {:?}] }}\n",
+        written.display().to_string()
+    );
+    let path = dir.join("config.toml");
+    std::fs::write(&path, config).unwrap();
+    let pgbg = Command::new(env!("CARGO_BIN_EXE_pgbg"))
+        .args(["run", "shop", "SELECT 1"])
+        .env("PGBG_CONFIG", &path)
+        .env("PGBG_LOG", "off")
+        .spawn()
+        .unwrap();
+    assert!(within(TUNNEL_WAIT, || std::fs::read_to_string(&written).is_ok_and(|port| !port.is_empty())));
+    let port = std::fs::read_to_string(&written).unwrap().parse().unwrap();
+    assert!(within(TUNNEL_WAIT, || answers(port)));
+    (pgbg, port)
+}
+
+/// Whether the tunnel of a `pgbg run` that `signal` stopped went with it, and pgbg said which signal it was.
+fn a_tunnel_goes_when_pgbg_is_stopped_by(signal: Signal) {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut pgbg, port) = waiting_on_a_tunnel(dir.path());
+    kill_process(Pid::from_child(&pgbg), signal).unwrap();
+    let status = pgbg.wait().unwrap();
+    assert_eq!(status.code(), Some(128 + signal.as_raw()));
+    assert!(within(TUNNEL_WAIT, || !answers(port)), "the tunnel on port {port} outlived pgbg");
+}
+
+#[test]
+#[ignore = "starts a tunnel"]
+fn ctrl_c_on_pgbg_run_stops_its_tunnel_too() {
+    a_tunnel_goes_when_pgbg_is_stopped_by(Signal::INT);
+}
+
+#[test]
+#[ignore = "starts a tunnel"]
+fn a_kill_of_pgbg_run_stops_its_tunnel_too() {
+    a_tunnel_goes_when_pgbg_is_stopped_by(Signal::TERM);
+}
+
+#[test]
+#[ignore = "starts a tunnel"]
+fn closing_the_terminal_of_pgbg_run_stops_its_tunnel_too() {
+    a_tunnel_goes_when_pgbg_is_stopped_by(Signal::HUP);
 }

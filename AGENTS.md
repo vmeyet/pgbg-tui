@@ -83,6 +83,7 @@ The model is in `ARCHITECTURE.md` § Read only and § Secrets; these are the rul
 - No password in the config file or a URL in it: a password comes from the keychain, an environment variable or a command; the config loader refuses a `password` key.
 - No secret in logs, history, cache, fixtures or `Debug` output; `Secret` prints `<redacted>`.
 - TLS through rustls; a non-local host without `sslmode = "require"` or stronger is refused unless the connection says `tls = "off"` on purpose.
-- A tunnel is a child process pgbg owns: it binds `127.0.0.1` only, and it dies with pgbg.
+- A tunnel is a child process pgbg owns, in its own process group: it dies with pgbg on a quit, an error, a panic or a stopping signal; only `SIGKILL` and a forward handed outside the group (an ssh `ControlMaster`) escape it, and `stop` says so.
+- pgbg cannot make a tunnel bind `127.0.0.1` only: the examples say it, and a tunnelled connection needs TLS or `tls = "off"` on purpose.
 - No telemetry and no crash reporting.
 - The repo may go public: no real host, project, database or table name, no work email in commits.

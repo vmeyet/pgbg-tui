@@ -82,7 +82,7 @@ impl Connection {
         Ok(Self {
             name: ConnectionName::new(name)?,
             tier,
-            tls: tls::tls(&url, tls)?,
+            tls: tls::tls(&url, tls, tunnel.as_ref())?,
             url,
             tunnel,
             password: password.map(secret_source).transpose()?,
