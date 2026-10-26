@@ -1,6 +1,6 @@
 use crate::config;
 use crate::connection::{Connection, ConnectionName};
-use crate::secret::{Keychain, Secret, SecretSource};
+use crate::secret::{Keychain, KeychainItem, Secret, SecretSource};
 use anyhow::{Result, bail};
 
 /// Saves the password of the connection `name` in the keychain, typed hidden or piped in; a connection
@@ -18,9 +18,9 @@ pub fn set(name: &ConnectionName) -> Result<()> {
 }
 
 /// The keychain item the connection names, else `pgbg/<name>`; a password from elsewhere is refused.
-fn keychain_item(connection: &Connection) -> Result<String> {
+fn keychain_item(connection: &Connection) -> Result<KeychainItem> {
     match connection.password() {
-        None => Ok(format!("pgbg/{}", connection.name())),
+        None => format!("pgbg/{}", connection.name()).parse(),
         Some(SecretSource::Keychain(item)) => Ok(item.clone()),
         Some(other) => bail!(
             "`{}` reads its password from `{}`, not the keychain: change that there, or remove its `password` key first",
@@ -41,12 +41,12 @@ mod tests {
 
     #[test]
     fn a_connection_without_a_password_gets_an_item_named_after_it() {
-        assert_eq!(keychain_item(&prod("")).unwrap(), "pgbg/prod");
+        assert_eq!(keychain_item(&prod("")).unwrap().as_str(), "pgbg/prod");
     }
 
     #[test]
     fn a_connection_that_names_a_keychain_item_keeps_it() {
-        assert_eq!(keychain_item(&prod("password = { keychain = \"shop/main\" }")).unwrap(), "shop/main");
+        assert_eq!(keychain_item(&prod("password = { keychain = \"shop/main\" }")).unwrap().as_str(), "shop/main");
     }
 
     #[test]

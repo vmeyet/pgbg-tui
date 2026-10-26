@@ -27,10 +27,8 @@ async fn run(cli: &Cli) -> Result<()> {
 
 fn connection(command: &ConnectionCommand) -> Result<()> {
     match command {
-        ConnectionCommand::Add { connection, tier, url, keys } => commands::connection::add(connection, tier, url, keys),
-        ConnectionCommand::Edit { connection, tier, url, keys } => {
-            commands::connection::edit(connection, tier.as_deref(), url.as_deref(), keys)
-        }
+        ConnectionCommand::Add { connection, tier, url, keys } => commands::connection::add(connection, *tier, url, keys),
+        ConnectionCommand::Edit { connection, tier, url, keys } => commands::connection::edit(connection, *tier, url.as_deref(), keys),
         ConnectionCommand::Remove { connection, keep_password } => commands::connection::remove(connection, *keep_password),
     }
 }
