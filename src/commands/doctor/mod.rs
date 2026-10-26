@@ -1,6 +1,6 @@
 use crate::config;
 use crate::connection::{Connection, ConnectionName};
-use crate::db::{NotOpened, Opened, Session, open_along};
+use crate::db::{Attempt, Session, open_once};
 use crate::tunnel::Tunnel;
 use anyhow::{Result, bail};
 use report::{Check, Report};
@@ -43,13 +43,12 @@ fn file_mode(path: &Path) -> Check {
 
 /// The checks that need the server: the tunnel when there is one, the login, then what the session reads.
 async fn reached(connection: &Connection) -> Vec<Check> {
-    let (opened, tunnel) = match open_along(connection, None).await {
-        Ok(Opened { session, tunnel }) => (Ok(session), tunnel),
-        Err(NotOpened::Tunnel(err)) => return vec![verdicts::tunnel_failed(&err)],
-        Err(NotOpened::Login { error, tunnel }) => (Err(error), tunnel.map(|tunnel| *tunnel)),
+    let Attempt { session, tunnel } = match open_once(connection).await {
+        Ok(attempt) => attempt,
+        Err(err) => return vec![verdicts::tunnel_failed(&err)],
     };
     let started = connection.tunnel().zip(tunnel.as_ref()).map(|(spec, tunnel)| verdicts::tunnel_started(spec, tunnel.port()));
-    let session = match opened {
+    let session = match session {
         Ok(session) => read(connection, session).await,
         Err(err) => vec![verdicts::login_failed(&err)],
     };

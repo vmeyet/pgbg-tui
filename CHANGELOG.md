@@ -12,9 +12,10 @@ Each entry says what changed, then where, then how to use it.
   It reads the config and the mode of `config.toml`, says whether TLS is on and why, starts and stops the tunnel, logs in, and shows the server's version and the statement timeout in effect, with where it comes from: the connection, its tier or the server.
   It says what the role can write: superuser, `CREATEROLE`, `CREATEDB`, `BYPASSRLS`, `pg_write_all_data` and the tables it may change; a read-only connection whose role can write gets `!`, since only a read-only role truly stops a write.
   `--json` prints the same checks; pgbg exits 1 when one fails, so a script can run it.
+  A `ctrl-c`, a `kill` or a closed terminal stops its tunnel too.
 
 - **History** of every statement `pgbg run` sends: `pgbg history <connection>` lists the newest first, with when, how long and what came of it; `--limit n` and `--json` too.
-  It lives in `pgbg/history/` in your data folder, readable by you only; it never keeps a row, the server's words or a statement that holds a password.
+  It lives in `pgbg/history/` in your data folder, readable by you only; it never keeps a row, the server's words or a statement that holds a password, as a word or in a URL such as `postgresql://nina:...@db.example.com`.
 - **The connection picker** in the TUI: press `ctrl-o`, type a few letters of a connection's name, and `⏎` to switch to it.
   Each connection shows its tier's colour, where it goes, whether it takes writes, and whether its session is open.
   Sessions stay open until you quit, so switching back is instant, and each connection keeps its own editor text, result and saved query.

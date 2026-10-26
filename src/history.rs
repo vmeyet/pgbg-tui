@@ -1,23 +1,26 @@
 //! Every statement run, per connection: one JSON line each in `<data folder>/pgbg/history/<connection>.jsonl`, oldest first.
 //! A line never holds a password or a row.
+use crate::config;
 use crate::connection::ConnectionName;
 use crate::db::guard::Refusal;
 use crate::db::model::{ResultSet, ServerError};
 use chrono::{DateTime, Utc};
+use rustix::fs::{FlockOperation, flock};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fmt;
-use std::fs::{DirBuilder, OpenOptions};
+use std::fs::{DirBuilder, File, OpenOptions};
 use std::io::{self, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
-use std::path::PathBuf;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
+use std::path::{Path, PathBuf};
 
 const PATH_VARIABLE: &str = "PGBG_DATA_DIR";
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
 const DIR_MODE: u32 = 0o700;
 const FILE_MODE: u32 = 0o600;
 const PASSWORD_WORD: &str = "password";
+const SCHEME_END: &str = "://";
 const PASSWORD_KEPT_AS: &str = "-- not kept: it holds a password";
 
 /// What came of a statement, without the server's words: they can quote a row.
@@ -104,14 +107,21 @@ impl Store {
     }
 
     /// Adds `entry` at the end of its connection's file; a statement that holds a password is kept as a note instead.
+    /// The file is locked while it is rolled over and written, so two pgbg never lose each other's lines.
     pub(crate) fn append(&self, entry: &Entry) -> io::Result<()> {
         DirBuilder::new().recursive(true).mode(DIR_MODE).create(&self.dir)?;
-        let path = self.file(&entry.connection);
-        if std::fs::metadata(&path).is_ok_and(|file| file.len() > self.max_bytes) {
-            std::fs::rename(&path, self.rolled(&entry.connection))?;
-        }
         let line = serde_json::to_string(&kept(entry)).map_err(io::Error::other)? + "\n";
-        OpenOptions::new().create(true).append(true).mode(FILE_MODE).open(&path)?.write_all(line.as_bytes())
+        let path = self.file(&entry.connection);
+        let file = locked(&path)?;
+        let is_full = file.metadata()?.len() > self.max_bytes;
+        let mut file = if is_full { self.rolled_over(&path, &entry.connection)? } else { file };
+        file.write_all(line.as_bytes())
+    }
+
+    /// Moves the full file at `path` to `.1` and gives a new one, locked; the full one stays locked until it is dropped.
+    fn rolled_over(&self, path: &Path, connection: &ConnectionName) -> io::Result<File> {
+        std::fs::rename(path, self.rolled(connection))?;
+        locked(path)
     }
 
     /// The history of `connection`, its rolled-over file included; a line pgbg cannot read is left out.
@@ -132,8 +142,30 @@ impl Store {
 }
 
 fn dir_from(variable: Option<OsString>, data_dir: Option<PathBuf>) -> Option<PathBuf> {
-    let named = variable.filter(|v| !v.is_empty()).map(PathBuf::from);
-    Some(named.or_else(|| data_dir.map(|dir| dir.join("pgbg")))?.join("history"))
+    Some(config::named_path(variable).or_else(|| data_dir.map(|dir| dir.join("pgbg")))?.join("history"))
+}
+
+/// The file at `path`, opened to append and locked for this process alone; opened again when another writer rolled it over
+/// while this one waited.
+fn locked(path: &Path) -> io::Result<File> {
+    loop {
+        let file = OpenOptions::new().create(true).append(true).mode(FILE_MODE).open(path)?;
+        if let Some(file) = locked_if_current(file, path)? {
+            return Ok(file);
+        }
+    }
+}
+
+/// `file` once locked, while it is still the one at `path`; `None` when it was rolled over before the lock was taken.
+fn locked_if_current(file: File, path: &Path) -> io::Result<Option<File>> {
+    flock(&file, FlockOperation::LockExclusive)?;
+    let held = file.metadata()?;
+    let current = match std::fs::metadata(path) {
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        current => current?,
+    };
+    let is_current = held.dev() == current.dev() && held.ino() == current.ino();
+    Ok(is_current.then_some(file))
 }
 
 fn kept(entry: &Entry) -> Entry {
@@ -141,10 +173,23 @@ fn kept(entry: &Entry) -> Entry {
     Entry { statement, ..entry.clone() }
 }
 
-/// Whether `password` stands as a word of its own, as in `ALTER ROLE nina PASSWORD '...'`; `password_hash` is another word.
+/// Whether `password` stands as a word of its own, as in `ALTER ROLE nina PASSWORD '...'`, or a URL holds one, as in
+/// `postgresql://nina:...@db.example.com`; `password_hash` is another word.
 fn holds_password(statement: &str) -> bool {
     let is_word_char = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
-    statement.split(|c: char| !is_word_char(c)).any(|word| word.eq_ignore_ascii_case(PASSWORD_WORD))
+    let has_password_word = statement.split(|c: char| !is_word_char(c)).any(|word| word.eq_ignore_ascii_case(PASSWORD_WORD));
+    has_password_word || statement.match_indices(SCHEME_END).any(|(at, _)| is_url_with_password(&statement[..at], &statement[at..]))
+}
+
+/// Whether a scheme ends `before` and `after` opens on `://user:password@`.
+fn is_url_with_password(before: &str, after: &str) -> bool {
+    let has_scheme = before.ends_with(|c: char| c.is_alphanumeric() || c == '_');
+    let Some((user, password)) = after[SCHEME_END.len()..].split_once('@').and_then(|(user_info, _)| user_info.split_once(':')) else {
+        return false;
+    };
+    let is_user = !user.is_empty() && !user.contains(|c: char| c == '/' || c.is_whitespace());
+    let is_password = !password.is_empty() && !password.contains(char::is_whitespace);
+    has_scheme && is_user && is_password
 }
 
 fn read_or_empty(path: PathBuf) -> io::Result<String> {
@@ -234,6 +279,25 @@ mod tests {
         store(&dir).append(&entry("shop", "ALTER ROLE nina PASSWORD 'hunter2'", 1)).unwrap();
         store(&dir).append(&entry("shop", "SELECT password_hash FROM customers", 2)).unwrap();
         assert_eq!(statements(&store(&dir).read(&shop()).unwrap()), ["SELECT password_hash FROM customers", PASSWORD_KEPT_AS]);
+    }
+
+    #[test]
+    fn a_statement_quoting_a_url_with_a_password_is_not_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let dblink = "SELECT * FROM dblink('postgresql://nina:hunter2@db.example.com/shop', 'SELECT 1')";
+        store(&dir).append(&entry("shop", dblink, 1)).unwrap();
+        store(&dir).append(&entry("shop", "SELECT 'https://db.example.com/nina@shop'", 2)).unwrap();
+        assert_eq!(statements(&store(&dir).read(&shop()).unwrap()), ["SELECT 'https://db.example.com/nina@shop'", PASSWORD_KEPT_AS]);
+    }
+
+    #[test]
+    fn a_file_rolled_over_by_another_writer_is_not_locked() {
+        let dir = tempfile::tempdir().unwrap();
+        store(&dir).append(&entry("shop", "SELECT 1", 1)).unwrap();
+        let path = dir.path().join("history/shop.jsonl");
+        let opened_before = OpenOptions::new().append(true).open(&path).unwrap();
+        std::fs::rename(&path, dir.path().join("history/shop.jsonl.1")).unwrap();
+        assert!(locked_if_current(opened_before, &path).unwrap().is_none());
     }
 
     #[test]

@@ -270,6 +270,7 @@ links = []
 while True:
     links.append(server.accept())
 ";
+const RUN: &[&str] = &["run", "shop", "SELECT 1"];
 const TUNNEL_WAIT: Duration = Duration::from_secs(10);
 
 fn answers(port: u16) -> bool {
@@ -287,8 +288,8 @@ fn within(wait: Duration, done: impl Fn() -> bool) -> bool {
     true
 }
 
-/// `pgbg run` through `SILENT_TUNNEL`, and the port of that tunnel once it answers.
-fn waiting_on_a_tunnel(dir: &Path) -> (Child, u16) {
+/// pgbg with `args` on `shop`, through `SILENT_TUNNEL`, and the port of that tunnel once it answers.
+fn waiting_on_a_tunnel(dir: &Path, args: &[&str]) -> (Child, u16) {
     let written = dir.join("port");
     let config = format!(
         "[connections.shop]\ntier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\ntls = \"off\"\n\
@@ -298,7 +299,7 @@ fn waiting_on_a_tunnel(dir: &Path) -> (Child, u16) {
     let path = dir.join("config.toml");
     std::fs::write(&path, config).unwrap();
     let pgbg = Command::new(env!("CARGO_BIN_EXE_pgbg"))
-        .args(["run", "shop", "SELECT 1"])
+        .args(args)
         .env("PGBG_CONFIG", &path)
         .env("PGBG_LOG", "off")
         .env("PGBG_DATA_DIR", dir)
@@ -310,10 +311,10 @@ fn waiting_on_a_tunnel(dir: &Path) -> (Child, u16) {
     (pgbg, port)
 }
 
-/// Whether the tunnel of a `pgbg run` that `signal` stopped went with it, and pgbg said which signal it was.
-fn a_tunnel_goes_when_pgbg_is_stopped_by(signal: Signal) {
+/// Whether the tunnel of pgbg with `args` that `signal` stopped went with it, and pgbg said which signal it was.
+fn a_tunnel_goes_when_pgbg_is_stopped_by(args: &[&str], signal: Signal) {
     let dir = tempfile::tempdir().unwrap();
-    let (mut pgbg, port) = waiting_on_a_tunnel(dir.path());
+    let (mut pgbg, port) = waiting_on_a_tunnel(dir.path(), args);
     kill_process(Pid::from_child(&pgbg), signal).unwrap();
     let status = pgbg.wait().unwrap();
     assert_eq!(status.code(), Some(128 + signal.as_raw()));
@@ -323,19 +324,25 @@ fn a_tunnel_goes_when_pgbg_is_stopped_by(signal: Signal) {
 #[test]
 #[ignore = "starts a tunnel"]
 fn ctrl_c_on_pgbg_run_stops_its_tunnel_too() {
-    a_tunnel_goes_when_pgbg_is_stopped_by(Signal::INT);
+    a_tunnel_goes_when_pgbg_is_stopped_by(RUN, Signal::INT);
 }
 
 #[test]
 #[ignore = "starts a tunnel"]
 fn a_kill_of_pgbg_run_stops_its_tunnel_too() {
-    a_tunnel_goes_when_pgbg_is_stopped_by(Signal::TERM);
+    a_tunnel_goes_when_pgbg_is_stopped_by(RUN, Signal::TERM);
 }
 
 #[test]
 #[ignore = "starts a tunnel"]
 fn closing_the_terminal_of_pgbg_run_stops_its_tunnel_too() {
-    a_tunnel_goes_when_pgbg_is_stopped_by(Signal::HUP);
+    a_tunnel_goes_when_pgbg_is_stopped_by(RUN, Signal::HUP);
+}
+
+#[test]
+#[ignore = "starts a tunnel"]
+fn a_kill_of_pgbg_doctor_stops_its_tunnel_too() {
+    a_tunnel_goes_when_pgbg_is_stopped_by(&["doctor", "shop"], Signal::TERM);
 }
 
 #[test]

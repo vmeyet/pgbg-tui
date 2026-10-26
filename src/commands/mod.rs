@@ -18,7 +18,7 @@ pub mod tui;
 
 use crate::config::{self, Config};
 use crate::connection::{Connection, ConnectionName};
-use crate::db::{NotOpened, Opened, Session, open_along};
+use crate::db::{Attempt, Session, open_once};
 use crate::render::printable;
 use crate::tunnel::Tunnel;
 use anyhow::{Result, anyhow};
@@ -39,10 +39,10 @@ fn warn(text: &str) {
 
 /// `work` on a session opened on `connection` along its route; its tunnel, when it has one, stops once it is done.
 async fn on_session<T>(connection: &Connection, work: impl AsyncFnOnce(&mut Session) -> Result<T>) -> Result<T> {
-    let (result, tunnel) = match open_along(connection, None).await {
-        Ok(Opened { mut session, tunnel }) => (work(&mut session).await, tunnel),
-        Err(NotOpened::Tunnel(err)) => return Err(err),
-        Err(NotOpened::Login { error, tunnel }) => (Err(error), tunnel.map(|tunnel| *tunnel)),
+    let Attempt { session, tunnel } = open_once(connection).await?;
+    let result = match session {
+        Ok(mut session) => work(&mut session).await,
+        Err(err) => Err(err),
     };
     stop(tunnel).await;
     result

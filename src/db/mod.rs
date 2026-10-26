@@ -20,7 +20,7 @@ mod open;
 mod schema;
 mod server;
 
-pub(crate) use open::{NotOpened, Opened, open_along};
+pub(crate) use open::{Attempt, open_once};
 
 const NO_PARAMETERS: [&str; 0] = [];
 /// The rows pgbg keeps of a result; past it the result is cut, so a big table cannot fill the memory.
