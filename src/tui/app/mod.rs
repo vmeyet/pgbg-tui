@@ -11,6 +11,7 @@ use grid::Move;
 pub(super) use picker::{Note, Picker};
 pub(super) use protocol::{Action, Answer, ConfigAnswer, Incoming, QueryAnswer, RunId, SaveConnection, Saving, TunnelState};
 pub(super) use queries::{Finder, Queries};
+pub(super) use search::{ROWS_SHOWN, Search};
 pub(super) use sheet::{Run, SessionState, Sheet, View};
 
 mod editor;
@@ -19,6 +20,7 @@ mod grid;
 pub(super) mod picker;
 mod protocol;
 pub(super) mod queries;
+mod search;
 mod sheet;
 
 /// The pane that has the keys.

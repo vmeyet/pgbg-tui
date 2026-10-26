@@ -28,7 +28,7 @@ When a boundary or a flow changes, change this page in the same MR.
 | `syntax/` | SQL colours from tree-sitter, loaded on first use |
 | `act.rs`, `keymap.rs` (planned) | Every action in one table (name, default keys, help, pane, and palette verb (planned)); the user's `[keys]` on top (planned) |
 | `tui/mod.rs` | The event loop: terminal events, answers and the recolour timer in, frames out |
-| `tui/app/` | `App`, the pure state machine: keys in, `Action`s out, `Answer`s applied to the sheet of the connection that gave them, a saved query read to the sheet that asked for it; `protocol.rs` holds what the app and the backend say to each other, `sheet.rs` one connection's state; one `Overlay` at most (help, finder, picker, connection form) takes the keys |
+| `tui/app/` | `App`, the pure state machine: keys in, `Action`s out, `Answer`s applied to the sheet of the connection that gave them, a saved query read to the sheet that asked for it; `protocol.rs` holds what the app and the backend say to each other, `sheet.rs` one connection's state, `search.rs` the fzf-narrowed list the finder and the picker share; one `Overlay` at most (help, finder, picker, connection form) takes the keys |
 | `tui/backend/` | `Backend::dispatch` hands each `Action` over without waiting, to one part per concern: sessions (one per connection opened, a task owns each one, runs its statements in turn, takes cancels by `RunId` while a statement runs, and says when the session is lost), queries, the config (changed through `config/` on a blocking thread, then read back), and history (planned) |
 | `tui/ui.rs`, `tui/*_view.rs` | Drawing: layout in `ui.rs`, one view module per pane or modal |
 | `tui/grid_view/` | The results grid: only the visible rows and columns are drawn |

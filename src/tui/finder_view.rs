@@ -1,5 +1,5 @@
 //! The `ctrl-p` finder: a vtui palette over every saved query, best match first.
-use super::app::{App, Overlay};
+use super::app::{App, Overlay, ROWS_SHOWN};
 use crate::act::{self, Pane};
 use crate::query::{Query, Source};
 use ratatui::Frame;
@@ -19,8 +19,10 @@ fn pick<'a>(app: &App, query: &Query, label: &'a str) -> Pick<'a> {
 pub(super) fn draw(f: &mut Frame<'_>, app: &App) {
     let Some(Overlay::Finder(finder)) = &app.overlay else { return };
     let theme = &app.theme;
-    let labels: Vec<String> = finder.shown.iter().map(|query| query.path.to_string()).collect();
-    let picks: Vec<Pick<'_>> = finder.shown.iter().zip(&labels).map(|(query, label)| pick(app, query, label)).collect();
+    let in_view = finder.in_view(ROWS_SHOWN);
+    let labels: Vec<String> = in_view.iter().map(|query| query.path.to_string()).collect();
+    let picks: Vec<Pick<'_>> = in_view.iter().zip(&labels).map(|(query, label)| pick(app, query, label)).collect();
+    let selected = finder.palette.selected - finder.first_in_view(ROWS_SHOWN);
     let hints: Vec<String> = act::footer(Pane::Finder).map(|hint| format!("{} {}", hint.keys, hint.does)).collect();
     let footer = format!("  {}", hints.join(" · "));
     let popup = Popup { title: "Queries", prompt: view::prompt(theme, &finder.palette, "", |_| vec![]), footer: &footer };
@@ -28,6 +30,6 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) {
         if app.queries.all.is_empty() {
             return vec![Line::styled(NO_QUERY, Style::default().fg(theme.muted))];
         }
-        view::pick_lines(theme, &picks, finder.palette.selected, room)
+        view::pick_lines(theme, &picks, selected, room)
     });
 }

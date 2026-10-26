@@ -211,6 +211,17 @@ mod tests {
     }
 
     #[test]
+    fn a_finder_with_more_matches_than_fit_scrolls_and_keeps_its_footer() {
+        let mut app = with_queries();
+        let many = (1..=20).map(|day| query(&format!("orders/day{day:02}.sql"))).collect();
+        app.apply(Answer::Queries(QueryAnswer::All(many)));
+        app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+        (0..14).for_each(|_| _ = app.handle_key(KeyEvent::from(KeyCode::Down)));
+        let screen = format!("{:?}", render(&app, 60, 20).backend());
+        assert!(screen.contains("▎◆ orders/day15.sql") && screen.contains("esc"), "{screen}");
+    }
+
+    #[test]
     fn ctrl_p_opens_the_finder_over_the_screen() {
         let mut app = with_queries();
         app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));

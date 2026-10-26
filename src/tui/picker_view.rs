@@ -1,12 +1,11 @@
 //! The connection picker over the screen: each connection's dot in its tier's colour, where it goes, whether it
 //! takes writes, and whether its session is open. vtui draws the popup around it.
-use super::app::{App, Note, Overlay, SessionState};
+use super::app::{App, Note, Overlay, ROWS_SHOWN, Search, SessionState};
 use super::theme;
 use crate::connection::{Connection, WritePolicy};
 use ratatui::Frame;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use vtui::palette::MAX_SHOWN;
 use vtui::palette::view::{self, Popup};
 use vtui::text::truncate;
 
@@ -15,11 +14,11 @@ const FOOTER: &str = "  ↑↓ pick · ⏎ opens · ^d removes · ^x closes · e
 /// The picker when it is open.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App) {
     let Some(Overlay::Picker(picker)) = &app.overlay else { return };
-    let prompt = view::prompt(&app.theme, &picker.palette, "", |_| vec![]);
+    let prompt = view::prompt(&app.theme, &picker.search.palette, "", |_| vec![]);
     let popup = Popup { title: "Connections", prompt, footer: FOOTER };
-    let matching = app.matching(&picker.palette.input);
+    let rows = ROWS_SHOWN - usize::from(picker.note.is_some());
     view::draw(f, &app.theme, f.area(), popup, |room| {
-        let mut lines = lines(app, &matching, picker.palette.selected, room);
+        let mut lines = lines(app, &picker.search, rows, room);
         lines.extend(picker.note.as_ref().map(|note| note_line(app, note, room)));
         lines
     });
@@ -38,14 +37,13 @@ fn note_line(app: &App, note: &Note, room: usize) -> Line<'static> {
     Line::styled(truncate(&text, room + 2), style)
 }
 
-/// The rows in view, scrolled so the highlighted one shows.
-fn lines(app: &App, matching: &[&Connection], selected: usize, room: usize) -> Vec<Line<'static>> {
-    if matching.is_empty() {
+/// The `rows` in view, scrolled so the highlighted one shows.
+fn lines(app: &App, search: &Search<Connection>, rows: usize, room: usize) -> Vec<Line<'static>> {
+    if search.shown.is_empty() {
         return vec![Line::styled("  no match", Style::default().fg(app.theme.muted))];
     }
-    let first = selected.saturating_sub(MAX_SHOWN - 1);
-    let shown = matching.iter().enumerate().skip(first).take(MAX_SHOWN);
-    shown.map(|(at, connection)| line(app, connection, at == selected, room)).collect()
+    let selected = search.palette.selected - search.first_in_view(rows);
+    search.in_view(rows).iter().enumerate().map(|(at, connection)| line(app, connection, at == selected, room)).collect()
 }
 
 /// `▎● prod  via tunnel · read only  open`: the name is cut to leave room for its badge and state, the place to the room left.
@@ -98,6 +96,20 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
         terminal.draw(|f| _ = ui::draw(f, app)).unwrap();
         format!("{:?}", terminal.backend())
+    }
+
+    #[test]
+    fn a_question_under_a_full_list_keeps_the_footer() {
+        let shops: Vec<_> =
+            (1..=14).map(|at| named(&format!("shop{at:02}"), "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\n")).collect();
+        let mut app = App::new(shops.clone(), &shops[0], Theme::default());
+        ctrl(&mut app, 'o');
+        (0..13).for_each(|_| _ = app.handle_key(KeyEvent::from(KeyCode::Down)));
+        ctrl(&mut app, 'd');
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|f| _ = ui::draw(f, &app)).unwrap();
+        let screen = format!("{:?}", terminal.backend());
+        assert!(screen.contains("▎● shop14") && screen.contains("remove `shop14`?") && screen.contains("esc"), "{screen}");
     }
 
     #[test]
