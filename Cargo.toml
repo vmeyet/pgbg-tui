@@ -41,6 +41,7 @@ vtui = { git = "https://github.com/vmeyet/vtui", tag = "v0.1.0" }
 
 [dev-dependencies]
 insta = "1"
+tokio = { version = "1", features = ["test-util"] }
 
 [profile.release]
 lto = "fat"

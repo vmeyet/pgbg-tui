@@ -57,7 +57,7 @@ Switching connection:
 3. `Session::open` takes the tunnel's `Route`: it connects to `hostaddr=127.0.0.1` and the tunnel's port, and keeps the URL's host for the TLS certificate check; it reads the schema in the background for completion and the sidebar.
 4. The session stays open until pgbg quits, so switching back is instant; its tunnel stops with it.
 5. A session whose link is gone, or whose rollback failed, is opened again before the next statement; it is never retried on its own.
-6. Opening gives up after 10 seconds unless the `url` sets `connect_timeout`, and each session asks the server to stop its statement once pgbg is gone (`client_connection_check_interval`).
+6. Opening gives up after 10 seconds, TLS and login included, unless the `url` sets `connect_timeout`; and each session asks the server to stop its statement once pgbg is gone (`client_connection_check_interval`).
 
 Charting a result:
 

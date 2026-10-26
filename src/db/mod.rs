@@ -7,6 +7,7 @@ use model::{CancelToken, LocalPort, ResultSet, Route, ServerError};
 use std::net::Ipv4Addr;
 use std::time::Duration;
 use tokio::sync::watch;
+use tokio::time::timeout;
 use tokio_postgres::config::SslMode;
 use tokio_postgres::error::ErrorPosition;
 use tokio_postgres::tls::MakeTlsConnect;
@@ -117,11 +118,12 @@ fn driver_config(target: &Target, route: Route) -> Result<Config> {
         Route::Direct => url,
         Route::Tunnel(port) => through_tunnel(&url, port),
     };
-    let mut config: Config = url.as_str().trim_end_matches('?').parse().map_err(|err| anyhow!("`url` is not a PostgreSQL URL: {err}"))?;
-    if config.get_connect_timeout().is_none() {
-        config.connect_timeout(CONNECT_TIMEOUT);
-    }
-    Ok(config)
+    url.as_str().trim_end_matches('?').parse().map_err(|err| anyhow!("`url` is not a PostgreSQL URL: {err}"))
+}
+
+/// How long opening a session waits, TLS and login included: the driver's own timeout covers only the TCP connect.
+fn connect_wait(config: &Config) -> Duration {
+    config.get_connect_timeout().copied().unwrap_or(CONNECT_TIMEOUT)
 }
 
 fn without_key(url: &Url, dropped: &str) -> Url {
@@ -153,7 +155,11 @@ where
     T: MakeTlsConnect<Socket>,
     T::Stream: Send + 'static,
 {
-    let (client, connection) = config.connect(tls).await.map_err(server_error)?;
+    let wait = connect_wait(config);
+    let (client, connection) = timeout(wait, config.connect(tls))
+        .await
+        .with_context(|| format!("the server did not answer within {}s", wait.as_secs()))?
+        .map_err(server_error)?;
     let (end, ended) = watch::channel(None);
     tokio::spawn(async move {
         let reason = match connection.await {
@@ -291,15 +297,21 @@ mod tests {
 
     #[test]
     fn a_session_gives_up_connecting_after_ten_seconds() {
-        assert_eq!(driver_config_of("postgres://nina@localhost/shop").get_connect_timeout(), Some(&Duration::from_secs(10)));
+        assert_eq!(connect_wait(&driver_config_of("postgres://nina@localhost/shop")), Duration::from_secs(10));
     }
 
     #[test]
     fn the_connect_timeout_of_the_url_wins() {
-        assert_eq!(
-            driver_config_of("postgres://nina@localhost/shop?connect_timeout=3").get_connect_timeout(),
-            Some(&Duration::from_secs(3))
-        );
+        assert_eq!(connect_wait(&driver_config_of("postgres://nina@localhost/shop?connect_timeout=3")), Duration::from_secs(3));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_server_that_accepts_but_never_answers_is_given_up() {
+        let silent = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let port = silent.local_addr().unwrap().port();
+        let entry: Entry = toml::from_str(&format!("tier = \"local\"\nurl = \"postgres://nina@localhost:{port}/shop\"\n")).unwrap();
+        let err = Session::open(&Connection::new("shop", entry).unwrap(), Route::Direct).await.unwrap_err();
+        assert!(format!("{err:#}").contains("did not answer within 10s"), "{err:#}");
     }
 
     fn numbers_up_to(count: usize) -> String {
