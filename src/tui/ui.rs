@@ -1,6 +1,6 @@
 //! Drawing: the frame in the tier's colour, the panes inside it, and the key hints under them.
-use super::app::{App, Fit, SessionState, TunnelState};
-use super::{editor_view, finder_view, form_view, help_view, picker_view, result_view, sidebar_view, theme};
+use super::app::{App, Fit, Overlay, SessionState, TunnelState};
+use super::{editor_view, finder_view, form_view, help_view, picker_view, prompt_view, result_view, sidebar_view, theme};
 use crate::act::{self, Hint};
 use crate::render::printable;
 use ratatui::Frame;
@@ -63,8 +63,12 @@ fn layout(area: Rect, has_sidebar: bool) -> Areas {
     Areas { sidebar: has_sidebar.then_some(sidebar), editor, result, footer }
 }
 
-/// The session's state on the right, as wide as it needs up to half the row, and the keys that fit on the left.
+/// The session's state on the right, as wide as it needs up to half the row, and the keys that fit on the left; an open
+/// prompt takes the whole row.
 fn footer(f: &mut Frame<'_>, app: &App, area: Rect) {
+    if let Some(Overlay::Prompt(prompt)) = &app.overlay {
+        return prompt_view::draw(f, app, prompt, area);
+    }
     let status = status(app, usize::from(area.width / STATUS_SHARE_OF_ROW));
     let status_columns = u16::try_from(status.width()).unwrap_or(area.width);
     let [hints_area, status_area] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(status_columns)]).areas(area);
@@ -257,6 +261,14 @@ mod tests {
             text: text.into(),
         }));
         insta::assert_snapshot!("query_header", render(&app, 100, 6).backend());
+    }
+
+    #[test]
+    fn ctrl_s_on_new_text_asks_for_its_path_on_the_footer_line() {
+        let mut app = typed("SELECT 1");
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        "orders/".chars().for_each(|c| _ = app.handle_key(KeyEvent::from(KeyCode::Char(c))));
+        insta::assert_snapshot!("save_as", render(&app, 60, 6).backend());
     }
 
     #[test]

@@ -122,6 +122,7 @@ impl Sheet {
     /// pointed into the old text; the colours follow on their own.
     pub(super) fn text_changed(&mut self) {
         self.header = Header::parse(self.editor.text());
+        self.is_dirty = true;
         self.error_mark = None;
         self.forget_sent_place();
     }

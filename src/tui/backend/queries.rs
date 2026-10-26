@@ -2,7 +2,7 @@
 use super::super::app::{Answer, QueryAnswer};
 use super::send;
 use crate::connection::ConnectionName;
-use crate::query::{Query, Roots};
+use crate::query::{Query, QueryPath, Roots, Write};
 use tokio::sync::mpsc::UnboundedSender;
 
 /// The folders of saved queries, and the loop's channel for what is read in them.
@@ -30,4 +30,45 @@ impl QueryFiles {
             send(&answers, Answer::Queries(answer));
         });
     }
+
+    /// Writes `text` over `query` on a blocking thread; `QueryAnswer::Saved` comes back for the sheet of `connection`,
+    /// then the new list.
+    pub(in crate::tui) fn save(&self, connection: ConnectionName, query: Query, text: String) {
+        let (roots, answers) = (self.roots.clone(), self.answers.clone());
+        tokio::task::spawn_blocking(move || {
+            let path = query.path.clone();
+            let saved = roots.write(&query, &text, Write::Replace).map(|()| query);
+            answer_saved(&answers, saved_answer(Saving { connection, path, saved, text }), &roots);
+        });
+    }
+
+    /// Writes `text` as a new query at `path`, never over another one; answers as `save` does.
+    pub(in crate::tui) fn save_new(&self, connection: ConnectionName, path: QueryPath, text: String) {
+        let (roots, answers) = (self.roots.clone(), self.answers.clone());
+        tokio::task::spawn_blocking(move || {
+            let saved = roots.new_query(path.clone()).and_then(|query| roots.write(&query, &text, Write::Create).map(|()| query));
+            answer_saved(&answers, saved_answer(Saving { connection, path, saved, text }), &roots);
+        });
+    }
+}
+
+/// What a save of `text` at `path` for the sheet of `connection` came to.
+struct Saving {
+    connection: ConnectionName,
+    path: QueryPath,
+    saved: anyhow::Result<Query>,
+    text: String,
+}
+
+fn saved_answer(Saving { connection, path, saved, text }: Saving) -> QueryAnswer {
+    match saved {
+        Ok(query) => QueryAnswer::Saved { connection, query, text },
+        Err(err) => QueryAnswer::NotSaved { connection, path, error: format!("{err:#}") },
+    }
+}
+
+/// Sends `answer`, then the queries listed again, so a new file shows in the sidebar and the finder.
+fn answer_saved(answers: &UnboundedSender<Answer>, answer: QueryAnswer, roots: &Roots) {
+    send(answers, Answer::Queries(answer));
+    send(answers, Answer::Queries(QueryAnswer::All(roots.list())));
 }

@@ -53,7 +53,7 @@ impl App {
     /// Opens the query under the sidebar's cursor, or folds and unfolds the folder there.
     pub(super) fn open_in_sidebar(&mut self) -> Vec<Action> {
         match self.queries.rows().into_iter().nth(self.queries.selected) {
-            Some(TreeRow::Query { query, .. }) => return vec![self.open_query(query)],
+            Some(TreeRow::Query { query, .. }) => return self.ask_open(query),
             Some(TreeRow::Folder { key, is_open: true, .. }) => _ = self.queries.closed.insert(key),
             Some(TreeRow::Folder { key, is_open: false, .. }) => _ = self.queries.closed.remove(&key),
             None => {}
@@ -66,13 +66,13 @@ impl App {
         match finder.after(key, Pane::Finder, &self.queries.all) {
             Searching::Typed(finder) | Searching::Unhandled(finder, _) => (Some(finder), vec![]),
             Searching::Closed => (None, vec![]),
-            Searching::Picked(query) => (None, vec![self.open_query(query)]),
+            Searching::Picked(query) => (None, self.ask_open(query)),
             Searching::Quit => (None, self.quit()),
         }
     }
 
     /// Reads `query` into the editor on screen.
-    fn open_query(&self, query: Query) -> Action {
+    pub(super) fn open_query(&self, query: Query) -> Action {
         Action::OpenQuery { connection: self.sheet().name().clone(), query }
     }
 
@@ -84,6 +84,7 @@ impl App {
         sheet.opened = Some(query);
         sheet.editor = Editor::new(text);
         sheet.text_changed();
+        sheet.is_dirty = false;
         if is_on_screen {
             self.focus = Focus::Editor;
         }

@@ -16,9 +16,11 @@ use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 
 pub(crate) use header::Header;
+pub(crate) use save::Write;
 pub(crate) use tree::{TreeRow, tree_rows};
 
 mod header;
+mod save;
 mod tree;
 
 const PROJECT_DIR: &str = ".pgbg";

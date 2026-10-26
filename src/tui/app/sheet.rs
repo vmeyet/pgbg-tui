@@ -75,6 +75,8 @@ pub(in crate::tui) struct Sheet {
     pub(in crate::tui) query_error: Option<String>,
     /// The header of the editor's text: its `-- chart:` draws each result of the sheet.
     pub(in crate::tui) header: Header,
+    /// Whether the editor's text changed since it was opened or saved.
+    pub(in crate::tui) is_dirty: bool,
 }
 
 impl Sheet {
@@ -91,6 +93,7 @@ impl Sheet {
             opened: None,
             query_error: None,
             header: Header::default(),
+            is_dirty: false,
         }
     }
 
