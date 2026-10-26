@@ -74,6 +74,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "starts a process"]
     fn killing_a_group_no_longer_held_signals_nothing() {
         let mut child = std::process::Command::new("sleep").arg("30").process_group(0).spawn().unwrap();
         let group = Pid::from_raw(child.id() as i32).unwrap();

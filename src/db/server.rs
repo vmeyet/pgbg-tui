@@ -31,17 +31,17 @@ fn timeout_at(row: &Row, index: usize) -> Result<StatementTimeout> {
 
 #[cfg(test)]
 mod tests {
-    use crate::connection::{Connection, Entry};
     use crate::db::Session;
     use crate::db::model::Route;
+    use crate::fixtures;
 
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn the_facts_name_the_user_the_version_and_the_timeout_in_effect() {
-        let mut url = url::Url::parse(&std::env::var("PGBG_TEST_DATABASE_URL").unwrap()).unwrap();
+        let mut url = url::Url::parse(&fixtures::test_database_url()).unwrap();
         url.query_pairs_mut().append_pair("options", "-cstatement_timeout=2min");
-        let entry: Entry = toml::from_str(&format!("tier = \"staging\"\ntls = \"off\"\nurl = \"{url}\"\n")).unwrap();
-        let mut session = Session::open(&Connection::new("shop", entry).unwrap(), Route::Direct).await.unwrap();
+        let connection = fixtures::connection(&format!("tier = \"staging\"\ntls = \"off\"\nurl = \"{url}\"\n"));
+        let mut session = Session::open(&connection, Route::Direct).await.unwrap();
         let facts = session.server_facts().await.unwrap();
         assert_eq!(facts.user, url.username());
         assert_eq!((facts.statement_timeout.as_millis(), facts.server_statement_timeout.as_millis()), (60_000, 120_000));

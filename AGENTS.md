@@ -47,7 +47,7 @@ When an MR changes a boundary or a flow, it updates `ARCHITECTURE.md` too.
 - Never block the runtime while the TUI loop runs: `std::process`, `std::fs` and heavy CPU work go through `spawn_blocking` or their tokio form.
 - Never hold a `std::sync::Mutex` guard across an `.await`: take what you need and drop the guard.
 - Tests are deterministic: no real network, no real clock, and no real-time sleep to make tasks overlap.
-- Tests that need a real PostgreSQL are `#[ignore]`d and read `PGBG_TEST_DATABASE_URL`; CI runs them against a service container.
+- Tests that need a real PostgreSQL, start a process or use a real socket are `#[ignore]`d with the reason; the PostgreSQL ones read `PGBG_TEST_DATABASE_URL`, and CI runs them all with `--include-ignored` against a service container.
 - One behaviour per test, named as a sentence that says it.
 - `unsafe` only inside a safe function whose runtime checks make its `SAFETY:` comment true, not just a claim.
 - One crate per job: prefer std or a dependency already in `Cargo.toml`; a new one needs a line in the MR saying why.
@@ -66,12 +66,13 @@ When an MR changes a boundary or a flow, it updates `ARCHITECTURE.md` too.
 
 ```sh
 cargo test                                   # unit, snapshots, CLI
-cargo test -- --ignored                      # against PGBG_TEST_DATABASE_URL, a throwaway database
+cargo test -- --include-ignored              # also tunnels, processes, and PGBG_TEST_DATABASE_URL, a throwaway database
 cargo insta review                           # after a deliberate rendering change
 ```
 
 Every module ships its tests in the same file; snapshot tests render on `TestBackend`.
 Fixtures are invented: database `shop`, tables `orders` and `customers`, user `nina`, host `db.example.com`.
+The ones several modules share live in `src/fixtures.rs`, compiled for tests only; a test takes one from there before it writes its own.
 
 ## Security
 

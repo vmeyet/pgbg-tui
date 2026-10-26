@@ -78,12 +78,13 @@ fn column_width(result: &ResultSet, column: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::model::{Column, ColumnKind, Value};
+    use crate::db::model::{ColumnKind, Value};
+    use crate::fixtures::column;
 
     fn result(rows: usize) -> ResultSet {
-        let column = |name: &str| Column { name: name.to_owned(), kind: ColumnKind::Int, type_name: String::new() };
+        let int = |name: &str| column(name, ColumnKind::Int);
         ResultSet {
-            columns: vec![column("id"), column("total"), column("customer")],
+            columns: vec![int("id"), int("total"), int("customer")],
             rows: (0..rows).map(|n| vec![Value::Int(n as i64), Value::Int(12), Value::Text("nina".into())]).collect(),
             is_cut: false,
         }

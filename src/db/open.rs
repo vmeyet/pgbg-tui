@@ -41,29 +41,31 @@ async fn running_tunnel(connection: &Connection, tunnel: Option<Tunnel>) -> anyh
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connection::Entry;
+    use crate::fixtures;
 
     const HANG_UP: &str =
         "import socket, sys\nserver = socket.create_server(('127.0.0.1', int(sys.argv[1])))\nwhile True: server.accept()[0].close()";
 
     fn connection(extra: &str) -> Connection {
-        let entry: Entry = toml::from_str(&format!("tier = \"local\"\nurl = \"postgres://nina@localhost:1/shop\"\n{extra}")).unwrap();
-        Connection::new("shop", entry).unwrap()
+        fixtures::connection(&format!("tier = \"local\"\nurl = \"postgres://nina@localhost:1/shop\"\n{extra}"))
     }
 
     #[tokio::test]
+    #[ignore = "starts a tunnel"]
     async fn a_tunnel_that_does_not_start_says_so_before_any_login() {
         let dead = connection("tls = \"off\"\ntunnel = { command = [\"sh\", \"-c\", \"exit 255\", \"{port}\"] }");
         assert!(matches!(open_along(&dead, None).await, Err(NotOpened::Tunnel(_))));
     }
 
     #[tokio::test]
+    #[ignore = "opens a socket"]
     async fn a_failed_login_without_a_tunnel_has_none_to_give_back() {
         let refused = open_along(&connection(""), None).await;
         assert!(matches!(refused, Err(NotOpened::Login { tunnel: None, .. })), "{refused:?}");
     }
 
     #[tokio::test]
+    #[ignore = "starts a tunnel"]
     async fn a_failed_login_gives_back_the_tunnel_it_started() {
         let listening = connection(&format!("tls = \"off\"\ntunnel = {{ command = [\"python3\", \"-c\", {HANG_UP:?}, \"{{port}}\"] }}"));
         let refused = open_along(&listening, None).await;

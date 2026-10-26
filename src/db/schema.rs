@@ -113,14 +113,13 @@ fn grouped<T>(items: Vec<(u32, T)>) -> HashMap<u32, Vec<T>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connection::{Connection, Entry, WritePolicy};
+    use crate::connection::WritePolicy;
     use crate::db::guard;
     use crate::db::model::{Route, Statement};
+    use crate::fixtures;
 
     async fn session() -> Session {
-        let url = std::env::var("PGBG_TEST_DATABASE_URL").unwrap();
-        let entry: Entry = toml::from_str(&format!("tier = \"local\"\nurl = \"{url}\"\nwrites = \"allowed\"\n")).unwrap();
-        Session::open(&Connection::new("shop", entry).unwrap(), Route::Direct).await.unwrap()
+        Session::open(&fixtures::test_database("local", "writes = \"allowed\"\n"), Route::Direct).await.unwrap()
     }
 
     async fn write(session: &mut Session, sql: &str) {

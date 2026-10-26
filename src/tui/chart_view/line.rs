@@ -62,10 +62,10 @@ fn x_labels(series: &Series, x: [f64; 2], width: u16) -> Vec<Line<'static>> {
 mod tests {
     use super::super::tests::{render, series};
     use super::*;
-    use crate::db::model::{Column, ColumnKind, ResultSet, Value};
+    use crate::db::model::{ColumnKind, ResultSet, Value};
+    use crate::fixtures::column;
 
     fn daily(orders: &[Option<i64>]) -> ResultSet {
-        let column = |name: &str, kind| Column { name: name.to_owned(), kind, type_name: String::new() };
         let day = |at: usize| Value::Date(chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap() + chrono::Days::new(at as u64 * 2));
         let rows = orders.iter().enumerate().map(|(at, orders)| vec![day(at), orders.map_or(Value::Null, Value::Int)]).collect();
         ResultSet { columns: vec![column("day", ColumnKind::Date), column("orders", ColumnKind::Int)], rows, is_cut: false }

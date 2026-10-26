@@ -259,30 +259,16 @@ impl fmt::Display for Died {
 impl std::error::Error for Died {}
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
     use crate::connection::WritePolicy;
-    use crate::connection::{Connection, Entry};
     use crate::db::Session;
     use crate::db::guard;
     use crate::db::model::{Statement, Value};
-    use rustix::process::{Signal, kill_process_group};
+    use crate::fixtures::{self, FORWARD};
+    use rustix::process::{Signal, kill_process, test_kill_process_group};
 
     const LISTEN: &str = "import socket, sys, time; server = socket.create_server(('127.0.0.1', int(sys.argv[1]))); time.sleep(60)";
-    /// A forwarder from `127.0.0.1:argv[1]` to `argv[2]:argv[3]`, for tunnels in tests.
-    pub(crate) const FORWARD: &str = "
-import socket, sys, threading
-def pipe(source, sink):
-    while data := source.recv(65536):
-        sink.sendall(data)
-    sink.shutdown(socket.SHUT_WR)
-server = socket.create_server(('127.0.0.1', int(sys.argv[1])))
-while True:
-    client, _ = server.accept()
-    upstream = socket.create_connection((sys.argv[2], int(sys.argv[3])))
-    for source, sink in ((client, upstream), (upstream, client)):
-        threading.Thread(target=pipe, args=(source, sink), daemon=True).start()
-";
     /// A forward that leaves the tunnel's group, as an ssh `ControlMaster` holds one, and goes away on its own soon after.
     const DETACH: &str = "
 import os, socket, sys, time
@@ -308,15 +294,23 @@ time.sleep(60)
         spec(&["python3", "-c", LISTEN, "{port}"], None)
     }
 
-    fn port_of(tunnel: &Tunnel) -> u16 {
-        tunnel.port.get()
+    fn group_of(tunnel: &Tunnel) -> Pid {
+        tunnel.group.unwrap()
     }
 
-    async fn until_silent(port: u16) -> bool {
-        goes_silent(LocalPort::new(port), STOP_TIMEOUT).await
+    /// Whether every process of `group` is gone within `STOP_TIMEOUT`: a port could be taken by another test's tunnel.
+    async fn until_gone(group: Pid) -> bool {
+        timeout(STOP_TIMEOUT, async {
+            while test_kill_process_group(group).is_ok() {
+                sleep(READY_POLL).await;
+            }
+        })
+        .await
+        .is_ok()
     }
 
     #[tokio::test]
+    #[ignore = "starts a tunnel"]
     async fn a_started_tunnel_answers_on_the_port_it_picked() {
         let tunnel = Tunnel::start(&listener()).await.unwrap();
         assert!(answers(tunnel.port).await);
@@ -324,6 +318,7 @@ time.sleep(60)
     }
 
     #[tokio::test]
+    #[ignore = "starts a tunnel"]
     async fn a_tunnel_that_dies_before_answering_says_how_with_its_last_words() {
         let dying = spec(&["sh", "-c", "echo 'bastion.example.com: connection refused' >&2; exit 3", "{port}"], None);
         let err = Tunnel::start(&dying).await.unwrap_err().to_string();
@@ -331,6 +326,7 @@ time.sleep(60)
     }
 
     #[tokio::test]
+    #[ignore = "starts a tunnel"]
     async fn a_tunnel_that_never_answers_is_given_up() {
         let silent = spec(&["sh", "-c", "sleep 30", "{port}"], None);
         let err = Tunnel::start_within(&silent, Duration::from_millis(200)).await.unwrap_err().to_string();
@@ -338,14 +334,17 @@ time.sleep(60)
     }
 
     #[tokio::test]
+    #[ignore = "starts a tunnel"]
     async fn stopping_a_tunnel_kills_the_processes_it_started_too() {
         let forking = spec(&["sh", "-c", &format!("python3 -c \"{LISTEN}\" \"$0\"; true"), "{port}"], None);
         let mut tunnel = Tunnel::start(&forking).await.unwrap();
+        let group = group_of(&tunnel);
         tunnel.stop().await.unwrap();
-        assert!(until_silent(port_of(&tunnel)).await);
+        assert!(until_gone(group).await);
     }
 
     #[tokio::test]
+    #[ignore = "starts a tunnel"]
     async fn a_tunnel_that_ends_cleanly_before_answering_says_it_likely_handed_the_forward_off() {
         let handing_off = spec(&["sh", "-c", "exit 0", "{port}"], None);
         let err = format!("{:#}", Tunnel::start(&handing_off).await.unwrap_err());
@@ -353,6 +352,7 @@ time.sleep(60)
     }
 
     #[tokio::test]
+    #[ignore = "starts a tunnel"]
     async fn stopping_a_tunnel_whose_port_still_answers_says_so() {
         let detaching = spec(&["python3", "-c", DETACH, "{port}"], None);
         let mut tunnel = Tunnel::start(&detaching).await.unwrap();
@@ -361,12 +361,14 @@ time.sleep(60)
     }
 
     #[tokio::test]
+    #[ignore = "starts a tunnel"]
     async fn stopping_a_tunnel_whose_port_went_silent_is_fine() {
         let mut tunnel = Tunnel::start(&listener()).await.unwrap();
         assert!(tunnel.stop().await.is_ok());
     }
 
     #[tokio::test(start_paused = true)]
+    #[ignore = "starts a tunnel"]
     async fn a_before_command_that_never_ends_is_given_up() {
         let stuck = spec(&["python3", "-c", LISTEN, "{port}"], Some(&["sleep", "600"]));
         let err = Tunnel::start(&stuck).await.unwrap_err().to_string();
@@ -374,19 +376,22 @@ time.sleep(60)
     }
 
     #[tokio::test]
+    #[ignore = "starts a tunnel"]
     async fn stopping_a_tunnel_twice_is_safe() {
         let mut tunnel = Tunnel::start(&listener()).await.unwrap();
+        let group = group_of(&tunnel);
         tunnel.stop().await.unwrap();
         tunnel.stop().await.unwrap();
-        assert!(until_silent(port_of(&tunnel)).await);
+        assert!(until_gone(group).await);
     }
 
     #[tokio::test]
+    #[ignore = "starts a tunnel"]
     async fn dropping_a_tunnel_kills_it() {
         let tunnel = Tunnel::start(&listener()).await.unwrap();
-        let port = port_of(&tunnel);
+        let group = group_of(&tunnel);
         drop(tunnel);
-        assert!(until_silent(port).await);
+        assert!(until_gone(group).await);
     }
 
     async fn until_ended(tunnel: &mut Tunnel) -> bool {
@@ -400,16 +405,18 @@ time.sleep(60)
     }
 
     #[tokio::test]
+    #[ignore = "starts a tunnel"]
     async fn a_tunnel_seen_ended_takes_the_processes_it_started_with_it() {
         let forking = spec(&["sh", "-c", &format!("python3 -c \"{LISTEN}\" \"$0\"; true"), "{port}"], None);
         let mut tunnel = Tunnel::start(&forking).await.unwrap();
-        let leader = Pid::from_raw(tunnel.child.id().unwrap() as i32).unwrap();
-        rustix::process::kill_process(leader, Signal::KILL).unwrap();
+        let group = group_of(&tunnel);
+        kill_process(group, Signal::KILL).unwrap();
         assert!(until_ended(&mut tunnel).await);
-        assert!(until_silent(port_of(&tunnel)).await);
+        assert!(until_gone(group).await);
     }
 
     #[tokio::test]
+    #[ignore = "starts a tunnel"]
     async fn last_words_wait_cut_short_are_still_there_on_the_next_wait() {
         let talking =
             spec(&["sh", "-c", &format!("echo 'bastion.example.com: no route' >&2; exec python3 -c \"{LISTEN}\" \"$0\""), "{port}"], None);
@@ -420,38 +427,42 @@ time.sleep(60)
     }
 
     #[tokio::test]
+    #[ignore = "starts a tunnel"]
     async fn a_tunnel_that_ends_on_its_own_says_how() {
         let mut tunnel = Tunnel::start(&listener()).await.unwrap();
         assert!(tunnel.is_running());
-        kill_process_group(tunnel.group.unwrap(), Signal::KILL).unwrap();
+        kill_process(group_of(&tunnel), Signal::KILL).unwrap();
         assert!(tunnel.ended().await.to_string().contains("`python3` died"));
         assert!(!tunnel.is_running());
     }
 
-    async fn port_of_a_tunnel_left_by_a_panicking_pgbg() -> u16 {
+    async fn group_of_a_tunnel_left_by_a_panicking_pgbg() -> Pid {
         let output = Command::new(std::env::current_exe().unwrap())
-            .args([PANIC_TEST, "--exact", "--nocapture"])
+            .args([PANIC_TEST, "--exact", "--include-ignored", "--nocapture"])
             .env(PANICKING_CHILD, "1")
             .output()
             .await
             .unwrap();
         let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-        stdout.lines().find_map(|line| line.strip_prefix("port=")).unwrap().parse().unwrap()
+        let group = stdout.lines().find_map(|line| line.strip_prefix("group=")).unwrap().parse().unwrap();
+        Pid::from_raw(group).unwrap()
     }
 
     #[tokio::test]
+    #[ignore = "starts a tunnel"]
     async fn a_panic_kills_every_live_tunnel_even_where_no_drop_runs() {
         if std::env::var_os(PANICKING_CHILD).is_some() {
             let leaked = Box::leak(Box::new(Tunnel::start(&listener()).await.unwrap()));
-            println!("port={}", leaked.port);
+            println!("group={}", group_of(leaked).as_raw_nonzero());
             let on_the_main_thread = std::thread::Builder::new().name("main".into());
             _ = on_the_main_thread.spawn(|| panic!("pgbg panicked with a tunnel open")).unwrap().join();
             return;
         }
-        assert!(until_silent(port_of_a_tunnel_left_by_a_panicking_pgbg().await).await);
+        assert!(until_gone(group_of_a_tunnel_left_by_a_panicking_pgbg().await).await);
     }
 
     #[tokio::test]
+    #[ignore = "starts a tunnel"]
     async fn the_before_command_runs_first() {
         let folder = tempfile::tempdir().unwrap();
         let woken = folder.path().join("woken").display().to_string();
@@ -461,6 +472,7 @@ time.sleep(60)
     }
 
     #[tokio::test]
+    #[ignore = "starts a tunnel"]
     async fn a_failing_before_command_stops_the_start_and_says_so() {
         let failing = spec(&["python3", "-c", LISTEN, "{port}"], Some(&["sh", "-c", "echo 'bastion is gone' >&2; exit 1"]));
         let err = Tunnel::start(&failing).await.unwrap_err().to_string();
@@ -470,12 +482,11 @@ time.sleep(60)
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_session_through_a_tunnel_reaches_the_database() {
-        let database = url::Url::parse(&std::env::var("PGBG_TEST_DATABASE_URL").unwrap()).unwrap();
+        let database = url::Url::parse(&fixtures::test_database_url()).unwrap();
         let (host, port) = (database.host_str().unwrap().to_owned(), database.port().unwrap_or(5432).to_string());
         let mut unreachable = database.clone();
         unreachable.set_port(Some(1)).unwrap();
-        let entry: Entry = toml::from_str(&format!("tier = \"local\"\nurl = \"{unreachable}\"\n")).unwrap();
-        let connection = Connection::new("shop", entry).unwrap();
+        let connection = fixtures::connection(&format!("tier = \"local\"\nurl = \"{unreachable}\"\n"));
         let tunnel = Tunnel::start(&spec(&["python3", "-c", FORWARD, "{port}", &host, &port], None)).await.unwrap();
         let mut session = Session::open(&connection, tunnel.route()).await.unwrap();
         let result = session.run(&guard::admit(Statement::new("SELECT 7"), WritePolicy::ReadOnly).unwrap()).await.unwrap();

@@ -68,11 +68,8 @@ fn text(result: &ResultSet) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::model::{Column, ColumnKind, Value};
-
-    fn column(name: &str, kind: ColumnKind) -> Column {
-        Column { name: name.to_owned(), kind, type_name: String::new() }
-    }
+    use crate::db::model::{ColumnKind, Value};
+    use crate::fixtures::column;
 
     #[test]
     fn a_result_prints_its_header_its_rows_and_their_count() {
