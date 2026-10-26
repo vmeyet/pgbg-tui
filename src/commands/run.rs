@@ -1,7 +1,6 @@
-use crate::connection::{Connection, ConnectionName};
-use crate::db::guard::Admitted;
-use crate::db::model::{ResultSet, Route, Statement};
-use crate::db::{Session, guard};
+use crate::connection::ConnectionName;
+use crate::db::model::{ResultSet, Statement};
+use crate::db::{NotOpened, Opened, guard, open_along};
 use crate::render;
 use crate::tunnel::Tunnel;
 use anyhow::Result;
@@ -10,18 +9,13 @@ use anyhow::Result;
 pub async fn run(connection: &ConnectionName, sql: &str, json: bool) -> Result<()> {
     let connection = super::connection(Some(connection))?;
     let admitted = guard::admit(Statement::new(sql), connection.writes())?;
-    let tunnel = match connection.tunnel() {
-        Some(spec) => Some(Tunnel::start(spec).await?),
-        None => None,
+    let (result, tunnel) = match open_along(&connection, None).await {
+        Ok(Opened { mut session, tunnel }) => (session.run(&admitted).await, tunnel),
+        Err(NotOpened::Tunnel(err)) => return Err(err),
+        Err(NotOpened::Login { error, tunnel }) => (Err(error), tunnel.map(|tunnel| *tunnel)),
     };
-    let route = tunnel.as_ref().map_or(Route::Direct, Tunnel::route);
-    let result = run_on(&connection, route, &admitted).await;
     stop(tunnel).await;
     print(&result?, json)
-}
-
-async fn run_on(connection: &Connection, route: Route, admitted: &Admitted) -> Result<ResultSet> {
-    Session::open(connection, route).await?.run(admitted).await
 }
 
 /// Stops `tunnel` and warns when its forward outlives it.
