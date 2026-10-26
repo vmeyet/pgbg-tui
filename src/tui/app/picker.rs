@@ -203,16 +203,12 @@ pub(in crate::tui) mod tests {
     use super::super::tests::orders;
     use super::super::{Answer, ConfigAnswer, Incoming, QueryAnswer, Run, RunId, SessionState};
     use super::*;
-    use crate::connection::Entry;
     use crate::connection::WritePolicy;
     use crate::db::model::Statement;
+    use crate::fixtures::named;
     use crossterm::event::KeyModifiers;
     use std::time::Duration;
     use vtui::theme::Theme;
-
-    pub(in crate::tui) fn named(name: &str, keys: &str) -> Connection {
-        Connection::new(name, toml::from_str::<Entry>(keys).unwrap()).unwrap()
-    }
 
     /// Three connections, the TUI on `local`.
     pub(in crate::tui) fn on_local() -> App {

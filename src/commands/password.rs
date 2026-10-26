@@ -33,10 +33,10 @@ fn keychain_item(connection: &Connection) -> Result<KeychainItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fixtures;
 
     fn prod(extra: &str) -> Connection {
-        let text = format!("tier = \"production\"\nurl = \"postgres://nina@db.example.com/shop?sslmode=require\"\n{extra}");
-        Connection::new("prod", toml::from_str(&text).unwrap()).unwrap()
+        fixtures::named("prod", &format!("tier = \"production\"\nurl = \"postgres://nina@db.example.com/shop?sslmode=require\"\n{extra}"))
     }
 
     #[test]

@@ -80,6 +80,8 @@ Each entry says what changed, then where, then how to use it.
 ### Fixed
 
 - **The finder and the connection picker always show their keys** at the bottom, however many matches or a question under the list; the picker follows a connection added or removed while it is open.
+- **A URL whose `options` or `application_name` hold `%20`** reaches the server as written, as in `options=-c%20role%3Dnina`; it failed with `unrecognized configuration parameter "+role"`.
+- **The editor colours SQL by meaning**: `NULL` as a constant, `1e3` as a number, and table names plain.
 - **The connection picker keeps the `WRITES` badge** on a long name or a narrow terminal, cutting the name instead, and says `running…` for a connection whose statement still runs.
 - **Picking a connection whose session failed** in the picker opens it again.
 - **A saved query opens in the editor that asked for it**, even when you switched connection while it was read; its error shows there too.

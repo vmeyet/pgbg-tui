@@ -247,10 +247,9 @@ mod tests {
 
     #[test]
     fn a_query_written_for_production_says_so_while_another_connection_is_on_screen() {
-        let entry: crate::connection::Entry =
-            toml::from_str("tier = \"production\"\nurl = \"postgres://nina@db.example.com/shop?sslmode=require\"\n").unwrap();
+        let prod = crate::fixtures::named("prod", "tier = \"production\"\nurl = \"postgres://nina@db.example.com/shop?sslmode=require\"\n");
         let shop = connection("local", "read-only");
-        let mut app = App::new(vec![shop.clone(), crate::connection::Connection::new("prod", entry).unwrap()], &shop, Theme::default());
+        let mut app = App::new(vec![shop.clone(), prod], &shop, Theme::default());
         let text = "-- name: daily orders\n-- connection: prod\n-- owner: nina\nSELECT 1";
         app.apply(Answer::Queries(QueryAnswer::Opened {
             connection: app.sheet().name().clone(),

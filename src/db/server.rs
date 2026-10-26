@@ -149,11 +149,11 @@ mod tests {
     use crate::fixtures;
 
     async fn session_as(user: Option<&str>, writes: &str) -> Session {
-        let mut url = url::Url::parse(&fixtures::test_database_url()).unwrap();
-        if let Some(user) = user {
-            url.set_username(user).unwrap();
-        }
-        let connection = fixtures::connection(&format!("tier = \"local\"\nurl = \"{url}\"\nwrites = \"{writes}\"\n"));
+        let writes = format!("writes = \"{writes}\"\n");
+        let connection = match user {
+            Some(user) => fixtures::test_database_by(user, &writes),
+            None => fixtures::test_database("local", &writes),
+        };
         Session::open(&connection, Route::Direct).await.unwrap()
     }
 

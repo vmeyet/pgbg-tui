@@ -83,12 +83,18 @@ fn query_values<'a>(url: &'a Url, wanted: &'a str) -> impl Iterator<Item = Strin
     url.query_pairs().filter(move |(key, _)| key == wanted).map(|(_, value)| value.into_owned())
 }
 
+/// `url` without the query key `dropped`; the other pieces stay as written, since the driver reads a `+` as itself.
 fn without(url: &Url, dropped: &str) -> Url {
+    let pieces = url.query().unwrap_or_default().split('&');
+    let kept: Vec<&str> = pieces.filter(|piece| !piece.is_empty() && !is_key(piece, dropped)).collect();
     let mut url = url.clone();
-    let kept: Vec<(String, String)> =
-        url.query_pairs().filter(|(key, _)| key != dropped).map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
-    url.query_pairs_mut().clear().extend_pairs(kept);
+    url.set_query((!kept.is_empty()).then(|| kept.join("&")).as_deref());
     url
+}
+
+/// Whether the query piece `key=value` sets `wanted`.
+fn is_key(piece: &str, wanted: &str) -> bool {
+    url::form_urlencoded::parse(piece.as_bytes()).any(|(key, _)| key == wanted)
 }
 
 fn through(url: &Url, port: LocalPort) -> Url {

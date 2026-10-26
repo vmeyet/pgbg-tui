@@ -271,9 +271,10 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::super::picker::tests::{ctrl, named, on_local, press};
+    use super::super::picker::tests::{ctrl, on_local, press};
     use super::super::{Answer, ConfigAnswer};
     use super::*;
+    use crate::fixtures::named;
 
     fn form(app: &App) -> &Form {
         let Some(Overlay::Form(form)) = &app.overlay else { panic!("no form") };

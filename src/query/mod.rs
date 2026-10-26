@@ -2,12 +2,18 @@
 //! `.git`, and under `pgbg/queries/` in the user's config folder.
 use crate::render;
 use anyhow::{Context, Result, bail};
+use rustix::fs::{Mode, OFlags};
+#[cfg(target_os = "macos")]
+use std::ffi::OsString;
 use std::fmt;
 use std::fs::{self, DirEntry, Metadata};
-use std::io;
+use std::io::{self, Read};
+#[cfg(target_os = "macos")]
+use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::MetadataExt;
+#[cfg(target_os = "linux")]
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
-use tokio::io::AsyncReadExt;
 
 pub(crate) use header::Header;
 pub(crate) use tree::{TreeRow, tree_rows};
@@ -134,7 +140,8 @@ struct Root {
 impl Root {
     /// `dir` when each of `checked` is a folder of the user's own and none is a link, else none and a warning.
     fn checked(dir: PathBuf, checked: Vec<PathBuf>) -> Option<Self> {
-        let real = fs::canonicalize(&dir).unwrap_or_default();
+        let real =
+            fs::canonicalize(&dir).inspect_err(|err| tracing::warn!("the queries folder {} is skipped: {err}", dir.display())).ok()?;
         let root = Self { dir, checked, real };
         root.is_still_safe().then_some(root)
     }
@@ -220,21 +227,43 @@ impl Roots {
 }
 
 async fn read_inside(root: Root, query: &QueryPath) -> Result<String> {
-    let (path, real_root) = (query.under(&root.dir), root.real.clone());
-    if !tokio::task::spawn_blocking(move || root.is_still_safe()).await? {
+    let path = query.under(&root.real);
+    tokio::task::spawn_blocking(move || read_checked(&root, &path)).await?
+}
+
+/// The text at `path` once opened, when `root` is still safe and the opened file is a plain one inside it. Blocks.
+fn read_checked(root: &Root, path: &Path) -> Result<String> {
+    if !root.is_still_safe() {
         bail!("its queries folder changed since pgbg started");
     }
-    check_inside(&real_root, &path).await?;
-    check_readable(&tokio::fs::symlink_metadata(&path).await?)?;
+    let file = open_unlinked(path)?;
+    check_inside(&root.real, &opened_path(&file)?)?;
+    check_readable(&file.metadata()?)?;
     let mut text = String::new();
-    tokio::fs::File::open(path).await?.take(MAX_QUERY_BYTES + 1).read_to_string(&mut text).await?;
+    file.take(MAX_QUERY_BYTES + 1).read_to_string(&mut text)?;
     check_size(text.len() as u64)?;
     Ok(text)
 }
 
-/// Refuses a path that a link, swapped in after the listing, takes out of the root whose real path is `real_root`.
-async fn check_inside(real_root: &Path, path: &Path) -> Result<()> {
-    if !tokio::fs::canonicalize(path).await?.starts_with(real_root) {
+/// Opens `path` for reading unless it is a link; a pipe opens without waiting for a writer, then fails the checks.
+fn open_unlinked(path: &Path) -> Result<fs::File> {
+    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    Ok(fs::File::from(rustix::fs::open(path, flags, Mode::empty())?))
+}
+
+#[cfg(target_os = "macos")]
+fn opened_path(file: &fs::File) -> Result<PathBuf> {
+    Ok(PathBuf::from(OsString::from_vec(rustix::fs::getpath(file)?.into_bytes())))
+}
+
+#[cfg(target_os = "linux")]
+fn opened_path(file: &fs::File) -> Result<PathBuf> {
+    Ok(fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()))?)
+}
+
+/// Refuses a file that a link, swapped in after the listing, took out of the root whose real path is `real_root`.
+fn check_inside(real_root: &Path, opened: &Path) -> Result<()> {
+    if !opened.starts_with(real_root) {
         bail!("it leads out of the queries folder");
     }
     Ok(())

@@ -84,9 +84,10 @@ fn session_state(app: &App, connection: &Connection) -> (&'static str, Style) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::app::picker::tests::{ctrl, named, on_local, press};
+    use super::super::app::picker::tests::{ctrl, on_local, press};
     use super::super::app::{Answer, App, Incoming};
     use super::super::ui;
+    use crate::fixtures::named;
     use crossterm::event::{KeyCode, KeyEvent};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
