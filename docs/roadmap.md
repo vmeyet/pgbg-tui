@@ -42,7 +42,7 @@ The MR that ships a step ticks its box.
 
 - [x] `ctrl-p` fuzzy finder over the `.pgbg/queries/` nearest the working directory, opening a query in the editor
 - [x] The user config folder's queries, beside the project's
-- [ ] `.pgbg/queries/` tree in a sidebar
+- [x] `.pgbg/queries/` tree in a sidebar
 - [ ] Header parsing: `-- name:`, `-- connection:`, `-- chart:`
 - [ ] Save from the editor, open in `$EDITOR`
 

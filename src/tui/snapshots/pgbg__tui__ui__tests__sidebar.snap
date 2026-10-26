@@ -1,0 +1,14 @@
+---
+source: src/tui/ui.rs
+expression: "render(&app, 80, 10).backend()"
+---
+"╭ ● shop ──────────────────────────────────────────────────────────────────────╮"
+"│╭ Queries ───────────────────╮╭ Editor · orders/daily.sql ─ READ ONLY ───────╮│"
+"││  ▾ orders/                 ││ SELECT 1                                     ││"
+"││    ● daily.sql             │╰──────────────────────────────────────────────╯│"
+"││      weekly.sql            │╭ Result ──────────────────────────────────────╮│"
+"││    customers.sql           ││ ⏎ runs the statement under the cursor        ││"
+"││                            ││                                              ││"
+"│╰────────────────────────────╯╰──────────────────────────────────────────────╯│"
+"│ ⏎ run  ⌥⏎ new line  ^p find  ⇥ pane  F1 keys  ^o connections  ^c connecting… │"
+"╰──────────────────────────────────────────────────────────────────────────────╯"

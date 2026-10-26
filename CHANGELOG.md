@@ -17,6 +17,7 @@ Each entry says what changed, then where, then how to use it.
   Queries of your own, for every project, go under `pgbg/queries/` in your config folder; the finder marks them `user`.
   The search stops at your home folder or at the top of your repository, where `.git` is; a queries folder that is a link, or that another user owns, is skipped.
   Only a plain file of 1 MiB at most opens: a pipe, a link or a dump says why it does not.
+  The sidebar on the left lists them as a tree, `●` on the one in the editor: `tab` reaches it, `j`/`k` move, `⏎` opens a query or folds a folder; a terminal under 80 columns leaves it out.
 - **Tunnels** for `pgbg run` and the TUI: a connection with `tunnel = { command = [...] }` starts that command on a free local port, put in place of `{port}`, and connects through it.
   TLS still checks the certificate against the host in `url`, so `sslmode=require` works through a tunnel; `before = [...]` runs once first.
   A tunnel that dies says how and quotes its last words; it stops with pgbg, along with any `ssh` or `gcloud` it started, even when pgbg crashes.

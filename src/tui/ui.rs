@@ -1,6 +1,6 @@
 //! Drawing: the frame in the tier's colour, the panes inside it, and the key hints under them.
-use super::app::{App, Link, TunnelState};
-use super::{editor_view, finder_view, help_view, picker_view, result_view, theme};
+use super::app::{App, Fit, Link, TunnelState};
+use super::{editor_view, finder_view, help_view, picker_view, result_view, sidebar_view, theme};
 use crate::act;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -10,24 +10,32 @@ use ratatui::widgets::{Block, BorderType, Paragraph};
 use vtui::text::truncate;
 
 const EDITOR_SHARE_PCT: u16 = 40;
+const SIDEBAR_COLUMNS: u16 = 30;
+/// A terminal narrower than this leaves the sidebar out, so the editor and the grid keep their room.
+const SIDEBAR_MIN_SCREEN_COLUMNS: u16 = 80;
 
 /// Where each part of the screen goes.
 struct Areas {
+    sidebar: Option<Rect>,
     editor: Rect,
     result: Rect,
     footer: Rect,
 }
 
-/// The whole screen for `app`; returns the grid rows it had room for.
-pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> usize {
-    let areas = layout(framed(f, app));
+/// The whole screen for `app`; returns what it had room for.
+pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> Fit {
+    let has_sidebar = !app.queries.all.is_empty() && f.area().width >= SIDEBAR_MIN_SCREEN_COLUMNS;
+    let areas = layout(framed(f, app), has_sidebar);
+    if let Some(sidebar) = areas.sidebar {
+        sidebar_view::draw(f, app, sidebar);
+    }
     editor_view::draw(f, app, areas.editor);
     let grid_rows = result_view::draw(f, app, areas.result);
     footer(f, app, areas.footer);
     finder_view::draw(f, app);
     picker_view::draw(f, app);
     help_view::draw(f, app);
-    grid_rows
+    Fit { grid_rows, has_sidebar }
 }
 
 /// The outer frame and its `● name` pill in the tier's colour; returns the area inside it.
@@ -40,10 +48,12 @@ fn framed(f: &mut Frame<'_>, app: &App) -> Rect {
     inside
 }
 
-fn layout(area: Rect) -> Areas {
+fn layout(area: Rect, has_sidebar: bool) -> Areas {
     let [panes, footer] = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
+    let sidebar_columns = if has_sidebar { SIDEBAR_COLUMNS } else { 0 };
+    let [sidebar, panes] = Layout::horizontal([Constraint::Length(sidebar_columns), Constraint::Fill(1)]).areas(panes);
     let [editor, result] = Layout::vertical([Constraint::Percentage(EDITOR_SHARE_PCT), Constraint::Fill(1)]).areas(panes);
-    Areas { editor, result, footer }
+    Areas { sidebar: has_sidebar.then_some(sidebar), editor, result, footer }
 }
 
 /// The keys that exist on the left, the session's state on the right.
@@ -161,6 +171,18 @@ mod tests {
         app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
         app.handle_key(KeyEvent::from(KeyCode::Char('o')));
         insta::assert_snapshot!("finder", render(&app, 60, 16).backend());
+    }
+
+    #[test]
+    fn the_sidebar_shows_the_tree_and_marks_the_open_query() {
+        let mut app = with_queries();
+        app.apply(Answer::Queries(QueryAnswer::Opened { query: query("orders/daily.sql"), text: "SELECT 1".into() }));
+        insta::assert_snapshot!("sidebar", render(&app, 80, 10).backend());
+    }
+
+    #[test]
+    fn a_narrow_terminal_leaves_the_sidebar_out() {
+        assert_eq!(render(&with_queries(), 79, 10).backend().buffer()[(3, 1)].symbol(), "E", "the editor's title starts the row");
     }
 
     #[test]

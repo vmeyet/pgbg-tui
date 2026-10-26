@@ -8,13 +8,14 @@ mod grid_view;
 mod help_view;
 mod picker_view;
 mod result_view;
+mod sidebar_view;
 mod theme;
 mod ui;
 
 use crate::connection::Connection;
 use crate::query::{Places, Roots};
 use anyhow::Result;
-use app::{Action, Answer, App};
+use app::{Action, Answer, App, Fit};
 use backend::Backend;
 use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures_util::StreamExt;
@@ -55,9 +56,9 @@ async fn event_loop(
 ) -> Result<()> {
     let mut events = EventStream::new();
     while !app.should_quit {
-        let mut grid_rows = 0;
-        terminal.draw(|f| grid_rows = ui::draw(f, app))?;
-        app.fit_grid(grid_rows);
+        let mut fit = Fit::default();
+        terminal.draw(|f| fit = ui::draw(f, app))?;
+        app.fit(fit);
         let actions = tokio::select! {
             Some(event) = events.next() => match event? {
                 Event::Key(key) if key.kind != KeyEventKind::Release => app.handle_key(key),
