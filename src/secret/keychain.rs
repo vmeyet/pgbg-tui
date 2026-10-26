@@ -57,6 +57,19 @@ impl Keychain {
         }
         Ok(())
     }
+
+    /// Deletes the item `account`; an item already gone is not an error, so it is safe to run twice.
+    pub(crate) fn delete(&self, account: &str) -> Result<()> {
+        let output = Command::new(SECURITY)
+            .args(["delete-generic-password", "-a", account, "-s", self.service])
+            .stdin(Stdio::null())
+            .output()
+            .context("running /usr/bin/security for the macOS keychain")?;
+        if output.status.success() || output.status.code() == Some(NOT_FOUND) {
+            return Ok(());
+        }
+        bail!("deleting the keychain item `{account}` failed: {}", String::from_utf8_lossy(&output.stderr).trim());
+    }
 }
 
 /// Whether `security -i`, which splits its line on spaces and quotes, reads `account` as one word:
@@ -101,14 +114,14 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[tokio::test]
     #[ignore = "touches the real login keychain"]
-    async fn a_written_password_reads_back_and_a_second_write_replaces_it() {
+    async fn a_written_password_reads_back_a_second_write_replaces_it_and_a_delete_removes_it() {
         let keychain = Keychain { service: "pgbg-test" };
         keychain.write("probe", &Secret("hunter2 \"one\"".into())).unwrap();
         assert_eq!(keychain.read("probe").await.unwrap().expose(), "hunter2 \"one\"");
         keychain.write("probe", &Secret("two".into())).unwrap();
         assert_eq!(keychain.read("probe").await.unwrap().expose(), "two");
-        let deleted = Command::new(SECURITY).args(["delete-generic-password", "-a", "probe", "-s", "pgbg-test"]).output().unwrap();
-        assert!(deleted.status.success());
+        keychain.delete("probe").unwrap();
+        keychain.delete("probe").unwrap();
         assert!(keychain.read("probe").await.unwrap_err().to_string().contains("no keychain item `probe`"));
     }
 }

@@ -23,6 +23,7 @@ tunnel = { command = ["ssh", "-N", "-L", "{port}:localhost:5432", "bastion.examp
 
 No password goes in this file: it comes from the keychain, an environment variable or a command.
 A host that is not this machine needs `sslmode=require` in its `url`, or `tls = "off"` on the connection to talk in clear on purpose.
+`pgbg connection add|edit|remove` and `pgbg password set <connection>` write this file for you and keep your comments.
 
 ## Run a statement
 

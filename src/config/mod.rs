@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 mod ignored;
 mod write;
 
-pub(crate) use write::set_password;
+pub(crate) use write::{ConnectionChange, add_connection, edit_connection, remove_connection, set_password};
 
 const PATH_VARIABLE: &str = "PGBG_CONFIG";
 
