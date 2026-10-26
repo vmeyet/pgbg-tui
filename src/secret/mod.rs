@@ -1,11 +1,13 @@
 //! Where a password comes from, and the password once read: never written anywhere, never printed.
 use anyhow::{Context, Result, anyhow, bail};
+pub(crate) use keychain::Keychain;
 use serde::{Deserialize, Serialize};
 use std::env::VarError;
 use std::fmt;
 use std::process::Stdio;
 
-const KEYCHAIN_LATER: &str = "a `keychain` password is not read by this pgbg yet: use `{ env = \"...\" }` or `{ command = [...] }`";
+mod keychain;
+mod typed;
 
 /// A password, read when a session opens and dropped once connected.
 pub(crate) struct Secret(String);
@@ -44,7 +46,7 @@ impl SecretSource {
     /// The password this source holds now; an error never quotes what a command printed.
     pub(crate) async fn read(&self) -> Result<Secret> {
         match self {
-            Self::Keychain(_) => bail!(KEYCHAIN_LATER),
+            Self::Keychain(account) => Keychain::PGBG.read(account).await,
             Self::Env(variable) => from_variable(variable, std::env::var(variable)),
             Self::Command(argv) => from_command(argv).await,
         }
@@ -54,6 +56,9 @@ impl SecretSource {
     pub(crate) fn problem(&self) -> Option<&'static str> {
         match self {
             Self::Keychain(item) if item.is_empty() => Some("`keychain` names no item"),
+            Self::Keychain(item) if !keychain::is_plain(item) => {
+                Some("`keychain` names an item with other than letters, digits, `-`, `_`, `.`, `:` and `/`")
+            }
             Self::Env(variable) if variable.is_empty() => Some("`env` names no variable"),
             Self::Command(argv) if argv.is_empty() => Some("`command` is empty"),
             _ => None,
@@ -132,6 +137,7 @@ mod tests {
         assert!(source("password = { command = [] }").problem().is_some());
         assert!(source("password = { keychain = \"\" }").problem().is_some());
         assert!(source("password = { env = \"\" }").problem().is_some());
+        assert!(source("password = { keychain = \"pgbg/prod -s other\" }").problem().is_some());
         assert_eq!(source("password = { env = \"SHOP_PGPASSWORD\" }").problem(), None);
     }
 }

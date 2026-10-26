@@ -11,9 +11,9 @@ When a boundary or a flow changes, change this page in the same MR.
 |---|---|
 | `main.rs`, `cli.rs` | The clap command line and the dispatch to `commands/` |
 | `commands/` | One module per subcommand, each with a `run`; plain output through `render.rs`, JSON with `--json` |
-| `config/` | `config.toml`: connections, theme, keys; load, validate, refuse secrets |
+| `config/` | `config.toml`: connections, theme, keys; load, validate, refuse secrets; rewrite key by key with `toml_edit`, checked as a load would, through a temp file only its owner reads |
 | `connection/` | `Connection`: name, tier, target, tunnel, secret source, write policy, TLS; parsed once from config |
-| `secret.rs` | `Secret` (prints `<redacted>`) and its sources: keychain through `/usr/bin/security`, environment variable, command; `SecretSource::read` reads one when a session opens |
+| `secret/` | `Secret` (prints `<redacted>`) and its sources: keychain through `/usr/bin/security`, environment variable, command; `SecretSource::read` reads one when a session opens; `Secret::from_stdin` reads one typed hidden or piped in |
 | `tunnel/` | `Tunnel`: a child process forwarding a free `127.0.0.1` port to the database; start, wait for the port, stop |
 | `db/` | The only module that sees `tokio_postgres`: connect over rustls, run a statement, stream rows, cancel |
 | `db/model/` | The neutral model: `ResultSet`, `Column`, `ColumnKind`, `Value`, `Page`, `Schema`, `Table`, `ServerError`, and `CancelToken`, whose driver part only `db/` reads |
@@ -63,11 +63,11 @@ Charting a result:
 ## Boundaries
 
 - Only `src/db/` sees a `tokio_postgres` type; everything else uses `db/model/`.
-- Side effects live at the edges: `main.rs`, `commands/`, `tui/mod.rs`, `tui/actions.rs`, `tui/backend/`, `tunnel/`, `secret.rs`.
+- Side effects live at the edges: `main.rs`, `commands/`, `tui/mod.rs`, `tui/actions.rs`, `tui/backend/`, `tunnel/`, `secret/`, `config/` when it rewrites the file.
 - `tui/app/` is pure: it reads time from `app.now`, set by the loop, and never does I/O; its tests drive it with keys and `Incoming` values.
 - `chart/` is pure: a `ResultSet` in, a `Series` out; drawing lives in `tui/chart_view/`.
 - A program that takes the terminal (`$EDITOR` on a saved query) runs from the loop through `Screen::lend`, with the key stream paused.
-- Secrets are read only in `secret.rs` and sent only by `db::connect`.
+- Secrets are read only in `secret/` and sent only by `db::connect` and the keychain write.
 
 ## Read only
 
@@ -85,6 +85,8 @@ Four layers, outermost first; only the last one is a guarantee.
 - A connection names where its password comes from: `password = { keychain = "pgbg/prod" }`, `{ env = "PROD_PGPASSWORD" }` or `{ command = ["gcloud", "secrets", "versions", "access", ...] }`.
 - The password is read when the session opens, kept in a `Secret`, and dropped once connected.
 - The config loader refuses a plain `password`, and a URL with a password in it.
+- Keychain items live under the service `pgbg`, one account per item; `security` reads one on a pipe, and writes one through `security -i` so the password never shows in argv.
+- `pgbg password set <connection>` takes the password typed hidden or piped in, never as a flag.
 
 ## Tunnels
 
