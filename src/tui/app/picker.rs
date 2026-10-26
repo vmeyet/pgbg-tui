@@ -30,7 +30,7 @@ enum Picked {
     Quit,
     Remove(ConnectionName),
     Form(Box<Form>),
-    CloseSession(ConnectionName),
+    CloseSession { search: Search<Connection>, name: ConnectionName },
 }
 
 impl App {
@@ -58,9 +58,10 @@ impl App {
                 let id = self.new_config_change();
                 return vec![Action::RemoveConnection { id, connection: name }];
             }
-            Picked::CloseSession(name) => {
+            Picked::CloseSession { search, name } => {
                 self.drop_sheet(&name);
-                self.say(format!("closed the session of `{name}`"));
+                let note = Some(Note::Said(format!("closed the session of `{name}`")));
+                self.overlay = Some(Overlay::Picker(Picker { search, note }));
                 return vec![Action::Close(name)];
             }
         }
@@ -95,7 +96,7 @@ impl App {
             },
             Act::Delete => name.map(|name| self.removal(name)),
             Act::CloseSession => match name.filter(|name| self.sheet_of(name).is_some()) {
-                Some(name) if name != *self.sheet().name() => return Picked::CloseSession(name),
+                Some(name) if name != *self.sheet().name() => return Picked::CloseSession { search, name },
                 Some(name) => Some(on_screen(&name)),
                 None => None,
             },
@@ -107,12 +108,6 @@ impl App {
     /// The question before removing `name`; the connection on screen cannot go.
     fn removal(&self, name: ConnectionName) -> Note {
         if name == *self.sheet().name() { on_screen(&name) } else { Note::ConfirmRemove(name) }
-    }
-
-    fn say(&mut self, said: String) {
-        if let Some(Overlay::Picker(picker)) = &mut self.overlay {
-            picker.note = Some(Note::Said(said));
-        }
     }
 
     /// Shows the sheet of `connection`, starting one and opening its session when it has none, or when it failed.
@@ -459,6 +454,13 @@ pub(in crate::tui) mod tests {
         assert_eq!(ctrl(&mut app, 'x'), [Action::Close(name("local"))]);
         assert!(app.sheet_of(&name("local")).is_none());
         assert_eq!(app.sheet().name(), &name("prod"));
+    }
+
+    #[test]
+    fn ctrl_x_keeps_the_picker_open_and_says_the_session_closed() {
+        let mut app = on_prod_with_local_open();
+        ctrl(&mut app, 'x');
+        assert_eq!(picker(&app).note, Some(Note::Said("closed the session of `local`".into())));
     }
 
     #[test]
