@@ -214,6 +214,7 @@ impl App {
             Act::Chart => self.sheet_mut().switch_view(),
             Act::Open => return self.open_in_sidebar(),
             Act::Save => return self.save(),
+            Act::EditOutside => return self.edit_outside(),
             Act::Close | Act::Delete | Act::CloseSession | Act::Add | Act::Edit => {}
         }
         vec![]

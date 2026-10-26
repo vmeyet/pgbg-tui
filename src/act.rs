@@ -30,6 +30,7 @@ pub(crate) enum Act {
     Add,
     Edit,
     Save,
+    EditOutside,
 }
 
 #[cfg(test)]
@@ -64,7 +65,8 @@ impl Act {
             Self::CloseSession => Some(Self::Add),
             Self::Add => Some(Self::Edit),
             Self::Edit => Some(Self::Save),
-            Self::Save => None,
+            Self::Save => Some(Self::EditOutside),
+            Self::EditOutside => None,
         }
     }
 
@@ -204,6 +206,7 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Open, Pane::Prompt, &[key(KeyCode::Enter)]).help("⏎", "save, or open over the unsaved text").footer("⏎", "ok"),
     row(Act::Close, Pane::Prompt, &[key(KeyCode::Esc)]).help("esc", "keep editing").footer("esc", "cancel"),
     row(Act::Quit, Pane::Prompt, &[control('c')]).help("^c", "quit"),
+    row(Act::EditOutside, Pane::Editor, &[control('e')]).help("^e", "edit the saved query in $EDITOR"),
     row(Act::Save, Pane::Anywhere, &[control('s')]).help("^s", "save the query, naming a new one").footer("^s", "save"),
     row(Act::Connections, Pane::Anywhere, &[control('o')]).help("^o", "pick a connection").footer("^o", "connections"),
     row(Act::Quit, Pane::Anywhere, &[control('c')]).help("^c", "quit").footer("^c", "quit"),

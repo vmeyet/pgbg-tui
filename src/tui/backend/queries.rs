@@ -31,6 +31,11 @@ impl QueryFiles {
         });
     }
 
+    /// The file of `query` for the user's editor; blocks on the file system.
+    pub(super) fn file(&self, query: &Query) -> anyhow::Result<std::path::PathBuf> {
+        self.roots.file(query)
+    }
+
     /// Writes `text` over `query` on a blocking thread; `QueryAnswer::Saved` comes back for the sheet of `connection`,
     /// then the new list.
     pub(in crate::tui) fn save(&self, connection: ConnectionName, query: Query, text: String) {

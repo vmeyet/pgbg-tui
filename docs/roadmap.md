@@ -45,7 +45,7 @@ The MR that ships a step ticks its box.
 - [x] `.pgbg/queries/` tree in a sidebar
 - [x] Header parsing: `-- name:`, `-- connection:`, `-- chart:`
 - [x] Save from the editor with `ctrl-s`, asking before an open drops unsaved text
-- [ ] Open in `$EDITOR`
+- [x] Open in `$EDITOR` with `ctrl-e`, read again when it exits
 
 ## 7. Big results
 

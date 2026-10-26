@@ -3,7 +3,7 @@ use super::{Query, QueryPath, Root, Roots, Source};
 use anyhow::{Context, Result, bail};
 use std::fs;
 use std::io::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Whether a save may replace a file that is there.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,6 +26,24 @@ impl Roots {
     pub(crate) fn write(&self, query: &Query, text: &str, write: Write) -> Result<()> {
         let root = self.root(query.source).with_context(|| format!("no {} queries folder", query.source))?;
         write_inside(root, query, text, write).with_context(|| format!("saving {}", query.path))
+    }
+}
+
+impl Roots {
+    /// The file of `query`, for a program of the user's to open: a plain file inside its root. Blocks on the file system.
+    pub(crate) fn file(&self, query: &Query) -> Result<PathBuf> {
+        let root = self.root(query.source).with_context(|| format!("no {} queries folder", query.source))?;
+        if !root.is_still_safe() {
+            bail!("its queries folder changed since pgbg started");
+        }
+        let path = query.path.under(&root.dir);
+        if !fs::canonicalize(&path)?.starts_with(&root.real) {
+            bail!("{} leads out of the queries folder", query.path);
+        }
+        if !fs::symlink_metadata(&path)?.is_file() {
+            bail!("{} is not a plain file", query.path);
+        }
+        Ok(path)
     }
 }
 
@@ -131,5 +149,16 @@ mod tests {
         let both = Roots { user: Root::checked(user.path().into(), vec![user.path().into()]), ..project(root.path()) };
         assert_eq!(both.new_query(QueryPath::parse("x.sql").unwrap()).unwrap().source, Source::Project);
         assert!(Roots::default().new_query(QueryPath::parse("x.sql").unwrap()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_file_for_the_users_editor_stays_inside_the_root() {
+        let (root, outside) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        fs::write(outside.path().join("secret.sql"), "SELECT 1").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret.sql"), root.path().join("linked.sql")).unwrap();
+        project(root.path()).write(&query("daily.sql"), "SELECT 1", Write::Create).unwrap();
+        assert_eq!(project(root.path()).file(&query("daily.sql")).unwrap(), root.path().join("daily.sql"));
+        assert!(project(root.path()).file(&query("linked.sql")).is_err());
     }
 }
