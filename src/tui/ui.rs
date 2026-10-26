@@ -2,6 +2,7 @@
 use super::app::{App, Fit, SessionState, TunnelState};
 use super::{editor_view, finder_view, help_view, picker_view, result_view, sidebar_view, theme};
 use crate::act::{self, Hint};
+use crate::render::printable;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -118,7 +119,7 @@ fn session_text(session: &SessionState) -> &'static str {
 /// The first line of `err` after a `✗`, cut to `width`.
 fn failure(app: &App, err: &str, width: usize) -> Line<'static> {
     let first_line = err.lines().next().unwrap_or_default();
-    Line::styled(truncate(&format!("✗ {first_line} "), width), Style::default().fg(theme::failure(&app.theme)))
+    Line::styled(truncate(&format!("✗ {} ", printable(first_line)), width), Style::default().fg(theme::failure(&app.theme)))
 }
 
 #[cfg(test)]
@@ -183,6 +184,23 @@ mod tests {
         let mut app = app();
         app.apply(to_shop(Incoming::NotOpened("connecting to shop: connection refused".into())));
         insta::assert_snapshot!("not_opened", render(&app, 60, 14).backend());
+    }
+
+    #[test]
+    fn a_session_error_cannot_reverse_the_status_line() {
+        let mut app = app();
+        app.apply(to_shop(Incoming::NotOpened("role \u{202e}anin does not exist".into())));
+        let drawn = render(&app, 60, 14).backend().to_string();
+        assert!(drawn.contains("\\u{202e}anin") && !drawn.contains('\u{202e}'), "{drawn}");
+    }
+
+    #[test]
+    fn a_failed_run_cannot_reverse_the_result_pane() {
+        let mut app = typed("SELECT 1");
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        app.apply(to_shop(Incoming::Failed { run: RunId::FIRST, error: "column \u{2066}latot does not exist".into(), position: None }));
+        let drawn = render(&app, 60, 14).backend().to_string();
+        assert!(drawn.contains("\\u{2066}latot") && !drawn.contains('\u{2066}'), "{drawn}");
     }
 
     #[test]

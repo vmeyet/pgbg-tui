@@ -30,7 +30,7 @@ Each entry says what changed, then where, then how to use it.
   The search stops at your home folder or at the top of your repository, where `.git` is; a queries folder that is a link, or that another user owns, is skipped.
   Only a plain file of 1 MiB at most opens: a pipe, a link or a dump says why it does not.
   The sidebar on the left lists them as a tree, `●` on the one in the editor: `tab` reaches it, `j`/`k` move, `⏎` opens a query or folds a folder; a terminal under 80 columns leaves it out.
-  A header of `--` lines names the query and draws its result: `-- name: Orders per day`, `-- chart: bar x=day y=orders`.
+  A header of `--` lines names the query and draws its result: `-- name: Orders per day`, `-- chart: bar x=day y=orders`; a result that chart does not fit shows on the grid.
   `-- connection: prod` only says which connection the query was written for: the editor's title shows it, in red for a production one, and the statement still runs on the connection on screen.
   A header line pgbg cannot read shows as a warning in the editor's title; the query opens and runs all the same.
 - **Tunnels** for `pgbg run` and the TUI: a connection with `tunnel = { command = [...] }` starts that command on a free local port, put in place of `{port}`, and connects through it.
@@ -61,6 +61,7 @@ Each entry says what changed, then where, then how to use it.
 - **The keys of the TUI** on one screen: press `F1`, or `?` in the results grid, to list the keys of the pane you are in; press `?` again for every key.
   The footer shows the keys of the pane that has them.
 - **The results grid** in the TUI: numbers line up on the right, `▶` marks the current row, and a control character in a value shows escaped.
+  So does a mark that reverses text, in the grid, a chart, an error or the status line; a paste drops them.
   Press `tab` to give it the keys, then `j`/`k`, `PgUp`/`PgDn` and `g`/`G` to scroll its rows, `h`/`l` its columns; `tab` again goes back to the editor.
 - **`pgbg schema <connection>`** prints every table your role can read, with its columns, their types and defaults, and its indexes.
   Add a few letters to see only the tables whose name holds them, `pgbg schema prod orders`, and `--json` for a script.

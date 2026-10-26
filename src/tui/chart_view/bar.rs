@@ -1,6 +1,7 @@
 //! Bars, drawn across so a long text label stays readable: one row per bar, a group of rows per point.
 use super::{colour, short_number};
 use crate::chart::Series;
+use crate::render::printable;
 use ratatui::Frame;
 use ratatui::layout::{Direction, Rect};
 use ratatui::style::Style;
@@ -26,8 +27,11 @@ pub(super) fn draw(f: &mut Frame<'_>, series: &Series, theme: &Theme, area: Rect
 /// The bars of one point, its label on the first.
 fn group<'a>(series: &'a Series, point: usize, longest: f64, theme: &Theme) -> BarGroup<'a> {
     let bars: Vec<Bar<'a>> = series.y.iter().enumerate().map(|(column, y)| bar(y.values[point], longest, theme, column)).collect();
-    let labelled: Vec<Bar<'a>> =
-        bars.into_iter().enumerate().map(|(at, bar)| if at == 0 { bar.label(series.labels[point].as_str()) } else { bar }).collect();
+    let labelled: Vec<Bar<'a>> = bars
+        .into_iter()
+        .enumerate()
+        .map(|(at, bar)| if at == 0 { bar.label(printable(&series.labels[point]).into_owned()) } else { bar })
+        .collect();
     BarGroup::new(labelled)
 }
 

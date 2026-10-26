@@ -20,11 +20,11 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
     f.render_widget(block, area);
     let sheet = app.sheet();
     let (before, _, _) = sheet.editor.split();
-    let row = before.matches('\n').count() as u16;
-    let column = Line::from(before.rsplit('\n').next().unwrap_or_default()).width() as u16;
-    let scroll = row.saturating_sub(inside.height.saturating_sub(1));
+    let row = before.matches('\n').count();
+    let column = Line::from(before.rsplit('\n').next().unwrap_or_default()).width();
+    let scroll = row.saturating_sub(usize::from(inside.height.saturating_sub(1)));
     let mark = Style::default().fg(theme::failure(&app.theme)).add_modifier(Modifier::REVERSED);
-    let window = Window { first: usize::from(scroll), rows: usize::from(inside.height) };
+    let window = Window { first: scroll, rows: usize::from(inside.height) };
     let text = coloured(
         sheet.editor.text(),
         Paint { colours: sheet.editor.colours(), mark: sheet.error_mark, mark_style: mark, theme: &app.theme },
@@ -34,8 +34,14 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
     if !focused {
         return;
     }
-    let x = (inside.x + column).min(inside.right().saturating_sub(1));
-    f.set_cursor_position(Position { x, y: inside.y + row - scroll });
+    f.set_cursor_position(cursor_position(inside, column, row - scroll));
+}
+
+/// Where the cursor at `column` of the `row`th line in view lands, kept inside `inside`.
+fn cursor_position(inside: Rect, column: usize, row: usize) -> Position {
+    let offset = |at: usize| u16::try_from(at).unwrap_or(u16::MAX);
+    let x = inside.x.saturating_add(offset(column)).min(inside.right().saturating_sub(1));
+    Position { x, y: inside.y.saturating_add(offset(row)) }
 }
 
 /// The lines of the editor in view.
@@ -219,6 +225,17 @@ mod tests {
     #[test]
     fn the_error_mark_draws_over_a_coloured_token() {
         insta::assert_snapshot!("coloured_marked", painted("SELECT id, 'paid', 10 -- recent\nFROM ordrs", Some(37)));
+    }
+
+    #[test]
+    fn the_cursor_stays_in_view_past_65_536_lines() {
+        let mut app = typed("");
+        let text: String = (1..=70_000).map(|line| format!("{line}\n")).collect();
+        app.paste(&(text + "last"));
+        let mut terminal = Terminal::new(TestBackend::new(30, 5)).unwrap();
+        terminal.draw(|f| draw(f, &app, f.area())).unwrap();
+        assert_eq!(terminal.backend_mut().get_cursor_position().unwrap(), Position { x: 6, y: 3 });
+        assert!(terminal.backend().to_string().contains("last"), "{}", terminal.backend());
     }
 
     #[test]

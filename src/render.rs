@@ -37,7 +37,8 @@ pub(crate) fn printable(text: &str) -> Cow<'_, str> {
     Cow::Owned(text.chars().map(escape_unprintable).collect())
 }
 
-fn is_unprintable(c: char) -> bool {
+/// A control character, or a mark that reverses the text around it.
+pub(crate) fn is_unprintable(c: char) -> bool {
     c.is_control() || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
 }
 
