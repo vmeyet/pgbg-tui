@@ -83,6 +83,8 @@ Each entry says what changed, then where, then how to use it.
 
 ### Fixed
 
+- **Closing a session stops its running statement**: `ctrl-x` in the picker, a connection removed or edited, or quitting cancels it on the server, and a write on a connection that allows writes never commits after it.
+  pgbg waits 2 seconds for the cancel, then cuts the link, so the server stops the statement within a second; a statement still queued is never sent.
 - **The finder and the connection picker always show their keys** at the bottom, however many matches or a question under the list; the picker follows a connection added or removed while it is open.
 - **A URL whose `options` or `application_name` hold `%20`** reaches the server as written, as in `options=-c%20role%3Dnina`; it failed with `unrecognized configuration parameter "+role"`.
 - **The editor colours SQL by meaning**: `NULL` as a constant, `1e3` as a number, and table names plain.
