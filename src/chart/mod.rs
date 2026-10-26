@@ -1,7 +1,8 @@
 //! What to chart and the points to draw, from a result: pure, drawing lives in `tui/chart_view/`.
+pub(crate) use series::{ChartError, Series};
 pub(crate) use spec::ChartSpec;
 
-use crate::db::model::{Column, ColumnKind, ResultSet};
+use crate::db::model::{Column, ColumnKind, ResultSet, Value};
 
 mod axis;
 mod bar;
@@ -39,25 +40,57 @@ impl ChartKind {
     }
 }
 
+/// A chart's kind and its columns, by index in one result, so two columns of the same name stay apart.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ChartColumns {
+    pub(crate) kind: ChartKind,
+    pub(crate) x: usize,
+    pub(crate) y: Vec<usize>,
+}
+
 /// The chart a result asks for, or `None` when it has nothing to put on x or y.
 ///
-/// x is the first text, date, time or timestamp column; y is every numeric column.
-/// The kind is bar when x is text or there are at most 12 rows, line otherwise: a line reads a trend over time, bars compare a few values.
-pub(crate) fn infer(result: &ResultSet) -> Option<ChartSpec> {
-    let x = &result.columns[default_x(&result.columns)?];
-    let y = default_y(&result.columns);
+/// x is the first text, date, time or timestamp column, else the first numeric column when it holds integers in ascending order
+/// (`year`, `generate_series`); y is every other numeric column.
+/// The kind is bar when x is text or there are at most 12 rows, line otherwise: a line reads a trend, bars compare a few values.
+pub(crate) fn infer(result: &ResultSet) -> Option<ChartColumns> {
+    let x = default_x(result)?;
+    let y = default_y(&result.columns, x);
     if y.is_empty() {
         return None;
     }
-    Some(ChartSpec { kind: suited_kind(x, result.rows.len()), x: Some(x.name.clone()), y })
+    Some(ChartColumns { kind: suited_kind(&result.columns[x], result.rows.len()), x, y })
 }
 
-fn default_x(columns: &[Column]) -> Option<usize> {
-    columns.iter().position(|column| is_label(&column.kind))
+/// The series of the chart `infer` picks for `result`, or why there is none.
+pub(crate) fn infer_series(result: &ResultSet) -> Result<Series, ChartError> {
+    let columns = infer(result).ok_or_else(|| missing_axis(result))?;
+    Series::from_columns(result, &columns)
 }
 
-fn default_y(columns: &[Column]) -> Vec<String> {
-    columns.iter().filter(|column| is_numeric(&column.kind)).map(|column| column.name.clone()).collect()
+fn missing_axis(result: &ResultSet) -> ChartError {
+    if default_x(result).is_none() { ChartError::NoX } else { ChartError::NoY }
+}
+
+fn default_x(result: &ResultSet) -> Option<usize> {
+    result.columns.iter().position(|column| is_label(&column.kind)).or_else(|| ascending_integers(result))
+}
+
+/// The first numeric column, when it is an integer one whose every value is greater than the one before.
+fn ascending_integers(result: &ResultSet) -> Option<usize> {
+    let first = result.columns.iter().position(|column| is_numeric(&column.kind))?;
+    let is_integer = result.columns[first].kind == ColumnKind::Int;
+    let integers: Option<Vec<i64>> = result.rows.iter().map(|row| integer(&row[first])).collect();
+    let is_ascending = integers.is_some_and(|integers| integers.windows(2).all(|pair| pair[0] < pair[1]));
+    (is_integer && is_ascending).then_some(first)
+}
+
+const fn integer(value: &Value) -> Option<i64> {
+    if let Value::Int(integer) = value { Some(*integer) } else { None }
+}
+
+fn default_y(columns: &[Column], x: usize) -> Vec<usize> {
+    (0..columns.len()).filter(|&column| column != x && is_numeric(&columns[column].kind)).collect()
 }
 
 fn suited_kind(x: &Column, rows: usize) -> ChartKind {
@@ -100,20 +133,20 @@ mod tests {
             vec![column("id", ColumnKind::Int), column("customer", ColumnKind::Text), column("total", ColumnKind::Numeric)],
             vec![vec![Value::Int(7), Value::Text("nina".into()), Value::Numeric("12.50".into())]],
         );
-        let spec = infer(&orders).unwrap();
-        assert_eq!(spec, ChartSpec { kind: ChartKind::Bar, x: Some("customer".into()), y: vec!["id".into(), "total".into()] });
+        assert_eq!(infer(&orders), Some(ChartColumns { kind: ChartKind::Bar, x: 1, y: vec![0, 2] }));
     }
 
     #[test]
     fn the_first_label_column_is_x() {
         let orders =
             result(vec![column("day", ColumnKind::Date), column("customer", ColumnKind::Text), column("total", ColumnKind::Float)], vec![]);
-        assert_eq!(infer(&orders).unwrap().x.as_deref(), Some("day"));
+        assert_eq!(infer(&orders).unwrap().x, 0);
     }
 
     #[test]
-    fn a_result_without_a_label_column_has_no_chart() {
-        let totals = result(vec![column("id", ColumnKind::Int), column("total", ColumnKind::Numeric)], vec![]);
+    fn a_result_without_a_label_or_ascending_integer_column_has_no_chart() {
+        let row = |id: i64| vec![Value::Int(id), Value::Numeric("1.50".into())];
+        let totals = result(vec![column("id", ColumnKind::Int), column("total", ColumnKind::Numeric)], vec![row(7), row(3)]);
         assert_eq!(infer(&totals), None);
     }
 
@@ -147,10 +180,52 @@ mod tests {
     }
 
     #[test]
+    fn an_inferred_series_says_which_axis_is_missing() {
+        let numbers = result(vec![column("total", ColumnKind::Float)], vec![vec![Value::Float(1.5)]]);
+        let names = result(vec![column("customer", ColumnKind::Text)], vec![vec![Value::Text("nina".into())]]);
+        assert_eq!(infer_series(&numbers), Err(ChartError::NoX));
+        assert_eq!(infer_series(&names), Err(ChartError::NoY));
+    }
+
+    #[test]
+    fn an_inferred_series_draws_what_infer_picks() {
+        let orders = result(
+            vec![column("customer", ColumnKind::Text), column("total", ColumnKind::Int)],
+            vec![vec![Value::Text("nina".into()), Value::Int(3)]],
+        );
+        assert_eq!(infer_series(&orders).unwrap().labels, ["nina"]);
+    }
+
+    #[test]
+    fn ascending_integers_go_on_x_when_there_is_no_label_column() {
+        let yearly = result(
+            vec![column("year", ColumnKind::Int), column("orders", ColumnKind::Int)],
+            rows(3, |i| vec![Value::Int(2024 + i as i64), Value::Int(9)]),
+        );
+        assert_eq!(infer(&yearly), Some(ChartColumns { kind: ChartKind::Bar, x: 0, y: vec![1] }));
+    }
+
+    #[test]
+    fn integers_with_a_null_are_not_an_x() {
+        let yearly = result(
+            vec![column("year", ColumnKind::Int), column("orders", ColumnKind::Int)],
+            vec![vec![Value::Null, Value::Int(1)], vec![Value::Int(2026), Value::Int(2)]],
+        );
+        assert_eq!(infer(&yearly), None);
+    }
+
+    #[test]
+    fn two_columns_of_the_same_name_both_go_on_y() {
+        let counts =
+            result(vec![column("customer", ColumnKind::Text), column("count", ColumnKind::Int), column("count", ColumnKind::Int)], vec![]);
+        assert_eq!(infer(&counts).unwrap().y, [1, 2]);
+    }
+
+    #[test]
     fn timestamps_and_times_can_be_x() {
         for kind in [ColumnKind::Time, ColumnKind::Timestamp, ColumnKind::TimestampTz] {
             let orders = result(vec![column("at", kind), column("orders", ColumnKind::Int)], vec![]);
-            assert_eq!(infer(&orders).unwrap().x.as_deref(), Some("at"));
+            assert_eq!(infer(&orders).unwrap().x, 0);
         }
     }
 }
