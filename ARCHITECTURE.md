@@ -63,9 +63,10 @@ Switching connection:
 
 Charting a result:
 
-1. `v` on a result asks `chart::infer` for a `ChartSpec`: the first text, date or time column as x, the numeric columns as y; bars when x is text or there are at most 12 rows, a line otherwise.
+1. `v` on a result asks `chart::infer` for its `ChartColumns`, by index so two columns of one name (`count`) stay apart: the first text, date or time column as x, else the first numeric column when it holds ascending integers (`year`), every other numeric column as y; bars when x is text or there are at most 12 rows, a line otherwise.
 2. A saved query can set it in its header instead: `-- chart: bar x=day y=orders,refunds`, parsed by `ChartSpec`'s `FromStr`; a header without `x=` or `y=` leaves them to the result, as `infer` would pick them.
-3. `chart::Series::from_result` builds the points: a line over dates or times is placed in time and sorted, so a gap in time shows, and a row with no place in time (NULL, infinity) is left out; bars and a line over text keep the result's order, one point per row.
+   A header name matches a column whatever its case, as PostgreSQL folds an unquoted name, unless one column has it exactly; a name several columns answer to is refused.
+3. `chart::Series` builds the points: a line over dates, times or integers is placed on their scale and sorted, so a gap shows, and a row with no place on it (NULL, infinity) is left out; bars and a line over text keep the result's order, one point per row.
 4. A y value of NULL, NaN or infinity leaves a gap, and NUMERIC is read as a float; each kind caps its points to what a terminal shows: bars keep the first 64, a line samples 1024 evenly, and the series says when rows were left out.
 5. `chart_view` draws them.
 

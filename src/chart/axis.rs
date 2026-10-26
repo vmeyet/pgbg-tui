@@ -2,7 +2,7 @@ use super::ChartKind;
 use crate::db::model::{ColumnKind, Value};
 use chrono::{DateTime, NaiveTime, Timelike, Utc};
 
-/// What a point's x position means: its row, or its place in time, so a gap in time shows as a gap.
+/// What a point's x position means: its row, or its place in time or among integers, so a gap there shows as a gap.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum XAxis {
     /// The row's place in the result: bars, and a line over text.
@@ -13,21 +13,24 @@ pub(crate) enum XAxis {
     Timestamps,
     /// Seconds since midnight.
     TimesOfDay,
+    /// The integer itself.
+    Integers,
 }
 
 impl XAxis {
-    /// Only a line goes on a time axis: bars stay one per row, in the result's order.
+    /// Only a line goes on a scale: bars stay one per row, in the result's order.
     pub(super) const fn of(kind: ChartKind, x: &ColumnKind) -> Self {
         match (kind, x) {
             (ChartKind::Line, ColumnKind::Date) => Self::Dates,
             (ChartKind::Line, ColumnKind::Timestamp | ColumnKind::TimestampTz) => Self::Timestamps,
             (ChartKind::Line, ColumnKind::Time) => Self::TimesOfDay,
+            (ChartKind::Line, ColumnKind::Int) => Self::Integers,
             _ => Self::Rows,
         }
     }
 
-    /// Where row `row`, whose x is `value`, sits on the axis; a value with no place in time (NULL, infinity) has none.
-    #[expect(clippy::cast_precision_loss, reason = "a row index is far below 2^53")]
+    /// Where row `row`, whose x is `value`, sits on the axis; a value with no place on a scale (NULL, infinity) has none.
+    #[expect(clippy::cast_precision_loss, reason = "a chart draws to a terminal cell, far coarser than 53 bits")]
     pub(super) fn position(self, row: usize, value: &Value) -> Option<f64> {
         match (self, value) {
             (Self::Rows, _) => Some(row as f64),
@@ -35,18 +38,20 @@ impl XAxis {
             (Self::Timestamps, Value::Timestamp(at)) => Some(seconds(at.and_utc())),
             (Self::Timestamps, Value::TimestampTz(at)) => Some(seconds(*at)),
             (Self::TimesOfDay, Value::Time(time)) => Some(f64::from(time.num_seconds_from_midnight())),
+            (Self::Integers, Value::Int(integer)) => Some(*integer as f64),
             _ => None,
         }
     }
 
-    /// A position on a time axis written back as the column shows it; `None` on the rows axis, or out of chrono's range.
-    pub(crate) fn time_label(self, position: f64) -> Option<String> {
-        let seconds = position.round() as i64;
+    /// A position on a scale written back as the column shows it; `None` on the rows axis, or out of chrono's range.
+    pub(crate) fn label(self, position: f64) -> Option<String> {
+        let whole = position.round() as i64;
         match self {
             Self::Rows => None,
-            Self::Dates => Some(DateTime::from_timestamp(seconds, 0)?.format("%Y-%m-%d").to_string()),
-            Self::Timestamps => Some(DateTime::from_timestamp(seconds, 0)?.format("%Y-%m-%d %H:%M").to_string()),
-            Self::TimesOfDay => Some(NaiveTime::from_num_seconds_from_midnight_opt(seconds as u32, 0)?.format("%H:%M:%S").to_string()),
+            Self::Dates => Some(DateTime::from_timestamp(whole, 0)?.format("%Y-%m-%d").to_string()),
+            Self::Timestamps => Some(DateTime::from_timestamp(whole, 0)?.format("%Y-%m-%d %H:%M").to_string()),
+            Self::Integers => Some(whole.to_string()),
+            Self::TimesOfDay => Some(NaiveTime::from_num_seconds_from_midnight_opt(whole as u32, 0)?.format("%H:%M:%S").to_string()),
         }
     }
 }
@@ -70,6 +75,7 @@ mod tests {
         assert_eq!(XAxis::of(ChartKind::Line, &ColumnKind::Date), XAxis::Dates);
         assert_eq!(XAxis::of(ChartKind::Line, &ColumnKind::TimestampTz), XAxis::Timestamps);
         assert_eq!(XAxis::of(ChartKind::Line, &ColumnKind::Time), XAxis::TimesOfDay);
+        assert_eq!(XAxis::of(ChartKind::Line, &ColumnKind::Int), XAxis::Integers);
     }
 
     #[test]
@@ -86,8 +92,8 @@ mod tests {
 
     #[test]
     fn a_time_position_is_written_back_as_the_column_shows_it() {
-        assert_eq!(XAxis::Dates.time_label(1_767_259_800.0).as_deref(), Some("2026-01-01"));
-        assert_eq!(XAxis::Timestamps.time_label(1_767_259_800.0).as_deref(), Some("2026-01-01 09:30"));
-        assert_eq!(XAxis::TimesOfDay.time_label(3630.0).as_deref(), Some("01:00:30"));
+        assert_eq!(XAxis::Dates.label(1_767_259_800.0).as_deref(), Some("2026-01-01"));
+        assert_eq!(XAxis::Timestamps.label(1_767_259_800.0).as_deref(), Some("2026-01-01 09:30"));
+        assert_eq!(XAxis::TimesOfDay.label(3630.0).as_deref(), Some("01:00:30"));
     }
 }

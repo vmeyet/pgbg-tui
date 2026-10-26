@@ -1,5 +1,5 @@
 use super::axis::XAxis;
-use super::{ChartKind, ChartSpec, default_x, default_y, is_numeric};
+use super::{ChartColumns, ChartKind, ChartSpec, default_x, default_y, is_numeric};
 use crate::db::model::{Column, ResultSet, Value};
 use std::fmt;
 
@@ -39,6 +39,8 @@ pub(crate) struct YColumn {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ChartError {
     UnknownColumn(String),
+    /// More columns than one answer to the name: `count`, `?column?`.
+    AmbiguousColumn(String),
     NotNumeric(String),
     /// No x was given and the result has no text, date or time column.
     NoX,
@@ -52,6 +54,7 @@ impl fmt::Display for ChartError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnknownColumn(name) => write!(f, "the result has no column `{name}`"),
+            Self::AmbiguousColumn(name) => write!(f, "the result has several columns `{name}`: give them an alias"),
             Self::NotNumeric(name) => write!(f, "column `{name}` does not hold numbers"),
             Self::NoX => f.write_str("no text, date or time column to put on x"),
             Self::NoY => f.write_str("no numeric column to put on y"),
@@ -64,16 +67,21 @@ impl std::error::Error for ChartError {}
 
 impl Series {
     /// The points of `result` for `spec`, x and y filled as `chart::infer` would when the spec leaves them out.
-    /// A line over dates or times is placed in time and sorted; anything else keeps the result's order.
+    /// A name matches a column as PostgreSQL folds an unquoted one, whatever its case, unless one column has it exactly.
     pub(crate) fn from_result(result: &ResultSet, spec: &ChartSpec) -> Result<Self, ChartError> {
-        let x = x_column(result, spec)?;
-        let y = y_columns(result, spec)?;
-        let axis = XAxis::of(spec.kind, &result.columns[x].kind);
+        Self::from_columns(result, &resolve(result, spec)?)
+    }
+
+    /// The points of `result` for the columns picked by index.
+    /// A line over dates, times or integers is placed on their scale and sorted; anything else keeps the result's order.
+    pub(crate) fn from_columns(result: &ResultSet, columns: &ChartColumns) -> Result<Self, ChartError> {
+        let ChartColumns { kind, x, ref y } = *columns;
+        let axis = XAxis::of(kind, &result.columns[x].kind);
         let placed = place(result, x, axis);
-        let kept: Vec<Placed> = spec.kind.keep(placed.len()).into_iter().map(|index| placed[index]).collect();
+        let kept: Vec<Placed> = kind.keep(placed.len()).into_iter().map(|index| placed[index]).collect();
         let rows: Vec<usize> = kept.iter().map(|point| point.row).collect();
         let series = Self {
-            kind: spec.kind,
+            kind,
             x: result.columns[x].name.clone(),
             axis,
             positions: kept.iter().map(|point| point.position).collect(),
@@ -85,6 +93,19 @@ impl Series {
             return Err(ChartError::Empty);
         }
         Ok(series)
+    }
+
+    /// The x label at `position`: a time or number axis writes the value there, the rows axis gives the nearest point's label.
+    pub(crate) fn x_label_at(&self, position: f64) -> String {
+        self.axis.label(position).unwrap_or_else(|| self.nearest_label(position))
+    }
+
+    fn nearest_label(&self, position: f64) -> String {
+        let last = self.positions.len().saturating_sub(1);
+        let after = self.positions.partition_point(|&point| point < position).min(last);
+        let before = after.saturating_sub(1);
+        let is_before_nearer = (position - self.positions[before]).abs() < (self.positions[after] - position).abs();
+        self.labels[if is_before_nearer { before } else { after }].clone()
     }
 
     fn has_no_value(&self) -> bool {
@@ -103,29 +124,39 @@ fn place(result: &ResultSet, x: usize, axis: XAxis) -> Vec<Placed> {
     placed
 }
 
-fn x_column(result: &ResultSet, spec: &ChartSpec) -> Result<usize, ChartError> {
-    match &spec.x {
-        Some(name) => position(&result.columns, name),
-        None => default_x(&result.columns).ok_or(ChartError::NoX),
-    }
-}
-
-fn y_columns(result: &ResultSet, spec: &ChartSpec) -> Result<Vec<usize>, ChartError> {
-    let names = if spec.y.is_empty() { default_y(&result.columns) } else { spec.y.clone() };
-    if names.is_empty() {
+fn resolve(result: &ResultSet, spec: &ChartSpec) -> Result<ChartColumns, ChartError> {
+    let x = match &spec.x {
+        Some(name) => find(&result.columns, name)?,
+        None => default_x(result).ok_or(ChartError::NoX)?,
+    };
+    let y = if spec.y.is_empty() { default_y(&result.columns, x) } else { find_numbers(&result.columns, &spec.y)? };
+    if y.is_empty() {
         return Err(ChartError::NoY);
     }
-    names.iter().map(|name| numeric_position(&result.columns, name)).collect()
+    Ok(ChartColumns { kind: spec.kind, x, y })
 }
 
-fn position(columns: &[Column], name: &str) -> Result<usize, ChartError> {
-    columns.iter().position(|column| column.name == name).ok_or_else(|| ChartError::UnknownColumn(name.to_owned()))
+fn find_numbers(columns: &[Column], names: &[String]) -> Result<Vec<usize>, ChartError> {
+    names.iter().map(|name| find(columns, name).and_then(|index| numeric(columns, index))).collect()
 }
 
-fn numeric_position(columns: &[Column], name: &str) -> Result<usize, ChartError> {
-    let index = position(columns, name)?;
+fn find(columns: &[Column], name: &str) -> Result<usize, ChartError> {
+    let exact = matching(columns, |column| column.name == name);
+    let folded = matching(columns, |column| column.name.eq_ignore_ascii_case(name));
+    match (exact.as_slice(), folded.as_slice()) {
+        ([index], _) | ([], [index]) => Ok(*index),
+        ([], []) => Err(ChartError::UnknownColumn(name.to_owned())),
+        _ => Err(ChartError::AmbiguousColumn(name.to_owned())),
+    }
+}
+
+fn matching(columns: &[Column], is_match: impl Fn(&Column) -> bool) -> Vec<usize> {
+    (0..columns.len()).filter(|&index| is_match(&columns[index])).collect()
+}
+
+fn numeric(columns: &[Column], index: usize) -> Result<usize, ChartError> {
     if !is_numeric(&columns[index].kind) {
-        return Err(ChartError::NotNumeric(name.to_owned()));
+        return Err(ChartError::NotNumeric(columns[index].name.clone()));
     }
     Ok(index)
 }
@@ -212,7 +243,7 @@ mod tests {
 
     #[test]
     fn a_result_with_nothing_for_x_or_y_says_which() {
-        let numbers = result(vec![column("total", ColumnKind::Int)], vec![vec![Value::Int(1)]]);
+        let numbers = result(vec![column("total", ColumnKind::Float)], vec![vec![Value::Float(1.5)]]);
         let names = result(vec![column("customer", ColumnKind::Text)], vec![vec![Value::Text("nina".into())]]);
         assert_eq!(Series::from_result(&numbers, &spec("bar")), Err(ChartError::NoX));
         assert_eq!(Series::from_result(&names, &spec("bar")), Err(ChartError::NoY));
@@ -274,6 +305,55 @@ mod tests {
         assert_eq!(values(&series).len(), line::MAX_POINTS);
         assert_eq!(values(&series).last(), Some(&Some(4999.0)));
         assert!(series.is_cut);
+    }
+
+    #[test]
+    fn a_label_between_points_on_a_time_axis_is_the_time_there() {
+        let series = Series::from_result(&daily(&[day(1), day(5)]), &spec("line")).unwrap();
+        assert_eq!(series.x_label_at(series.positions[0] + 2.0 * 86_400.0), "2026-01-03");
+    }
+
+    #[test]
+    fn a_label_between_rows_is_the_nearest_row() {
+        let series = Series::from_result(&orders(), &spec("bar")).unwrap();
+        assert_eq!([0.4, 0.6, 9.0].map(|position| series.x_label_at(position)), ["nina", "NULL", "NULL"]);
+    }
+
+    #[test]
+    fn a_name_matches_whatever_its_case() {
+        assert_eq!(Series::from_result(&orders(), &spec("bar x=Customer y=TOTAL")).unwrap().y[0].name, "total");
+    }
+
+    #[test]
+    fn a_name_with_exactly_one_column_wins_over_other_cases() {
+        let totals =
+            result(vec![column("customer", ColumnKind::Text), column("Total", ColumnKind::Int), column("total", ColumnKind::Int)], vec![]);
+        let picked = resolve(&totals, &spec("bar y=Total")).unwrap();
+        assert_eq!(picked.y, [1]);
+    }
+
+    #[test]
+    fn a_name_that_several_columns_answer_to_is_refused() {
+        let counts =
+            result(vec![column("customer", ColumnKind::Text), column("count", ColumnKind::Int), column("count", ColumnKind::Int)], vec![]);
+        assert_eq!(resolve(&counts, &spec("bar y=count")), Err(ChartError::AmbiguousColumn("count".into())));
+        assert_eq!(resolve(&counts, &spec("bar y=COUNT")), Err(ChartError::AmbiguousColumn("COUNT".into())));
+    }
+
+    #[test]
+    fn a_numeric_x_is_left_out_of_the_default_y() {
+        assert_eq!(resolve(&orders(), &spec("bar x=orders")).unwrap().y, [2]);
+    }
+
+    #[test]
+    fn a_line_over_integers_shows_a_gap_between_them() {
+        let yearly = result(
+            vec![column("year", ColumnKind::Int), column("orders", ColumnKind::Int)],
+            [2020, 2021, 2025].map(|year| vec![Value::Int(year), Value::Int(1)]).into(),
+        );
+        let series = Series::from_result(&yearly, &spec("line")).unwrap();
+        assert_eq!(series.positions, [2020.0, 2021.0, 2025.0]);
+        assert_eq!(series.x_label_at(2023.0), "2023");
     }
 
     #[test]
