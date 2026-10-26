@@ -45,6 +45,10 @@ impl App {
         self.sheets.iter().find(|sheet| &sheet.name == name)
     }
 
+    pub(super) fn sheet_of_mut(&mut self, name: &ConnectionName) -> Option<&mut Sheet> {
+        self.sheets.iter_mut().find(|sheet| &sheet.name == name)
+    }
+
     pub(super) fn picker_key(&mut self, picker: Palette<Picking>, key: KeyEvent) -> Vec<Action> {
         match self.picked(picker, key) {
             Picked::Stay(picker) => self.overlay = Some(Overlay::Picker(picker)),
@@ -201,11 +205,29 @@ pub(in crate::tui) mod tests {
         let mut app = on_local();
         let customers =
             crate::query::Query { source: crate::query::Source::Project, path: crate::query::QueryPath::parse("customers.sql").unwrap() };
-        app.apply(Answer::Queries(QueryAnswer::Opened { query: customers.clone(), text: "SELECT 1".into() }));
+        app.apply(Answer::Queries(QueryAnswer::Opened { connection: name("local"), query: customers.clone(), text: "SELECT 1".into() }));
         switch_to(&mut app, "prod");
         assert_eq!(app.sheet().opened, None);
         switch_to(&mut app, "local");
         assert_eq!(app.sheet().opened, Some(customers));
+    }
+
+    #[test]
+    fn a_saved_query_read_after_a_switch_lands_on_the_sheet_that_asked_for_it() {
+        let mut app = on_local();
+        let customers =
+            crate::query::Query { source: crate::query::Source::Project, path: crate::query::QueryPath::parse("customers.sql").unwrap() };
+        switch_to(&mut app, "prod");
+        app.apply(Answer::Queries(QueryAnswer::Opened { connection: name("local"), query: customers.clone(), text: "SELECT 1".into() }));
+        app.apply(Answer::Queries(QueryAnswer::NotOpened {
+            connection: name("local"),
+            query: customers,
+            error: "permission denied".into(),
+        }));
+        assert_eq!((app.sheet().editor.text(), &app.sheet().query_error), ("", &None));
+        let local = app.sheet_of(&name("local")).unwrap();
+        assert_eq!(local.editor.text(), "SELECT 1");
+        assert!(local.query_error.is_some());
     }
 
     #[test]

@@ -59,7 +59,7 @@ impl Backend {
             Action::Run { connection, run, statement } => self.run(&connection, run, statement),
             Action::Cancel { connection, run } => self.cancel(&connection, run),
             Action::ListQueries => self.queries.list(),
-            Action::OpenQuery(query) => self.queries.open(query),
+            Action::OpenQuery { connection, query } => self.queries.open(connection, query),
         }
     }
 
