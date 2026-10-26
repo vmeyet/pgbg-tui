@@ -105,7 +105,7 @@ fn hex(text: &str) -> String {
 }
 
 fn from_hex(digits: &str) -> Option<Vec<u8>> {
-    if digits.len() % 2 != 0 {
+    if !digits.len().is_multiple_of(2) {
         return None;
     }
     (0..digits.len()).step_by(2).map(|at| digits.get(at..at + 2).and_then(|pair| u8::from_str_radix(pair, 16).ok())).collect()
