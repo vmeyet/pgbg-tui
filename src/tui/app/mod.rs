@@ -1,5 +1,6 @@
 //! The pure state machine: keys in, actions out, incoming answers applied. No clock, no I/O.
 use crate::connection::{Connection, ConnectionName, Tier, WritePolicy};
+use crate::db::guard;
 use crate::db::model::{ResultSet, Statement};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::time::Duration;
@@ -18,6 +19,8 @@ mod keys;
 pub(super) enum Action {
     /// Run this statement on the session.
     Run(Statement),
+    /// Cancel the statement the session is running.
+    Cancel,
 }
 
 /// What the backend answers.
@@ -50,6 +53,8 @@ pub(super) enum Run {
     #[default]
     Idle,
     Running,
+    /// `Esc` asked the server to cancel the running statement; its answer has not come yet.
+    Cancelling,
     Done {
         result: ResultSet,
         took: Duration,
@@ -107,6 +112,10 @@ impl App {
                 self.should_quit = true;
                 vec![]
             }
+            KeyCode::Esc if self.run == Run::Running => {
+                self.run = Run::Cancelling;
+                vec![Action::Cancel]
+            }
             KeyCode::Tab => {
                 self.focus = match self.focus {
                     Focus::Editor => Focus::Result,
@@ -146,13 +155,19 @@ impl App {
         }
     }
 
+    fn is_running(&self) -> bool {
+        matches!(self.run, Run::Running | Run::Cancelling)
+    }
+
+    /// Runs the statement under the cursor, the editor's other statements left alone.
     fn run_editor(&mut self) -> Vec<Action> {
-        let is_empty = self.editor.text().trim().is_empty();
-        if is_empty || self.run == Run::Running {
+        if self.is_running() {
             return vec![];
         }
+        let (before, _, _) = self.editor.split();
+        let Some(range) = guard::statement_at(self.editor.text(), before.len()) else { return vec![] };
         self.run = Run::Running;
-        vec![Action::Run(Statement::new(self.editor.text()))]
+        vec![Action::Run(Statement::new(&self.editor.text()[range]))]
     }
 
     /// Applies one answer of the backend.
@@ -160,7 +175,7 @@ impl App {
         match incoming {
             Incoming::Opened => self.link = Link::Open,
             Incoming::NotOpened(err) => {
-                if self.run == Run::Running {
+                if self.is_running() {
                     self.run = Run::Failed(err.clone());
                 }
                 self.link = Link::Failed(err);
@@ -237,6 +252,35 @@ pub(super) mod tests {
     fn enter_while_a_statement_runs_sends_no_second_one() {
         let mut app = typed("SELECT 1");
         enter(&mut app);
+        assert_eq!(enter(&mut app), []);
+    }
+
+    #[test]
+    fn enter_runs_only_the_statement_under_the_cursor() {
+        let mut app = typed("SELECT 1;\nSELECT 2;\nSELECT 3");
+        app.handle_key(KeyEvent::from(KeyCode::Up));
+        assert_eq!(enter(&mut app), [Action::Run(Statement::new("SELECT 2"))]);
+    }
+
+    #[test]
+    fn esc_cancels_a_running_statement_once() {
+        let mut app = typed("SELECT pg_sleep(30)");
+        enter(&mut app);
+        assert_eq!(app.handle_key(KeyEvent::from(KeyCode::Esc)), [Action::Cancel]);
+        assert_eq!(app.run, Run::Cancelling);
+        assert_eq!(app.handle_key(KeyEvent::from(KeyCode::Esc)), []);
+    }
+
+    #[test]
+    fn esc_with_nothing_running_cancels_nothing() {
+        assert_eq!(typed("SELECT 1").handle_key(KeyEvent::from(KeyCode::Esc)), []);
+    }
+
+    #[test]
+    fn enter_while_a_cancel_is_on_its_way_sends_nothing() {
+        let mut app = typed("SELECT 1");
+        enter(&mut app);
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
         assert_eq!(enter(&mut app), []);
     }
 

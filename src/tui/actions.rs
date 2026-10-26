@@ -6,5 +6,6 @@ use super::backend::Backend;
 pub(super) fn spawn(action: Action, backend: &Backend) {
     match action {
         Action::Run(statement) => backend.run(statement),
+        Action::Cancel => backend.cancel(),
     }
 }

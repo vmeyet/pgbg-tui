@@ -17,8 +17,9 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) -> usize {
     f.render_widget(block, area);
     let body = match &app.run {
         Run::Done { result, grid, .. } => return grid_view::draw(f, GridView { result, grid, theme: &app.theme, focused }, inside),
-        Run::Idle => Text::styled("⏎ runs the statement in the editor", Style::default().fg(app.theme.faded)),
-        Run::Running => Text::styled("running…", Style::default().fg(app.theme.muted)),
+        Run::Idle => Text::styled("⏎ runs the statement under the cursor", Style::default().fg(app.theme.faded)),
+        Run::Running => Text::styled("running… esc cancels it", Style::default().fg(app.theme.muted)),
+        Run::Cancelling => Text::styled("cancelling…", Style::default().fg(app.theme.muted)),
         Run::Failed(err) => Text::styled(err.as_str(), Style::default().fg(app.theme.danger)),
     };
     f.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }), inside);

@@ -1,9 +1,9 @@
-//! The only module that sees `tokio_postgres`: connect, run one statement, decode its rows.
+//! The only module that sees `tokio_postgres`: connect, run one statement, decode its rows, cancel it.
 use crate::connection::{Connection, Target, Tls};
 use anyhow::{Context, Result, anyhow};
 use futures_util::{TryStreamExt, future};
 use guard::{Admitted, Mode};
-use model::ResultSet;
+use model::{CancelToken, ResultSet};
 use tokio_postgres::config::SslMode;
 use tokio_postgres::tls::MakeTlsConnect;
 use tokio_postgres::{Client, Config, GenericClient, NoTls, Socket};
@@ -19,6 +19,7 @@ const NO_PARAMETERS: [&str; 0] = [];
 #[derive(Debug)]
 pub(crate) struct Session {
     client: Client,
+    tls: Tls,
 }
 
 impl Session {
@@ -28,11 +29,17 @@ impl Session {
         if let Some(source) = connection.password() {
             config.password(source.read().await?.expose());
         }
-        let client = match connection.tls() {
+        let tls = connection.tls();
+        let client = match tls {
             Tls::On => open_client(config.ssl_mode(SslMode::Require), MakeRustlsConnect::with_webpki_roots()).await,
             Tls::Off => open_client(config.ssl_mode(SslMode::Disable), NoTls).await,
         };
-        Ok(Self { client: client.with_context(|| format!("connecting to {}", connection.name()))? })
+        Ok(Self { client: client.with_context(|| format!("connecting to {}", connection.name()))?, tls })
+    }
+
+    /// What cancels the statement this session is running, usable while `run` waits.
+    pub(crate) fn cancel_token(&self) -> CancelToken {
+        CancelToken { token: self.client.cancel_token(), tls: self.tls }
     }
 
     /// Runs `admitted` alone and returns everything it printed; a read-only one is always rolled back.
@@ -47,6 +54,18 @@ impl Session {
                 result
             }
         }
+    }
+}
+
+impl CancelToken {
+    /// Asks the server to cancel the statement the session is running; that statement then fails
+    /// with the server's words. With nothing running, the server does nothing.
+    pub(crate) async fn cancel(&self) -> Result<()> {
+        let sent = match self.tls {
+            Tls::On => self.token.cancel_query(MakeRustlsConnect::with_webpki_roots()).await,
+            Tls::Off => self.token.cancel_query(NoTls).await,
+        };
+        sent.map_err(server_error)
     }
 }
 
@@ -154,6 +173,21 @@ mod tests {
     async fn two_statements_are_refused_by_the_server_even_when_writes_are_allowed() {
         let err = run(WritePolicy::Allowed, "SELECT 1; SELECT 2").await.unwrap_err();
         assert!(err.to_string().contains("multiple commands"), "{err}");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_cancelled_statement_fails_with_the_servers_words() {
+        const SLEEP: &str = "SELECT pg_sleep(30)";
+        let mut sleeper = session(WritePolicy::ReadOnly).await;
+        let token = sleeper.cancel_token();
+        let running = tokio::spawn(async move { sleeper.run(&guard::admit(Statement::new(SLEEP), WritePolicy::ReadOnly).unwrap()).await });
+        let watcher = session(WritePolicy::ReadOnly).await;
+        let is_sleeping = format!("SELECT 1 FROM pg_stat_activity WHERE query = '{SLEEP}' AND state = 'active'");
+        while fetch(&watcher.client, &is_sleeping).await.unwrap().rows.is_empty() {}
+        token.cancel().await.unwrap();
+        let err = running.await.unwrap().unwrap_err();
+        assert!(err.to_string().contains("canceling statement due to user request"), "{err}");
     }
 
     #[tokio::test]

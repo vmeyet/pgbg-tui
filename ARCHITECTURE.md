@@ -16,8 +16,8 @@ When a boundary or a flow changes, change this page in the same MR.
 | `secret.rs` | `Secret` (prints `<redacted>`) and its sources: keychain through `/usr/bin/security`, environment variable, command; `SecretSource::read` reads one when a session opens |
 | `tunnel/` | `Tunnel`: a child process forwarding a free `127.0.0.1` port to the database; start, wait for the port, stop |
 | `db/` | The only module that sees `tokio_postgres`: connect over rustls, run a statement, stream rows, cancel |
-| `db/model/` | The neutral model: `ResultSet`, `Column`, `ColumnKind`, `Value`, `Page`, `Schema`, `Table` |
-| `db/guard.rs` | Classifies a statement before it is sent: read, write, or more than one statement; `admit` turns a statement into an `Admitted`, the only kind a session runs |
+| `db/model/` | The neutral model: `ResultSet`, `Column`, `ColumnKind`, `Value`, `Page`, `Schema`, `Table`, and `CancelToken`, whose driver part only `db/` reads |
+| `db/guard.rs` | Classifies a statement before it is sent: read, write, or more than one statement; `admit` turns a statement into an `Admitted`, the only kind a session runs; `statement_at` finds the statement under the editor's cursor with the same tokenizer |
 | `db/decode.rs` | Wire values to `Value`, by column type |
 | `query/` | Saved queries: the `.pgbg/queries/` tree, the header (`-- name:`, `-- chart:`), load and save |
 | `history.rs` | Every statement run, per connection, in a local file |
@@ -27,7 +27,7 @@ When a boundary or a flow changes, change this page in the same MR.
 | `tui/mod.rs` | The event loop: terminal events, answers and ticks in, frames out |
 | `tui/app/` | `App`, the pure state machine: keys in, `Action`s out, `Incoming` answers applied |
 | `tui/actions.rs` | The action runner: hands each `Action` to the backend without waiting; answers come back as `Incoming` |
-| `tui/backend/` | What the runner calls, one part per concern: sessions (a task owns each one and runs its statements in turn), queries, history |
+| `tui/backend/` | What the runner calls, one part per concern: sessions (a task owns each one and runs its statements in turn, and shares its `CancelToken` through a `watch` so a cancel never waits behind the statement), queries, history |
 | `tui/ui.rs`, `tui/*_view.rs` | Drawing: layout in `ui.rs`, one view module per pane or modal |
 | `tui/grid_view/` | The results grid: only the visible rows and columns are drawn |
 | `tui/chart_view/` | Draws a `Series` with ratatui's `BarChart` and `Chart` |
@@ -43,7 +43,7 @@ Running a statement:
 2. `db::guard` classifies it; a write on a read-only connection comes back as `Incoming::Refused` and never reaches the server.
 3. The session opens `BEGIN READ ONLY`, sets `statement_timeout` from the tier, and declares a cursor for the statement.
 4. The first page (`FETCH 500`) comes back as `Incoming::Page`; the grid paints it, and more pages are fetched as the cursor nears the end.
-5. `Esc` on a running statement sends the server a cancel request; the transaction is always rolled back at the end.
+5. `Esc` on a running statement sends the server a cancel request over a link of its own, with the session's TLS; the statement fails with the server's words, and the transaction is always rolled back at the end.
 
 Switching connection:
 
