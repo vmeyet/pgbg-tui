@@ -1,10 +1,10 @@
 use crate::secret::SecretSource;
 use serde::Deserialize;
-use serde::de::{Deserializer, Error, MapAccess, Visitor, value::MapAccessDeserializer};
+use serde::de::{Deserializer, Error, MapAccess, SeqAccess, Visitor, value::MapAccessDeserializer};
 use std::fmt;
 
-/// The `password` key as written: a source, or a plain password, which is refused once parsed so
-/// that no parse error ever quotes it.
+/// The `password` key as written: a source, or a plain password of any type, which is refused once
+/// parsed so that no parse error ever quotes it.
 pub(super) enum PasswordEntry {
     Plain,
     Source(SecretSource),
@@ -26,6 +26,26 @@ impl<'de> Visitor<'de> for PasswordVisitor {
     }
 
     fn visit_str<E: Error>(self, _plain: &str) -> Result<Self::Value, E> {
+        Ok(PasswordEntry::Plain)
+    }
+
+    fn visit_i64<E: Error>(self, _plain: i64) -> Result<Self::Value, E> {
+        Ok(PasswordEntry::Plain)
+    }
+
+    fn visit_u64<E: Error>(self, _plain: u64) -> Result<Self::Value, E> {
+        Ok(PasswordEntry::Plain)
+    }
+
+    fn visit_f64<E: Error>(self, _plain: f64) -> Result<Self::Value, E> {
+        Ok(PasswordEntry::Plain)
+    }
+
+    fn visit_bool<E: Error>(self, _plain: bool) -> Result<Self::Value, E> {
+        Ok(PasswordEntry::Plain)
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, _plain: A) -> Result<Self::Value, A::Error> {
         Ok(PasswordEntry::Plain)
     }
 

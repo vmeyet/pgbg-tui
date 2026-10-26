@@ -1,6 +1,6 @@
 //! Keys a config holds that this pgbg does not read: written for a newer pgbg, or a secret.
 //! A newer pgbg's config must not stop an older one, so each is a warning; only a secret fails.
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use serde::de::DeserializeOwned;
 
 /// Words no setting is named after, since a password never goes in the config.
@@ -9,11 +9,24 @@ const SECRET_WORDS: [&str; 4] = ["key", "token", "secret", "password"];
 /// What `text` holds, and one warning for each key it ignored.
 pub(super) fn parse<T: DeserializeOwned>(text: &str) -> Result<(T, Vec<String>)> {
     let mut ignored = vec![];
-    let value = serde_ignored::deserialize(toml::Deserializer::parse(text)?, |path| ignored.push(path.to_string()))?;
+    let document = toml::Deserializer::parse(text).map_err(|err| without_source(&err, text))?;
+    let value = serde_ignored::deserialize(document, |path| ignored.push(path.to_string())).map_err(|err| without_source(&err, text))?;
     if let Some(secret) = ignored.iter().find(|key| is_secret(key)) {
         bail!("`{secret}` looks like a secret: a password comes from the keychain, an environment variable or a command, never the config");
     }
     Ok((value, ignored.iter().map(|key| warning(key)).collect()))
+}
+
+/// `err` as its line and message only: toml's own report quotes the line, which may hold a secret.
+fn without_source(err: &toml::de::Error, text: &str) -> anyhow::Error {
+    match err.span() {
+        Some(span) => anyhow!("line {}: {}", line_number(text, span.start), err.message()),
+        None => anyhow!("{}", err.message()),
+    }
+}
+
+fn line_number(text: &str, offset: usize) -> usize {
+    text.get(..offset).map_or(0, |before| before.matches('\n').count()) + 1
 }
 
 fn is_secret(key: &str) -> bool {
