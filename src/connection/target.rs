@@ -15,7 +15,7 @@ pub(crate) struct Target(Url);
 
 impl Target {
     /// The URL in `text`; its errors never repeat it, since a refused URL may hold a password.
-    pub(super) fn parse(text: &str) -> Result<Self> {
+    pub(crate) fn parse(text: &str) -> Result<Self> {
         let url = Url::parse(text).map_err(|e| anyhow!("`url` is not a URL: {e}"))?;
         if !SCHEMES.contains(&url.scheme()) {
             bail!("`url` must start with postgres://, not {}://", url.scheme());

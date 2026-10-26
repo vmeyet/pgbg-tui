@@ -161,13 +161,14 @@ fn connection_add_writes_a_connection_the_list_then_shows() {
         "--url",
         "postgres://nina@localhost:5433/shop",
         "--tunnel",
-        "ssh -N -L {port}:localhost:5432 db.example.com",
+        "ssh -N -o 'ProxyCommand ssh -W %h:%p jump' -L {port}:localhost:5432 db.example.com",
         "--password-env",
         "STAGING_PGPASSWORD",
     ];
     let (output, config) = pgbg_rewriting(SHOP, &args);
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(config.starts_with(SHOP), "{config}");
+    assert!(config.contains("tunnel = { command = [\"ssh\", \"-N\", \"-o\", \"ProxyCommand ssh -W %h:%p jump\", \"-L\", \"{port}:localhost:5432\", \"db.example.com\"] }"), "{config}");
     assert!(config.ends_with("password = { env = \"STAGING_PGPASSWORD\" }\n"), "{config}");
     assert!(stdout(&pgbg(&config, &["connections"])).contains("staging     postgres://nina@localhost:5433/shop"));
 }
@@ -177,8 +178,23 @@ fn connection_add_refuses_a_password_in_the_url_and_leaves_the_file() {
     let (output, config) =
         pgbg_rewriting(SHOP, &["connection", "add", "staging", "--tier", "staging", "--url", "postgres://nina:hunter2@localhost/shop"]);
     assert!(!output.status.success());
-    assert!(!stderr(&output).contains("hunter2"), "{}", stderr(&output));
+    assert!(!stderr(&output).contains("hunter2") && stderr(&output).contains("`--url`"), "{}", stderr(&output));
     assert_eq!(config, SHOP);
+}
+
+#[test]
+fn connection_remove_with_keep_password_drops_a_connection_that_does_not_load() {
+    let broken = format!("{SHOP}\n[connections.old]\ntier = \"staging\"\nurl = \"postgres://nina@db.example.com/shop\"\n");
+    let (output, config) = pgbg_rewriting(&broken, &["connection", "remove", "old", "--keep-password"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(config, SHOP);
+}
+
+#[test]
+fn connection_remove_of_a_config_that_does_not_load_says_how_to_keep_going() {
+    let broken = format!("{SHOP}\n[connections.old]\ntier = \"staging\"\nurl = \"postgres://nina@db.example.com/shop\"\n");
+    let output = pgbg(&broken, &["connection", "remove", "old"]);
+    assert!(stderr(&output).contains("--keep-password"), "{}", stderr(&output));
 }
 
 #[test]

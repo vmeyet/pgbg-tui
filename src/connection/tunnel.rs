@@ -21,6 +21,15 @@ pub(crate) struct TunnelSpec {
 }
 
 impl TunnelSpec {
+    /// A tunnel that runs `command` and nothing before it.
+    pub(crate) fn new(command: Vec<String>) -> anyhow::Result<Self> {
+        Self::try_from(TunnelEntry { command, before: None }).map_err(anyhow::Error::msg)
+    }
+
+    pub(crate) fn command(&self) -> &[String] {
+        &self.command
+    }
+
     /// The tunnel's command with `port` in place of every `{port}`.
     pub(crate) fn command_on(&self, port: LocalPort) -> Vec<String> {
         self.command.iter().map(|arg| arg.replace(PORT, &port.to_string())).collect()
@@ -75,6 +84,11 @@ mod tests {
     fn a_command_without_the_port_placeholder_is_refused() {
         let err = tunnel("tunnel = { command = [\"ssh\", \"-N\", \"-L\", \"5433:localhost:5432\", \"db.example.com\"] }").unwrap_err();
         assert!(err.to_string().contains("{port}"), "{err}");
+    }
+
+    #[test]
+    fn a_tunnel_built_from_a_command_without_the_port_placeholder_is_refused() {
+        assert!(TunnelSpec::new(vec!["ssh".into(), "db.example.com".into()]).unwrap_err().to_string().contains("{port}"));
     }
 
     #[test]

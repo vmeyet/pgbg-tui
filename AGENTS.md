@@ -21,6 +21,7 @@ When an MR changes a boundary or a flow, it updates `ARCHITECTURE.md` too.
 - Doc comments (`///`, `//!`) say what an item is for or why it is so; they describe the item they sit on and stay true when it changes.
 - No comment restates the code; a `//` comment says why, and only when no name can.
 - Immutability across function boundaries: pass helpers values or `&` borrows and take back a new value; only the owner of a state changes it, through `&mut self`.
+  The one exception is `config/write.rs`: its private helpers edit the `toml_edit` document through `&mut`, since that API only edits in place.
 - Side effects at the edges only, as `ARCHITECTURE.md` § Boundaries lists them; `tui/app/` stays pure.
 - Flat bodies of named steps at one level of abstraction.
 - Design a signature from the call site: a caller never needs to read the body to use it right.

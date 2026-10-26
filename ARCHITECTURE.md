@@ -11,9 +11,9 @@ When a boundary or a flow changes, change this page in the same MR.
 |---|---|
 | `main.rs`, `cli.rs` | The clap command line and the dispatch to `commands/` |
 | `commands/` | One module per subcommand, each with a `run`; plain output through `render.rs`, JSON with `--json` |
-| `config/` | `config.toml`: connections, theme, keys; load, validate, refuse secrets; rewrite key by key with `toml_edit`, checked as a load would, through a temp file only its owner reads |
+| `config/` | `config.toml`: connections, theme, keys; load, validate, refuse secrets; rewrite key by key with `toml_edit` from a `ConnectionChange` of keys each parsed on its own (`Tier`, `Target`, `TunnelSpec`, `SecretSource`, `WritePolicy`), checked as a load would, through a temp file only its owner reads |
 | `connection/` | `Connection`: name, tier, target, tunnel, secret source, write policy, TLS, statement timeout; parsed once from config |
-| `secret/` | `Secret` (prints `<redacted>`) and its sources: keychain through `/usr/bin/security`, environment variable, command; `SecretSource::read` reads one when a session opens; `Secret::from_stdin` reads one typed hidden or piped in |
+| `secret/` | `Secret` (prints `<redacted>`) and its sources (a `KeychainItem` is one word `security -i` cannot split): keychain through `/usr/bin/security`, environment variable, command; `SecretSource::read` reads one when a session opens; `Secret::from_stdin` reads one typed hidden or piped in |
 | `tunnel/` | `Tunnel`: a child process forwarding a free `127.0.0.1` port to the database; start, wait for the port, stop; its `Route` is what a session opens along |
 | `db/` | The only module that sees `tokio_postgres`: connect over rustls, run a statement, stream rows, cancel |
 | `db/model/` | The neutral model: `ResultSet`, `Column`, `ColumnKind`, `Value`, `Page`, `Schema`, `Table`, `ServerError`, `Route` (direct, or a tunnel's `LocalPort`), and `CancelToken`, whose driver part only `db/` reads |

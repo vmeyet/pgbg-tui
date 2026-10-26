@@ -1,7 +1,8 @@
 //! Rewrites `config.toml` key by key, so the user's comments and order stay; the result must load
-//! as `Config::read` loads it before it replaces the file.
+//! as `Config::read` loads it before it replaces the file, so an edit may fix a config that does not load.
+//! The helpers below change the `toml_edit` document through `&mut`, the way its API works.
 use super::parse;
-use crate::connection::ConnectionName;
+use crate::connection::{ConnectionName, Target, Tier, TunnelSpec, WritePolicy};
 use crate::secret::SecretSource;
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Serialize;
@@ -10,14 +11,16 @@ use std::path::{Path, PathBuf};
 use toml_edit::ser::ValueSerializer;
 use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, TableLike, Value};
 
-/// The keys of a connection to set, each left as it is when `None`; checked by the load that follows.
+/// The keys of a connection to set, each left as it is when `None`, each already checked on its own;
+/// the load that follows checks them together.
 #[derive(Debug, Default)]
 pub(crate) struct ConnectionChange {
-    pub(crate) tier: Option<String>,
-    pub(crate) url: Option<String>,
-    pub(crate) tunnel: Option<Vec<String>>,
+    pub(crate) tier: Option<Tier>,
+    pub(crate) url: Option<Target>,
+    /// Sets the tunnel's `command`, keeping the `before` the config already has.
+    pub(crate) tunnel: Option<TunnelSpec>,
     pub(crate) password: Option<SecretSource>,
-    pub(crate) writes: Option<String>,
+    pub(crate) writes: Option<WritePolicy>,
 }
 
 /// Adds the connection `name` at the end of the config, creating the file when there is none.
@@ -55,21 +58,25 @@ pub(crate) fn set_password(path: &Path, name: &ConnectionName, source: &SecretSo
 
 fn apply(table: &mut dyn TableLike, change: &ConnectionChange) -> Result<()> {
     if let Some(tier) = &change.tier {
-        set_value(table, "tier", tier.into());
+        set_value(table, "tier", value_of(tier)?);
     }
     if let Some(url) = &change.url {
-        set_value(table, "url", url.into());
+        set_value(table, "url", value_of(url)?);
     }
-    if let Some(command) = &change.tunnel {
-        set_tunnel_command(table, command);
+    if let Some(tunnel) = &change.tunnel {
+        set_tunnel_command(table, tunnel.command());
     }
     if let Some(source) = &change.password {
-        set_value(table, "password", source.serialize(ValueSerializer::new()).context("writing the password source")?);
+        set_value(table, "password", value_of(source)?);
     }
     if let Some(writes) = &change.writes {
-        set_value(table, "writes", writes.into());
+        set_value(table, "writes", value_of(writes)?);
     }
     Ok(())
+}
+
+fn value_of(key: &impl Serialize) -> Result<Value> {
+    key.serialize(ValueSerializer::new()).context("writing a key of the connection")
 }
 
 /// `value` in place of `key`, with the spacing and comment the old value had.
@@ -114,7 +121,6 @@ fn no_connection(name: &ConnectionName) -> anyhow::Error {
 fn rewrite(path: &Path, change: impl FnOnce(&mut DocumentMut) -> Result<()>) -> Result<()> {
     let path = resolved(path)?;
     let kept = read_kept(&path)?;
-    parse(&kept).with_context(|| format!("in {}", path.display()))?;
     let mut document: DocumentMut = kept.parse().map_err(|_quotes_the_line| anyhow!("{} is not TOML", path.display()))?;
     change(&mut document)?;
     let text = document.to_string();
@@ -171,7 +177,7 @@ mod tests {
     }
 
     fn keychain(item: &str) -> SecretSource {
-        SecretSource::Keychain(item.into())
+        SecretSource::Keychain(item.parse().unwrap())
     }
 
     #[test]
@@ -210,11 +216,23 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), TYPED);
     }
 
+    fn url(text: &str) -> Target {
+        Target::parse(text).unwrap()
+    }
+
     #[test]
     fn a_change_that_would_not_load_leaves_the_file_whole() {
         let (_dir, path) = typed_config(TYPED);
-        assert!(set_password(&path, &prod(), &keychain("pgbg/prod -s other")).is_err());
+        let without_tls = change(|c| c.url = Some(url("postgres://nina@db.example.com/shop")));
+        assert!(edit_connection(&path, &prod(), &without_tls).is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), TYPED);
+    }
+
+    #[test]
+    fn an_edit_fixes_a_config_that_does_not_load() {
+        let (_dir, path) = typed_config(&TYPED.replace("/shop?sslmode=require", "/shop"));
+        edit_connection(&path, &prod(), &change(|c| c.url = Some(url("postgres://nina@db.example.com/shop?sslmode=require")))).unwrap();
+        assert_eq!(read(&path), TYPED);
     }
 
     fn change(edit: impl FnOnce(&mut ConnectionChange)) -> ConnectionChange {
@@ -225,12 +243,16 @@ mod tests {
 
     fn staging() -> ConnectionChange {
         change(|c| {
-            c.tier = Some("staging".into());
-            c.url = Some("postgres://nina@localhost:5433/shop".into());
-            c.tunnel = Some(vec!["ssh".into(), "-N".into(), "-L".into(), "{port}:localhost:5432".into(), "db.example.com".into()]);
+            c.tier = Some(Tier::Staging);
+            c.url = Some(url("postgres://nina@localhost:5433/shop"));
+            c.tunnel = Some(tunnel(&["ssh", "-N", "-L", "{port}:localhost:5432", "db.example.com"]));
             c.password = Some(SecretSource::Env("STAGING_PGPASSWORD".into()));
-            c.writes = Some("allowed".into());
+            c.writes = Some(WritePolicy::Allowed);
         })
+    }
+
+    fn tunnel(command: &[&str]) -> TunnelSpec {
+        TunnelSpec::new(command.iter().map(|&word| word.to_owned()).collect()).unwrap()
     }
 
     fn read(path: &Path) -> String {
@@ -264,7 +286,7 @@ mod tests {
     #[test]
     fn adding_a_connection_that_would_not_load_leaves_the_file_whole() {
         let (_dir, path) = typed_config(TYPED);
-        let without_url = change(|c| c.tier = Some("staging".into()));
+        let without_url = change(|c| c.tier = Some(Tier::Staging));
         assert!(add_connection(&path, &"staging".parse().unwrap(), &without_url).is_err());
         assert_eq!(read(&path), TYPED);
     }
@@ -272,14 +294,14 @@ mod tests {
     #[test]
     fn editing_sets_only_the_keys_given_and_keeps_their_comments() {
         let (_dir, path) = typed_config(TYPED);
-        edit_connection(&path, &"local".parse().unwrap(), &change(|c| c.tier = Some("staging".into()))).unwrap();
+        edit_connection(&path, &"local".parse().unwrap(), &change(|c| c.tier = Some(Tier::Staging))).unwrap();
         assert_eq!(read(&path), TYPED.replace("tier = \"local\" # docker", "tier = \"staging\" # docker"));
     }
 
     #[test]
     fn editing_the_tunnel_command_keeps_its_before_command() {
         let (_dir, path) = typed_config(&format!("{TYPED}tunnel = {{ command = [\"proxy\", \"{{port}}\"], before = [\"wake\"] }}\n"));
-        edit_connection(&path, &prod(), &change(|c| c.tunnel = Some(vec!["ssh".into(), "{port}".into()]))).unwrap();
+        edit_connection(&path, &prod(), &change(|c| c.tunnel = Some(tunnel(&["ssh", "{port}"])))).unwrap();
         assert!(read(&path).ends_with("tunnel = { command = [\"ssh\", \"{port}\"], before = [\"wake\"] }\n"), "{}", read(&path));
     }
 

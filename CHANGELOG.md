@@ -19,8 +19,10 @@ Each entry says what changed, then where, then how to use it.
 - **A statement timeout on every session**, set by the connection's tier: none on local, a minute on staging, 30 seconds on production.
   The server cancels a statement that runs longer; set `statement_timeout = "2min"` on a connection to choose its own, `"0s"` for none.
 - **`pgbg connection add|edit|remove`** writes `config.toml` for you, one key at a time, keeping your comments and order.
-  `add <name> --tier <tier> --url <url>` takes `--tunnel "<command>"`, one of `--password-env`, `--password-command` or `--keychain`, and `--writes allowed`; `edit` changes only the flags you give.
-  `remove` deletes the connection's keychain item too; add `--keep-password` to leave it.
+  `add <name> --tier <tier> --url <url>` takes `--tunnel "<command>"`, one of `--password-env`, `--password-command "<command>"` or `--keychain`, and `--writes allowed`; a command splits as a shell would, so quote a word with spaces: `--tunnel "ssh -N -o 'ProxyCommand ssh -W %h:%p jump' -L 127.0.0.1:{port}:db.example.com:5432 bastion"`; `edit` changes only the flags you give.
+  An error names the flag it is about, and `edit` can fix a config that does not load.
+  `edit --keychain` deletes the item it replaces, unless another connection names it.
+  `remove` deletes the connection's keychain item too; add `--keep-password` to leave it, or to remove a connection from a config that does not load.
 - **`pgbg password set <connection>`** saves a connection's password in the macOS keychain.
   Type it at the hidden prompt, or pipe it in: `pass shop | pgbg password set prod`; no flag takes a password, so `ps` never shows one.
   A connection with no password yet gets `password = { keychain = "pgbg/<name>" }` in your `config.toml`, the rest of the file as you wrote it.

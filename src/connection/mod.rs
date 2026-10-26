@@ -56,18 +56,18 @@ pub(crate) struct Connection {
 pub struct ConnectionName(String);
 
 /// Sets the colour and the timeout of a connection.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum Tier {
+pub enum Tier {
     Local,
     Staging,
     Production,
 }
 
 /// Read only unless the connection says `writes = "allowed"`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
-pub(crate) enum WritePolicy {
+pub enum WritePolicy {
     #[default]
     ReadOnly,
     Allowed,
@@ -214,7 +214,7 @@ mod tests {
     #[test]
     fn a_password_source_is_kept_for_later() {
         let shop = shop("password = { keychain = \"pgbg/shop\" }").unwrap();
-        assert_eq!(shop.password(), Some(&SecretSource::Keychain("pgbg/shop".into())));
+        assert_eq!(shop.password(), Some(&SecretSource::Keychain("pgbg/shop".parse().unwrap())));
     }
 
     #[test]

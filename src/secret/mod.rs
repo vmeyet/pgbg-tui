@@ -1,6 +1,6 @@
 //! Where a password comes from, and the password once read: never written anywhere, never printed.
 use anyhow::{Context, Result, anyhow, bail};
-pub(crate) use keychain::Keychain;
+pub(crate) use keychain::{Keychain, KeychainItem};
 use serde::{Deserialize, Serialize};
 use std::env::VarError;
 use std::fmt;
@@ -28,7 +28,7 @@ impl fmt::Debug for Secret {
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum SecretSource {
-    Keychain(String),
+    Keychain(KeychainItem),
     Env(String),
     Command(Vec<String>),
 }
@@ -55,10 +55,6 @@ impl SecretSource {
     /// Why this source cannot name a password, when it cannot.
     pub(crate) fn problem(&self) -> Option<&'static str> {
         match self {
-            Self::Keychain(item) if item.is_empty() => Some("`keychain` names no item"),
-            Self::Keychain(item) if !keychain::is_plain(item) => {
-                Some("`keychain` names an item with other than letters, digits, `-`, `_`, `.`, `:` and `/`")
-            }
             Self::Env(variable) if variable.is_empty() => Some("`env` names no variable"),
             Self::Command(argv) if argv.is_empty() => Some("`command` is empty"),
             _ => None,
@@ -106,7 +102,7 @@ mod tests {
 
     #[test]
     fn each_source_is_spelled_by_its_key() {
-        assert_eq!(source("password = { keychain = \"pgbg/prod\" }"), SecretSource::Keychain("pgbg/prod".into()));
+        assert_eq!(source("password = { keychain = \"pgbg/prod\" }"), SecretSource::Keychain("pgbg/prod".parse().unwrap()));
         assert_eq!(source("password = { env = \"SHOP_PGPASSWORD\" }").kind(), "env");
         assert_eq!(source("password = { command = [\"pass\", \"shop\"] }").kind(), "command");
     }
@@ -139,11 +135,17 @@ mod tests {
     }
 
     #[test]
+    fn a_keychain_item_that_is_not_one_word_is_refused_as_the_config_is_read() {
+        for item in ["\"\"", "\"pgbg/prod -s other\""] {
+            let text = format!("password = {{ keychain = {item} }}");
+            assert!(toml::from_str::<std::collections::BTreeMap<String, SecretSource>>(&text).is_err(), "{item}");
+        }
+    }
+
+    #[test]
     fn a_source_that_names_nothing_has_a_problem() {
         assert!(source("password = { command = [] }").problem().is_some());
-        assert!(source("password = { keychain = \"\" }").problem().is_some());
         assert!(source("password = { env = \"\" }").problem().is_some());
-        assert!(source("password = { keychain = \"pgbg/prod -s other\" }").problem().is_some());
         assert_eq!(source("password = { env = \"SHOP_PGPASSWORD\" }").problem(), None);
     }
 }

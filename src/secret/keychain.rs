@@ -5,8 +5,11 @@
 //! An error gives `security`'s exit status only: what it prints may hold the password.
 use super::Secret;
 use anyhow::{Context, Result, anyhow, bail, ensure};
+use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::io::Write;
 use std::process::{Command, ExitStatus, Stdio};
+use std::str::FromStr;
 
 const SECURITY: &str = "/usr/bin/security";
 const RUNNING_SECURITY: &str = "running /usr/bin/security for the macOS keychain";
@@ -15,6 +18,55 @@ const NOT_FOUND: i32 = 44;
 const LINE_LIMIT_BYTES: usize = 4096;
 const PASSWORD_LINE: &str = "password: ";
 const HEX_PREFIX: &str = "0x";
+
+const NO_ITEM: &str = "`keychain` names no item";
+const NOT_AN_ITEM: &str = "`keychain` names an item with other than letters, digits, `-`, `_`, `.`, `:` and `/`";
+
+/// The name of one keychain item, which `security -i` reads as one word: nothing in it can end the
+/// account and start another option.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(try_from = "String", into = "String")]
+pub(crate) struct KeychainItem(String);
+
+impl KeychainItem {
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for KeychainItem {
+    type Error = &'static str;
+
+    fn try_from(name: String) -> Result<Self, Self::Error> {
+        if name.is_empty() {
+            return Err(NO_ITEM);
+        }
+        if !name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':' | '/')) {
+            return Err(NOT_AN_ITEM);
+        }
+        Ok(Self(name))
+    }
+}
+
+impl FromStr for KeychainItem {
+    type Err = anyhow::Error;
+
+    fn from_str(name: &str) -> Result<Self> {
+        Self::try_from(name.to_owned()).map_err(|problem| anyhow!(problem))
+    }
+}
+
+impl From<KeychainItem> for String {
+    fn from(item: KeychainItem) -> Self {
+        item.0
+    }
+}
+
+impl fmt::Display for KeychainItem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
 
 /// The keychain items of one service.
 #[derive(Debug)]
@@ -27,9 +79,9 @@ impl Keychain {
     pub(crate) const PGBG: Self = Self { service: "pgbg" };
 
     /// The password the item `account` holds.
-    pub(crate) async fn read(&self, account: &str) -> Result<Secret> {
+    pub(crate) async fn read(&self, account: &KeychainItem) -> Result<Secret> {
         let output = tokio::process::Command::new(SECURITY)
-            .args(["find-generic-password", "-a", account, "-s", self.service, "-g"])
+            .args(["find-generic-password", "-a", account.as_str(), "-s", self.service, "-g"])
             .stdin(Stdio::null())
             .output()
             .await
@@ -46,8 +98,8 @@ impl Keychain {
 
     /// Saves `password` as the item `account`, over the one already there: safe to run twice.
     /// Written as hex through `security -i`, so it never shows in argv and is never read from the terminal.
-    pub(crate) fn write(&self, account: &str, password: &Secret) -> Result<()> {
-        let line = format!("add-generic-password -a {} -s {} -U -X {}\n", plain(account)?, self.service, hex(password.expose()));
+    pub(crate) fn write(&self, account: &KeychainItem, password: &Secret) -> Result<()> {
+        let line = format!("add-generic-password -a {account} -s {} -U -X {}\n", self.service, hex(password.expose()));
         ensure!(line.len() <= LINE_LIMIT_BYTES, "the password is too long for the keychain: {} bytes", password.expose().len());
         let mut child = Command::new(SECURITY)
             .arg("-i")
@@ -66,9 +118,9 @@ impl Keychain {
     }
 
     /// Deletes the item `account`; an item already gone is not an error, so it is safe to run twice.
-    pub(crate) fn delete(&self, account: &str) -> Result<()> {
+    pub(crate) fn delete(&self, account: &KeychainItem) -> Result<()> {
         let status = Command::new(SECURITY)
-            .args(["delete-generic-password", "-a", account, "-s", self.service])
+            .args(["delete-generic-password", "-a", account.as_str(), "-s", self.service])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -81,22 +133,11 @@ impl Keychain {
     }
 }
 
-/// Whether `security -i`, which splits its line on spaces and quotes, reads `account` as one word:
-/// nothing in it can end the account and start another option.
-pub(crate) fn is_plain(account: &str) -> bool {
-    !account.is_empty() && account.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':' | '/'))
-}
-
-fn plain(account: &str) -> Result<&str> {
-    ensure!(is_plain(account), "not a keychain item name: {account:?}");
-    Ok(account)
-}
-
-fn failed(doing: &str, account: &str, status: ExitStatus) -> anyhow::Error {
+fn failed(doing: &str, account: &KeychainItem, status: ExitStatus) -> anyhow::Error {
     anyhow!("{doing} the keychain item `{account}` failed: /usr/bin/security {status}")
 }
 
-fn not_utf8(account: &str) -> anyhow::Error {
+fn not_utf8(account: &KeychainItem) -> anyhow::Error {
     anyhow!("the keychain item `{account}` is not UTF-8")
 }
 
@@ -137,18 +178,26 @@ fn from_dump(dump: &str) -> Result<Secret> {
 mod tests {
     use super::*;
 
+    fn item(name: &str) -> KeychainItem {
+        name.parse().unwrap()
+    }
+
     #[test]
-    fn an_item_name_with_a_space_or_a_quote_is_refused_before_security_runs() {
-        for account in ["pgbg/prod -s other", "pgbg/prod\"", "pgbg/prod'", "pgbg/prod\nlist-keychains", ""] {
-            let err = Keychain::PGBG.write(account, &Secret("hunter2".into())).unwrap_err().to_string();
-            assert!(err.starts_with("not a keychain item name"), "{account:?}: {err}");
+    fn an_item_name_with_a_space_or_a_quote_is_refused() {
+        for name in ["pgbg/prod -s other", "pgbg/prod\"", "pgbg/prod'", "pgbg/prod\nlist-keychains"] {
+            assert_eq!(name.parse::<KeychainItem>().unwrap_err().to_string(), NOT_AN_ITEM, "{name:?}");
         }
     }
 
     #[test]
-    fn an_item_name_made_of_a_connection_name_is_plain() {
-        for account in ["pgbg/prod", "pgbg/shop-eu_1.ro", "shop:5432"] {
-            assert!(is_plain(account), "{account}");
+    fn an_empty_item_name_is_refused() {
+        assert_eq!("".parse::<KeychainItem>().unwrap_err().to_string(), NO_ITEM);
+    }
+
+    #[test]
+    fn an_item_name_made_of_a_connection_name_is_one_word() {
+        for name in ["pgbg/prod", "pgbg/shop-eu_1.ro", "shop:5432"] {
+            assert_eq!(item(name).as_str(), name);
         }
     }
 
@@ -174,7 +223,7 @@ mod tests {
 
     #[test]
     fn a_password_too_long_for_one_line_of_security_is_refused_before_it_runs() {
-        let err = Keychain::PGBG.write("pgbg/prod", &Secret("x".repeat(2100))).unwrap_err().to_string();
+        let err = Keychain::PGBG.write(&item("pgbg/prod"), &Secret("x".repeat(2100))).unwrap_err().to_string();
         assert!(err.contains("too long") && !err.contains("78"), "{err}");
     }
 
@@ -188,12 +237,12 @@ mod tests {
     #[ignore = "touches the real login keychain"]
     async fn a_written_password_reads_back_a_second_write_replaces_it_and_a_delete_removes_it() {
         let keychain = Keychain { service: "pgbg-test" };
-        keychain.write("probe", &Secret("hunter2 \"one\"".into())).unwrap();
-        assert_eq!(keychain.read("probe").await.unwrap().expose(), "hunter2 \"one\"");
-        keychain.write("probe", &Secret("é\ttwo".into())).unwrap();
-        assert_eq!(keychain.read("probe").await.unwrap().expose(), "é\ttwo");
-        keychain.delete("probe").unwrap();
-        keychain.delete("probe").unwrap();
-        assert!(keychain.read("probe").await.unwrap_err().to_string().contains("no keychain item `probe`"));
+        keychain.write(&item("probe"), &Secret("hunter2 \"one\"".into())).unwrap();
+        assert_eq!(keychain.read(&item("probe")).await.unwrap().expose(), "hunter2 \"one\"");
+        keychain.write(&item("probe"), &Secret("é\ttwo".into())).unwrap();
+        assert_eq!(keychain.read(&item("probe")).await.unwrap().expose(), "é\ttwo");
+        keychain.delete(&item("probe")).unwrap();
+        keychain.delete(&item("probe")).unwrap();
+        assert!(keychain.read(&item("probe")).await.unwrap_err().to_string().contains("no keychain item `probe`"));
     }
 }

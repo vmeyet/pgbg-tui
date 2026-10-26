@@ -1,9 +1,6 @@
 //! The command line `pgbg` parses, with the help text each flag shows.
-use crate::connection::ConnectionName;
+use crate::connection::{ConnectionName, Tier, WritePolicy};
 use clap::{Args, Parser, Subcommand};
-
-const TIERS: [&str; 3] = ["local", "staging", "production"];
-const WRITE_POLICIES: [&str; 2] = ["allowed", "read-only"];
 
 /// The command line: global flags, then one subcommand.
 #[derive(Parser, Debug)]
@@ -70,9 +67,9 @@ pub enum ConnectionCommand {
     Add {
         /// The new connection's name.
         connection: ConnectionName,
-        /// `local`, `staging` or `production`: sets the colour and the timeout.
-        #[arg(long, value_parser = TIERS)]
-        tier: String,
+        /// Sets the colour and the timeout.
+        #[arg(long)]
+        tier: Tier,
         /// `postgres://user@host:port/database`, without a password.
         #[arg(long)]
         url: String,
@@ -86,9 +83,9 @@ pub enum ConnectionCommand {
     Edit {
         /// The connection's name in `config.toml`.
         connection: ConnectionName,
-        /// `local`, `staging` or `production`.
-        #[arg(long, value_parser = TIERS)]
-        tier: Option<String>,
+        /// Sets the colour and the timeout.
+        #[arg(long)]
+        tier: Option<Tier>,
         /// `postgres://user@host:port/database`, without a password.
         #[arg(long)]
         url: Option<String>,
@@ -109,15 +106,16 @@ pub enum ConnectionCommand {
 /// The keys `add` and `edit` share.
 #[derive(Args, Debug)]
 pub struct ConnectionKeys {
-    /// The command that forwards a local port, split on spaces, `{port}` where the port goes: "ssh -N -L {port}:localhost:5432 bastion".
+    /// The command that forwards a local port, `{port}` where the port goes, split as a shell would:
+    /// "ssh -N -o 'ProxyCommand ssh -W %h:%p jump' -L 127.0.0.1:{port}:db.example.com:5432 bastion".
     #[arg(long)]
     pub tunnel: Option<String>,
     /// Where the password comes from.
     #[command(flatten)]
     pub password: PasswordFlags,
     /// `allowed` lets statements other than reads run.
-    #[arg(long, value_parser = WRITE_POLICIES)]
-    pub writes: Option<String>,
+    #[arg(long)]
+    pub writes: Option<WritePolicy>,
 }
 
 /// One place the password comes from; no flag takes the password itself, which `ps` would show.
@@ -127,7 +125,7 @@ pub struct PasswordFlags {
     /// The environment variable that holds it.
     #[arg(long)]
     pub password_env: Option<String>,
-    /// The command that prints it, split on spaces.
+    /// The command that prints it, split as a shell would: "pass show 'shop main'".
     #[arg(long)]
     pub password_command: Option<String>,
     /// The keychain item that holds it; `pgbg password set` saves it there.
