@@ -51,6 +51,8 @@ Each entry says what changed, then where, then how to use it.
   Set `connect_timeout` in the connection's `url` to wait longer.
 - **A big result cannot fill the memory**: the TUI and `pgbg run` keep the first 10 000 rows, and say `first 10000 rows` when there were more.
   Add a `LIMIT` or a `WHERE` to see the rest.
+- **A cut result frees the session at once on a connection that allows writes**: the server stops after the first 10 000 rows instead of sending the whole table first.
+  A statement that returns rows runs in its own transaction, committed once its rows are in; inside a transaction you began with `BEGIN`, it stays yours to end.
 - **A statement stops when pgbg quits**: the server checks every second that pgbg is still there, on PostgreSQL 14 and later.
 - **A keychain password with an accent, a tab or any other character outside plain ASCII logs in**: `pgbg` read it back as hex before.
   Nothing to do: the next session reads it right.

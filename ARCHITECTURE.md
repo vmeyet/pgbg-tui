@@ -83,6 +83,8 @@ Four layers, outermost first; only the last one is a guarantee.
 3. **Transaction**: one statement per round trip (the extended protocol refuses more), inside `BEGIN READ ONLY`, always rolled back; the server refuses writes even when the guard misses one.
 4. **Role**: a read-only database role. A read-only transaction still lets a function with side effects run (`pg_terminate_backend`, `dblink`); only the role stops those.
 
+On a connection that allows writes, a statement runs as typed, except that one returning rows goes through a portal in its own committed transaction, unless the user's own `BEGIN` left one open (a `SAVEPOINT` probe tells).
+
 `pgbg doctor <connection>` checks the role and says what it can write.
 
 ## Secrets
