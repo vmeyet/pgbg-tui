@@ -1,99 +1,197 @@
 //! What the runner calls: the session of the open connection, served by a task that owns it.
-use super::app::Incoming;
+use super::app::{Incoming, RunId};
 use crate::connection::{Connection, WritePolicy};
 use crate::db::model::{CancelToken, ServerError, Statement};
 use crate::db::{Session, guard};
+use std::pin::pin;
+use std::time::Duration;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use tokio::sync::watch;
+use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-/// The way to the session task: statements in, answers out on the loop's channel.
+/// How long quitting waits for the session task to finish a cancel, so the terminal comes back soon.
+const STOP_WAIT: Duration = Duration::from_secs(2);
+const CANCELLED_BEFORE_SENT: &str = "cancelled before it was sent";
+
+/// The way to the session task: runs and cancels in, answers out on the loop's channel.
 #[derive(Debug)]
 pub(super) struct Backend {
-    statements: UnboundedSender<Statement>,
-    /// The open session's token, set by its task: a cancel cannot wait behind the statement it cancels.
-    cancel_token: watch::Receiver<Option<CancelToken>>,
+    runs: UnboundedSender<Queued>,
+    cancels: UnboundedSender<RunId>,
+    task: JoinHandle<()>,
+}
+
+/// A statement waiting for the session, and its run.
+#[derive(Debug)]
+struct Queued {
+    run: RunId,
+    statement: Statement,
 }
 
 impl Backend {
     /// Starts the task that opens a session on `connection` and runs each statement in turn.
     pub(super) fn start(connection: Connection, answers: UnboundedSender<Incoming>) -> Self {
-        let (statements, queue) = mpsc::unbounded_channel();
-        let (cancel_tokens, cancel_token) = watch::channel(None);
-        tokio::spawn(serve(Served { connection, queue, answers, cancel_tokens }));
-        Self { statements, cancel_token }
+        let (runs, queue) = mpsc::unbounded_channel();
+        let (cancels, cancelled) = mpsc::unbounded_channel();
+        let task = tokio::spawn(SessionTask { connection, session: None, cancelled, answers }.serve(queue));
+        Self { runs, cancels, task }
     }
 
     /// Queues `statement` behind the one running; its answer comes back as `Incoming`.
-    pub(super) fn run(&self, statement: Statement) {
-        if self.statements.send(statement).is_err() {
+    pub(super) fn run(&self, run: RunId, statement: Statement) {
+        if self.runs.send(Queued { run, statement }).is_err() {
             tracing::warn!("the session task is gone: the statement is dropped");
         }
     }
 
-    /// Asks the server to cancel the running statement; that statement's answer says how it ended.
-    pub(super) fn cancel(&self) {
-        let Some(token) = self.cancel_token.borrow().clone() else { return };
-        tokio::spawn(async move {
-            if let Err(err) = token.cancel().await {
-                tracing::warn!("the cancel request failed: {err:#}");
-            }
-        });
+    /// Cancels `run` if the session is on it, or keeps it from the server if it has not started; a later run is never touched.
+    pub(super) fn cancel(&self, run: RunId) {
+        if self.cancels.send(run).is_err() {
+            tracing::warn!("the session task is gone: the cancel is dropped");
+        }
+    }
+
+    /// Lets the session task finish what it was asked, a cancel included, waiting `STOP_WAIT` at most.
+    pub(super) async fn stop(self) {
+        let Self { runs, cancels, task } = self;
+        drop((runs, cancels));
+        match tokio::time::timeout(STOP_WAIT, task).await {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => tracing::warn!("the session task failed: {err}"),
+            Err(_) => tracing::warn!("the session task did not stop within {STOP_WAIT:?}"),
+        }
     }
 }
 
-/// What the session task owns.
-struct Served {
-    connection: Connection,
-    queue: UnboundedReceiver<Statement>,
-    answers: UnboundedSender<Incoming>,
-    cancel_tokens: watch::Sender<Option<CancelToken>>,
+/// What woke the session task.
+enum Woken {
+    Queued(Option<Queued>),
+    Closed(String),
 }
 
-/// Opens the session at once, and again before a statement when the last try failed or the session closed.
-async fn serve(served: Served) {
-    let Served { connection, mut queue, answers, cancel_tokens } = served;
-    let send = |incoming: Incoming| {
-        if answers.send(incoming).is_err() {
+/// The task that owns the session: it opens it, runs each statement in turn, and says when it is lost.
+struct SessionTask {
+    connection: Connection,
+    session: Option<Session>,
+    cancelled: UnboundedReceiver<RunId>,
+    answers: UnboundedSender<Incoming>,
+}
+
+impl SessionTask {
+    /// Opens the session at once, and again before a statement when the last try failed or the session was lost.
+    async fn serve(mut self, mut queue: UnboundedReceiver<Queued>) {
+        self.open().await;
+        loop {
+            match self.woken(&mut queue).await {
+                Woken::Queued(Some(queued)) => self.run(queued).await,
+                Woken::Queued(None) => break,
+                Woken::Closed(why) => self.lose(why),
+            }
+        }
+    }
+
+    async fn woken(&self, queue: &mut UnboundedReceiver<Queued>) -> Woken {
+        tokio::select! {
+            queued = queue.recv() => Woken::Queued(queued),
+            why = closed(self.session.as_ref()) => Woken::Closed(why),
+        }
+    }
+
+    async fn open(&mut self) {
+        self.session = match Session::open(&self.connection).await {
+            Ok(session) => {
+                self.send(Incoming::Opened);
+                Some(session)
+            }
+            Err(err) => {
+                self.send(Incoming::NotOpened(format!("{err:#}")));
+                None
+            }
+        };
+    }
+
+    async fn run(&mut self, queued: Queued) {
+        if self.session.is_none() {
+            self.open().await;
+        }
+        let Some(session) = self.session.as_mut() else { return };
+        let run = queued.run;
+        let answer = if was_cancelled(&mut self.cancelled, run) {
+            Incoming::Failed { run, error: CANCELLED_BEFORE_SENT.to_owned(), position: None }
+        } else {
+            run_until_answered(session, self.connection.writes(), queued, &mut self.cancelled).await
+        };
+        self.send(answer);
+        if let Some(why) = self.session.as_ref().and_then(Session::lost) {
+            self.lose(why);
+        }
+    }
+
+    fn lose(&mut self, why: String) {
+        self.session = None;
+        self.send(Incoming::Closed(why));
+    }
+
+    fn send(&self, incoming: Incoming) {
+        if self.answers.send(incoming).is_err() {
             tracing::warn!("the loop is gone: an answer is dropped");
         }
-    };
-    let mut session = open(&connection, send).await;
-    cancel_tokens.send_replace(session.as_ref().map(Session::cancel_token));
-    while let Some(statement) = queue.recv().await {
-        if session.as_ref().is_none_or(Session::is_closed) {
-            session = open(&connection, send).await;
-            cancel_tokens.send_replace(session.as_ref().map(Session::cancel_token));
-        }
-        if let Some(open) = session.as_mut() {
-            send(run(open, connection.writes(), statement).await);
+    }
+}
+
+/// Why `session` ended, once it has; never, when there is none.
+async fn closed(session: Option<&Session>) -> String {
+    match session {
+        Some(session) => session.closed().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Whether a cancel for `run` came before it started; a cancel for an earlier run is dropped.
+fn was_cancelled(cancelled: &mut UnboundedReceiver<RunId>, run: RunId) -> bool {
+    std::iter::from_fn(|| cancelled.try_recv().ok()).any(|cancelled| cancelled == run)
+}
+
+/// Runs `queued`, asking the server to cancel it when its cancel comes; a cancel for another run does nothing.
+async fn run_until_answered(
+    session: &mut Session,
+    writes: WritePolicy,
+    queued: Queued,
+    cancelled: &mut UnboundedReceiver<RunId>,
+) -> Incoming {
+    let token = session.cancel_token();
+    let run = queued.run;
+    let mut answer = pin!(answer_to(session, writes, queued));
+    loop {
+        tokio::select! {
+            answer = &mut answer => return answer,
+            Some(cancelled) = cancelled.recv() => {
+                if cancelled == run {
+                    cancel(&token).await;
+                }
+            }
         }
     }
 }
 
-async fn open(connection: &Connection, send: impl Fn(Incoming)) -> Option<Session> {
-    match Session::open(connection).await {
-        Ok(session) => {
-            send(Incoming::Opened);
-            Some(session)
-        }
-        Err(err) => {
-            send(Incoming::NotOpened(format!("{err:#}")));
-            None
-        }
+async fn cancel(token: &CancelToken) {
+    if let Err(err) = token.cancel().await {
+        tracing::warn!("the cancel request failed: {err:#}");
     }
 }
 
-async fn run(session: &mut Session, writes: WritePolicy, statement: Statement) -> Incoming {
+async fn answer_to(session: &mut Session, writes: WritePolicy, queued: Queued) -> Incoming {
+    let Queued { run, statement } = queued;
     let admitted = match guard::admit(statement, writes) {
         Ok(admitted) => admitted,
-        Err(refusal) => return Incoming::Refused(refusal.to_string()),
+        Err(refusal) => return Incoming::Refused { run, why: refusal.to_string() },
     };
     let started = Instant::now();
     match session.run(&admitted).await {
-        Ok(result) => Incoming::Result { result, took: started.elapsed() },
+        Ok(result) => Incoming::Result { run, result, took: started.elapsed() },
         Err(err) => {
-            Incoming::Failed { position: err.downcast_ref::<ServerError>().and_then(|server| server.position), error: format!("{err:#}") }
+            let position = err.downcast_ref::<ServerError>().and_then(|server| server.position);
+            Incoming::Failed { run, position, error: format!("{err:#}") }
         }
     }
 }
@@ -104,14 +202,20 @@ mod tests {
     use crate::connection::Entry;
     use crate::db::model::Value;
 
+    const SLEEP: &str = "SELECT pg_sleep(30)";
+
     fn connection() -> Connection {
         let url = std::env::var("PGBG_TEST_DATABASE_URL").unwrap();
         let entry: Entry = toml::from_str(&format!("tier = \"local\"\nurl = \"{url}\"\n")).unwrap();
         Connection::new("shop", entry).unwrap()
     }
 
-    async fn answer_to(backend: &Backend, answers: &mut UnboundedReceiver<Incoming>, sql: &str) -> Incoming {
-        backend.run(Statement::new(sql));
+    fn started() -> (Backend, UnboundedReceiver<Incoming>) {
+        let (sender, answers) = mpsc::unbounded_channel();
+        (Backend::start(connection(), sender), answers)
+    }
+
+    async fn next_answer(answers: &mut UnboundedReceiver<Incoming>) -> Incoming {
         loop {
             match answers.recv().await.unwrap() {
                 Incoming::Opened => {}
@@ -120,21 +224,78 @@ mod tests {
         }
     }
 
-    async fn end_the_server_side_of(pid: &Value) {
+    async fn answer_to(backend: &Backend, answers: &mut UnboundedReceiver<Incoming>, run: RunId, sql: &str) -> Incoming {
+        backend.run(run, Statement::new(sql));
+        next_answer(answers).await
+    }
+
+    async fn on_a_side_session(sql: &str) -> Vec<Vec<Value>> {
         let mut session = Session::open(&connection()).await.unwrap();
-        let ending = guard::admit(Statement::new(format!("SELECT pg_terminate_backend({pid}, 5000)")), WritePolicy::ReadOnly).unwrap();
-        session.run(&ending).await.unwrap();
+        session.run(&guard::admit(Statement::new(sql), WritePolicy::ReadOnly).unwrap()).await.unwrap().rows
+    }
+
+    async fn backend_pid(backend: &Backend, answers: &mut UnboundedReceiver<Incoming>) -> Value {
+        let Incoming::Result { result, .. } = answer_to(backend, answers, RunId::FIRST, "SELECT pg_backend_pid()").await else {
+            panic!("no pid")
+        };
+        result.rows[0][0].clone()
+    }
+
+    async fn until_sleeping() {
+        let is_sleeping = format!("SELECT 1 FROM pg_stat_activity WHERE query = '{SLEEP}' AND state = 'active'");
+        while on_a_side_session(&is_sleeping).await.is_empty() {}
     }
 
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_statement_after_the_session_died_runs_on_a_new_one() {
-        let (sender, mut answers) = mpsc::unbounded_channel();
-        let backend = Backend::start(connection(), sender);
-        let Incoming::Result { result, .. } = answer_to(&backend, &mut answers, "SELECT pg_backend_pid()").await else { panic!("no pid") };
-        end_the_server_side_of(&result.rows[0][0]).await;
-        answer_to(&backend, &mut answers, "SELECT 1").await;
-        let after = answer_to(&backend, &mut answers, "SELECT 1").await;
+        let (backend, mut answers) = started();
+        let pid = backend_pid(&backend, &mut answers).await;
+        on_a_side_session(&format!("SELECT pg_terminate_backend({pid}, 5000)")).await;
+        next_answer(&mut answers).await;
+        let after = answer_to(&backend, &mut answers, RunId::FIRST.next(), "SELECT 1").await;
         assert!(matches!(after, Incoming::Result { .. }), "{after:?}");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_session_that_dies_while_idle_says_so_at_once() {
+        let (backend, mut answers) = started();
+        let pid = backend_pid(&backend, &mut answers).await;
+        on_a_side_session(&format!("SELECT pg_terminate_backend({pid}, 5000)")).await;
+        let answer = next_answer(&mut answers).await;
+        assert!(matches!(&answer, Incoming::Closed(why) if why.contains("terminating connection")), "{answer:?}");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_cancel_that_comes_before_its_run_keeps_it_from_the_server() {
+        let (backend, mut answers) = started();
+        backend.run(RunId::FIRST, Statement::new(SLEEP));
+        backend.cancel(RunId::FIRST);
+        let answer = next_answer(&mut answers).await;
+        assert_eq!(answer, Incoming::Failed { run: RunId::FIRST, error: CANCELLED_BEFORE_SENT.to_owned(), position: None });
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_cancel_for_an_earlier_run_leaves_the_running_one_alone() {
+        let (backend, mut answers) = started();
+        backend_pid(&backend, &mut answers).await;
+        backend.cancel(RunId::FIRST);
+        let answer = answer_to(&backend, &mut answers, RunId::FIRST.next(), "SELECT pg_sleep(0.2)").await;
+        assert!(matches!(answer, Incoming::Result { .. }), "{answer:?}");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn stopping_after_a_cancel_waits_for_the_cancelled_run_to_end() {
+        let (backend, mut answers) = started();
+        backend.run(RunId::FIRST, Statement::new(SLEEP));
+        until_sleeping().await;
+        backend.cancel(RunId::FIRST);
+        backend.stop().await;
+        let answer = next_answer(&mut answers).await;
+        assert!(matches!(&answer, Incoming::Failed { error, .. } if error.contains("canceling statement")), "{answer:?}");
     }
 }

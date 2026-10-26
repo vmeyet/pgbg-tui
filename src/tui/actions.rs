@@ -5,7 +5,7 @@ use super::backend::Backend;
 /// Hands `action` over without waiting on it; the loop never awaits the database.
 pub(super) fn spawn(action: Action, backend: &Backend) {
     match action {
-        Action::Run(statement) => backend.run(statement),
-        Action::Cancel => backend.cancel(),
+        Action::Run { run, statement } => backend.run(run, statement),
+        Action::Cancel(run) => backend.cancel(run),
     }
 }

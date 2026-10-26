@@ -69,7 +69,7 @@ fn link(app: &App, width: usize) -> Line<'static> {
 #[cfg(test)]
 mod tests {
     use super::super::app::tests::{app, connection, orders, typed};
-    use super::super::app::{App, Incoming};
+    use super::super::app::{App, Incoming, RunId};
     use super::*;
     use crossterm::event::{KeyCode, KeyEvent};
     use ratatui::Terminal;
@@ -93,7 +93,7 @@ mod tests {
         let mut app = typed("SELECT id, customer FROM orders");
         app.handle_key(KeyEvent::from(KeyCode::Enter));
         app.apply(Incoming::Opened);
-        app.apply(Incoming::Result { result: orders(), took: Duration::from_millis(38) });
+        app.apply(Incoming::Result { run: RunId::FIRST, result: orders(), took: Duration::from_millis(38) });
         insta::assert_snapshot!("result", render(&app, 60, 14).backend());
     }
 

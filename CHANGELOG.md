@@ -36,6 +36,11 @@ Each entry says what changed, then where, then how to use it.
 
 ### Fixed
 
+- **`esc` cancels only the statement you see running** in the TUI: a cancel that arrives late never stops the next statement, and `esc` while the session is still opening keeps the statement from the server.
+- **`ctrl-c` cancels the running statement before pgbg quits**, so the server does not run it to its end.
+- **A lost session shows at once** in the TUI's status line, even when nothing runs; the next `⏎` opens a new one.
+- **The error mark stays off when you edit while a statement runs**, instead of marking the wrong character.
+
 - **A lost session opens again** in the TUI: after the server restarts or the link drops, the next statement you run opens a new session instead of failing for good.
   The statement that met the dead link fails; press `⏎` to run it again.
 - **Opening a session gives up after 10 seconds** instead of waiting on a server that never answers.

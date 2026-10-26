@@ -27,7 +27,7 @@ When a boundary or a flow changes, change this page in the same MR.
 | `tui/mod.rs` | The event loop: terminal events, answers and ticks in, frames out |
 | `tui/app/` | `App`, the pure state machine: keys in, `Action`s out, `Incoming` answers applied |
 | `tui/actions.rs` | The action runner: hands each `Action` to the backend without waiting; answers come back as `Incoming` |
-| `tui/backend/` | What the runner calls, one part per concern: sessions (a task owns each one and runs its statements in turn, and shares its `CancelToken` through a `watch` so a cancel never waits behind the statement), queries, history |
+| `tui/backend/` | What the runner calls, one part per concern: sessions (a task owns each one, runs its statements in turn, takes cancels by `RunId` while a statement runs, and says when the session is lost), queries, history |
 | `tui/ui.rs`, `tui/*_view.rs` | Drawing: layout in `ui.rs`, one view module per pane or modal |
 | `tui/grid_view/` | The results grid: only the visible rows and columns are drawn |
 | `tui/chart_view/` | Draws a `Series` with ratatui's `BarChart` and `Chart` |
@@ -39,14 +39,16 @@ When a boundary or a flow changes, change this page in the same MR.
 
 Running a statement:
 
-1. The editor hands `App` the statement under the cursor; `App` returns `Action::Run { session, sql }`.
+1. The editor hands `App` the statement under the cursor; `App` returns `Action::Run { run, statement }`, and every answer about it carries the same `RunId`, so a late one never lands on the next run.
 2. `db::guard` classifies it; a write on a read-only connection comes back as `Incoming::Refused` and never reaches the server.
 3. The session opens `BEGIN READ ONLY`, sets `statement_timeout` from the tier, and binds the statement to a portal (`Transaction::bind`).
    A portal takes any statement the guard admits; `DECLARE CURSOR` takes only a `SELECT` or `VALUES`, not `SHOW` or `EXPLAIN`.
 4. The first page (`query_portal(&portal, 500)`) comes back as `Incoming::Page`; the grid paints it, and more pages are fetched as the grid nears the end.
    Until paging lands, a result keeps its first 10 000 rows and says it is cut.
 5. A server error comes back as a `ServerError` with the server's position; the editor marks that character until the text changes.
-6. `Esc` on a running statement sends the server a cancel request over a link of its own, with the session's TLS; the statement fails with the server's words, and the transaction is always rolled back at the end.
+6. `Esc` on a running statement returns `Action::Cancel(run)`; the session task sends the server a cancel request over a link of its own, with the session's TLS, only while that run is on the server, and before the next one starts.
+   The statement fails with the server's words, and the transaction is always rolled back at the end; a run cancelled before it started is never sent.
+7. `ctrl-c` on a running statement cancels it first; pgbg waits 2 seconds at most for the session task before it exits.
 
 Switching connection:
 

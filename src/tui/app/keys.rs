@@ -3,7 +3,7 @@ use super::App;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 impl App {
-    /// Applies `key` to the editor; a change to the text drops the error mark, which pointed into the old text.
+    /// Applies `key` to the editor; a change to the text drops the error mark and the place of the statement sent, which pointed into the old text.
     pub(super) fn edit(&mut self, key: KeyEvent) {
         let editor = &mut self.editor;
         // A key either inserts or deletes, never both, so the length says whether the text changed.
@@ -29,6 +29,7 @@ impl App {
         }
         if editor.text().len() != length_before {
             self.error_mark = None;
+            self.forget_sent_place();
         }
     }
 }

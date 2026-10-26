@@ -29,6 +29,7 @@ pub(crate) async fn run(connection: Connection) -> Result<()> {
     let (mut terminal, screen) = Screen::enter();
     let outcome = event_loop(&mut terminal, &mut app, &backend, &mut incoming).await;
     screen.leave();
+    backend.stop().await;
     outcome
 }
 
