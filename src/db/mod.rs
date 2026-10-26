@@ -1,5 +1,5 @@
 //! The only module that sees `tokio_postgres`: connect, run one statement, decode its rows, cancel it.
-use crate::connection::{Connection, StatementTimeout, Target, Tls};
+use crate::connection::{Connection, StatementTimeout, Target, TimeoutChoice, Tls};
 use anyhow::{Context, Result, anyhow};
 use futures_util::{StreamExt, TryStreamExt, future};
 use guard::{Admitted, Mode};
@@ -28,6 +28,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const STOP_WHEN_CLIENT_GONE: &str = "SET client_connection_check_interval = '1s'";
 const SERVER_CLOSED: &str = "the server closed the link";
 const LINK_TASK_GONE: &str = "the link's task is gone";
+/// The server's `statement_timeout` in milliseconds, whatever unit it was set in.
+const SERVER_STATEMENT_TIMEOUT: &str = "SELECT setting::bigint FROM pg_settings WHERE name = 'statement_timeout'";
 const PROBE_SAVEPOINT: &str = "SAVEPOINT pgbg_probe";
 const RELEASE_PROBE: &str = "RELEASE SAVEPOINT pgbg_probe";
 const ROLLBACK_FAILED: &str = "a rollback failed, so the server may still hold its transaction";
@@ -57,7 +59,8 @@ impl Session {
         };
         let Link { client, ended } = link.with_context(|| format!("connecting to {}", connection.name()))?;
         stop_statements_when_client_gone(&client).await;
-        set_statement_timeout(&client, connection.statement_timeout()).await?;
+        let timeout = statement_timeout_in_effect(&client, connection.statement_timeout()).await?;
+        set_statement_timeout(&client, timeout).await?;
         Ok(Self { client, tls, has_failed_rollback: false, ended })
     }
 
@@ -205,6 +208,15 @@ async fn stop_statements_when_client_gone(client: &Client) {
     if let Err(err) = client.batch_execute(STOP_WHEN_CLIENT_GONE).await {
         tracing::warn!("the server will not stop a statement when pgbg is gone: {err}");
     }
+}
+
+/// The timeout a session runs with: the one the connection chose, else the stricter of its tier's and the one the
+/// server applies already (a role's or a database's default, or the URL's `options`).
+async fn statement_timeout_in_effect(client: &Client, choice: TimeoutChoice) -> Result<StatementTimeout> {
+    let row = client.query_one(SERVER_STATEMENT_TIMEOUT, &[]).await.map_err(server_error)?;
+    let ms: i64 = row.try_get(0).map_err(server_error)?;
+    let server = StatementTimeout::from_millis(u64::try_from(ms).context("the server's statement timeout is negative")?);
+    Ok(choice.in_effect(server))
 }
 
 /// Not best effort: a production session never runs without its timeout.
@@ -440,6 +452,33 @@ mod tests {
     async fn a_session_runs_with_the_statement_timeout_of_its_connection() {
         let shown = on(session_on("staging", "statement_timeout = \"90s\"").await, "SHOW statement_timeout").await.unwrap();
         assert_eq!(shown.rows, [[Value::Text("90s".into())]]);
+    }
+
+    async fn shown_timeout_with_a_server_default(tier: &str, extra: &str) -> Vec<Vec<Value>> {
+        let mut url = Url::parse(&std::env::var(DATABASE_URL).unwrap()).unwrap();
+        url.query_pairs_mut().append_pair("options", "-cstatement_timeout=5s");
+        let entry: Entry = toml::from_str(&format!("tier = \"{tier}\"\nurl = \"{url}\"\n{extra}")).unwrap();
+        let session = Session::open(&Connection::new("shop", entry).unwrap(), Route::Direct).await.unwrap();
+        on(session, "SHOW statement_timeout").await.unwrap().rows
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_stricter_timeout_on_the_server_wins_over_the_tier() {
+        assert_eq!(shown_timeout_with_a_server_default("staging", "").await, [[Value::Text("5s".into())]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_local_session_keeps_the_timeout_of_the_server() {
+        assert_eq!(shown_timeout_with_a_server_default("local", "").await, [[Value::Text("5s".into())]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_timeout_the_connection_chose_wins_over_the_server() {
+        let shown = shown_timeout_with_a_server_default("staging", "statement_timeout = \"90s\"").await;
+        assert_eq!(shown, [[Value::Text("90s".into())]]);
     }
 
     #[tokio::test]

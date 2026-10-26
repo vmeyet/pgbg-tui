@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 pub(crate) use target::Target;
-pub(crate) use timeout::StatementTimeout;
+pub(crate) use timeout::{StatementTimeout, TimeoutChoice};
 pub(crate) use tls::Tls;
 pub(crate) use tunnel::TunnelSpec;
 
@@ -47,7 +47,7 @@ pub(crate) struct Connection {
     password: Option<SecretSource>,
     writes: WritePolicy,
     tls: Tls,
-    statement_timeout: StatementTimeout,
+    statement_timeout: TimeoutChoice,
 }
 
 /// The name a connection has under `[connections.<name>]`, typed on the command line.
@@ -87,7 +87,7 @@ impl Connection {
             tunnel,
             password: password.map(secret_source).transpose()?,
             writes,
-            statement_timeout: statement_timeout.unwrap_or_else(|| tier.statement_timeout()),
+            statement_timeout: statement_timeout.map_or_else(|| TimeoutChoice::Tier(tier.statement_timeout()), TimeoutChoice::Own),
         })
     }
 
@@ -120,7 +120,7 @@ impl Connection {
     }
 
     /// The connection's own `statement_timeout`, else its tier's.
-    pub(crate) fn statement_timeout(&self) -> StatementTimeout {
+    pub(crate) fn statement_timeout(&self) -> TimeoutChoice {
         self.statement_timeout
     }
 }
@@ -251,14 +251,15 @@ mod tests {
     fn each_tier_has_its_statement_timeout() {
         let local = connection("shop", "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\n").unwrap();
         let production = connection("shop", "tier = \"production\"\nurl = \"postgres://nina@db.example.com/shop?sslmode=require\"\n");
-        assert_eq!(local.statement_timeout(), StatementTimeout::NONE);
-        assert_eq!(shop("").unwrap().statement_timeout().to_string(), "1min");
-        assert_eq!(production.unwrap().statement_timeout().to_string(), "30s");
+        assert_eq!(local.statement_timeout(), TimeoutChoice::Tier(StatementTimeout::NONE));
+        assert_eq!(shop("").unwrap().statement_timeout(), TimeoutChoice::Tier(StatementTimeout::STAGING));
+        assert_eq!(production.unwrap().statement_timeout(), TimeoutChoice::Tier(StatementTimeout::PRODUCTION));
     }
 
     #[test]
     fn a_connection_may_set_its_own_statement_timeout() {
-        assert_eq!(shop("statement_timeout = \"2min\"").unwrap().statement_timeout().to_string(), "2min");
+        let own = TimeoutChoice::Own(StatementTimeout::parse("2min").unwrap());
+        assert_eq!(shop("statement_timeout = \"2min\"").unwrap().statement_timeout(), own);
     }
 
     #[test]

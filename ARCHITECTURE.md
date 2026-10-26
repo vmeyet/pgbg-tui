@@ -58,7 +58,8 @@ Switching connection:
 4. The session stays open until pgbg quits, so switching back is instant; its tunnel stops with it.
    Each sheet keeps its editor text and its result while another one is shown, and the answers of its session land on it alone.
 5. A session whose link is gone, or whose rollback failed, is opened again before the next statement; it is never retried on its own.
-6. Opening sets `statement_timeout`: the connection's own, else its tier's (none on local, 60 s on staging, 30 s on production).
+6. Opening sets `statement_timeout`: the connection's own, else the stricter of its tier's (none on local, 60 s on staging, 30 s on production) and the one the server already applies, read from `pg_settings`.
+   It is a session setting, so behind PgBouncer in transaction pooling it does not follow pgbg's next transaction: there, give the role its own `statement_timeout`.
 7. Opening gives up after 10 seconds, TLS and login included, unless the `url` sets `connect_timeout`; and each session asks the server to stop its statement once pgbg is gone (`client_connection_check_interval`).
 
 Charting a result:
@@ -110,6 +111,8 @@ On a connection that allows writes, a statement runs as typed, except that one r
 - The session task owns the tunnel with the session: the status line shows `⇄ tunnel :<port>`, `starting…` or how it died; a tunnel that dies closes its session and says why, and the next statement starts both again.
 - A session reopened while its tunnel still runs keeps that tunnel.
 - Release builds abort on a panic, so no `Drop` runs: `tunnel/groups.rs` keeps every live process group in a registry, and a panic hook kills them all.
+- The hook kills them only when the panic ends the process: always in a release build, and on the main thread only when the build unwinds, since a tokio task, a blocking thread or a test catches its own panic and goes on.
+- A tunnel seen ended has its group killed at once, before its id can be reused, and a group the hook killed is never signalled again.
 
 ## Saved queries
 
