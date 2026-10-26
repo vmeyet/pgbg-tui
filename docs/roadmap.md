@@ -70,7 +70,8 @@ The MR that ships a step ticks its box.
 
 ## 11. Doctor
 
-- [ ] `pgbg doctor <connection>`: TLS, role privileges, tunnel, timeout
+- [x] `pgbg doctor <connection>`: config, TLS, tunnel, login, timeout; `--json`, exit 1 on a failed check
+- [ ] Role privileges: what the role can write, a warning when a read-only connection's role can
 
 ## Later
 

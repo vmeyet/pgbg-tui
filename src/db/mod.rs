@@ -21,6 +21,7 @@ pub(crate) mod model;
 mod open;
 #[cfg_attr(not(test), expect(dead_code, reason = "`pgbg schema`, the next step, prints it"))]
 mod schema;
+mod server;
 
 pub(crate) use open::{NotOpened, Opened, open_along};
 

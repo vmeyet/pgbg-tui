@@ -1,0 +1,222 @@
+use super::report::Check;
+use crate::connection::{Connection, TimeoutChoice, Tls, TunnelSpec};
+use crate::db::model::{LocalPort, ServerFacts};
+use std::path::Path;
+
+const PRIVATE_CA: &str = "sslrootcert";
+const OTHERS_READ_OR_WRITE: u32 = 0o077;
+
+pub(super) fn config_refused(err: &anyhow::Error) -> Check {
+    Check::fail("config", format!("{err:#}"), "fix `config.toml` as it says; `pgbg connections` lists what loads")
+}
+
+pub(super) fn config(connection: &Connection) -> Check {
+    let password = connection.password().map_or_else(|| "no password".to_owned(), |source| format!("password from {}", source.kind()));
+    Check::ok("config", format!("`{}` loads, {password}", connection.name()))
+}
+
+/// `mode` holds the permission bits of the file at `path`.
+pub(super) fn file_mode(path: &Path, mode: u32) -> Check {
+    let found = format!("{} is {:04o}", path.display(), mode & 0o777);
+    if mode & OTHERS_READ_OR_WRITE == 0 {
+        return Check::ok("file mode", found);
+    }
+    Check::warn("file mode", format!("{found}: other users can read it"), format!("chmod 600 {}", path.display()))
+}
+
+pub(super) fn tls(connection: &Connection) -> Check {
+    let target = connection.target();
+    let asks_private_ca = target.url().query_pairs().any(|(key, _)| key == PRIVATE_CA);
+    if asks_private_ca {
+        return Check::fail(
+            "tls",
+            "a private CA (`sslrootcert`) is not supported yet",
+            "drop `sslrootcert` from `url`: pgbg trusts the public CAs only",
+        );
+    }
+    let why = target.ssl_mode().map_or_else(|| "`tls = \"on\"`".to_owned(), |mode| format!("`sslmode={mode}`"));
+    match connection.tls() {
+        Tls::On => Check::ok(
+            "tls",
+            format!(
+                "on, as {why} asks; the certificate is checked as `verify-full` does, against the public CAs (a private CA is not supported yet)"
+            ),
+        ),
+        Tls::Off if target.is_local() && connection.tunnel().is_none() => Check::ok("tls", "off: the host is this machine"),
+        Tls::Off => Check::warn(
+            "tls",
+            "off, as `tls = \"off\"` asks: the password and the rows travel in clear",
+            "add `sslmode=require` to `url` and drop `tls = \"off\"`",
+        ),
+    }
+}
+
+pub(super) fn tunnel_failed(err: &anyhow::Error) -> Check {
+    Check::fail("tunnel", format!("{err:#}"), "run the tunnel's command by hand to see why")
+}
+
+pub(super) fn tunnel_started(spec: &TunnelSpec, port: LocalPort) -> Check {
+    let program = |argv: &[String]| argv.first().map_or_else(String::new, |program| format!("`{program}`"));
+    let before = spec.before().map_or_else(String::new, |before| format!("`before` ({}) ran, then ", program(before)));
+    Check::ok("tunnel", format!("{before}{} answers on :{port}", program(spec.command())))
+}
+
+pub(super) fn tunnel_stopped(port: LocalPort, is_port_free: bool) -> Check {
+    if is_port_free {
+        return Check::ok("tunnel stop", format!("stopped, :{port} is free again"));
+    }
+    Check::warn(
+        "tunnel stop",
+        format!(":{port} still answers once the tunnel stopped: another process holds it, such as an ssh ControlMaster"),
+        "add `-o ControlPath=none` to an ssh tunnel, so pgbg owns all of it",
+    )
+}
+
+pub(super) fn login_failed(err: &anyhow::Error) -> Check {
+    Check::fail("login", format!("{err:#}"), "check the user and the password, and that the server lets this machine in")
+}
+
+pub(super) fn not_read(name: &'static str, err: &anyhow::Error) -> Check {
+    Check::warn(name, format!("could not read it: {err:#}"), "run `SELECT 1` with `pgbg run` to see why reads fail")
+}
+
+pub(super) fn server(facts: &ServerFacts) -> [Check; 2] {
+    [Check::ok("login", format!("as `{}`", facts.user)), Check::ok("server", format!("PostgreSQL {}", facts.version))]
+}
+
+/// Fine when the session runs with the timeout pgbg set: the connection's own, else the stricter of its tier's and the server's.
+pub(super) fn timeout(connection: &Connection, facts: &ServerFacts) -> Check {
+    let choice = connection.statement_timeout();
+    let set = choice.in_effect(facts.server_statement_timeout);
+    let in_effect = facts.statement_timeout;
+    if in_effect != set {
+        let found = format!("{in_effect} in effect, not the {set} pgbg set");
+        return Check::warn(
+            "timeout",
+            found,
+            "a pooler in transaction mode drops `SET`: connect past it, or set `statement_timeout` on the role",
+        );
+    }
+    let tier = connection.tier();
+    let why = match choice {
+        TimeoutChoice::Own(_) => "the connection's own".to_owned(),
+        TimeoutChoice::Tier(tier_timeout) if tier_timeout == set => format!("the {tier} tier's"),
+        TimeoutChoice::Tier(tier_timeout) => format!("the server's, stricter than the {tier} tier's {tier_timeout}"),
+    };
+    Check::ok("timeout", format!("{in_effect}, {why}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::doctor::report::Verdict;
+    use crate::connection::{Entry, StatementTimeout};
+
+    fn connection(extra: &str) -> Connection {
+        let entry: Entry =
+            toml::from_str(&format!("tier = \"production\"\nurl = \"postgres://nina@db.example.com/shop?sslmode=require\"\n{extra}"))
+                .unwrap();
+        Connection::new("prod", entry).unwrap()
+    }
+
+    fn local(url: &str, extra: &str) -> Connection {
+        let entry: Entry = toml::from_str(&format!("tier = \"local\"\nurl = \"{url}\"\n{extra}")).unwrap();
+        Connection::new("local", entry).unwrap()
+    }
+
+    #[test]
+    fn the_config_check_names_the_password_source_and_never_the_password() {
+        assert_eq!(config(&connection("password = { env = \"PROD_PGPASSWORD\" }")).found, "`prod` loads, password from env");
+        assert_eq!(config(&connection("")).found, "`prod` loads, no password");
+    }
+
+    #[test]
+    fn a_config_only_its_owner_reads_is_fine() {
+        assert_eq!(file_mode(Path::new("config.toml"), 0o100600), Check::ok("file mode", "config.toml is 0600"));
+    }
+
+    #[test]
+    fn a_config_others_can_read_is_a_warning_with_the_chmod_that_fixes_it() {
+        let check = file_mode(Path::new("/tmp/config.toml"), 0o100644);
+        assert_eq!((check.verdict, check.fix.as_deref()), (Verdict::Warn, Some("chmod 600 /tmp/config.toml")));
+    }
+
+    #[test]
+    fn tls_on_says_require_checks_the_certificate_like_verify_full() {
+        let check = tls(&connection(""));
+        assert_eq!(check.verdict, Verdict::Ok);
+        assert!(check.found.starts_with("on, as `sslmode=require` asks") && check.found.contains("`verify-full`"), "{}", check.found);
+    }
+
+    #[test]
+    fn a_private_ca_fails_the_tls_check() {
+        let check = tls(&local("postgres://nina@localhost/shop?sslmode=verify-full&sslrootcert=ca.pem", ""));
+        assert_eq!(check.verdict, Verdict::Fail);
+    }
+
+    #[test]
+    fn tls_off_to_this_machine_is_fine() {
+        assert_eq!(tls(&local("postgres://nina@localhost/shop", "")), Check::ok("tls", "off: the host is this machine"));
+    }
+
+    #[test]
+    fn tls_off_on_purpose_to_a_remote_host_is_a_warning() {
+        let remote = local("postgres://nina@db.example.com/shop", "tls = \"off\"");
+        assert_eq!(tls(&remote).verdict, Verdict::Warn);
+    }
+
+    #[test]
+    fn tls_off_through_a_tunnel_to_this_machine_is_a_warning() {
+        let tunnelled = local("postgres://nina@localhost/shop", "tls = \"off\"\ntunnel = { command = [\"proxy\", \"{port}\"] }");
+        assert_eq!(tls(&tunnelled).verdict, Verdict::Warn);
+    }
+
+    fn tunnel(text: &str) -> TunnelSpec {
+        connection(text).tunnel().unwrap().clone()
+    }
+
+    #[test]
+    fn a_started_tunnel_names_its_programs_and_never_their_arguments() {
+        let spec = tunnel(
+            "tunnel = { command = [\"ssh\", \"-L\", \"{port}:localhost:5432\", \"db.example.com\"], before = [\"wake\", \"bastion\"] }",
+        );
+        assert_eq!(tunnel_started(&spec, LocalPort::new(49213)).found, "`before` (`wake`) ran, then `ssh` answers on :49213");
+    }
+
+    #[test]
+    fn a_port_still_answering_after_the_stop_is_a_warning_about_controlmaster() {
+        let check = tunnel_stopped(LocalPort::new(49213), false);
+        assert_eq!(check.verdict, Verdict::Warn);
+        assert!(check.found.contains("ControlMaster"), "{}", check.found);
+    }
+
+    fn facts(in_effect_ms: u64, server_ms: u64) -> ServerFacts {
+        ServerFacts {
+            user: "nina".into(),
+            version: "17.2".into(),
+            statement_timeout: StatementTimeout::from_millis(in_effect_ms),
+            server_statement_timeout: StatementTimeout::from_millis(server_ms),
+        }
+    }
+
+    #[test]
+    fn the_tier_timeout_in_effect_is_fine() {
+        assert_eq!(timeout(&connection(""), &facts(30_000, 0)), Check::ok("timeout", "30s, the production tier's"));
+    }
+
+    #[test]
+    fn a_stricter_server_timeout_in_effect_says_it_won_over_the_tier() {
+        assert_eq!(timeout(&connection(""), &facts(5_000, 5_000)).found, "5s, the server's, stricter than the production tier's 30s");
+    }
+
+    #[test]
+    fn the_connections_own_timeout_in_effect_is_fine() {
+        assert_eq!(timeout(&connection("statement_timeout = \"2min\""), &facts(120_000, 5_000)).found, "2min, the connection's own");
+    }
+
+    #[test]
+    fn a_timeout_other_than_the_one_pgbg_set_is_a_warning() {
+        let check = timeout(&connection(""), &facts(0, 0));
+        assert_eq!((check.verdict, check.found.as_str()), (Verdict::Warn, "0s in effect, not the 30s pgbg set"));
+    }
+}

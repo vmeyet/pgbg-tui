@@ -30,6 +30,10 @@ An optional `before` command, such as one that wakes the bastion, runs once befo
 Each session gets a statement timeout from its tier: none on local, a minute on staging, 30 seconds on production; `statement_timeout = "2min"` on a connection sets its own, and a stricter one the server sets is kept.
 `pgbg connection add|edit|remove` and `pgbg password set <connection>` write this file for you and keep your comments.
 
+## Check a connection
+
+`pgbg doctor prod` checks the config, TLS, the tunnel, the login and the statement timeout, one line each with how to fix it; it exits 1 when a check fails.
+
 ## Run a statement
 
 ```sh

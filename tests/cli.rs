@@ -137,6 +137,31 @@ fn run_through_a_tunnel_that_dies_says_why_before_connecting() {
 }
 
 #[test]
+fn doctor_marks_a_refused_login_and_exits_with_a_failure() {
+    let output = pgbg("[connections.shop]\ntier = \"local\"\nurl = \"postgres://nina@localhost:1/shop\"\n", &["doctor", "shop"]);
+    assert!(!output.status.success());
+    assert!(stdout(&output).lines().any(|line| line.starts_with("✗  login")), "{}", stdout(&output));
+    assert!(stderr(&output).contains("1 check failed"), "{}", stderr(&output));
+}
+
+#[test]
+fn doctor_on_an_unknown_connection_fails_the_config_check_in_json_too() {
+    let output = pgbg(SHOP, &["doctor", "shop", "--json"]);
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!((&json["checks"][0]["name"], &json["checks"][0]["verdict"]), (&"config".into(), &"fail".into()));
+    assert!(!output.status.success());
+}
+
+#[test]
+#[ignore = "needs PGBG_TEST_DATABASE_URL"]
+fn doctor_on_a_reachable_database_finds_nothing_broken() {
+    let url = std::env::var("PGBG_TEST_DATABASE_URL").unwrap();
+    let output = pgbg(&format!("[connections.shop]\ntier = \"local\"\nurl = \"{url}\"\n"), &["doctor", "shop"]);
+    assert!(output.status.success(), "{}{}", stdout(&output), stderr(&output));
+    assert!(stdout(&output).contains("✓  login"), "{}", stdout(&output));
+}
+
+#[test]
 #[ignore = "needs PGBG_TEST_DATABASE_URL"]
 fn run_json_prints_the_columns_and_rows() {
     let url = std::env::var("PGBG_TEST_DATABASE_URL").unwrap();
