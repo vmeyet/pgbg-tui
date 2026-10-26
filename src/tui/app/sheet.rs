@@ -2,7 +2,7 @@
 use super::editor::Editor;
 use super::{Action, Grid, Incoming, RunId, TunnelState};
 use crate::chart::{self, ChartError, Series};
-use crate::connection::{Connection, ConnectionName, Tier, WritePolicy};
+use crate::connection::{Connection, ConnectionName};
 use crate::db::guard;
 use crate::db::model::{ResultSet, Statement};
 use crate::query::{Header, Query};
@@ -57,9 +57,8 @@ pub(in crate::tui) enum View {
 /// One connection in the TUI: its editor text, its last run and its session's state, kept while another one is shown.
 #[derive(Debug)]
 pub(in crate::tui) struct Sheet {
-    pub(in crate::tui) name: ConnectionName,
-    pub(in crate::tui) tier: Tier,
-    pub(in crate::tui) writes: WritePolicy,
+    /// The connection as the config said when its session last opened.
+    pub(in crate::tui) connection: Connection,
     pub(in crate::tui) editor: Editor,
     pub(in crate::tui) session: SessionState,
     /// The connection's tunnel, once it has one and its task said where it stands.
@@ -80,9 +79,7 @@ pub(in crate::tui) struct Sheet {
 impl Sheet {
     pub(super) fn new(connection: &Connection) -> Self {
         Self {
-            name: connection.name().clone(),
-            tier: connection.tier(),
-            writes: connection.writes(),
+            connection: connection.clone(),
             editor: Editor::default(),
             session: SessionState::Opening,
             tunnel: None,
@@ -106,14 +103,25 @@ impl Sheet {
         }
     }
 
+    pub(in crate::tui) fn name(&self) -> &ConnectionName {
+        self.connection.name()
+    }
+
+    /// Takes `connection` as it is now and waits for its new session; the editor and the last run stay.
+    pub(super) fn reopen(&mut self, connection: Connection) {
+        self.connection = connection;
+        self.session = SessionState::Opening;
+        self.tunnel = None;
+    }
+
     pub(super) fn cancel(&mut self) -> Vec<Action> {
         let Run::Running { run } = self.run else { return vec![] };
         self.run = Run::Cancelling { run };
-        vec![Action::Cancel { connection: self.name.clone(), run }]
+        vec![Action::Cancel { connection: self.name().clone(), run }]
     }
 
     pub(super) fn cancel_of_running(&self) -> Option<Action> {
-        self.running_run().map(|run| Action::Cancel { connection: self.name.clone(), run })
+        self.running_run().map(|run| Action::Cancel { connection: self.name().clone(), run })
     }
 
     fn running_run(&self) -> Option<RunId> {
@@ -144,7 +152,7 @@ impl Sheet {
         self.last_run = Some(run);
         self.error_mark = None;
         self.sent = Some(Sent { start: Some(range.start), statement: statement.clone() });
-        vec![Action::Run { connection: self.name.clone(), run, statement }]
+        vec![Action::Run { connection: self.name().clone(), run, statement }]
     }
 
     /// The editor's byte at character `position` of the statement sent; the end of it when the server

@@ -23,6 +23,7 @@ use backend::Backend;
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste, Event, EventStream, KeyEventKind};
 use futures_util::StreamExt;
 use ratatui::DefaultTerminal;
+use std::path::PathBuf;
 use std::sync::Once;
 use std::time::Duration;
 use tokio::sync::mpsc::{self, UnboundedReceiver};
@@ -35,13 +36,14 @@ const RECOLOUR_DELAY: Duration = Duration::from_millis(40);
 
 static PASTE_OFF_ON_PANIC: Once = Once::new();
 
-/// Runs the TUI on `first` until the user quits, with `connections` to switch to, giving the terminal back on the way out.
-pub(crate) async fn run(connections: Vec<Connection>, first: Connection) -> Result<()> {
+/// Runs the TUI on `first` until the user quits, with `connections` to switch to and the `config` file they come from,
+/// giving the terminal back on the way out.
+pub(crate) async fn run(connections: Vec<Connection>, first: Connection, config: PathBuf) -> Result<()> {
     let mut signals = Signals::listen()?;
     let theme = vtui::ground::ask().map_or_else(Theme::default, |ground| Theme::default().with_ground(ground));
     let mut app = App::new(connections, &first, theme);
     let (answers, mut incoming) = mpsc::unbounded_channel();
-    let mut backend = Backend::new(find_roots().await?, answers);
+    let mut backend = Backend::new(find_roots().await?, config, answers);
     for action in std::iter::once(Action::Open(first)).chain(App::start()) {
         backend.dispatch(action);
     }
@@ -100,10 +102,7 @@ async fn event_loop(
                 Event::Paste(text) => app.paste(&text),
                 _ => vec![],
             },
-            Some(answer) = incoming.recv() => {
-                app.apply(answer);
-                vec![]
-            }
+            Some(answer) = incoming.recv() => app.apply(answer),
             () = sleep(RECOLOUR_DELAY), if app.has_stale_colours() => {
                 app.recolour();
                 vec![]

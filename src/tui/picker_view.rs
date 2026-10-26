@@ -1,6 +1,6 @@
 //! The connection picker over the screen: each connection's dot in its tier's colour, where it goes, whether it
 //! takes writes, and whether its session is open. vtui draws the popup around it.
-use super::app::{App, Overlay, SessionState};
+use super::app::{App, Note, Overlay, SessionState};
 use super::theme;
 use crate::connection::{Connection, WritePolicy};
 use ratatui::Frame;
@@ -10,15 +10,32 @@ use vtui::palette::MAX_SHOWN;
 use vtui::palette::view::{self, Popup};
 use vtui::text::truncate;
 
-const FOOTER: &str = "  ↑↓ pick · ⏎ opens or switches · esc";
+const FOOTER: &str = "  ↑↓ pick · ⏎ opens · ^d removes · ^x closes · esc";
 
 /// The picker when it is open.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App) {
     let Some(Overlay::Picker(picker)) = &app.overlay else { return };
-    let prompt = view::prompt(&app.theme, picker, "", |_| vec![]);
+    let prompt = view::prompt(&app.theme, &picker.palette, "", |_| vec![]);
     let popup = Popup { title: "Connections", prompt, footer: FOOTER };
-    let matching = app.matching(&picker.input);
-    view::draw(f, &app.theme, f.area(), popup, |room| lines(app, &matching, picker.selected, room));
+    let matching = app.matching(&picker.palette.input);
+    view::draw(f, &app.theme, f.area(), popup, |room| {
+        let mut lines = lines(app, &matching, picker.palette.selected, room);
+        lines.extend(picker.note.as_ref().map(|note| note_line(app, note, room)));
+        lines
+    });
+}
+
+/// The question or the word under the list.
+fn note_line(app: &App, note: &Note, room: usize) -> Line<'static> {
+    let (text, style) = match note {
+        Note::ConfirmRemove(name) => (
+            format!("  remove `{name}`? y removes it, any other key keeps it"),
+            Style::default().fg(theme::failure(&app.theme)).add_modifier(Modifier::BOLD),
+        ),
+        Note::Said(said) => (format!("  {said}"), Style::default().fg(app.theme.muted)),
+        Note::Failed(why) => (format!("  ✗ {why}"), Style::default().fg(theme::failure(&app.theme))),
+    };
+    Line::styled(truncate(&text, room + 2), style)
 }
 
 /// The rows in view, scrolled so the highlighted one shows.
@@ -116,5 +133,17 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
         terminal.draw(|f| _ = ui::draw(f, &app)).unwrap();
         insta::assert_snapshot!("picker", terminal.backend());
+    }
+
+    #[test]
+    fn the_picker_asks_before_removing_a_connection() {
+        let mut app = on_local();
+        app.apply(Answer::Session { connection: "local".parse().unwrap(), incoming: Incoming::Opened });
+        ctrl(&mut app, 'o');
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        ctrl(&mut app, 'd');
+        let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
+        terminal.draw(|f| _ = ui::draw(f, &app)).unwrap();
+        insta::assert_snapshot!("picker_confirm", terminal.backend());
     }
 }

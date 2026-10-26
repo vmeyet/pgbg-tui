@@ -25,6 +25,8 @@ pub(crate) enum Act {
     Open,
     Close,
     Chart,
+    Delete,
+    CloseSession,
 }
 
 #[cfg(test)]
@@ -54,7 +56,9 @@ impl Act {
             Self::Find => Some(Self::Open),
             Self::Open => Some(Self::Close),
             Self::Close => Some(Self::Chart),
-            Self::Chart => None,
+            Self::Chart => Some(Self::Delete),
+            Self::Delete => Some(Self::CloseSession),
+            Self::CloseSession => None,
         }
     }
 
@@ -178,6 +182,8 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Open, Pane::Picker, &[key(KeyCode::Enter)]).help("⏎", "open it, or switch back to it").footer("⏎", "opens"),
     row(Act::Close, Pane::Picker, &[key(KeyCode::Esc), control('o')]).help("esc ^o", "close the picker").footer("esc", "closes"),
     row(Act::Quit, Pane::Picker, &[control('c')]).help("^c", "quit"),
+    row(Act::Delete, Pane::Picker, &[control('d')]).help("^d", "remove the connection from the config, once you say yes"),
+    row(Act::CloseSession, Pane::Picker, &[control('x')]).help("^x", "close its session and its tunnel"),
     row(Act::Connections, Pane::Anywhere, &[control('o')]).help("^o", "pick a connection").footer("^o", "connections"),
     row(Act::Quit, Pane::Anywhere, &[control('c')]).help("^c", "quit").footer("^c", "quit"),
 ];

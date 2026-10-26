@@ -44,8 +44,9 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> Fit {
 /// the area inside it.
 fn framed(f: &mut Frame<'_>, app: &App) -> Rect {
     let sheet = app.sheet();
-    let colour = theme::tier(&app.theme, sheet.tier);
-    let pill = Span::styled(format!(" ● {} · {} ", sheet.name, sheet.tier), Style::default().fg(colour).add_modifier(Modifier::BOLD));
+    let tier = sheet.connection.tier();
+    let colour = theme::tier(&app.theme, tier);
+    let pill = Span::styled(format!(" ● {} · {tier} ", sheet.name()), Style::default().fg(colour).add_modifier(Modifier::BOLD));
     let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(colour)).title(pill);
     let inside = block.inner(f.area());
     f.render_widget(block, f.area());
@@ -202,7 +203,7 @@ mod tests {
     fn the_sidebar_shows_the_tree_and_marks_the_open_query() {
         let mut app = with_queries();
         app.apply(Answer::Queries(QueryAnswer::Opened {
-            connection: app.sheet().name.clone(),
+            connection: app.sheet().name().clone(),
             query: query("orders/daily.sql"),
             text: "SELECT 1".into(),
         }));
@@ -222,7 +223,7 @@ mod tests {
         let mut app = App::new(vec![shop.clone(), crate::connection::Connection::new("prod", entry).unwrap()], &shop, Theme::default());
         let text = "-- name: daily orders\n-- connection: prod\n-- owner: nina\nSELECT 1";
         app.apply(Answer::Queries(QueryAnswer::Opened {
-            connection: app.sheet().name.clone(),
+            connection: app.sheet().name().clone(),
             query: query("orders/daily.sql"),
             text: text.into(),
         }));
@@ -233,7 +234,7 @@ mod tests {
     fn an_open_query_names_the_editor() {
         let mut app = with_queries();
         app.apply(Answer::Queries(QueryAnswer::Opened {
-            connection: app.sheet().name.clone(),
+            connection: app.sheet().name().clone(),
             query: query("orders/daily.sql"),
             text: "SELECT 1".into(),
         }));

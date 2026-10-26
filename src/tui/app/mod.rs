@@ -3,13 +3,12 @@ use crate::act::{self, Act, Pane};
 use crate::connection::Connection;
 use crossterm::event::{KeyCode, KeyEvent};
 use vtui::help::Help;
-use vtui::palette::Palette;
 use vtui::theme::Theme;
 
 pub(super) use grid::Grid;
 use grid::Move;
-pub(super) use picker::Picking;
-pub(super) use protocol::{Action, Answer, Incoming, QueryAnswer, RunId, TunnelState};
+pub(super) use picker::{Note, Picker};
+pub(super) use protocol::{Action, Answer, ConfigAnswer, Incoming, QueryAnswer, RunId, TunnelState};
 pub(super) use queries::{Finder, Queries};
 pub(super) use sheet::{Run, SessionState, Sheet, View};
 
@@ -60,7 +59,7 @@ pub(super) enum Overlay {
     /// The `ctrl-p` finder of saved queries.
     Finder(Finder),
     /// The `ctrl-o` connection picker.
-    Picker(Palette<Picking>),
+    Picker(Picker),
 }
 
 /// The help after `key`: `?` lists every key, `j`/`k` scroll, any other key closes it.
@@ -196,7 +195,7 @@ impl App {
             Act::Connections => self.open_picker(),
             Act::Chart => self.sheet_mut().switch_view(),
             Act::Open => return self.open_in_sidebar(),
-            Act::Close => {}
+            Act::Close | Act::Delete | Act::CloseSession => {}
         }
         vec![]
     }
@@ -237,8 +236,9 @@ impl App {
         self.sheets.iter().filter_map(Sheet::cancel_of_running).collect()
     }
 
-    /// Applies one answer: a session's or a query read to the sheet of its connection, the list of queries to the app.
-    pub(super) fn apply(&mut self, answer: Answer) {
+    /// Applies one answer: a session's or a query read to the sheet of its connection, the list of queries to the app;
+    /// returns what the runner should do about it.
+    pub(super) fn apply(&mut self, answer: Answer) -> Vec<Action> {
         match answer {
             Answer::Session { connection, incoming } => {
                 if let Some(sheet) = self.sheet_of_mut(&connection) {
@@ -252,7 +252,10 @@ impl App {
                     sheet.query_error = Some(format!("could not open {}: {error}", query.path));
                 }
             }
+            Answer::Config(ConfigAnswer::Changed(connections)) => return self.take_connections(connections),
+            Answer::Config(ConfigAnswer::Failed(error)) => self.config_failed(error),
         }
+        vec![]
     }
 }
 
