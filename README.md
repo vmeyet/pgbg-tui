@@ -3,7 +3,7 @@
 Read your PostgreSQL databases from the terminal: local, staging, and production behind a tunnel.
 Read only by default, saved queries in plain `.sql` files, and charts of your results.
 
-The TUI is not usable yet, but `pgbg connections` and `pgbg run` are: see [`docs/roadmap.md`](docs/roadmap.md).
+The TUI is early: `pgbg` opens it on your first connection, `pgbg tui <connection>` on another; [`docs/roadmap.md`](docs/roadmap.md) says what comes next.
 
 ## Connections
 

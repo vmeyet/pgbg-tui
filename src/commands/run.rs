@@ -1,19 +1,13 @@
-use crate::config::{self, Config};
 use crate::db::model::{ResultSet, Statement};
 use crate::db::{Session, guard};
 use crate::render;
-use anyhow::{Result, bail};
+use anyhow::Result;
 
 /// Runs one statement on the connection named `connection` and prints its result: a plain table, or JSON with `json`.
 pub async fn run(connection: &str, sql: &str, json: bool) -> Result<()> {
-    let path = config::path();
-    let loaded = Config::read(&path)?;
-    super::warn_of_ignored_keys(&loaded.warnings, &path);
-    let Some(connection) = loaded.config.connections.iter().find(|c| c.name().to_string() == connection) else {
-        bail!("no connection `{connection}` in {}: `pgbg connections` lists them", path.display());
-    };
+    let connection = super::connection(Some(connection))?;
     let admitted = guard::admit(Statement::new(sql), connection.writes())?;
-    let result = Session::open(connection).await?.run(&admitted).await?;
+    let result = Session::open(&connection).await?.run(&admitted).await?;
     if json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {

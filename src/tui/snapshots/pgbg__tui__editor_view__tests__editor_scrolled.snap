@@ -1,0 +1,9 @@
+---
+source: src/tui/editor_view.rs
+expression: terminal.backend()
+---
+"╭ Editor ─ READ ONLY ────────╮"
+"│                            │"
+"│                            │"
+"│ 1                          │"
+"╰────────────────────────────╯"

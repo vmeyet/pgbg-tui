@@ -19,7 +19,9 @@ async fn main() {
 
 async fn run(cli: &Cli) -> Result<()> {
     match &cli.command {
-        Command::Connections => commands::connections::run(cli.json),
-        Command::Run { connection, sql } => commands::run::run(connection, sql, cli.json).await,
+        None => commands::tui::run(None).await,
+        Some(Command::Tui { connection }) => commands::tui::run(connection.as_deref()).await,
+        Some(Command::Connections) => commands::connections::run(cli.json),
+        Some(Command::Run { connection, sql }) => commands::run::run(connection, sql, cli.json).await,
     }
 }
