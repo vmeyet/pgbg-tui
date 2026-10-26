@@ -71,6 +71,11 @@ Each entry says what changed, then where, then how to use it.
 
 ### Fixed
 
+- **The connection picker keeps the `WRITES` badge** on a long name or a narrow terminal, cutting the name instead, and says `running…` for a connection whose statement still runs.
+- **Picking a connection whose session failed** in the picker opens it again.
+- **A saved query opens in the editor that asked for it**, even when you switched connection while it was read; its error shows there too.
+- **The sidebar keeps its cursor on the same query** when the list of queries changes, and draws a name's control characters escaped.
+- **A queries folder swapped for a link** after pgbg started is no longer listed or read.
 - **A statement the TUI shows as failed is never sent**: one sent while its session fails to open fails with it, so `⏎` again never runs a write twice.
 - **A `kill` or a closed terminal stops the TUI as `ctrl-c` does**: the running statement is cancelled, one still waiting is never sent, and pgbg warns when a tunnel's port still answers.
 - **`ctrl-c` quits from the connection picker** too.
