@@ -76,7 +76,7 @@ fn tokens(sql: &str) -> Vec<Token> {
     while let Some(c) = rest.chars().next() {
         let after = &rest[c.len_utf8()..];
         rest = match c {
-            '-' if after.starts_with('-') => after.find('\n').map_or("", |end| &after[end..]),
+            '-' if after.starts_with('-') => after.find(['\n', '\r']).map_or("", |end| &after[end..]),
             '/' if after.starts_with('*') => after_block_comment(&after[1..]),
             c if c.is_whitespace() => after,
             ';' => {
@@ -315,6 +315,11 @@ mod tests {
     #[test]
     fn a_quoted_identifier_is_no_keyword() {
         assert_eq!(verdict(r#"SELECT "delete", "a;b" FROM orders"#), Ok(Mode::ReadOnly));
+    }
+
+    #[test]
+    fn a_carriage_return_ends_a_line_comment() {
+        assert_eq!(refused_word("SELECT * FROM orders --\rFOR UPDATE"), "UPDATE");
     }
 
     #[test]

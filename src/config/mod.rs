@@ -105,6 +105,20 @@ url = "postgres://nina@localhost:5432/shop"
     }
 
     #[test]
+    fn a_plain_password_of_any_type_is_refused_without_repeating_it() {
+        for password in ["84217733", "842.17733", "true", "[\"hunter2\"]"] {
+            let err = format!("{:#}", parse(&format!("{SHOP}password = {password}\n")).unwrap_err());
+            assert!(err.contains("plain password") && !err.contains(password), "{err}");
+        }
+    }
+
+    #[test]
+    fn a_syntax_error_names_its_line_without_quoting_it() {
+        let err = format!("{:#}", parse(&format!("{SHOP}password = \"hunter2\n")).unwrap_err());
+        assert!(err.contains("line 9") && !err.contains("hunter2"), "{err}");
+    }
+
+    #[test]
     fn a_missing_file_is_an_empty_config() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(Config::read(&dir.path().join("config.toml")).unwrap().config.connections, Vec::<Connection>::new());

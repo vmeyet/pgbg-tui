@@ -7,6 +7,7 @@ const SCHEMES: [&str; 2] = ["postgres", "postgresql"];
 const LOCAL_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "[::1]"];
 const PASSWORD_IN_URL: &str =
     "`url` carries a password: take it out and set `password = { keychain = \"...\" }`, `{ env = \"...\" }` or `{ command = [...] }`";
+const HOSTADDR_IN_URL: &str = "`url` sets `hostaddr`: pgbg keeps it for the local port its tunnels open; name the host in the URL instead";
 
 /// Where the database is: a `postgres://` URL that never carries a password.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -21,6 +22,9 @@ impl Target {
         }
         if has_password(&url) {
             bail!(PASSWORD_IN_URL);
+        }
+        if has_query_key(&url, "hostaddr") {
+            bail!(HOSTADDR_IN_URL);
         }
         Ok(Self(url))
     }
@@ -46,7 +50,11 @@ fn is_local_host(host: &str) -> bool {
 }
 
 fn has_password(url: &Url) -> bool {
-    url.password().is_some() || url.query_pairs().any(|(key, _)| key == "password")
+    url.password().is_some() || has_query_key(url, "password")
+}
+
+fn has_query_key(url: &Url, wanted: &str) -> bool {
+    url.query_pairs().any(|(key, _)| key == wanted)
 }
 
 impl fmt::Display for Target {
@@ -85,6 +93,11 @@ mod tests {
     fn a_password_in_the_query_is_refused_too() {
         let err = refusal("postgres://nina@db.example.com/shop?password=hunter2");
         assert!(err.contains("password") && !err.contains("hunter2"), "{err}");
+    }
+
+    #[test]
+    fn a_hostaddr_in_the_url_is_refused_since_tunnels_own_it() {
+        assert!(refusal("postgres://nina@localhost/shop?hostaddr=203.0.113.5").contains("hostaddr"));
     }
 
     #[test]

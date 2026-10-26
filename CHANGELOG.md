@@ -22,3 +22,13 @@ Each entry says what changed, then where, then how to use it.
   A plain password, in a `password` key or in a URL, is refused: name a keychain item, an environment variable or a command instead.
 - **TLS on every remote connection**: a connection whose host is not this machine needs `sslmode=require` (or `verify-ca`, `verify-full`) in its `url`, and pgbg checks the server's certificate.
   Set `tls = "off"` on the connection to talk to it in clear on purpose; a local host talks in clear unless its `url` asks for TLS.
+
+### Fixed
+
+- **No more clear text through `hostaddr`**: a `url` with `hostaddr` is refused, since it sent a connection to `localhost` on to another machine without TLS.
+  Name the host in the `url` instead; pgbg keeps `hostaddr` for its tunnels.
+- **A password never shows in a config error**: a `password` written as a number, a boolean or a list is refused like a plain one, and a broken line is reported by its number only.
+  Fix the line the error names in your `config.toml`.
+- **Values cannot talk to your terminal**: `pgbg run` prints a newline, a tab or an escape code inside a value as `\n`, `\t` or `\u{1b}`.
+  Use `--json` to get the exact text.
+- **A `--` comment ends at a carriage return**, as PostgreSQL ends it, so text after it is checked like the rest of the statement.

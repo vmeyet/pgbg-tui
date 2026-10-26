@@ -5,6 +5,7 @@ const GAP: &str = "  ";
 
 /// Rows as aligned lines; every column is padded to its widest cell, the last one is not.
 pub(crate) fn table(rows: &[Vec<String>]) -> String {
+    let rows: Vec<Vec<Cow<'_, str>>> = rows.iter().map(|row| row.iter().map(|cell| printable(cell)).collect()).collect();
     let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
     let widths: Vec<usize> =
         (0..columns).map(|c| rows.iter().filter_map(|row| row.get(c)).map(|cell| width(cell)).max().unwrap_or(0)).collect();
@@ -32,7 +33,7 @@ fn escape_control(c: char) -> String {
     if c.is_control() { c.escape_default().collect() } else { c.into() }
 }
 
-fn line(row: &[String], widths: &[usize]) -> String {
+fn line(row: &[Cow<'_, str>], widths: &[usize]) -> String {
     let padded: Vec<String> = row.iter().zip(widths).map(|(cell, width)| format!("{cell:<width$}")).collect();
     padded.join(GAP).trim_end().to_owned() + "\n"
 }
@@ -58,6 +59,17 @@ mod tests {
     #[test]
     fn control_characters_print_escaped() {
         assert_eq!(printable("\u{1b}]0;title\u{7} nina\nnoel"), "\\u{1b}]0;title\\u{7} nina\\nnoel");
+    }
+
+    #[test]
+    fn control_characters_in_a_cell_print_escaped() {
+        let rows = [row(&["\u{1b}]0;title\u{7}", "nina\nnoel\t."])];
+        assert_eq!(table(&rows), "\\u{1b}]0;title\\u{7}  nina\\nnoel\\t.\n");
+    }
+
+    #[test]
+    fn printable_text_is_kept_as_is() {
+        assert_eq!(printable("Zoë ✓ 12.50"), "Zoë ✓ 12.50");
     }
 
     #[test]
