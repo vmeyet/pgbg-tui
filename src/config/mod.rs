@@ -7,8 +7,10 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 mod ignored;
+mod keychain;
 mod write;
 
+pub(crate) use keychain::{keychain_item_to_delete, replaced_keychain_item};
 pub(crate) use write::{ConnectionChange, add_connection, edit_connection, remove_connection, set_password};
 
 const PATH_VARIABLE: &str = "PGBG_CONFIG";
