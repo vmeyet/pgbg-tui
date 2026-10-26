@@ -6,6 +6,7 @@ mod config;
 mod connection;
 mod db;
 pub mod log;
+mod query;
 mod render;
 mod secret;
 mod syntax;

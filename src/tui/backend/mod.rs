@@ -1,14 +1,18 @@
-//! What the runner calls: the session of the open connection, served by a task that owns it.
+//! What the runner calls: the session of the open connection, served by a task that owns it, and the saved queries.
 use super::app::{Incoming, RunId, TunnelState};
 use crate::connection::{Connection, WritePolicy};
 use crate::db::model::{CancelToken, Route, ServerError, Statement};
 use crate::db::{Session, guard};
+use crate::query::Root;
 use crate::tunnel::{Died, Tunnel};
+use queries::QueryFiles;
 use std::pin::pin;
 use std::time::Duration;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
+
+mod queries;
 
 /// How long quitting waits for the session task to finish a cancel, so the terminal comes back soon.
 const STOP_WAIT: Duration = Duration::from_secs(2);
@@ -22,6 +26,7 @@ pub(super) struct Backend {
     runs: UnboundedSender<Queued>,
     cancels: UnboundedSender<RunId>,
     task: JoinHandle<()>,
+    pub(super) queries: QueryFiles,
 }
 
 /// A statement waiting for the session, and its run.
@@ -32,12 +37,13 @@ struct Queued {
 }
 
 impl Backend {
-    /// Starts the task that opens a session on `connection` and runs each statement in turn.
-    pub(super) fn start(connection: Connection, answers: UnboundedSender<Incoming>) -> Self {
+    /// Starts the task that opens a session on `connection` and runs each statement in turn; queries are read under `root`.
+    pub(super) fn start(connection: Connection, root: Option<Root>, answers: UnboundedSender<Incoming>) -> Self {
         let (runs, queue) = mpsc::unbounded_channel();
         let (cancels, cancelled) = mpsc::unbounded_channel();
+        let queries = QueryFiles { root, answers: answers.clone() };
         let task = tokio::spawn(SessionTask { connection, tunnel: None, session: None, cancelled, answers }.serve(queue));
-        Self { runs, cancels, task }
+        Self { runs, cancels, task, queries }
     }
 
     /// Queues `statement` behind the one running; its answer comes back as `Incoming`.
@@ -56,7 +62,7 @@ impl Backend {
 
     /// Lets the session task finish what it was asked, a cancel included, waiting `STOP_WAIT` at most.
     pub(super) async fn stop(self) {
-        let Self { runs, cancels, task } = self;
+        let Self { runs, cancels, task, .. } = self;
         drop((runs, cancels));
         match tokio::time::timeout(STOP_WAIT, task).await {
             Ok(Ok(())) => {}
@@ -269,7 +275,7 @@ mod tests {
 
     fn started_on(connection: Connection) -> (Backend, UnboundedReceiver<Incoming>) {
         let (sender, answers) = mpsc::unbounded_channel();
-        (Backend::start(connection, sender), answers)
+        (Backend::start(connection, None, sender), answers)
     }
 
     /// A connection to the test database through a forwarder whose command line carries `marker`, so a test can kill it.

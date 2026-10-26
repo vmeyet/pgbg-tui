@@ -15,7 +15,7 @@ use vtui::theme::Theme;
 /// The editor in `area`, scrolled so the cursor's line shows, with the terminal's cursor on it when it has the keys.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
     let focused = app.focus == Focus::Editor;
-    let block = pane::framed(&app.theme, "Editor", focused).title(badge(app));
+    let block = pane::framed(&app.theme, &title(app), focused).title(badge(app));
     let inside = block.inner(area);
     f.render_widget(block, area);
     let (before, _, _) = app.editor.split();
@@ -74,6 +74,11 @@ fn coloured_line<'a>(
         pieces.push(Span::styled(" ", mark_style));
     }
     Line::from(pieces)
+}
+
+/// `Editor`, then the path of the saved query in it.
+fn title(app: &App) -> String {
+    app.queries.opened.as_ref().map_or_else(|| "Editor".to_owned(), |path| format!("Editor · {path}"))
 }
 
 fn badge(app: &App) -> Span<'static> {
