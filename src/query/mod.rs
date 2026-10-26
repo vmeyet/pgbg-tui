@@ -97,6 +97,7 @@ enum RootProblem {
     Link,
     NotAFolder,
     OwnedByAnotherUser,
+    LeadsElsewhere,
 }
 
 impl fmt::Display for RootProblem {
@@ -106,6 +107,7 @@ impl fmt::Display for RootProblem {
             Self::Link => "it is a link",
             Self::NotAFolder => "it is not a folder",
             Self::OwnedByAnotherUser => "another user owns it",
+            Self::LeadsElsewhere => "it leads somewhere else than when pgbg started",
         })
     }
 }
@@ -121,12 +123,35 @@ fn root_problem(dir: &Path, owner: u32) -> Option<RootProblem> {
     (metadata.uid() != owner).then_some(RootProblem::OwnedByAnotherUser)
 }
 
-/// `root` when each of `dirs` is a folder of the user's own and none is a link, else none and a warning.
-fn checked_root(root: PathBuf, dirs: &[&Path]) -> Option<PathBuf> {
-    let owner = rustix::process::getuid().as_raw();
-    let Some((dir, problem)) = dirs.iter().find_map(|dir| Some((dir, root_problem(dir, owner)?))) else { return Some(root) };
-    tracing::warn!("the queries folder {} is skipped: {problem}", dir.display());
-    None
+/// A folder of queries as it was found: the folders checked on the way to it, and the real path it had then.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Root {
+    dir: PathBuf,
+    checked: Vec<PathBuf>,
+    real: PathBuf,
+}
+
+impl Root {
+    /// `dir` when each of `checked` is a folder of the user's own and none is a link, else none and a warning.
+    fn checked(dir: PathBuf, checked: Vec<PathBuf>) -> Option<Self> {
+        let real = fs::canonicalize(&dir).unwrap_or_default();
+        let root = Self { dir, checked, real };
+        root.is_still_safe().then_some(root)
+    }
+
+    /// Whether the folder still passes the checks it passed when found, and leads where it led; a warning when not.
+    fn is_still_safe(&self) -> bool {
+        let Some((dir, problem)) = self.problem() else { return true };
+        tracing::warn!("the queries folder {} is skipped: {problem}", dir.display());
+        false
+    }
+
+    fn problem(&self) -> Option<(&Path, RootProblem)> {
+        let owner = rustix::process::getuid().as_raw();
+        let checked = self.checked.iter().find_map(|dir| Some((dir.as_path(), root_problem(dir, owner)?)));
+        let leads_elsewhere = fs::canonicalize(&self.dir).ok().as_ref() != Some(&self.real);
+        checked.or_else(|| leads_elsewhere.then_some((self.dir.as_path(), RootProblem::LeadsElsewhere)))
+    }
 }
 
 /// The folders from `working_dir` up to `home` or the first one holding `.git`, both included.
@@ -137,18 +162,18 @@ fn walked<'a>(places: &Places<'a>) -> Vec<&'a Path> {
     ancestors[..kept].to_vec()
 }
 
-fn project_root(places: &Places<'_>) -> Option<PathBuf> {
+fn project_root(places: &Places<'_>) -> Option<Root> {
     let project = walked(places).into_iter().map(|dir| dir.join(PROJECT_DIR)).find(|dir| exists(&dir.join(QUERIES_DIR)))?;
     let root = project.join(QUERIES_DIR);
-    checked_root(root.clone(), &[&project, &root])
+    Root::checked(root.clone(), vec![project, root])
 }
 
-fn user_root(config_dir: &Path) -> Option<PathBuf> {
+fn user_root(config_dir: &Path) -> Option<Root> {
     let root = config_dir.join(USER_DIR);
     if !exists(&root) {
         return None;
     }
-    checked_root(root.clone(), &[&root])
+    Root::checked(root.clone(), vec![root])
 }
 
 fn exists(path: &Path) -> bool {
@@ -158,8 +183,8 @@ fn exists(path: &Path) -> bool {
 /// The folders queries live in, each when it exists.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Roots {
-    project: Option<PathBuf>,
-    user: Option<PathBuf>,
+    project: Option<Root>,
+    user: Option<Root>,
 }
 
 impl Roots {
@@ -169,42 +194,47 @@ impl Roots {
         Self { project: project_root(places), user: places.config_dir.and_then(user_root) }
     }
 
-    fn dir(&self, source: Source) -> Option<&Path> {
+    fn root(&self, source: Source) -> Option<&Root> {
         match source {
-            Source::Project => self.project.as_deref(),
-            Source::User => self.user.as_deref(),
+            Source::Project => self.project.as_ref(),
+            Source::User => self.user.as_ref(),
         }
     }
 
-    /// Every query under both roots, sorted; a folder that cannot be read is skipped with a warning. Blocks on the file system.
+    /// Every query under both roots, sorted; a folder that cannot be read, or that changed since it was found, is
+    /// skipped with a warning. Blocks on the file system.
     pub(crate) fn list(&self) -> Vec<Query> {
-        let found = [Source::Project, Source::User].into_iter().filter_map(|source| Some((source, self.dir(source)?)));
+        let safe = |source| self.root(source).filter(|root| root.is_still_safe()).map(|root| (source, root.dir.as_path()));
+        let found = [Source::Project, Source::User].into_iter().filter_map(safe);
         let mut queries: Vec<Query> =
             found.flat_map(|(source, dir)| files_under(dir, "").into_iter().map(move |path| Query { source, path })).collect();
         queries.sort();
         queries
     }
 
-    /// The text of `query`, read without blocking: a plain file inside its root, `MAX_QUERY_BYTES` at most.
+    /// The text of `query`, read without blocking: a plain file inside its root, as the root was found, `MAX_QUERY_BYTES` at most.
     pub(crate) async fn read(&self, query: &Query) -> Result<String> {
-        let root = self.dir(query.source).with_context(|| format!("no {} queries folder", query.source))?;
-        read_inside(root, &query.path.under(root)).await.with_context(|| format!("reading {}", query.path))
+        let root = self.root(query.source).with_context(|| format!("no {} queries folder", query.source))?.clone();
+        read_inside(root, &query.path).await.with_context(|| format!("reading {}", query.path))
     }
 }
 
-async fn read_inside(root: &Path, path: &Path) -> Result<String> {
-    check_inside(root, path).await?;
-    check_readable(&tokio::fs::symlink_metadata(path).await?)?;
+async fn read_inside(root: Root, query: &QueryPath) -> Result<String> {
+    let (path, real_root) = (query.under(&root.dir), root.real.clone());
+    if !tokio::task::spawn_blocking(move || root.is_still_safe()).await? {
+        bail!("its queries folder changed since pgbg started");
+    }
+    check_inside(&real_root, &path).await?;
+    check_readable(&tokio::fs::symlink_metadata(&path).await?)?;
     let mut text = String::new();
     tokio::fs::File::open(path).await?.take(MAX_QUERY_BYTES + 1).read_to_string(&mut text).await?;
     check_size(text.len() as u64)?;
     Ok(text)
 }
 
-/// Refuses a path that a link, swapped in after the listing, takes out of `root`.
-async fn check_inside(root: &Path, path: &Path) -> Result<()> {
-    let (root, path) = (tokio::fs::canonicalize(root).await?, tokio::fs::canonicalize(path).await?);
-    if !path.starts_with(&root) {
+/// Refuses a path that a link, swapped in after the listing, takes out of the root whose real path is `real_root`.
+async fn check_inside(real_root: &Path, path: &Path) -> Result<()> {
+    if !tokio::fs::canonicalize(path).await?.starts_with(real_root) {
         bail!("it leads out of the queries folder");
     }
     Ok(())
@@ -279,7 +309,11 @@ mod tests {
     }
 
     fn project(root: &Path) -> Roots {
-        Roots { project: Some(root.into()), user: None }
+        Roots { project: Some(unchecked(root)), user: None }
+    }
+
+    fn unchecked(dir: &Path) -> Root {
+        Root { dir: dir.into(), checked: vec![], real: fs::canonicalize(dir).unwrap() }
     }
 
     fn listed(roots: &Roots) -> Vec<String> {
@@ -309,7 +343,7 @@ mod tests {
         let places = Places { working_dir: config.path(), home: None, config_dir: Some(config.path()) };
         assert_eq!(Roots::find(&places).user, None);
         write(config.path(), "pgbg/queries/mine.sql");
-        assert_eq!(Roots::find(&places).user, Some(config.path().join("pgbg/queries")));
+        assert_eq!(Roots::find(&places).user.map(|root| root.dir), Some(config.path().join("pgbg/queries")));
     }
 
     #[test]
@@ -319,7 +353,7 @@ mod tests {
             write(root.path(), file);
         }
         write(user.path(), "mine.sql");
-        let roots = Roots { user: Some(user.path().into()), ..project(root.path()) };
+        let roots = Roots { user: Some(unchecked(user.path())), ..project(root.path()) };
         assert_eq!(listed(&roots), ["project customers.sql", "project orders/daily.sql", "project orders/weekly/top.sql", "user mine.sql"]);
     }
 
@@ -334,7 +368,7 @@ mod tests {
     }
 
     fn find_from(working_dir: &Path, home: Option<&Path>) -> Option<PathBuf> {
-        Roots::find(&Places { working_dir, home, config_dir: None }).project
+        Roots::find(&Places { working_dir, home, config_dir: None }).project.map(|root| root.dir)
     }
 
     fn daily() -> Query {
@@ -387,6 +421,31 @@ mod tests {
         write(outside.path(), "queries/secret.sql");
         std::os::unix::fs::symlink(outside.path(), project.path().join(".pgbg")).unwrap();
         assert_eq!(find_from(project.path(), None), None);
+    }
+
+    /// The roots found in a project whose `.pgbg` is then swapped for a link to another one with the same queries.
+    fn found_then_swapped_for_a_link() -> (Roots, [tempfile::TempDir; 2]) {
+        let (project, outside) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        write(project.path(), ".pgbg/queries/orders/daily.sql");
+        write(outside.path(), "queries/orders/daily.sql");
+        let roots = Roots::find(&Places { working_dir: project.path(), home: None, config_dir: None });
+        fs::rename(project.path().join(".pgbg"), project.path().join("was")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), project.path().join(".pgbg")).unwrap();
+        (roots, [project, outside])
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn listing_skips_a_root_swapped_for_a_link_since_it_was_found() {
+        let (roots, _dirs) = found_then_swapped_for_a_link();
+        assert_eq!(listed(&roots), Vec::<String>::new());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn reading_refuses_a_root_swapped_for_a_link_since_it_was_found() {
+        let (roots, _dirs) = found_then_swapped_for_a_link();
+        assert!(roots.read(&daily()).await.is_err());
     }
 
     #[test]
