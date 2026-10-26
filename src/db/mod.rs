@@ -9,7 +9,7 @@ use std::time::Duration;
 use tokio::sync::watch;
 use tokio::time::timeout;
 use tokio_postgres::config::SslMode;
-use tokio_postgres::error::ErrorPosition;
+use tokio_postgres::error::{ErrorPosition, SqlState};
 use tokio_postgres::tls::MakeTlsConnect;
 use tokio_postgres::{Client, Config, NoTls, RowStream, Socket, Statement as Prepared, Transaction};
 use tokio_postgres_rustls::MakeRustlsConnect;
@@ -28,6 +28,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const STOP_WHEN_CLIENT_GONE: &str = "SET client_connection_check_interval = '1s'";
 const SERVER_CLOSED: &str = "the server closed the link";
 const LINK_TASK_GONE: &str = "the link's task is gone";
+const PROBE_SAVEPOINT: &str = "SAVEPOINT pgbg_probe";
+const RELEASE_PROBE: &str = "RELEASE SAVEPOINT pgbg_probe";
 const ROLLBACK_FAILED: &str = "a rollback failed, so the server may still hold its transaction";
 
 /// An open link to one connection.
@@ -84,14 +86,36 @@ impl Session {
     pub(crate) async fn run(&mut self, admitted: &Admitted) -> Result<ResultSet> {
         let sql = admitted.statement.as_str();
         match admitted.mode {
-            Mode::Writes => fetch(&self.client, sql).await,
+            Mode::Writes => self.run_writes(sql).await,
             Mode::ReadOnly => self.run_read_only(sql).await,
+        }
+    }
+
+    /// A statement that returns rows goes through a portal in its own committed transaction, so the
+    /// server sends no row past the cap; one inside a transaction the user began, or one without rows, runs as is.
+    async fn run_writes(&mut self, sql: &str) -> Result<ResultSet> {
+        let statement = self.client.prepare(sql).await.map_err(server_error)?;
+        if statement.columns().is_empty() || self.is_in_user_transaction().await? {
+            return fetch(&self.client, &statement).await;
+        }
+        let transaction = self.client.transaction().await.map_err(server_error)?;
+        let result = fetch_from_portal(&transaction, &statement).await?;
+        transaction.commit().await.map_err(server_error)?;
+        Ok(result)
+    }
+
+    /// Whether a `BEGIN` the user ran left a transaction open: only there does a savepoint take.
+    async fn is_in_user_transaction(&self) -> Result<bool> {
+        match self.client.batch_execute(PROBE_SAVEPOINT).await {
+            Ok(()) => self.client.batch_execute(RELEASE_PROBE).await.map(|()| true).map_err(server_error),
+            Err(err) if err.code() == Some(&SqlState::NO_ACTIVE_SQL_TRANSACTION) => Ok(false),
+            Err(err) => Err(server_error(err)),
         }
     }
 
     async fn run_read_only(&mut self, sql: &str) -> Result<ResultSet> {
         let transaction = self.client.build_transaction().read_only(true).start().await.map_err(server_error)?;
-        let result = fetch_from_portal(&transaction, sql).await;
+        let result = prepare_and_fetch_from_portal(&transaction, sql).await;
         let rolled_back = transaction.rollback().await;
         self.has_failed_rollback = rolled_back.is_err();
         rolled_back.map_err(server_error)?;
@@ -182,19 +206,22 @@ async fn stop_statements_when_client_gone(client: &Client) {
     }
 }
 
-/// Prepares `sql` first, so a result without rows still has its columns, then streams the rows.
-async fn fetch(client: &Client, sql: &str) -> Result<ResultSet> {
-    let statement = client.prepare(sql).await.map_err(server_error)?;
-    let rows = client.query_raw(&statement, NO_PARAMETERS).await.map_err(server_error)?;
-    first_rows(&statement, rows).await
+/// Streams the rows of `statement`, prepared first so a result without rows still has its columns.
+async fn fetch(client: &Client, statement: &Prepared) -> Result<ResultSet> {
+    let rows = client.query_raw(statement, NO_PARAMETERS).await.map_err(server_error)?;
+    first_rows(statement, rows).await
 }
 
-/// Like `fetch`, through a portal: the server sends no row past the cap, so the rollback does not wait on them.
-async fn fetch_from_portal(transaction: &Transaction<'_>, sql: &str) -> Result<ResultSet> {
-    let statement = transaction.prepare(sql).await.map_err(server_error)?;
-    let portal = transaction.bind(&statement, &[]).await.map_err(server_error)?;
+/// Like `fetch`, through a portal: the server sends no row past the cap, so ending the transaction does not wait on them.
+async fn fetch_from_portal(transaction: &Transaction<'_>, statement: &Prepared) -> Result<ResultSet> {
+    let portal = transaction.bind(statement, &[]).await.map_err(server_error)?;
     let rows = transaction.query_portal_raw(&portal, (ROW_CAP + 1) as i32).await.map_err(server_error)?;
-    first_rows(&statement, rows).await
+    first_rows(statement, rows).await
+}
+
+async fn prepare_and_fetch_from_portal(transaction: &Transaction<'_>, sql: &str) -> Result<ResultSet> {
+    let statement = transaction.prepare(sql).await.map_err(server_error)?;
+    fetch_from_portal(transaction, &statement).await
 }
 
 /// The first `ROW_CAP` rows of `rows`, decoded; one more says the result is cut.
@@ -339,6 +366,51 @@ mod tests {
         assert_eq!((result.rows.len(), result.is_cut), (ROW_CAP, true));
     }
 
+    async fn run_on(session: &mut Session, sql: &str) -> ResultSet {
+        session.run(&guard::admit(Statement::new(sql), WritePolicy::Allowed).unwrap()).await.unwrap()
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_cut_result_on_a_connection_that_allows_writes_leaves_the_server_idle() {
+        let mut writer = session(WritePolicy::Allowed).await;
+        let pid = run_on(&mut writer, "SELECT pg_backend_pid()").await.rows[0][0].to_string();
+        run_on(&mut writer, &numbers_up_to(100_000_000)).await;
+        let state = format!("SELECT state FROM pg_stat_activity WHERE pid = {pid}");
+        let watched = run(WritePolicy::ReadOnly, &state).await.unwrap();
+        assert_eq!(watched.rows, [[Value::Text("idle".into())]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_write_that_returns_rows_is_committed() {
+        run(WritePolicy::Allowed, "DROP TABLE IF EXISTS orders_returned").await.unwrap();
+        run(WritePolicy::Allowed, "CREATE TABLE orders_returned (id int)").await.unwrap();
+        run(WritePolicy::Allowed, "INSERT INTO orders_returned VALUES (41) RETURNING id").await.unwrap();
+        let seen = run(WritePolicy::ReadOnly, "SELECT count(*)::int4 FROM orders_returned WHERE id = 41").await.unwrap();
+        assert_eq!(seen.rows, [[Value::Int(1)]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_select_inside_a_transaction_the_user_began_leaves_it_to_the_user() {
+        run(WritePolicy::Allowed, "DROP TABLE IF EXISTS orders_undone").await.unwrap();
+        run(WritePolicy::Allowed, "CREATE TABLE orders_undone (id int)").await.unwrap();
+        let mut writer = session(WritePolicy::Allowed).await;
+        run_on(&mut writer, "BEGIN").await;
+        run_on(&mut writer, "INSERT INTO orders_undone VALUES (7)").await;
+        run_on(&mut writer, "SELECT id FROM orders_undone").await;
+        run_on(&mut writer, "ROLLBACK").await;
+        let seen = run(WritePolicy::ReadOnly, "SELECT count(*)::int4 FROM orders_undone").await.unwrap();
+        assert_eq!(seen.rows, [[Value::Int(0)]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_statement_that_cannot_run_in_a_transaction_runs_when_writes_are_allowed() {
+        assert!(run(WritePolicy::Allowed, "VACUUM").await.is_ok());
+    }
+
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_session_asks_the_server_to_stop_its_statement_once_pgbg_is_gone() {
@@ -421,9 +493,9 @@ mod tests {
         let mut sleeper = session(WritePolicy::ReadOnly).await;
         let token = sleeper.cancel_token();
         let running = tokio::spawn(async move { sleeper.run(&guard::admit(Statement::new(SLEEP), WritePolicy::ReadOnly).unwrap()).await });
-        let watcher = session(WritePolicy::ReadOnly).await;
+        let mut watcher = session(WritePolicy::ReadOnly).await;
         let is_sleeping = format!("SELECT 1 FROM pg_stat_activity WHERE query = '{SLEEP}' AND state = 'active'");
-        while fetch(&watcher.client, &is_sleeping).await.unwrap().rows.is_empty() {}
+        while watcher.run(&guard::admit(Statement::new(&is_sleeping), WritePolicy::ReadOnly).unwrap()).await.unwrap().rows.is_empty() {}
         token.cancel().await.unwrap();
         let err = running.await.unwrap().unwrap_err();
         assert!(err.to_string().contains("canceling statement due to user request"), "{err}");
