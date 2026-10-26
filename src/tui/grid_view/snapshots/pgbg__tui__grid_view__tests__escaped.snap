@@ -1,0 +1,6 @@
+---
+source: src/tui/grid_view/mod.rs
+expression: "render(&result, &Grid::new(&result), 50, 2).backend()"
+---
+"    id    total  customer                         "
+"▶    7    12.50  nina\u{1b}]0;owned\u{7}          "

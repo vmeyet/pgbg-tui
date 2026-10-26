@@ -3,6 +3,7 @@ mod actions;
 mod app;
 mod backend;
 mod editor_view;
+mod grid_view;
 mod result_view;
 mod theme;
 mod ui;
@@ -38,7 +39,9 @@ async fn event_loop(
 ) -> Result<()> {
     let mut events = EventStream::new();
     while !app.should_quit {
-        terminal.draw(|f| ui::draw(f, app))?;
+        let mut grid_rows = 0;
+        terminal.draw(|f| grid_rows = ui::draw(f, app))?;
+        app.fit_grid(grid_rows);
         let actions = tokio::select! {
             Some(event) = events.next() => match event? {
                 Event::Key(key) if key.kind != KeyEventKind::Release => app.handle_key(key),

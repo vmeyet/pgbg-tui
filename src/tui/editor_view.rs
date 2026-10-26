@@ -1,5 +1,5 @@
 //! The SQL editor pane: the text, the cursor kept in view, and whether the connection takes writes.
-use super::app::App;
+use super::app::{App, Focus};
 use crate::connection::WritePolicy;
 use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
@@ -8,9 +8,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use vtui::pane;
 
-/// The editor in `area`, scrolled so the cursor's line shows, with the terminal's cursor on it.
+/// The editor in `area`, scrolled so the cursor's line shows, with the terminal's cursor on it when it has the keys.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
-    let block = pane::framed(&app.theme, "Editor", true).title(badge(app));
+    let focused = app.focus == Focus::Editor;
+    let block = pane::framed(&app.theme, "Editor", focused).title(badge(app));
     let inside = block.inner(area);
     f.render_widget(block, area);
     let (before, _, _) = app.editor.split();
@@ -18,6 +19,9 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
     let column = Line::from(before.rsplit('\n').next().unwrap_or_default()).width() as u16;
     let scroll = row.saturating_sub(inside.height.saturating_sub(1));
     f.render_widget(Paragraph::new(app.editor.text()).scroll((scroll, 0)), inside);
+    if !focused {
+        return;
+    }
     let x = (inside.x + column).min(inside.right().saturating_sub(1));
     f.set_cursor_position(Position { x, y: inside.y + row - scroll });
 }
