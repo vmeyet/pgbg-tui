@@ -6,6 +6,7 @@ use guard::{Admitted, Mode};
 use model::{CancelToken, ResultSet, Route, ServerError};
 use std::time::Duration;
 use tokio::sync::watch;
+use tokio::task::AbortHandle;
 use tokio::time::timeout;
 use tokio_postgres::config::SslMode;
 use tokio_postgres::error::{ErrorPosition, SqlState};
@@ -46,6 +47,10 @@ pub(crate) struct Session {
     has_failed_rollback: bool,
     /// Why the link ended, set by the task that drives it.
     ended: watch::Receiver<Option<String>>,
+    link: AbortHandle,
+    /// A `run` began and has not returned: a session dropped then cuts its link, so the server stops the statement
+    /// instead of the link finishing it.
+    is_mid_statement: bool,
 }
 
 impl Session {
@@ -60,11 +65,11 @@ impl Session {
             Tls::On => open_client(config.ssl_mode(SslMode::Require), MakeRustlsConnect::with_webpki_roots()).await,
             Tls::Off => open_client(config.ssl_mode(SslMode::Disable), NoTls).await,
         };
-        let Connected { client, ended } = connected.with_context(|| format!("connecting to {}", connection.name()))?;
+        let Connected { client, ended, link } = connected.with_context(|| format!("connecting to {}", connection.name()))?;
         stop_statements_when_client_gone(&client).await;
         let timeout = statement_timeout_in_effect(&client, connection.statement_timeout()).await?;
         set_statement_timeout(&client, timeout).await?;
-        Ok(Self { client, tls, has_failed_rollback: false, ended })
+        Ok(Self { client, tls, has_failed_rollback: false, ended, link, is_mid_statement: false })
     }
 
     /// Waits until the link to the server ends, and says why.
@@ -92,10 +97,13 @@ impl Session {
     /// Runs `admitted` alone and returns its first `ROW_CAP` rows; a read-only one is always rolled back.
     pub(crate) async fn run(&mut self, admitted: &Admitted) -> Result<ResultSet> {
         let sql = admitted.statement.as_str();
-        match admitted.mode {
+        self.is_mid_statement = true;
+        let result = match admitted.mode {
             Mode::Writes => self.run_writes(sql).await,
             Mode::ReadOnly => self.run_read_only(sql).await,
-        }
+        };
+        self.is_mid_statement = false;
+        result
     }
 
     /// A statement that returns rows goes through a portal in its own committed transaction, so the
@@ -135,6 +143,14 @@ impl Session {
     }
 }
 
+impl Drop for Session {
+    fn drop(&mut self) {
+        if self.is_mid_statement {
+            self.link.abort();
+        }
+    }
+}
+
 impl CancelToken {
     /// Asks the server to cancel the statement the session is running; that statement then fails
     /// with the server's words. With nothing running, the server does nothing.
@@ -158,10 +174,11 @@ fn connect_wait(config: &Config) -> Duration {
     config.get_connect_timeout().copied().unwrap_or(CONNECT_TIMEOUT)
 }
 
-/// A client, and why its link ended once it has.
+/// A client, why its link ended once it has, and the task that drives the link.
 struct Connected {
     client: Client,
     ended: watch::Receiver<Option<String>>,
+    link: AbortHandle,
 }
 
 async fn open_client<T>(config: &Config, tls: T) -> Result<Connected>
@@ -175,7 +192,7 @@ where
         .with_context(|| format!("the server did not answer within {}s", wait.as_secs()))?
         .map_err(server_error)?;
     let (end, ended) = watch::channel(None);
-    tokio::spawn(async move {
+    let link = tokio::spawn(async move {
         let reason = match connection.await {
             Ok(()) => SERVER_CLOSED.to_owned(),
             Err(err) => {
@@ -186,7 +203,7 @@ where
         };
         end.send_replace(Some(reason));
     });
-    Ok(Connected { client, ended })
+    Ok(Connected { client, ended, link: link.abort_handle() })
 }
 
 /// Best effort: a server older than PostgreSQL 14, or not on Linux, cannot check.
@@ -577,6 +594,21 @@ mod tests {
         token.cancel().await.unwrap();
         let err = running.await.unwrap().unwrap_err();
         assert!(err.to_string().contains("canceling statement due to user request"), "{err}");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_session_dropped_mid_statement_ends_it_on_the_server() {
+        const SLEEP: &str = "SELECT pg_sleep(600)";
+        let mut sleeper = session(WritePolicy::ReadOnly).await;
+        let running = tokio::spawn(async move { sleeper.run(&guard::admit(Statement::new(SLEEP), WritePolicy::ReadOnly).unwrap()).await });
+        let mut watcher = session(WritePolicy::ReadOnly).await;
+        let is_sleeping = format!("SELECT 1 FROM pg_stat_activity WHERE query = '{SLEEP}'");
+        let is_sleeping = guard::admit(Statement::new(&is_sleeping), WritePolicy::ReadOnly).unwrap();
+        while watcher.run(&is_sleeping).await.unwrap().rows.is_empty() {}
+        running.abort();
+        let ended = async { while !watcher.run(&is_sleeping).await.unwrap().rows.is_empty() {} };
+        assert!(timeout(Duration::from_secs(10), ended).await.is_ok(), "the statement still runs on the server");
     }
 
     #[tokio::test]

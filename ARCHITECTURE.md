@@ -51,7 +51,8 @@ Running a statement:
 5. A server error comes back as a `ServerError` with the server's position; the editor marks that character until the text changes.
 6. `Esc` on a running statement returns `Action::Cancel { connection, run }`; the session task sends the server a cancel request over a link of its own, with the session's TLS, only while that run is on the server, and before the next one starts.
    The statement fails with the server's words, and the transaction is always rolled back at the end; a run cancelled before it started is never sent.
-7. `ctrl-c` on a running statement cancels it first; pgbg waits 2 seconds at most for the session task before it exits.
+7. Closing a session (`ctrl-c` to quit, `ctrl-x` in the picker, a connection removed or changed) cancels its running statement first, and one not yet sent never is; pgbg waits 2 seconds at most for the session task, then aborts it.
+   A `Session` dropped in the middle of a statement cuts its link instead of letting it finish, so the server stops the statement and rolls it back (`client_connection_check_interval`).
 
 Switching connection:
 
