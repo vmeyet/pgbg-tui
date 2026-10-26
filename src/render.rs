@@ -29,16 +29,20 @@ pub(crate) fn cell_text(value: &Value, chars: usize) -> String {
 }
 
 /// `text` with each control character escaped, a newline as `\n` and ESC as `\u{1b}`, so a value
-/// from the database can never move the cursor or send the terminal a command.
+/// from the database can never move the cursor, send the terminal a command or reorder the text around it.
 pub(crate) fn printable(text: &str) -> Cow<'_, str> {
-    if !text.chars().any(char::is_control) {
+    if !text.chars().any(is_unprintable) {
         return Cow::Borrowed(text);
     }
-    Cow::Owned(text.chars().map(escape_control).collect())
+    Cow::Owned(text.chars().map(escape_unprintable).collect())
 }
 
-fn escape_control(c: char) -> String {
-    if c.is_control() { c.escape_default().collect() } else { c.into() }
+fn is_unprintable(c: char) -> bool {
+    c.is_control() || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+}
+
+fn escape_unprintable(c: char) -> String {
+    if is_unprintable(c) { c.escape_default().collect() } else { c.into() }
 }
 
 fn line(row: &[Cow<'_, str>], widths: &[usize]) -> String {
@@ -104,6 +108,11 @@ mod tests {
     fn control_characters_in_a_cell_print_escaped() {
         let rows = [row(&["\u{1b}]0;title\u{7}", "nina\nnoel\t."])];
         assert_eq!(table(&rows), "\\u{1b}]0;title\\u{7}  nina\\nnoel\\t.\n");
+    }
+
+    #[test]
+    fn bidi_controls_print_escaped_so_text_cannot_reorder_itself() {
+        assert_eq!(printable("nina\u{202e}lmth.exe\u{2066}"), "nina\\u{202e}lmth.exe\\u{2066}");
     }
 
     #[test]

@@ -12,8 +12,17 @@ pub mod tui;
 
 use crate::config::{self, Config};
 use crate::connection::{Connection, ConnectionName};
+use crate::render::printable;
 use anyhow::{Result, anyhow};
 use std::path::Path;
+
+/// `err` and each of its causes on stderr, escaped: a server error can quote a value from the database.
+pub fn print_error(err: &anyhow::Error) {
+    eprintln!("\x1b[31m✗\x1b[0m {}", printable(&err.to_string()));
+    for cause in err.chain().skip(1) {
+        eprintln!("  \x1b[2m{}\x1b[0m", printable(&cause.to_string()));
+    }
+}
 
 /// Each key of the config this pgbg ignores, on stderr.
 fn warn_of_ignored_keys(warnings: &[String], path: &Path) {
@@ -21,7 +30,7 @@ fn warn_of_ignored_keys(warnings: &[String], path: &Path) {
         return;
     }
     for warning in warnings {
-        eprintln!("! {warning}");
+        eprintln!("! {}", printable(warning));
     }
     eprintln!("  in {}", path.display());
 }

@@ -48,6 +48,15 @@ Each entry says what changed, then where, then how to use it.
 - **A big result cannot fill the memory**: the TUI and `pgbg run` keep the first 10 000 rows, and say `first 10000 rows` when there were more.
   Add a `LIMIT` or a `WHERE` to see the rest.
 - **A statement stops when pgbg quits**: the server checks every second that pgbg is still there, on PostgreSQL 14 and later.
+- **A keychain password with an accent, a tab or any other character outside plain ASCII logs in**: `pgbg` read it back as hex before.
+  Nothing to do: the next session reads it right.
+- **A password too long for the keychain is refused before it is saved**, instead of replacing the item with a cut one.
+  A keychain error now gives the exit status of `security` only, never what it printed.
+- **Errors cannot talk to your terminal**: an escape code a server error quotes from your data prints as `\u{1b}`, and so does a control character in a config key.
+  Values and errors also escape the Unicode marks that reverse the order of text.
+- **`ctrl-u` or `alt` with a letter at the hidden password prompt adds nothing** to the password, instead of the letter.
+- **A config path that links to a missing file is refused** by `pgbg connection` and `pgbg password set`, instead of the link being replaced by a new file.
+  The rewritten file reaches the disk before it replaces the old one.
 
 - **No more clear text through `hostaddr`**: a `url` with `hostaddr` is refused, since it sent a connection to `localhost` on to another machine without TLS.
   Name the host in the `url` instead; pgbg keeps `hostaddr` for its tunnels.

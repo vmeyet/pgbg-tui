@@ -5,7 +5,8 @@ use crate::connection::ConnectionName;
 use crate::secret::SecretSource;
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Serialize;
-use std::path::Path;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use toml_edit::ser::ValueSerializer;
 use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, TableLike, Value};
 
@@ -111,7 +112,7 @@ fn no_connection(name: &ConnectionName) -> anyhow::Error {
 }
 
 fn rewrite(path: &Path, change: impl FnOnce(&mut DocumentMut) -> Result<()>) -> Result<()> {
-    let path = std::fs::canonicalize(path).unwrap_or_else(|_missing| path.to_owned());
+    let path = resolved(path)?;
     let kept = read_kept(&path)?;
     parse(&kept).with_context(|| format!("in {}", path.display()))?;
     let mut document: DocumentMut = kept.parse().map_err(|_quotes_the_line| anyhow!("{} is not TOML", path.display()))?;
@@ -119,6 +120,18 @@ fn rewrite(path: &Path, change: impl FnOnce(&mut DocumentMut) -> Result<()>) -> 
     let text = document.to_string();
     parse(&text).context("the rewritten config would not load")?;
     write_whole(&path, &text)
+}
+
+/// The file `path` names once its links are followed, or `path` itself when there is no file yet;
+/// a link to no file is refused, since writing would replace the link.
+fn resolved(path: &Path) -> Result<PathBuf> {
+    match std::fs::canonicalize(path) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound && path.is_symlink() => {
+            bail!("{} links to {}, which does not exist", path.display(), std::fs::read_link(path)?.display())
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(path.to_owned()),
+        resolved => resolved.with_context(|| format!("finding {}", path.display())),
+    }
 }
 
 /// The config's text, empty when there is no file yet.
@@ -129,12 +142,13 @@ fn read_kept(path: &Path) -> Result<String> {
     }
 }
 
-/// Through a temp file only its owner reads, then a rename: the file is always the old one or the new one.
+/// Through a temp file only its owner reads, on disk before a rename: the file is always the old one or the new one.
 fn write_whole(path: &Path, text: &str) -> Result<()> {
     let dir = path.parent().context("the config path has no folder")?;
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    let temp = tempfile::Builder::new().prefix(".tmp-").tempfile_in(dir).context("creating a temp file")?;
-    std::fs::write(temp.path(), text)?;
+    let mut temp = tempfile::Builder::new().prefix(".tmp-").tempfile_in(dir).context("creating a temp file")?;
+    temp.write_all(text.as_bytes()).context("writing a temp file")?;
+    temp.as_file().sync_all().context("writing a temp file")?;
     temp.persist(path).with_context(|| format!("writing {}", path.display()))?;
     Ok(())
 }
@@ -142,7 +156,6 @@ fn write_whole(path: &Path, text: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     const TYPED: &str = "# my databases\n[connections.local]\ntier = \"local\" # docker\nurl = \"postgres://nina@localhost:5432/shop\"\n\n# the real one\n[connections.prod]\ntier = \"production\"\nurl = \"postgres://nina@db.example.com/shop?sslmode=require\"\nwrites = \"read-only\" # always\n";
 
@@ -275,6 +288,17 @@ mod tests {
         let (_dir, path) = typed_config(TYPED);
         remove_connection(&path, &prod()).unwrap();
         assert_eq!(read(&path), TYPED.split("\n# the real one").next().unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_config_path_that_links_to_no_file_is_refused_and_the_link_stays() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::os::unix::fs::symlink(dir.path().join("dotfiles").join("config.toml"), &path).unwrap();
+        let err = add_connection(&path, &"staging".parse().unwrap(), &staging()).unwrap_err().to_string();
+        assert!(err.contains("links to"), "{err}");
+        assert!(std::fs::symlink_metadata(&path).unwrap().file_type().is_symlink());
     }
 
     #[cfg(unix)]
