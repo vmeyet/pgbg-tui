@@ -1,11 +1,13 @@
-//! What the runner calls: the session of the open connection, served by a task that owns it, and the saved queries.
-use super::app::{Incoming, RunId, TunnelState};
-use crate::connection::{Connection, WritePolicy};
+//! What the runner calls: a session for each connection opened, each served by a task that owns it, and the saved queries.
+use super::app::{Answer, Incoming, RunId, TunnelState};
+use crate::connection::{Connection, ConnectionName, WritePolicy};
 use crate::db::model::{CancelToken, Route, ServerError, Statement};
 use crate::db::{Session, guard};
 use crate::query::Roots;
 use crate::tunnel::{Died, Tunnel};
+use futures_util::future;
 use queries::QueryFiles;
+use std::collections::BTreeMap;
 use std::pin::pin;
 use std::time::Duration;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -14,19 +16,26 @@ use tokio::time::Instant;
 
 mod queries;
 
-/// How long quitting waits for the session task to finish a cancel, so the terminal comes back soon.
+/// How long quitting waits for the session tasks to finish a cancel, so the terminal comes back soon.
 const STOP_WAIT: Duration = Duration::from_secs(2);
 const CANCELLED_BEFORE_SENT: &str = "cancelled before it was sent";
 const TUNNEL_NOT_STARTED: &str = "its tunnel did not start";
 const TUNNEL_DIED: &str = "its tunnel died";
 
-/// The way to the session task: runs and cancels in, answers out on the loop's channel.
+/// The way to each session task, one per connection opened, kept until pgbg quits; answers go out on the loop's channel.
 #[derive(Debug)]
 pub(super) struct Backend {
+    sessions: BTreeMap<ConnectionName, SessionLink>,
+    answers: UnboundedSender<Answer>,
+    pub(super) queries: QueryFiles,
+}
+
+/// The way to one session task: runs and cancels in.
+#[derive(Debug)]
+struct SessionLink {
     runs: UnboundedSender<Queued>,
     cancels: UnboundedSender<RunId>,
     task: JoinHandle<()>,
-    pub(super) queries: QueryFiles,
 }
 
 /// A statement waiting for the session, and its run.
@@ -37,32 +46,68 @@ struct Queued {
 }
 
 impl Backend {
-    /// Starts the task that opens a session on `connection` and runs each statement in turn; queries are read under `roots`.
-    pub(super) fn start(connection: Connection, roots: Roots, answers: UnboundedSender<Incoming>) -> Self {
-        let (runs, queue) = mpsc::unbounded_channel();
-        let (cancels, cancelled) = mpsc::unbounded_channel();
+    /// The backend with no session yet; saved queries are read under `roots`.
+    pub(super) fn new(roots: Roots, answers: UnboundedSender<Answer>) -> Self {
         let queries = QueryFiles { roots, answers: answers.clone() };
-        let task = tokio::spawn(SessionTask { connection, tunnel: None, session: None, cancelled, answers }.serve(queue));
-        Self { runs, cancels, task, queries }
+        Self { sessions: BTreeMap::new(), answers, queries }
     }
 
-    /// Queues `statement` behind the one running; its answer comes back as `Incoming`.
-    pub(super) fn run(&self, run: RunId, statement: Statement) {
+    /// Starts the task that opens a session on `connection`, unless one already serves it.
+    pub(super) fn open(&mut self, connection: Connection) {
+        let answers = &self.answers;
+        self.sessions.entry(connection.name().clone()).or_insert_with(|| SessionLink::start(connection, answers.clone()));
+    }
+
+    /// Queues `statement` on the session of `connection`; its answer comes back as an `Answer`.
+    pub(super) fn run(&self, connection: &ConnectionName, run: RunId, statement: Statement) {
+        let Some(session) = self.sessions.get(connection) else {
+            tracing::warn!("no session for `{connection}`: the statement is dropped");
+            return;
+        };
+        session.run(run, statement);
+    }
+
+    /// Cancels `run` on the session of `connection`; see `SessionLink::cancel`.
+    pub(super) fn cancel(&self, connection: &ConnectionName, run: RunId) {
+        let Some(session) = self.sessions.get(connection) else {
+            tracing::warn!("no session for `{connection}`: the cancel is dropped");
+            return;
+        };
+        session.cancel(run);
+    }
+
+    /// Stops every session task at once, so quitting waits `STOP_WAIT` at most.
+    pub(super) async fn stop(self) {
+        future::join_all(self.sessions.into_values().map(SessionLink::stop)).await;
+    }
+}
+
+impl SessionLink {
+    /// Starts the task that opens a session on `connection` and runs each statement in turn.
+    fn start(connection: Connection, answers: UnboundedSender<Answer>) -> Self {
+        let (runs, queue) = mpsc::unbounded_channel();
+        let (cancels, cancelled) = mpsc::unbounded_channel();
+        let task = tokio::spawn(SessionTask { connection, tunnel: None, session: None, cancelled, answers }.serve(queue));
+        Self { runs, cancels, task }
+    }
+
+    /// Queues `statement` behind the one running.
+    fn run(&self, run: RunId, statement: Statement) {
         if self.runs.send(Queued { run, statement }).is_err() {
             tracing::warn!("the session task is gone: the statement is dropped");
         }
     }
 
     /// Cancels `run` if the session is on it, or keeps it from the server if it has not started; a later run is never touched.
-    pub(super) fn cancel(&self, run: RunId) {
+    fn cancel(&self, run: RunId) {
         if self.cancels.send(run).is_err() {
             tracing::warn!("the session task is gone: the cancel is dropped");
         }
     }
 
     /// Lets the session task finish what it was asked, a cancel included, waiting `STOP_WAIT` at most.
-    pub(super) async fn stop(self) {
-        let Self { runs, cancels, task, .. } = self;
+    async fn stop(self) {
+        let Self { runs, cancels, task } = self;
         drop((runs, cancels));
         match tokio::time::timeout(STOP_WAIT, task).await {
             Ok(Ok(())) => {}
@@ -85,7 +130,7 @@ struct SessionTask {
     tunnel: Option<Tunnel>,
     session: Option<Session>,
     cancelled: UnboundedReceiver<RunId>,
-    answers: UnboundedSender<Incoming>,
+    answers: UnboundedSender<Answer>,
 }
 
 impl SessionTask {
@@ -184,7 +229,7 @@ impl SessionTask {
     }
 
     fn send(&self, incoming: Incoming) {
-        if self.answers.send(incoming).is_err() {
+        if self.answers.send(Answer::Session { connection: self.connection.name().clone(), incoming }).is_err() {
             tracing::warn!("the loop is gone: an answer is dropped");
         }
     }
@@ -263,19 +308,34 @@ mod tests {
 
     const SLEEP: &str = "SELECT pg_sleep(30)";
 
-    fn connection() -> Connection {
+    fn named(name: &str) -> Connection {
         let url = std::env::var("PGBG_TEST_DATABASE_URL").unwrap();
         let entry: Entry = toml::from_str(&format!("tier = \"local\"\nurl = \"{url}\"\n")).unwrap();
-        Connection::new("shop", entry).unwrap()
+        Connection::new(name, entry).unwrap()
     }
 
-    fn started() -> (Backend, UnboundedReceiver<Incoming>) {
+    fn connection() -> Connection {
+        named("shop")
+    }
+
+    fn shop() -> ConnectionName {
+        connection().name().clone()
+    }
+
+    fn incoming(answer: Answer) -> Incoming {
+        let Answer::Session { incoming, .. } = answer else { panic!("not a session's answer: {answer:?}") };
+        incoming
+    }
+
+    fn started() -> (Backend, UnboundedReceiver<Answer>) {
         started_on(connection())
     }
 
-    fn started_on(connection: Connection) -> (Backend, UnboundedReceiver<Incoming>) {
+    fn started_on(connection: Connection) -> (Backend, UnboundedReceiver<Answer>) {
         let (sender, answers) = mpsc::unbounded_channel();
-        (Backend::start(connection, Roots::default(), sender), answers)
+        let mut backend = Backend::new(Roots::default(), sender);
+        backend.open(connection);
+        (backend, answers)
     }
 
     /// A connection to the test database through a forwarder whose command line carries `marker`, so a test can kill it.
@@ -289,10 +349,10 @@ mod tests {
         Connection::new("shop", entry).unwrap()
     }
 
-    async fn answers_until(answers: &mut UnboundedReceiver<Incoming>, last: impl Fn(&Incoming) -> bool) -> Vec<Incoming> {
+    async fn answers_until(answers: &mut UnboundedReceiver<Answer>, last: impl Fn(&Incoming) -> bool) -> Vec<Incoming> {
         let mut seen = vec![];
         while seen.last().is_none_or(|answer| !last(answer)) {
-            seen.push(answers.recv().await.unwrap());
+            seen.push(incoming(answers.recv().await.unwrap()));
         }
         seen
     }
@@ -328,7 +388,7 @@ mod tests {
         kill_tunnel_marked(marker).await;
         let mut seen = vec![];
         while !seen.iter().any(|answer| matches!(answer, Incoming::Closed(_))) || !seen.iter().any(is_tunnel_death) {
-            seen.push(answers.recv().await.unwrap());
+            seen.push(incoming(answers.recv().await.unwrap()));
         }
         assert!(
             seen.iter().any(|answer| matches!(answer, Incoming::Tunnel(TunnelState::Died(how)) if how.contains("`python3` died"))),
@@ -344,7 +404,7 @@ mod tests {
         answers_until(&mut answers, |answer| *answer == Incoming::Opened).await;
         kill_tunnel_marked(marker).await;
         answers_until(&mut answers, is_tunnel_death).await;
-        backend.run(RunId::FIRST, Statement::new("SELECT 1"));
+        backend.run(&shop(), RunId::FIRST, Statement::new("SELECT 1"));
         let seen = answers_until(&mut answers, |answer| matches!(answer, Incoming::Result { .. })).await;
         let seen: Vec<Incoming> = seen.into_iter().filter(|answer| !matches!(answer, Incoming::Closed(_))).collect();
         assert_eq!(seen[0], Incoming::Tunnel(TunnelState::Starting));
@@ -352,17 +412,17 @@ mod tests {
         assert_eq!(seen[2], Incoming::Opened);
     }
 
-    async fn next_answer(answers: &mut UnboundedReceiver<Incoming>) -> Incoming {
+    async fn next_answer(answers: &mut UnboundedReceiver<Answer>) -> Incoming {
         loop {
-            match answers.recv().await.unwrap() {
+            match incoming(answers.recv().await.unwrap()) {
                 Incoming::Opened => {}
                 answer => return answer,
             }
         }
     }
 
-    async fn answer_to(backend: &Backend, answers: &mut UnboundedReceiver<Incoming>, run: RunId, sql: &str) -> Incoming {
-        backend.run(run, Statement::new(sql));
+    async fn answer_to(backend: &Backend, answers: &mut UnboundedReceiver<Answer>, run: RunId, sql: &str) -> Incoming {
+        backend.run(&shop(), run, Statement::new(sql));
         next_answer(answers).await
     }
 
@@ -371,7 +431,7 @@ mod tests {
         session.run(&guard::admit(Statement::new(sql), WritePolicy::ReadOnly).unwrap()).await.unwrap().rows
     }
 
-    async fn backend_pid(backend: &Backend, answers: &mut UnboundedReceiver<Incoming>) -> Value {
+    async fn backend_pid(backend: &Backend, answers: &mut UnboundedReceiver<Answer>) -> Value {
         let Incoming::Result { result, .. } = answer_to(backend, answers, RunId::FIRST, "SELECT pg_backend_pid()").await else {
             panic!("no pid")
         };
@@ -381,6 +441,31 @@ mod tests {
     async fn until_sleeping() {
         let is_sleeping = format!("SELECT 1 FROM pg_stat_activity WHERE query = '{SLEEP}' AND state = 'active'");
         while on_a_side_session(&is_sleeping).await.is_empty() {}
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn an_answer_names_the_connection_whose_session_gave_it() {
+        let (mut backend, mut answers) = started();
+        let copy = named("shop-copy");
+        backend.open(copy.clone());
+        backend.run(copy.name(), RunId::FIRST, Statement::new("SELECT 1"));
+        let connection = loop {
+            if let Answer::Session { connection, incoming: Incoming::Result { .. } } = answers.recv().await.unwrap() {
+                break connection;
+            }
+        };
+        assert_eq!(&connection, copy.name());
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn opening_a_connection_twice_keeps_its_one_session() {
+        let (mut backend, mut answers) = started();
+        let pid = backend_pid(&backend, &mut answers).await;
+        backend.open(connection());
+        let again = answer_to(&backend, &mut answers, RunId::FIRST.next(), "SELECT pg_backend_pid()").await;
+        assert!(matches!(again, Incoming::Result { result, .. } if result.rows[0][0] == pid));
     }
 
     #[tokio::test]
@@ -408,8 +493,8 @@ mod tests {
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_cancel_that_comes_before_its_run_keeps_it_from_the_server() {
         let (backend, mut answers) = started();
-        backend.run(RunId::FIRST, Statement::new(SLEEP));
-        backend.cancel(RunId::FIRST);
+        backend.run(&shop(), RunId::FIRST, Statement::new(SLEEP));
+        backend.cancel(&shop(), RunId::FIRST);
         let answer = next_answer(&mut answers).await;
         assert_eq!(answer, Incoming::Failed { run: RunId::FIRST, error: CANCELLED_BEFORE_SENT.to_owned(), position: None });
     }
@@ -419,7 +504,7 @@ mod tests {
     async fn a_cancel_for_an_earlier_run_leaves_the_running_one_alone() {
         let (backend, mut answers) = started();
         backend_pid(&backend, &mut answers).await;
-        backend.cancel(RunId::FIRST);
+        backend.cancel(&shop(), RunId::FIRST);
         let answer = answer_to(&backend, &mut answers, RunId::FIRST.next(), "SELECT pg_sleep(0.2)").await;
         assert!(matches!(answer, Incoming::Result { .. }), "{answer:?}");
     }
@@ -428,9 +513,9 @@ mod tests {
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn stopping_after_a_cancel_waits_for_the_cancelled_run_to_end() {
         let (backend, mut answers) = started();
-        backend.run(RunId::FIRST, Statement::new(SLEEP));
+        backend.run(&shop(), RunId::FIRST, Statement::new(SLEEP));
         until_sleeping().await;
-        backend.cancel(RunId::FIRST);
+        backend.cancel(&shop(), RunId::FIRST);
         backend.stop().await;
         let answer = next_answer(&mut answers).await;
         assert!(matches!(&answer, Incoming::Failed { error, .. } if error.contains("canceling statement")), "{answer:?}");

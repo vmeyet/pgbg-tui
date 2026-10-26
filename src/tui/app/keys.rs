@@ -1,9 +1,9 @@
 //! The editing keys of the SQL editor: what each one does to the text and its cursor.
-use super::App;
+use super::Sheet;
 use crate::syntax;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-impl App {
+impl Sheet {
     /// Applies `key` to the editor; a change to the text rebuilds its colours and drops the error mark and the place of
     /// the statement sent, which pointed into the old text.
     pub(super) fn edit(&mut self, key: KeyEvent) {
@@ -45,11 +45,12 @@ mod tests {
 
     fn press(text: &str, keys: &[KeyEvent]) -> String {
         let mut app = app();
-        app.editor = Field::new(text);
+        let sheet = app.sheet_mut();
+        sheet.editor = Field::new(text);
         for &key in keys {
-            app.edit(key);
+            sheet.edit(key);
         }
-        let (before, under, after) = app.editor.split();
+        let (before, under, after) = sheet.editor.split();
         format!("{before}|{under}{after}")
     }
 

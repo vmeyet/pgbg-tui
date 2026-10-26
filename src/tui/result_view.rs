@@ -12,10 +12,11 @@ use vtui::pane;
 /// The pane in `area` for the last statement run; returns the grid rows it had room for.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) -> usize {
     let focused = app.focus == Focus::Result;
-    let block = pane::framed(&app.theme, &title(&app.run), focused);
+    let run = &app.sheet().run;
+    let block = pane::framed(&app.theme, &title(run), focused);
     let inside = block.inner(area);
     f.render_widget(block, area);
-    let body = match &app.run {
+    let body = match run {
         Run::Done { result, grid, .. } => return grid_view::draw(f, GridView { result, grid, theme: &app.theme, focused }, inside),
         Run::Idle => Text::styled("⏎ runs the statement under the cursor", Style::default().fg(app.theme.faded)),
         Run::Running => Text::styled("running… esc cancels it", Style::default().fg(app.theme.muted)),
