@@ -12,7 +12,7 @@ The MR that ships a step ticks its box.
 
 - [x] `db/`: connect over rustls, one read-only statement, decode the common types into `db/model/`
 - [x] `db::guard`: refuse anything that is not a read, with a test per statement kind
-- [ ] `pgbg run <connection> "<sql>"`: a plain table, or `--json`
+- [x] `pgbg run <connection> "<sql>"`: a plain table, or `--json`
 - [x] A PostgreSQL service container in CI for the `#[ignore]`d tests
 
 ## 2. The TUI shell

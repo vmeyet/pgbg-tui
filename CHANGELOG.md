@@ -8,6 +8,10 @@ Each entry says what changed, then where, then how to use it.
 
 ### New
 
+- **`pgbg run <connection> "<sql>"`** runs one statement and prints its result as a table, with the row count.
+  Add `--json` for a script: `{"columns": [...], "rows": [[...]]}`.
+  A connection is read only unless it says `writes = "allowed"`: a statement that is not a read is refused before it is sent, and every read runs in a read-only transaction that is rolled back.
+  The password comes from `password = { env = "..." }` or `{ command = [...] }`; `keychain` comes later.
 - **`pgbg connections`** lists the connections of your `config.toml`: name, tier, URL, and how pgbg reaches each one.
   Add `--json` for a script.
   A plain password, in a `password` key or in a URL, is refused: name a keychain item, an environment variable or a command instead.

@@ -4,10 +4,11 @@ use clap::Parser;
 use pgbg::cli::{Cli, Command};
 use pgbg::commands;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let cli = Cli::parse();
     pgbg::log::start();
-    if let Err(err) = run(&cli) {
+    if let Err(err) = run(&cli).await {
         eprintln!("\x1b[31m✗\x1b[0m {err}");
         for cause in err.chain().skip(1) {
             eprintln!("  \x1b[2m{cause}\x1b[0m");
@@ -16,8 +17,9 @@ fn main() {
     }
 }
 
-fn run(cli: &Cli) -> Result<()> {
-    match cli.command {
+async fn run(cli: &Cli) -> Result<()> {
+    match &cli.command {
         Command::Connections => commands::connections::run(cli.json),
+        Command::Run { connection, sql } => commands::run::run(connection, sql, cli.json).await,
     }
 }

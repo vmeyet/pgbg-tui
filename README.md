@@ -3,7 +3,7 @@
 Read your PostgreSQL databases from the terminal: local, staging, and production behind a tunnel.
 Read only by default, saved queries in plain `.sql` files, and charts of your results.
 
-Not usable yet: see [`docs/roadmap.md`](docs/roadmap.md).
+The TUI is not usable yet, but `pgbg connections` and `pgbg run` are: see [`docs/roadmap.md`](docs/roadmap.md).
 
 ## Connections
 
@@ -23,6 +23,13 @@ tunnel = { command = ["ssh", "-N", "-L", "{port}:localhost:5432", "bastion.examp
 
 No password goes in this file: it comes from the keychain, an environment variable or a command.
 A host that is not this machine needs `sslmode=require` in its `url`, or `tls = "off"` on the connection to talk in clear on purpose.
+
+## Run a statement
+
+```sh
+pgbg run local "SELECT id, total FROM orders LIMIT 5"
+pgbg run local "SELECT count(*) FROM orders" --json
+```
 
 ## Saved queries
 

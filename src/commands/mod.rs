@@ -1,6 +1,8 @@
 //! One module per subcommand, each with a `run` the binary calls.
 /// `pgbg connections`.
 pub mod connections;
+/// `pgbg run`.
+pub mod run;
 
 use std::path::Path;
 
