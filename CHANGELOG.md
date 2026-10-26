@@ -10,7 +10,7 @@ Each entry says what changed, then where, then how to use it.
 
 - **The TUI**: `pgbg` opens it on the first connection of your `config.toml`, `pgbg tui <connection>` on the one you name.
   Its frame takes the colour of the connection's tier: green for local, amber for staging, red for production.
-  It holds an editor for a statement, read only unless the connection allows writes; `ctrl-c` quits.
+  Type a statement in the editor and press `⏎` to run it; `⌥⏎` breaks the line, `ctrl-c` quits.
 - **`pgbg run <connection> "<sql>"`** runs one statement and prints its result as a table, with the row count.
   Add `--json` for a script: `{"columns": [...], "rows": [[...]]}`.
   A connection is read only unless it says `writes = "allowed"`: a statement that is not a read is refused before it is sent, and every read runs in a read-only transaction that is rolled back.

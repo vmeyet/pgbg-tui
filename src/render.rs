@@ -9,6 +9,14 @@ pub(crate) fn table(rows: &[Vec<String>]) -> String {
     rows.iter().map(|row| line(row, &widths)).collect()
 }
 
+/// `1 row`, `12 rows`.
+pub(crate) fn row_count(count: usize) -> String {
+    match count {
+        1 => "1 row".to_owned(),
+        count => format!("{count} rows"),
+    }
+}
+
 fn line(row: &[String], widths: &[usize]) -> String {
     let padded: Vec<String> = row.iter().zip(widths).map(|(cell, width)| format!("{cell:<width$}")).collect();
     padded.join(GAP).trim_end().to_owned() + "\n"

@@ -1,15 +1,15 @@
 //! Drawing: the frame in the tier's colour, the panes inside it, and the key hints under them.
-use super::app::App;
-use super::{editor_view, theme};
+use super::app::{App, Link};
+use super::{editor_view, result_view, theme};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Paragraph};
-use vtui::pane;
+use vtui::text::truncate;
 
 const EDITOR_SHARE_PCT: u16 = 40;
-const HINTS: [(&str, &str); 1] = [("^c", "quit")];
+const HINTS: [(&str, &str); 3] = [("⏎", "run"), ("⌥⏎", "new line"), ("^c", "quit")];
 
 /// Where each part of the screen goes.
 struct Areas {
@@ -22,7 +22,7 @@ struct Areas {
 pub(super) fn draw(f: &mut Frame<'_>, app: &App) {
     let areas = layout(framed(f, app));
     editor_view::draw(f, app, areas.editor);
-    f.render_widget(pane::framed(&app.theme, "Result", false), areas.result);
+    result_view::draw(f, app, areas.result);
     footer(f, app, areas.footer);
 }
 
@@ -42,22 +42,36 @@ fn layout(area: Rect) -> Areas {
     Areas { editor, result, footer }
 }
 
-/// The keys that exist.
+/// The keys that exist on the left, the session's state on the right.
 fn footer(f: &mut Frame<'_>, app: &App, area: Rect) {
     let key = Style::default().fg(app.theme.accent).add_modifier(Modifier::BOLD);
     let does = Style::default().fg(app.theme.muted);
     let hints: Vec<Span<'_>> =
         HINTS.iter().flat_map(|&(keys, what)| [Span::styled(format!(" {keys} "), key), Span::styled(format!("{what} "), does)]).collect();
     f.render_widget(Paragraph::new(Line::from(hints)), area);
+    f.render_widget(Paragraph::new(link(app, usize::from(area.width / 2))).right_aligned(), area);
+}
+
+fn link(app: &App, width: usize) -> Line<'static> {
+    match &app.link {
+        Link::Opening => Line::styled("connecting… ", Style::default().fg(app.theme.muted)),
+        Link::Open => Line::styled("connected ", Style::default().fg(app.theme.muted)),
+        Link::Failed(err) => {
+            let first_line = err.lines().next().unwrap_or_default();
+            Line::styled(truncate(&format!("✗ {first_line} "), width), Style::default().fg(app.theme.danger))
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::app::App;
-    use super::super::app::tests::{app, connection};
+    use super::super::app::tests::{app, connection, orders, typed};
+    use super::super::app::{App, Incoming};
     use super::*;
+    use crossterm::event::{KeyCode, KeyEvent};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use std::time::Duration;
     use vtui::theme::Theme;
 
     fn render(app: &App, width: u16, height: u16) -> Terminal<TestBackend> {
@@ -69,6 +83,22 @@ mod tests {
     #[test]
     fn a_fresh_screen_shows_the_connection_an_empty_editor_and_the_keys() {
         insta::assert_snapshot!("fresh", render(&app(), 60, 14).backend());
+    }
+
+    #[test]
+    fn a_result_shows_its_count_its_time_and_its_rows() {
+        let mut app = typed("SELECT id, customer FROM orders");
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        app.apply(Incoming::Opened);
+        app.apply(Incoming::Result { result: orders(), took: Duration::from_millis(38) });
+        insta::assert_snapshot!("result", render(&app, 60, 14).backend());
+    }
+
+    #[test]
+    fn a_session_that_cannot_open_says_so_in_the_status_line() {
+        let mut app = app();
+        app.apply(Incoming::NotOpened("connecting to shop: connection refused".into()));
+        insta::assert_snapshot!("not_opened", render(&app, 60, 14).backend());
     }
 
     #[test]

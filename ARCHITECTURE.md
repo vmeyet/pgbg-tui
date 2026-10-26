@@ -26,8 +26,8 @@ When a boundary or a flow changes, change this page in the same MR.
 | `act.rs`, `keymap.rs` | Every action in one table (name, default keys, help, palette verb, pane); the user's `[keys]` on top |
 | `tui/mod.rs` | The event loop: terminal events, answers and ticks in, frames out |
 | `tui/app/` | `App`, the pure state machine: keys in, `Action`s out, `Incoming` answers applied |
-| `tui/actions.rs` | The action runner: one task per `Action`, answers sent back as `Incoming` |
-| `tui/backend/` | What the runner calls, one part per concern: sessions (one per open connection), queries, history |
+| `tui/actions.rs` | The action runner: hands each `Action` to the backend without waiting; answers come back as `Incoming` |
+| `tui/backend/` | What the runner calls, one part per concern: sessions (a task owns each one and runs its statements in turn), queries, history |
 | `tui/ui.rs`, `tui/*_view.rs` | Drawing: layout in `ui.rs`, one view module per pane or modal |
 | `tui/grid_view/` | The results grid: only the visible rows and columns are drawn |
 | `tui/chart_view/` | Draws a `Series` with ratatui's `BarChart` and `Chart` |
