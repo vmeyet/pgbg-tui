@@ -1,7 +1,6 @@
 //! The results grid's state: the current row, the first row and column in view, and each column's width.
-use crate::db::model::{ResultSet, Value};
+use crate::db::model::ResultSet;
 use crate::render;
-use ratatui::text::Span;
 
 /// No column is drawn wider, so one long text never hides the others.
 const MAX_COLUMN_WIDTH: usize = 40;
@@ -31,19 +30,18 @@ pub(in crate::tui) struct Grid {
     pub(in crate::tui) top: usize,
     /// The first column in view.
     pub(in crate::tui) column: usize,
-    row_count: usize,
 }
 
 impl Grid {
     /// The grid on `result`, its cursor on the first row.
     pub(in crate::tui) fn new(result: &ResultSet) -> Self {
         let widths = (0..result.columns.len()).map(|c| column_width(result, c)).collect();
-        Self { widths, row: 0, top: 0, column: 0, row_count: result.rows.len() }
+        Self { widths, row: 0, top: 0, column: 0 }
     }
 
-    /// Moves the cursor by `step`, keeping it among the `visible` rows in view.
-    pub(super) fn step(&mut self, step: Move, visible: usize) {
-        let last_row = self.row_count.saturating_sub(1);
+    /// Moves the cursor by `step` in `result`, keeping it among the `visible` rows in view.
+    pub(super) fn step(&mut self, step: Move, result: &ResultSet, visible: usize) {
+        let last_row = result.rows.len().saturating_sub(1);
         let page = visible.max(1);
         match step {
             Move::Down => self.row = (self.row + 1).min(last_row),
@@ -70,22 +68,17 @@ impl Grid {
     }
 }
 
-/// The text a cell shows: its value, control characters escaped.
-pub(in crate::tui) fn cell_text(value: &Value) -> String {
-    render::printable(&value.to_string()).into_owned()
-}
-
 fn column_width(result: &ResultSet, column: usize) -> usize {
-    let header = Span::raw(render::printable(&result.columns[column].name)).width();
+    let header = render::width(&render::printable(&result.columns[column].name));
     let cells = result.rows.iter().take(WIDTH_SAMPLE_ROWS).filter_map(|row| row.get(column));
-    let widest_cell = cells.map(|value| Span::raw(cell_text(value)).width()).max().unwrap_or(0);
+    let widest_cell = cells.map(|value| render::width(&render::cell_text(value, MAX_COLUMN_WIDTH))).max().unwrap_or(0);
     header.max(widest_cell).min(MAX_COLUMN_WIDTH)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::model::{Column, ColumnKind};
+    use crate::db::model::{Column, ColumnKind, Value};
 
     fn result(rows: usize) -> ResultSet {
         let column = |name: &str| Column { name: name.to_owned(), kind: ColumnKind::Int, type_name: String::new() };
@@ -97,9 +90,10 @@ mod tests {
     }
 
     fn stepped(rows: usize, steps: &[Move], visible: usize) -> Grid {
-        let mut grid = Grid::new(&result(rows));
+        let result = result(rows);
+        let mut grid = Grid::new(&result);
         for &step in steps {
-            grid.step(step, visible);
+            grid.step(step, &result, visible);
         }
         grid
     }

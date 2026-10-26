@@ -1,5 +1,5 @@
 //! The results grid: the header, then only the rows and columns in view, numbers right-aligned, `▶` on the cursor's row.
-use super::app::{Grid, cell_text};
+use super::app::Grid;
 use crate::db::model::{Column, ColumnKind, ResultSet, Value};
 use crate::render;
 use ratatui::Frame;
@@ -70,9 +70,9 @@ fn header<'a>(view: GridView<'a>, shown: &[Shown]) -> Line<'a> {
 
 fn row_line<'a>(view: GridView<'a>, shown: &[Shown], index: usize, row: &[Value]) -> Line<'a> {
     let is_current = index == view.grid.row;
-    let cells = shown
-        .iter()
-        .map(|column| (aligned(&cell_text(&row[column.index]), &view.result.columns[column.index], column.width), Style::default()));
+    let cells = shown.iter().map(|column| {
+        (aligned(&cell(&row[column.index], column.width), &view.result.columns[column.index], column.width), Style::default())
+    });
     let colour = if view.focused { view.theme.accent } else { view.theme.faded };
     let marker = Span::styled(if is_current { CURSOR } else { NO_CURSOR }, Style::default().fg(colour));
     line(marker, cells.collect())
@@ -81,6 +81,11 @@ fn row_line<'a>(view: GridView<'a>, shown: &[Shown], index: usize, row: &[Value]
 fn line(marker: Span<'static>, cells: Vec<(String, Style)>) -> Line<'static> {
     let spans = cells.into_iter().flat_map(|(text, style)| [Span::raw(GAP), Span::styled(text, style)]);
     Line::from(std::iter::once(marker).chain(spans).collect::<Vec<_>>())
+}
+
+/// Enough of `value` to fill `width` and show that it goes on.
+fn cell(value: &Value, width: usize) -> String {
+    render::cell_text(value, width + 1)
 }
 
 /// `text` cut to `width` and padded to it: numbers on the right, so their digits line up, the rest on the left.

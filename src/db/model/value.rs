@@ -44,11 +44,43 @@ impl fmt::Display for Value {
             Self::Time(value) => write!(f, "{value}"),
             Self::Timestamp(value) => write!(f, "{value}"),
             Self::TimestampTz(value) => write!(f, "{}", value.format("%Y-%m-%d %H:%M:%S%.f%:z")),
-            Self::Bytes(bytes) => write!(f, "\\x{}", bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>()),
+            Self::Bytes(bytes) => {
+                f.write_str("\\x")?;
+                bytes.iter().try_for_each(|byte| write!(f, "{byte:02x}"))
+            }
             Self::Infinity => f.write_str("infinity"),
             Self::NegativeInfinity => f.write_str("-infinity"),
             Self::Unsupported => f.write_str("<unsupported>"),
         }
+    }
+}
+
+impl Value {
+    /// The first `chars` characters it prints, formatting no further: a 10 MB JSON value costs no more than a short one.
+    pub(crate) fn prefix(&self, chars: usize) -> String {
+        let mut prefix = Prefix { text: String::new(), room: chars };
+        // The only error is `Prefix` running out of room, which is the point.
+        _ = fmt::write(&mut prefix, format_args!("{self}"));
+        prefix.text
+    }
+}
+
+/// A `fmt::Write` that keeps `room` characters, then fails so the formatting stops.
+struct Prefix {
+    text: String,
+    room: usize,
+}
+
+impl fmt::Write for Prefix {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        for c in text.chars() {
+            if self.room == 0 {
+                return Err(fmt::Error);
+            }
+            self.text.push(c);
+            self.room -= 1;
+        }
+        Ok(())
     }
 }
 
@@ -82,6 +114,17 @@ impl Serialize for Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_prefix_stops_after_its_characters() {
+        assert_eq!(Value::Text("Zoë Nakamura".into()).prefix(3), "Zoë");
+        assert_eq!(Value::Bytes(vec![0xde, 0xad, 0x01]).prefix(4), "\\xde");
+    }
+
+    #[test]
+    fn a_prefix_of_a_short_value_is_all_of_it() {
+        assert_eq!(Value::Json(serde_json::json!([1, 2])).prefix(40), "[1,2]");
+    }
 
     #[test]
     fn bytes_print_as_postgres_hex() {

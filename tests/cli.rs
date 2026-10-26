@@ -101,6 +101,7 @@ fn run_json_prints_the_columns_and_rows() {
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["columns"][1]["name"], "customer");
     assert_eq!(json["rows"][0], serde_json::json!([7, "nina"]));
+    assert_eq!(json["is_cut"], false);
 }
 
 #[test]
