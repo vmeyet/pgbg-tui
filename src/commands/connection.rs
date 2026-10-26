@@ -76,7 +76,15 @@ fn tunnel_spec(command: &str) -> Result<TunnelSpec> {
 
 fn change_from(keys: &ConnectionKeys) -> Result<ConnectionChange> {
     let tunnel = keys.tunnel.as_deref().map(tunnel_spec).transpose()?;
-    Ok(ConnectionChange { tunnel, password: password_source(&keys.password)?, writes: keys.writes, ..ConnectionChange::default() })
+    let password = password_source(&keys.password)?;
+    Ok(ConnectionChange {
+        tunnel,
+        password,
+        writes: keys.writes,
+        tls: keys.tls,
+        statement_timeout: keys.statement_timeout,
+        ..ConnectionChange::default()
+    })
 }
 
 fn password_source(flags: &PasswordFlags) -> Result<Option<SecretSource>> {

@@ -1,6 +1,7 @@
 use anyhow::{Result, anyhow, bail};
 use serde::{Serialize, Serializer};
 use std::fmt;
+use std::str::FromStr;
 use std::time::Duration;
 
 /// The units `statement_timeout` takes, as PostgreSQL spells them, largest first.
@@ -13,7 +14,7 @@ const SPELLING: &str = "`statement_timeout` is a number and a unit, `ms`, `s`, `
 
 /// How long the server lets one statement run before it cancels it; zero lets it run to its end.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct StatementTimeout(Duration);
+pub struct StatementTimeout(Duration);
 
 impl StatementTimeout {
     pub(super) const NONE: Self = Self(Duration::ZERO);
@@ -96,6 +97,14 @@ impl fmt::Display for StatementTimeout {
         }
         let (unit, unit_ms) = UNITS.iter().find(|(_, unit_ms)| ms.is_multiple_of(*unit_ms)).unwrap_or(&("ms", 1));
         write!(f, "{}{unit}", ms / unit_ms)
+    }
+}
+
+impl FromStr for StatementTimeout {
+    type Err = anyhow::Error;
+
+    fn from_str(text: &str) -> Result<Self> {
+        Self::parse(text)
     }
 }
 
