@@ -57,4 +57,7 @@ pub(crate) struct Column {
 pub(crate) struct ResultSet {
     pub(crate) columns: Vec<Column>,
     pub(crate) rows: Vec<Vec<Value>>,
+    /// The statement returned more rows than pgbg keeps: `rows` holds the first ones.
+    #[serde(skip)]
+    pub(crate) is_cut: bool,
 }

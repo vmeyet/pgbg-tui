@@ -1,4 +1,5 @@
 //! Plain-terminal output for the scriptable commands: columns aligned by width.
+use crate::db::model::ResultSet;
 use ratatui::text::Span;
 use std::borrow::Cow;
 
@@ -13,12 +14,13 @@ pub(crate) fn table(rows: &[Vec<String>]) -> String {
     rows.iter().map(|row| line(row, &widths)).collect()
 }
 
-/// `1 row`, `12 rows`.
-pub(crate) fn row_count(count: usize) -> String {
-    match count {
+/// `1 row`, `12 rows`, or `first 10000 rows` when the result is cut.
+pub(crate) fn row_count(result: &ResultSet) -> String {
+    let count = match result.rows.len() {
         1 => "1 row".to_owned(),
         count => format!("{count} rows"),
-    }
+    };
+    if result.is_cut { format!("first {count}") } else { count }
 }
 
 /// `text` with each control character escaped, a newline as `\n` and ESC as `\u{1b}`, so a value
@@ -60,6 +62,21 @@ mod tests {
     fn columns_align_on_their_widest_cell() {
         let rows = [row(&["local", "local", "postgres://nina@localhost/shop"]), row(&["staging", "staging", ""])];
         assert_eq!(table(&rows), "local    local    postgres://nina@localhost/shop\nstaging  staging\n");
+    }
+
+    fn numbers(count: usize, is_cut: bool) -> ResultSet {
+        ResultSet { columns: vec![], rows: vec![vec![]; count], is_cut }
+    }
+
+    #[test]
+    fn a_whole_result_counts_its_rows() {
+        assert_eq!(row_count(&numbers(1, false)), "1 row");
+        assert_eq!(row_count(&numbers(12, false)), "12 rows");
+    }
+
+    #[test]
+    fn a_cut_result_says_its_rows_are_the_first_ones() {
+        assert_eq!(row_count(&numbers(10, true)), "first 10 rows");
     }
 
     #[test]

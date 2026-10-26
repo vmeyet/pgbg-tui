@@ -50,7 +50,7 @@ struct Served {
     cancel_tokens: watch::Sender<Option<CancelToken>>,
 }
 
-/// Opens the session at once, and again before a statement when the last try failed.
+/// Opens the session at once, and again before a statement when the last try failed or the session closed.
 async fn serve(served: Served) {
     let Served { connection, mut queue, answers, cancel_tokens } = served;
     let send = |incoming: Incoming| {
@@ -61,7 +61,7 @@ async fn serve(served: Served) {
     let mut session = open(&connection, send).await;
     cancel_tokens.send_replace(session.as_ref().map(Session::cancel_token));
     while let Some(statement) = queue.recv().await {
-        if session.is_none() {
+        if session.as_ref().is_none_or(Session::is_closed) {
             session = open(&connection, send).await;
             cancel_tokens.send_replace(session.as_ref().map(Session::cancel_token));
         }
@@ -95,5 +95,46 @@ async fn run(session: &mut Session, writes: WritePolicy, statement: Statement) -
         Err(err) => {
             Incoming::Failed { position: err.downcast_ref::<ServerError>().and_then(|server| server.position), error: format!("{err:#}") }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::connection::Entry;
+    use crate::db::model::Value;
+
+    fn connection() -> Connection {
+        let url = std::env::var("PGBG_TEST_DATABASE_URL").unwrap();
+        let entry: Entry = toml::from_str(&format!("tier = \"local\"\nurl = \"{url}\"\n")).unwrap();
+        Connection::new("shop", entry).unwrap()
+    }
+
+    async fn answer_to(backend: &Backend, answers: &mut UnboundedReceiver<Incoming>, sql: &str) -> Incoming {
+        backend.run(Statement::new(sql));
+        loop {
+            match answers.recv().await.unwrap() {
+                Incoming::Opened => {}
+                answer => return answer,
+            }
+        }
+    }
+
+    async fn end_the_server_side_of(pid: &Value) {
+        let mut session = Session::open(&connection()).await.unwrap();
+        let ending = guard::admit(Statement::new(format!("SELECT pg_terminate_backend({pid}, 5000)")), WritePolicy::ReadOnly).unwrap();
+        session.run(&ending).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_statement_after_the_session_died_runs_on_a_new_one() {
+        let (sender, mut answers) = mpsc::unbounded_channel();
+        let backend = Backend::start(connection(), sender);
+        let Incoming::Result { result, .. } = answer_to(&backend, &mut answers, "SELECT pg_backend_pid()").await else { panic!("no pid") };
+        end_the_server_side_of(&result.rows[0][0]).await;
+        answer_to(&backend, &mut answers, "SELECT 1").await;
+        let after = answer_to(&backend, &mut answers, "SELECT 1").await;
+        assert!(matches!(after, Incoming::Result { .. }), "{after:?}");
     }
 }
