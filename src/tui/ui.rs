@@ -1,5 +1,5 @@
 //! Drawing: the frame in the tier's colour, the panes inside it, and the key hints under them.
-use super::app::{App, Fit, Link, TunnelState};
+use super::app::{App, Fit, SessionState, TunnelState};
 use super::{editor_view, finder_view, help_view, picker_view, result_view, sidebar_view, theme};
 use crate::act;
 use ratatui::Frame;
@@ -83,10 +83,10 @@ fn tunnel_state(app: &App, tunnel: &TunnelState, width: usize) -> Span<'static> 
 }
 
 fn link(app: &App, width: usize) -> Span<'static> {
-    match &app.sheet().link {
-        Link::Opening => Span::styled("connecting… ", Style::default().fg(app.theme.muted)),
-        Link::Open => Span::styled("connected ", Style::default().fg(app.theme.muted)),
-        Link::Failed(err) => failure(app, err, width),
+    match &app.sheet().session {
+        SessionState::Opening => Span::styled("connecting… ", Style::default().fg(app.theme.muted)),
+        SessionState::Open => Span::styled("connected ", Style::default().fg(app.theme.muted)),
+        SessionState::Failed(err) => failure(app, err, width),
     }
 }
 

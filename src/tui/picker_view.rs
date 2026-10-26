@@ -1,6 +1,6 @@
 //! The connection picker over the screen: each connection's dot in its tier's colour, where it goes, whether it
 //! takes writes, and whether its session is open. vtui draws the popup around it.
-use super::app::{App, Link};
+use super::app::{App, Overlay, SessionState};
 use super::theme;
 use crate::connection::{Connection, WritePolicy};
 use ratatui::Frame;
@@ -14,7 +14,7 @@ const FOOTER: &str = "  ↑↓ pick · ⏎ opens or switches · esc";
 
 /// The picker when it is open.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App) {
-    let Some(picker) = &app.picker else { return };
+    let Some(Overlay::Picker(picker)) = &app.overlay else { return };
     let prompt = view::prompt(&app.theme, picker, "", |_| vec![]);
     let popup = Popup { title: "Connections", prompt, footer: FOOTER };
     let matching = app.matching(&picker.input);
@@ -56,10 +56,10 @@ fn line(app: &App, connection: &Connection, is_selected: bool, room: usize) -> L
 /// `open`, `opening…` or `failed` once its session was asked for; nothing before.
 fn session_state(app: &App, connection: &Connection) -> (&'static str, Style) {
     let Some(sheet) = app.sheet_of(connection.name()) else { return ("", Style::default()) };
-    match sheet.link {
-        Link::Opening => ("  opening…", Style::default().fg(app.theme.muted)),
-        Link::Open => ("  open", Style::default().fg(app.theme.success)),
-        Link::Failed(_) => ("  failed", Style::default().fg(app.theme.danger)),
+    match sheet.session {
+        SessionState::Opening => ("  opening…", Style::default().fg(app.theme.muted)),
+        SessionState::Open => ("  open", Style::default().fg(app.theme.success)),
+        SessionState::Failed(_) => ("  failed", Style::default().fg(app.theme.danger)),
     }
 }
 

@@ -1,5 +1,4 @@
 //! The TUI: an event loop over a pure `App`, with the database at its edge.
-mod actions;
 mod app;
 mod backend;
 mod chart_view;
@@ -42,7 +41,7 @@ pub(crate) async fn run(connections: Vec<Connection>, first: Connection) -> Resu
     let (answers, mut incoming) = mpsc::unbounded_channel();
     let mut backend = Backend::new(find_roots().await?, answers);
     for action in std::iter::once(Action::Open(first)).chain(App::start()) {
-        actions::spawn(action, &mut backend);
+        backend.dispatch(action);
     }
     let (mut terminal, screen) = Screen::enter();
     take_pastes();
@@ -109,14 +108,14 @@ async fn event_loop(
             }
             stopped = signals.next() => {
                 for action in app.quit() {
-                    actions::spawn(action, backend);
+                    backend.dispatch(action);
                 }
                 return Err(stopped.into());
             }
             else => break,
         };
         for action in actions {
-            actions::spawn(action, backend);
+            backend.dispatch(action);
         }
     }
     Ok(())
