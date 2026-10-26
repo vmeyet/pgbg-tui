@@ -17,7 +17,7 @@ When a boundary or a flow changes, change this page in the same MR.
 | `tunnel/` | `Tunnel`: a child process forwarding a free `127.0.0.1` port to the database; start, wait for the port, stop |
 | `db/` | The only module that sees `tokio_postgres`: connect over rustls, run a statement, stream rows, cancel |
 | `db/model/` | The neutral model: `ResultSet`, `Column`, `ColumnKind`, `Value`, `Page`, `Schema`, `Table` |
-| `db/guard.rs` | Classifies a statement before it is sent: read, write, or more than one statement |
+| `db/guard.rs` | Classifies a statement before it is sent: read, write, or more than one statement; `admit` turns a statement into an `Admitted`, the only kind a session runs |
 | `db/decode.rs` | Wire values to `Value`, by column type |
 | `query/` | Saved queries: the `.pgbg/queries/` tree, the header (`-- name:`, `-- chart:`), load and save |
 | `history.rs` | Every statement run, per connection, in a local file |
@@ -72,7 +72,7 @@ Charting a result:
 Four layers, outermost first; only the last one is a guarantee.
 
 1. **Policy**: each connection chooses; it is read only unless it says `writes = "allowed"`, whatever its tier.
-2. **Guard**: `db::guard` lets through `SELECT`, `WITH` without a data-changing part, `VALUES`, `TABLE`, `EXPLAIN` without `ANALYZE`, and `SHOW`; anything else is refused locally.
+2. **Guard**: `db::guard` lets through `SELECT`, `WITH` without a data-changing part, `VALUES`, `TABLE`, `EXPLAIN` without `ANALYZE`, and `SHOW`, without a row lock (`FOR UPDATE`, `FOR SHARE`) or `SELECT ... INTO`; anything else is refused locally.
 3. **Transaction**: one statement per round trip (the extended protocol refuses more), inside `BEGIN READ ONLY`, always rolled back; the server refuses writes even when the guard misses one.
 4. **Role**: a read-only database role. A read-only transaction still lets a function with side effects run (`pg_terminate_backend`, `dblink`); only the role stops those.
 
