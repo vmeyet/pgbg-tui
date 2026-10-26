@@ -10,19 +10,33 @@ use vtui::help::Help;
 use vtui::theme::Theme;
 
 pub(super) use grid::Grid;
+
+const LOST_SESSION: &str = "session lost, ⏎ opens a new one";
 use grid::Move;
 pub(super) use grid::cell_text;
 
 mod grid;
 mod keys;
 
+/// Which run of a statement an answer or a cancel is about, so a late one never lands on the next run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct RunId(u64);
+
+impl RunId {
+    pub(super) const FIRST: Self = Self(1);
+
+    pub(super) fn next(self) -> Self {
+        Self(self.0 + 1)
+    }
+}
+
 /// What the app asks the runner to do.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Action {
     /// Run this statement on the session.
-    Run(Statement),
-    /// Cancel the statement the session is running.
-    Cancel,
+    Run { run: RunId, statement: Statement },
+    /// Cancel this run if the session is still on it.
+    Cancel(RunId),
 }
 
 /// What the backend answers.
@@ -31,24 +45,32 @@ pub(super) enum Incoming {
     Opened,
     /// The session could not open, in the error's words.
     NotOpened(String),
+    /// The open session was lost, and why; the next run opens a new one.
+    Closed(String),
     Result {
+        run: RunId,
         result: ResultSet,
         took: Duration,
     },
     /// The guard kept the statement from the server, and why.
-    Refused(String),
+    Refused {
+        run: RunId,
+        why: String,
+    },
     /// The server, or the link to it, failed the statement; the server may say where in it.
     Failed {
+        run: RunId,
         error: String,
         /// A character count from 1 into the statement sent, as PostgreSQL counts.
         position: Option<usize>,
     },
 }
 
-/// The statement last sent, and the byte of the editor it starts at.
+/// The statement last sent, its run, and the byte of the editor it starts at until the text changes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Sent {
-    start: usize,
+    run: RunId,
+    start: Option<usize>,
     statement: Statement,
 }
 
@@ -168,7 +190,7 @@ impl App {
             Act::NewLine => self.edit(KeyEvent::from(KeyCode::Enter)),
             Act::SwitchPane => self.focus = if self.focus == Focus::Editor { Focus::Result } else { Focus::Editor },
             Act::Help => self.help = Some(Help::default()),
-            Act::Quit => self.should_quit = true,
+            Act::Quit => return self.quit(),
             Act::Down => self.grid_step(Move::Down),
             Act::Up => self.grid_step(Move::Up),
             Act::PageDown => self.grid_step(Move::PageDown),
@@ -196,15 +218,27 @@ impl App {
     }
 
     fn cancel(&mut self) -> Vec<Action> {
-        if self.run != Run::Running {
-            return vec![];
-        }
+        let Some(run) = self.running_run().filter(|_| self.run == Run::Running) else { return vec![] };
         self.run = Run::Cancelling;
-        vec![Action::Cancel]
+        vec![Action::Cancel(run)]
+    }
+
+    /// Quits, cancelling the running statement first so the server does not run it to its end.
+    fn quit(&mut self) -> Vec<Action> {
+        self.should_quit = true;
+        self.running_run().map(Action::Cancel).into_iter().collect()
     }
 
     fn is_running(&self) -> bool {
         matches!(self.run, Run::Running | Run::Cancelling)
+    }
+
+    fn running_run(&self) -> Option<RunId> {
+        self.sent.as_ref().filter(|_| self.is_running()).map(|sent| sent.run)
+    }
+
+    fn is_answer_to_running(&self, run: RunId) -> bool {
+        self.running_run() == Some(run)
     }
 
     /// Runs the statement under the cursor, the editor's other statements left alone.
@@ -215,10 +249,11 @@ impl App {
         let (before, _, _) = self.editor.split();
         let Some(range) = guard::statement_at(self.editor.text(), before.len()) else { return vec![] };
         let statement = Statement::new(&self.editor.text()[range.clone()]);
+        let run = self.sent.as_ref().map_or(RunId::FIRST, |sent| sent.run.next());
         self.run = Run::Running;
         self.error_mark = None;
-        self.sent = Some(Sent { start: range.start, statement: statement.clone() });
-        vec![Action::Run(statement)]
+        self.sent = Some(Sent { run, start: Some(range.start), statement: statement.clone() });
+        vec![Action::Run { run, statement }]
     }
 
     /// The editor's byte at character `position` of the statement sent; the end of it when the server
@@ -227,7 +262,7 @@ impl App {
         let sent = self.sent.as_ref()?;
         let text = sent.statement.as_str();
         let offset = text.char_indices().map(|(at, _)| at).chain(std::iter::once(text.len())).nth(position.checked_sub(1)?)?;
-        Some(sent.start + offset)
+        Some(sent.start? + offset)
     }
 
     /// Applies one answer of the backend.
@@ -240,12 +275,22 @@ impl App {
                 }
                 self.link = Link::Failed(err);
             }
-            Incoming::Result { result, took } => self.run = Run::Done { grid: Grid::new(&result), result, took },
-            Incoming::Refused(why) => self.run = Run::Failed(format!("not sent: {why}")),
-            Incoming::Failed { error, position } => {
+            Incoming::Closed(why) => self.link = Link::Failed(format!("{LOST_SESSION}: {why}")),
+            Incoming::Result { run, .. } | Incoming::Refused { run, .. } | Incoming::Failed { run, .. }
+                if !self.is_answer_to_running(run) => {}
+            Incoming::Result { result, took, .. } => self.run = Run::Done { grid: Grid::new(&result), result, took },
+            Incoming::Refused { why, .. } => self.run = Run::Failed(format!("not sent: {why}")),
+            Incoming::Failed { error, position, .. } => {
                 self.error_mark = position.and_then(|position| self.editor_byte(position));
                 self.run = Run::Failed(error);
             }
+        }
+    }
+
+    /// Forgets where the statement sent stands in the editor, once the text it was cut from changed.
+    fn forget_sent_place(&mut self) {
+        if let Some(sent) = &mut self.sent {
+            sent.start = None;
         }
     }
 }
@@ -302,7 +347,7 @@ pub(super) mod tests {
     #[test]
     fn enter_runs_the_text_of_the_editor() {
         let mut app = typed("SELECT 1");
-        assert_eq!(enter(&mut app), [Action::Run(Statement::new("SELECT 1"))]);
+        assert_eq!(enter(&mut app), [Action::Run { run: RunId::FIRST, statement: Statement::new("SELECT 1") }]);
         assert_eq!(app.run, Run::Running);
     }
 
@@ -324,14 +369,14 @@ pub(super) mod tests {
     fn enter_runs_only_the_statement_under_the_cursor() {
         let mut app = typed("SELECT 1;\nSELECT 2;\nSELECT 3");
         app.handle_key(KeyEvent::from(KeyCode::Up));
-        assert_eq!(enter(&mut app), [Action::Run(Statement::new("SELECT 2"))]);
+        assert_eq!(enter(&mut app), [Action::Run { run: RunId::FIRST, statement: Statement::new("SELECT 2") }]);
     }
 
     #[test]
     fn esc_cancels_a_running_statement_once() {
         let mut app = typed("SELECT pg_sleep(30)");
         enter(&mut app);
-        assert_eq!(app.handle_key(KeyEvent::from(KeyCode::Esc)), [Action::Cancel]);
+        assert_eq!(app.handle_key(KeyEvent::from(KeyCode::Esc)), [Action::Cancel(RunId::FIRST)]);
         assert_eq!(app.run, Run::Cancelling);
         assert_eq!(app.handle_key(KeyEvent::from(KeyCode::Esc)), []);
     }
@@ -353,14 +398,14 @@ pub(super) mod tests {
     fn a_result_replaces_the_running_state() {
         let mut app = typed("SELECT 1");
         enter(&mut app);
-        app.apply(Incoming::Result { result: orders(), took: Duration::from_millis(38) });
+        app.apply(Incoming::Result { run: RunId::FIRST, result: orders(), took: Duration::from_millis(38) });
         assert_eq!(app.run, Run::Done { grid: Grid::new(&orders()), result: orders(), took: Duration::from_millis(38) });
     }
 
     fn with_result() -> App {
         let mut app = typed("SELECT 1");
         enter(&mut app);
-        app.apply(Incoming::Result { result: orders(), took: Duration::from_millis(38) });
+        app.apply(Incoming::Result { run: RunId::FIRST, result: orders(), took: Duration::from_millis(38) });
         app
     }
 
@@ -391,12 +436,12 @@ pub(super) mod tests {
     fn a_refused_statement_says_it_was_not_sent() {
         let mut app = typed("DELETE FROM orders");
         enter(&mut app);
-        app.apply(Incoming::Refused("`DELETE` is not a read".into()));
+        app.apply(Incoming::Refused { run: RunId::FIRST, why: "`DELETE` is not a read".into() });
         assert_eq!(app.run, Run::Failed("not sent: `DELETE` is not a read".into()));
     }
 
     fn failed_at(app: &mut App, position: usize) {
-        app.apply(Incoming::Failed { error: "ERROR: syntax error".into(), position: Some(position) });
+        app.apply(Incoming::Failed { run: RunId::FIRST, error: "ERROR: syntax error".into(), position: Some(position) });
     }
 
     #[test]
@@ -483,6 +528,47 @@ pub(super) mod tests {
         press(&mut app, KeyCode::F(1));
         press(&mut app, KeyCode::Char('?'));
         assert_eq!(app.help, Some(Help { scroll: 0, every_key: true }));
+    }
+
+    #[test]
+    fn each_run_gets_a_new_id() {
+        let mut app = with_result();
+        let Action::Run { run, .. } = enter(&mut app).remove(0) else { panic!("no run") };
+        assert_eq!(run, RunId::FIRST.next());
+    }
+
+    #[test]
+    fn a_late_answer_to_an_earlier_run_is_dropped() {
+        let mut app = with_result();
+        enter(&mut app);
+        app.apply(Incoming::Failed { run: RunId::FIRST, error: "ERROR: canceling statement".into(), position: None });
+        assert_eq!(app.run, Run::Running);
+    }
+
+    #[test]
+    fn ctrl_c_while_a_statement_runs_cancels_it_and_quits() {
+        let mut app = typed("SELECT pg_sleep(30)");
+        enter(&mut app);
+        assert_eq!(app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)), [Action::Cancel(RunId::FIRST)]);
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn a_lost_session_says_so_in_the_status_line() {
+        let mut app = app();
+        app.apply(Incoming::Opened);
+        app.apply(Incoming::Closed("terminating connection".into()));
+        assert_eq!(app.link, Link::Failed(format!("{LOST_SESSION}: terminating connection")));
+    }
+
+    #[test]
+    fn an_edit_while_the_statement_runs_keeps_its_error_unmarked() {
+        let mut app = typed("SELECT x");
+        enter(&mut app);
+        app.handle_key(KeyEvent::from(KeyCode::Home));
+        app.handle_key(KeyEvent::from(KeyCode::Char(' ')));
+        failed_at(&mut app, 8);
+        assert_eq!(app.error_mark, None);
     }
 
     #[test]

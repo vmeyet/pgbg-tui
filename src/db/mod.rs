@@ -5,6 +5,7 @@ use futures_util::{StreamExt, TryStreamExt, future};
 use guard::{Admitted, Mode};
 use model::{CancelToken, ResultSet, ServerError};
 use std::time::Duration;
+use tokio::sync::watch;
 use tokio_postgres::config::SslMode;
 use tokio_postgres::error::ErrorPosition;
 use tokio_postgres::tls::MakeTlsConnect;
@@ -22,6 +23,9 @@ const ROW_CAP: usize = 10_000;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Has the server stop a statement within a second of pgbg going away, instead of running it to its end.
 const STOP_WHEN_CLIENT_GONE: &str = "SET client_connection_check_interval = '1s'";
+const SERVER_CLOSED: &str = "the server closed the link";
+const LINK_TASK_GONE: &str = "the link's task is gone";
+const ROLLBACK_FAILED: &str = "a rollback failed, so the server may still hold its transaction";
 
 /// An open link to one connection.
 #[derive(Debug)]
@@ -30,6 +34,8 @@ pub(crate) struct Session {
     tls: Tls,
     /// A `ROLLBACK` failed, so the server may still hold the transaction open.
     has_failed_rollback: bool,
+    /// Why the link ended, set by the task that drives it.
+    ended: watch::Receiver<Option<String>>,
 }
 
 impl Session {
@@ -40,18 +46,30 @@ impl Session {
             config.password(source.read().await?.expose());
         }
         let tls = connection.tls();
-        let client = match tls {
+        let link = match tls {
             Tls::On => open_client(config.ssl_mode(SslMode::Require), MakeRustlsConnect::with_webpki_roots()).await,
             Tls::Off => open_client(config.ssl_mode(SslMode::Disable), NoTls).await,
         };
-        let client = client.with_context(|| format!("connecting to {}", connection.name()))?;
+        let Link { client, ended } = link.with_context(|| format!("connecting to {}", connection.name()))?;
         stop_statements_when_client_gone(&client).await;
-        Ok(Self { client, tls, has_failed_rollback: false })
+        Ok(Self { client, tls, has_failed_rollback: false, ended })
     }
 
-    /// Whether this session can run no more statements: its link is gone, or a rollback failed; open a new one.
-    pub(crate) fn is_closed(&self) -> bool {
-        self.client.is_closed() || self.has_failed_rollback
+    /// Waits until the link to the server ends, and says why.
+    pub(crate) async fn closed(&self) -> String {
+        let mut ended = self.ended.clone();
+        match ended.wait_for(Option::is_some).await {
+            Ok(reason) => reason.clone().unwrap_or_default(),
+            Err(_) => LINK_TASK_GONE.to_owned(),
+        }
+    }
+
+    /// Why this session can run no more statements, when it cannot: its link is gone, or a rollback failed.
+    pub(crate) fn lost(&self) -> Option<String> {
+        let ended = self.ended.borrow().clone();
+        let is_link_gone = self.client.is_closed();
+        let lost = ended.or_else(|| is_link_gone.then(|| SERVER_CLOSED.to_owned()));
+        lost.or_else(|| self.has_failed_rollback.then(|| ROLLBACK_FAILED.to_owned()))
     }
 
     /// What cancels the statement this session is running, usable while `run` waits.
@@ -103,18 +121,31 @@ fn driver_config(target: &Target) -> Result<Config> {
     Ok(config)
 }
 
-async fn open_client<T>(config: &Config, tls: T) -> Result<Client>
+/// A client, and why its link ended once it has.
+struct Link {
+    client: Client,
+    ended: watch::Receiver<Option<String>>,
+}
+
+async fn open_client<T>(config: &Config, tls: T) -> Result<Link>
 where
     T: MakeTlsConnect<Socket>,
     T::Stream: Send + 'static,
 {
     let (client, connection) = config.connect(tls).await.map_err(server_error)?;
+    let (end, ended) = watch::channel(None);
     tokio::spawn(async move {
-        if let Err(err) = connection.await {
-            tracing::warn!("the connection closed: {err}");
-        }
+        let reason = match connection.await {
+            Ok(()) => SERVER_CLOSED.to_owned(),
+            Err(err) => {
+                let reason = format!("{:#}", server_error(err));
+                tracing::warn!("the connection closed: {reason}");
+                reason
+            }
+        };
+        end.send_replace(Some(reason));
     });
-    Ok(client)
+    Ok(Link { client, ended })
 }
 
 /// Best effort: a server older than PostgreSQL 14, or not on Linux, cannot check.
@@ -248,16 +279,28 @@ mod tests {
         assert_eq!(result.rows, [[Value::Text("1s".into())]]);
     }
 
-    #[tokio::test]
-    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
-    async fn a_session_whose_server_side_ended_is_closed() {
+    async fn ended_on_the_server() -> Session {
         let mut doomed = session(WritePolicy::ReadOnly).await;
         let pid =
             &doomed.run(&guard::admit(Statement::new("SELECT pg_backend_pid()"), WritePolicy::ReadOnly).unwrap()).await.unwrap().rows[0][0];
         run(WritePolicy::ReadOnly, &format!("SELECT pg_terminate_backend({pid}, 5000)")).await.unwrap();
+        doomed
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_session_whose_server_side_ended_is_lost() {
+        let mut doomed = ended_on_the_server().await;
         let lost = doomed.run(&guard::admit(Statement::new("SELECT 1"), WritePolicy::ReadOnly).unwrap()).await;
         assert!(lost.is_err());
-        assert!(doomed.is_closed());
+        assert!(doomed.lost().is_some());
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_session_whose_server_side_ended_says_why() {
+        let doomed = ended_on_the_server().await;
+        assert!(doomed.closed().await.contains("terminating connection"));
     }
 
     #[tokio::test]
