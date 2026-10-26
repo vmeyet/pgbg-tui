@@ -11,6 +11,7 @@ use grid::Move;
 pub(super) use picker::{Note, Picker};
 pub(super) use protocol::{Action, Answer, ConfigAnswer, Incoming, QueryAnswer, RunId, SaveConnection, Saving, TunnelState};
 pub(super) use queries::{Finder, Queries};
+pub(super) use save::Prompt;
 pub(super) use search::{ROWS_SHOWN, Search};
 pub(super) use sheet::{Run, SessionState, Sheet, View};
 
@@ -20,6 +21,7 @@ mod grid;
 pub(super) mod picker;
 mod protocol;
 pub(super) mod queries;
+mod save;
 mod search;
 mod sheet;
 
@@ -66,6 +68,8 @@ pub(super) enum Overlay {
     Picker(Picker),
     /// The form that adds or edits a connection, from the picker.
     Form(Box<Form>),
+    /// A question on the footer line: the path of a new query, or whether to open one over unsaved text.
+    Prompt(Prompt),
 }
 
 /// The help after `key`: `?` lists every key, `j`/`k` scroll, any other key closes it.
@@ -172,11 +176,18 @@ impl App {
             }
             Overlay::Finder(finder) => {
                 let (finder, actions) = self.finder_after(finder, key);
-                self.overlay = finder.map(Overlay::Finder);
+                if let Some(finder) = finder {
+                    self.overlay = Some(Overlay::Finder(finder));
+                }
                 actions
             }
             Overlay::Picker(picker) => self.picker_key(picker, key),
             Overlay::Form(form) => self.form_key(*form, key),
+            Overlay::Prompt(prompt) => {
+                let (prompt, actions) = self.prompt_after(prompt, key);
+                self.overlay = prompt.map(Overlay::Prompt);
+                actions
+            }
         }
     }
 
@@ -202,7 +213,8 @@ impl App {
             Act::Connections => self.open_picker(),
             Act::Chart => self.sheet_mut().switch_view(),
             Act::Open => return self.open_in_sidebar(),
-            Act::Close | Act::Delete | Act::CloseSession | Act::Add | Act::Edit | Act::Save => {}
+            Act::Save => return self.save(),
+            Act::Close | Act::Delete | Act::CloseSession | Act::Add | Act::Edit => {}
         }
         vec![]
     }
@@ -259,6 +271,8 @@ impl App {
                     sheet.query_error = Some(format!("could not open {}: {error}", query.path));
                 }
             }
+            Answer::Queries(QueryAnswer::Saved { connection, query, text }) => self.saved(&connection, query, &text),
+            Answer::Queries(QueryAnswer::NotSaved { connection, path, error }) => self.not_saved(&connection, &path, &error),
             Answer::Config(ConfigAnswer::Changed(connections)) => return self.take_connections(connections),
             Answer::Config(ConfigAnswer::Failed(error)) => self.config_failed(error),
         }

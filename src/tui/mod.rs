@@ -8,6 +8,7 @@ mod form_view;
 mod grid_view;
 mod help_view;
 mod picker_view;
+mod prompt_view;
 mod result_view;
 mod sidebar_view;
 #[cfg(test)]

@@ -35,6 +35,8 @@ Each entry says what changed, then where, then how to use it.
   A header of `--` lines names the query and draws its result: `-- name: Orders per day`, `-- chart: bar x=day y=orders`; a result that chart does not fit shows on the grid.
   `-- connection: prod` only says which connection the query was written for: the editor's title shows it, in red for a production one, and the statement still runs on the connection on screen.
   A header line pgbg cannot read shows as a warning in the editor's title; the query opens and runs all the same.
+  `ctrl-s` saves the editor's text over the query it stands for; new text asks for a path, as `orders/daily`, and goes under `.pgbg/queries/`, or your own folder when the project has none.
+  The editor's title marks unsaved text with `*`, and opening another query over it asks first.
 - **Tunnels** for `pgbg run` and the TUI: a connection with `tunnel = { command = [...] }` starts that command on a free local port, put in place of `{port}`, and connects through it.
   TLS still checks the certificate against the host in `url`, so `sslmode=require` works through a tunnel; a tunnel without it needs `tls = "off"` on purpose, even to `localhost`.
   `before = [...]` runs once first, and is given up after 2 minutes.

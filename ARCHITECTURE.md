@@ -137,6 +137,8 @@ On a connection that allows writes, a statement runs as typed, except that one r
 - The header is read again whenever the editor's text changes; a line it cannot read is a warning in the editor's title, never a failure.
 - `-- connection:` only suggests: the editor's title names it, in red when it is a production connection, and a statement always runs on the session on screen.
 - The file is the source of truth: pgbg reads it when it is opened and writes it back when it is saved, nothing else.
+- A save writes a temporary file beside the query and renames it over; it makes the missing folders, refuses a link or a root that changed, and a new query never replaces another file, so saving twice changes nothing.
+- A new query goes under the project's root, else under the user's; opening another query over unsaved text asks first.
 
 ## Performance
 

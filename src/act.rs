@@ -107,6 +107,8 @@ pub(crate) enum Pane {
     Picker,
     /// The form that adds or edits a connection, from the picker.
     Form,
+    /// A question on the footer line, as the path of a new query: while open it takes every key.
+    Prompt,
 }
 
 /// Keys as the help or the footer writes them, and what they do in a few words.
@@ -199,6 +201,10 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Save, Pane::Form, &[key(KeyCode::Enter)]).help("⏎", "save the connection").footer("⏎", "saves"),
     row(Act::Close, Pane::Form, &[key(KeyCode::Esc)]).help("esc", "leave without saving").footer("esc", "closes"),
     row(Act::Quit, Pane::Form, &[control('c')]).help("^c", "quit"),
+    row(Act::Open, Pane::Prompt, &[key(KeyCode::Enter)]).help("⏎", "save, or open over the unsaved text").footer("⏎", "ok"),
+    row(Act::Close, Pane::Prompt, &[key(KeyCode::Esc)]).help("esc", "keep editing").footer("esc", "cancel"),
+    row(Act::Quit, Pane::Prompt, &[control('c')]).help("^c", "quit"),
+    row(Act::Save, Pane::Anywhere, &[control('s')]).help("^s", "save the query, naming a new one").footer("^s", "save"),
     row(Act::Connections, Pane::Anywhere, &[control('o')]).help("^o", "pick a connection").footer("^o", "connections"),
     row(Act::Quit, Pane::Anywhere, &[control('c')]).help("^c", "quit").footer("^c", "quit"),
 ];
@@ -211,7 +217,7 @@ fn is_the_key(own: &KeyEvent, pressed: KeyEvent) -> bool {
 }
 
 fn works_in(row: &Row, pane: Pane) -> bool {
-    row.pane == pane || (row.pane == Pane::Anywhere && !matches!(pane, Pane::Finder | Pane::Picker | Pane::Form))
+    row.pane == pane || (row.pane == Pane::Anywhere && !matches!(pane, Pane::Finder | Pane::Picker | Pane::Form | Pane::Prompt))
 }
 
 /// What `key` does while `pane` has the keys; `None` leaves it to the pane, as text for the editor.
@@ -259,6 +265,7 @@ pub(crate) fn sections(pane: Pane, every_key: bool) -> Vec<Section> {
         (Pane::Finder, "finder"),
         (Pane::Picker, "picker"),
         (Pane::Form, "form"),
+        (Pane::Prompt, "prompt"),
         (Pane::Anywhere, "anywhere"),
     ];
     let shown = panes.into_iter().filter(|&(listed, _)| every_key || listed == pane || listed == Pane::Anywhere);
@@ -307,7 +314,7 @@ mod tests {
 
     #[test]
     fn no_key_does_two_actions_in_one_pane() {
-        for pane in [Pane::Editor, Pane::Result, Pane::Queries, Pane::Finder, Pane::Picker, Pane::Form] {
+        for pane in [Pane::Editor, Pane::Result, Pane::Queries, Pane::Finder, Pane::Picker, Pane::Form, Pane::Prompt] {
             let keys: Vec<&KeyEvent> = ROWS.iter().filter(|row| works_in(row, pane)).flat_map(|row| row.keys).collect();
             for (at, key) in keys.iter().enumerate() {
                 assert!(!keys[at + 1..].contains(key), "{key:?} in {pane:?}");
@@ -344,6 +351,6 @@ mod tests {
     fn the_first_help_lists_the_focused_pane_and_what_works_anywhere() {
         let titles: Vec<&str> = sections(Pane::Result, false).iter().map(|section| section.title).collect();
         assert_eq!(titles, ["result", "anywhere"]);
-        assert_eq!(sections(Pane::Result, true).len(), 7);
+        assert_eq!(sections(Pane::Result, true).len(), 8);
     }
 }

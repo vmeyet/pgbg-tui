@@ -16,5 +16,5 @@ expression: terminal.backend()
 "││                  │ ⇥ next · ←→ choose · ⏎ saves · esc                       │                  ││"
 "││                  ╰──────────────────────────────────────────────────────────╯                  ││"
 "│╰────────────────────────────────────────────────────────────────────────────────────────────────╯│"
-"│ ⏎ run  ⌥⏎ new line  ^p find  ⇥ pane  F1 keys  ^o connections  ^c quit                connecting… │"
+"│ ⏎ run  ⌥⏎ new line  ^p find  ⇥ pane  F1 keys  ^s save  ^o connections  ^c quit       connecting… │"
 "╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"

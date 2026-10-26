@@ -2,7 +2,7 @@
 use crate::config::ConnectionChange;
 use crate::connection::{Connection, ConnectionName};
 use crate::db::model::{LocalPort, ResultSet, Statement};
-use crate::query::Query;
+use crate::query::{Query, QueryPath};
 use crate::secret::Secret;
 use std::time::Duration;
 
@@ -31,6 +31,10 @@ pub(in crate::tui) enum Action {
     ListQueries,
     /// Read this query into the editor of the connection's sheet.
     OpenQuery { connection: ConnectionName, query: Query },
+    /// Write the text of the connection's editor over the query it stands for.
+    SaveQuery { connection: ConnectionName, query: Query, text: String },
+    /// Write the text of the connection's editor as a new query at this path, never over another one.
+    SaveNewQuery { connection: ConnectionName, path: QueryPath, text: String },
     /// Close the connection's session and its tunnel; nothing when it has none.
     Close(ConnectionName),
     /// Close the connection's session and open one on it as the config now says.
@@ -92,6 +96,17 @@ pub(in crate::tui) enum QueryAnswer {
     NotOpened {
         connection: ConnectionName,
         query: Query,
+        error: String,
+    },
+    /// `text` is now the file of `query`, for the sheet of `connection`, which saved it.
+    Saved {
+        connection: ConnectionName,
+        query: Query,
+        text: String,
+    },
+    NotSaved {
+        connection: ConnectionName,
+        path: QueryPath,
         error: String,
     },
 }

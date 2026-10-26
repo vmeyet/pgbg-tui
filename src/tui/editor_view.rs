@@ -147,7 +147,9 @@ fn cut_by_mark(run: &Run, mark: &Range<usize>, mark_style: Style) -> [Run; 3] {
 fn title(app: &App) -> String {
     let sheet = app.sheet();
     let path = sheet.opened.as_ref().map(|query| query.path.to_string());
-    sheet.header.name.clone().or(path).map_or_else(|| "Editor".to_owned(), |named| format!("Editor · {named}"))
+    let unsaved = if sheet.is_dirty { " *" } else { "" };
+    let named = sheet.header.name.clone().or(path);
+    named.map_or_else(|| "Editor".to_owned(), |named| format!("Editor · {named}{unsaved}"))
 }
 
 fn suggested(app: &App, named: &ConnectionName) -> Span<'static> {
