@@ -26,10 +26,21 @@ fn pgbg(config: &str, args: &[&str]) -> Output {
 /// The binary on `config`, and the config's text once it ran.
 fn pgbg_rewriting(config: &str, args: &[&str]) -> (Output, String) {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
+    let output = pgbg_in(dir.path(), config, args);
+    (output, std::fs::read_to_string(dir.path().join("config.toml")).unwrap_or_default())
+}
+
+/// The binary on `config`, written in `dir`, which also holds its data folder, so no run writes the real history.
+fn pgbg_in(dir: &Path, config: &str, args: &[&str]) -> Output {
+    let path = dir.join("config.toml");
     std::fs::write(&path, config).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_pgbg")).args(args).env("PGBG_CONFIG", &path).env("PGBG_LOG", "off").output().unwrap();
-    (output, std::fs::read_to_string(&path).unwrap_or_default())
+    let command = Command::new(env!("CARGO_BIN_EXE_pgbg"))
+        .args(args)
+        .env("PGBG_CONFIG", &path)
+        .env("PGBG_LOG", "off")
+        .env("PGBG_DATA_DIR", dir)
+        .output();
+    command.unwrap()
 }
 
 fn stdout(output: &Output) -> String {
@@ -92,6 +103,22 @@ fn run_refuses_a_write_on_a_read_only_connection_before_connecting() {
     let output = pgbg(SHOP, &["run", "local", "DELETE FROM orders"]);
     assert!(!output.status.success());
     assert!(stderr(&output).contains("`DELETE` is not a read"), "{}", stderr(&output));
+}
+
+#[test]
+fn run_adds_the_statement_to_the_history_of_its_connection() {
+    let dir = tempfile::tempdir().unwrap();
+    pgbg_in(dir.path(), SHOP, &["run", "local", "DELETE FROM orders"]);
+    let output = pgbg_in(dir.path(), SHOP, &["history", "local", "--json"]);
+    let history: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!((&history[0]["statement"], &history[0]["outcome"]["kind"]), (&"DELETE FROM orders".into(), &"refused".into()));
+}
+
+#[test]
+fn history_of_a_connection_never_run_prints_nothing() {
+    let output = pgbg(SHOP, &["history", "local"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "");
 }
 
 #[test]
@@ -249,6 +276,7 @@ fn waiting_on_a_tunnel(dir: &Path) -> (Child, u16) {
         .args(["run", "shop", "SELECT 1"])
         .env("PGBG_CONFIG", &path)
         .env("PGBG_LOG", "off")
+        .env("PGBG_DATA_DIR", dir)
         .spawn()
         .unwrap();
     assert!(within(TUNNEL_WAIT, || std::fs::read_to_string(&written).is_ok_and(|port| !port.is_empty())));

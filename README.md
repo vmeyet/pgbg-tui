@@ -35,7 +35,10 @@ Each session gets a statement timeout from its tier: none on local, a minute on 
 ```sh
 pgbg run local "SELECT id, total FROM orders LIMIT 5"
 pgbg run local "SELECT count(*) FROM orders" --json
+pgbg history local --limit 5
 ```
+
+Each statement run goes in the connection's history under `pgbg/history/` in your data folder, or the folder `$PGBG_DATA_DIR` names: when, how long and what came of it, never a row.
 
 ## Saved queries
 

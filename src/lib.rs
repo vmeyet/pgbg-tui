@@ -6,6 +6,7 @@ pub mod commands;
 mod config;
 mod connection;
 mod db;
+mod history;
 pub mod log;
 mod query;
 mod render;

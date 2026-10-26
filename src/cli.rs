@@ -36,6 +36,14 @@ pub enum Command {
         /// One SQL statement.
         sql: String,
     },
+    /// The statements run on a connection, newest first: when, how long, what came of it; never a row.
+    History {
+        /// The connection's name in `config.toml`.
+        connection: ConnectionName,
+        /// Lists this many at most.
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
     /// Adds, changes or removes a connection in `config.toml`, keeping the rest of the file as written.
     Connection {
         /// What to do with it.
@@ -186,6 +194,12 @@ mod tests {
     fn connection_edit_needs_something_to_change() {
         assert!(parse(&["connection", "edit", "prod"]).is_err());
         assert!(parse(&["connection", "edit", "prod", "--writes", "read-only"]).is_ok());
+    }
+
+    #[test]
+    fn history_lists_twenty_unless_told_otherwise() {
+        assert!(matches!(parse(&["history", "shop"]).unwrap().command, Some(Command::History { limit: 20, .. })));
+        assert!(matches!(parse(&["history", "shop", "--limit", "3"]).unwrap().command, Some(Command::History { limit: 3, .. })));
     }
 
     #[test]
