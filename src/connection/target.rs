@@ -42,12 +42,12 @@ impl Target {
     }
 
     /// The `sslmode` the query asks for, when it does.
-    pub(super) fn ssl_mode(&self) -> Option<String> {
+    pub(crate) fn ssl_mode(&self) -> Option<String> {
         self.0.query_pairs().find(|(key, _)| key == "sslmode").map(|(_, mode)| mode.into_owned())
     }
 
     /// True when every host the URL names, in its authority or a `host` query key, is this machine.
-    pub(super) fn is_local(&self) -> bool {
+    pub(crate) fn is_local(&self) -> bool {
         let queried = self.0.query_pairs().filter(|(key, _)| key == "host").map(|(_, host)| host.into_owned());
         self.0.host_str().map(str::to_owned).into_iter().chain(queried).all(|host| is_local_host(&host))
     }

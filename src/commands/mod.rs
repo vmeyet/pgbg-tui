@@ -3,6 +3,8 @@
 pub mod connection;
 /// `pgbg connections`.
 pub mod connections;
+/// `pgbg doctor`.
+pub mod doctor;
 /// `pgbg history`.
 pub mod history;
 /// `pgbg password set`.
