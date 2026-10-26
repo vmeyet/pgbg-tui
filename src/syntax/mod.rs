@@ -1,4 +1,5 @@
 //! SQL colours from the tree-sitter grammar, built on first use so startup never pays for it.
+use std::cell::RefCell;
 use std::ops::Range;
 use std::sync::OnceLock;
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
@@ -16,11 +17,23 @@ pub(crate) enum Token {
     Punctuation,
 }
 
-/// The coloured byte ranges of one line of text.
-pub(crate) type Spans = Vec<(Range<usize>, Token)>;
+/// A coloured piece of one line: its bytes, counted from the line's start, and what it is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Painted {
+    pub(crate) bytes: Range<usize>,
+    pub(crate) token: Token,
+}
+
+/// The coloured pieces of one line, in the order they appear.
+pub(crate) type Spans = Vec<Painted>;
 
 /// `None` inside when the grammar's query does not build: the editor then stays uncoloured.
 static CONFIGURATION: OnceLock<Option<HighlightConfiguration>> = OnceLock::new();
+
+thread_local! {
+    /// Kept between calls so its parser and buffers are built once.
+    static HIGHLIGHTER: RefCell<Highlighter> = RefCell::new(Highlighter::new());
+}
 
 /// The capture names the grammar's query uses and the token each paints.
 /// tree-sitter matches a capture to the longest listed name that prefixes it, so `string` also
@@ -44,10 +57,17 @@ const CAPTURES: [(&str, Token); 13] = [
 /// The spans of each line of `source`, split on `\n`; one entry per line, empty for uncoloured ones.
 /// A grammar that fails leaves every line uncoloured rather than failing the editor.
 pub(crate) fn highlight(source: &str) -> Vec<Spans> {
-    let starts: Vec<usize> = std::iter::once(0).chain(source.match_indices('\n').map(|(i, _)| i + 1)).collect();
+    let Some(config) = configuration() else { return vec![Vec::new(); line_starts(source).len()] };
+    HIGHLIGHTER.with_borrow_mut(|highlighter| highlight_with(highlighter, config, source))
+}
+
+fn line_starts(source: &str) -> Vec<usize> {
+    std::iter::once(0).chain(source.match_indices('\n').map(|(i, _)| i + 1)).collect()
+}
+
+fn highlight_with(highlighter: &mut Highlighter, config: &HighlightConfiguration, source: &str) -> Vec<Spans> {
+    let starts = line_starts(source);
     let mut lines: Vec<Spans> = vec![Vec::new(); starts.len()];
-    let Some(config) = configuration() else { return lines };
-    let mut highlighter = Highlighter::new();
     let Ok(events) = highlighter.highlight(config, source.as_bytes(), None, None, |_| None) else { return lines };
     let mut stack: Vec<Token> = Vec::new();
     for event in events {
@@ -78,7 +98,7 @@ fn push_span(lines: &mut [Spans], starts: &[usize], range: Range<usize>, token: 
         let start = range.start.max(line_start);
         let end = range.end.min(line_end);
         if start < end {
-            lines[index].push((start - line_start..end - line_start, token));
+            lines[index].push(Painted { bytes: start - line_start..end - line_start, token });
         }
     }
 }
@@ -115,7 +135,7 @@ mod tests {
     use super::*;
 
     fn tokens_of<'a>(line: &'a str, spans: &Spans) -> Vec<(&'a str, Token)> {
-        spans.iter().map(|(range, token)| (&line[range.clone()], *token)).collect()
+        spans.iter().map(|painted| (&line[painted.bytes.clone()], painted.token)).collect()
     }
 
     #[test]

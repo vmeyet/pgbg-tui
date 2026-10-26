@@ -1,10 +1,10 @@
 //! The saved queries in the app: the sidebar's tree and its cursor, the `ctrl-p` finder, and the query open in the editor.
+use super::editor::Editor;
 use super::{Action, App, Focus};
 use crate::act::{self, Act, Pane};
 use crate::query::{Query, TreeRow, tree_rows};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::collections::BTreeSet;
-use vtui::field::Field;
 use vtui::palette::{MAX_SHOWN, Palette};
 
 /// The finder's only mode: every query, by its path.
@@ -31,6 +31,12 @@ pub(in crate::tui) struct Finder {
 impl Finder {
     fn new(all: &[Query]) -> Self {
         Self { palette: Palette::default(), shown: found(all, "") }
+    }
+
+    /// Types the printable characters of `text`, then ranks once.
+    pub(super) fn paste(&mut self, text: &str, all: &[Query]) {
+        text.chars().filter(|c| !c.is_control()).for_each(|c| self.palette.type_char(c));
+        self.rank(all);
     }
 
     fn rank(&mut self, all: &[Query]) {
@@ -121,7 +127,7 @@ impl App {
         self.queries.error = None;
         let sheet = self.sheet_mut();
         sheet.opened = Some(query);
-        sheet.editor = Field::new(text);
+        sheet.editor = Editor::new(text);
         sheet.text_changed();
         self.focus = Focus::Editor;
     }
@@ -134,6 +140,7 @@ pub(in crate::tui) mod tests {
     use super::*;
     use crate::chart::Series;
     use crate::query::{QueryPath, Source};
+    use crate::syntax;
     use std::time::Duration;
 
     pub(in crate::tui) fn query(path: &str) -> Query {
@@ -176,6 +183,14 @@ pub(in crate::tui) mod tests {
     }
 
     #[test]
+    fn a_paste_in_the_finder_types_its_letters() {
+        let mut app = with_queries();
+        find(&mut app, "");
+        app.paste("wkly\n");
+        assert_eq!(press(&mut app, KeyCode::Enter), [Action::OpenQuery(query("orders/weekly.sql"))]);
+    }
+
+    #[test]
     fn esc_closes_the_finder_and_cancels_nothing() {
         let mut app = with_queries();
         find(&mut app, "");
@@ -190,7 +205,7 @@ pub(in crate::tui) mod tests {
         app.apply(Answer::Queries(QueryAnswer::Opened { query: query("customers.sql"), text: "SELECT * FROM customers".into() }));
         assert_eq!(app.sheet().editor.text(), "SELECT * FROM customers");
         assert_eq!(app.sheet().opened, Some(query("customers.sql")));
-        assert_eq!(app.sheet().colours, crate::syntax::highlight("SELECT * FROM customers"));
+        assert_eq!(app.sheet().editor.colours(), syntax::highlight("SELECT * FROM customers"));
         assert_eq!(app.focus, Focus::Editor);
     }
 

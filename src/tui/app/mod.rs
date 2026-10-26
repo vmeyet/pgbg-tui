@@ -5,10 +5,8 @@ use crate::connection::{Connection, ConnectionName, Tier, WritePolicy};
 use crate::db::guard;
 use crate::db::model::{LocalPort, ResultSet, Statement};
 use crate::query::{Header, Query};
-use crate::syntax::Spans;
 use crossterm::event::{KeyCode, KeyEvent};
 use std::time::Duration;
-use vtui::field::Field;
 use vtui::help::Help;
 use vtui::palette::Palette;
 use vtui::theme::Theme;
@@ -18,10 +16,11 @@ pub(super) use picker::Picking;
 pub(super) use queries::{Finder, Queries};
 
 const LOST_SESSION: &str = "session lost, ⏎ opens a new one";
+use editor::Editor;
 use grid::Move;
 
+mod editor;
 mod grid;
-mod keys;
 pub(super) mod picker;
 pub(super) mod queries;
 
@@ -200,9 +199,7 @@ pub(super) struct Sheet {
     pub(super) name: ConnectionName,
     pub(super) tier: Tier,
     pub(super) writes: WritePolicy,
-    pub(super) editor: Field,
-    /// The editor's syntax colours, one entry per line, rebuilt only when its text changes.
-    pub(super) colours: Vec<Spans>,
+    pub(super) editor: Editor,
     pub(super) link: Link,
     /// The connection's tunnel, once it has one and its task said where it stands.
     pub(super) tunnel: Option<TunnelState>,
@@ -293,6 +290,29 @@ impl App {
         vec![]
     }
 
+    /// Takes text the terminal pasted: the editor or the finder gets it whole, so its line ends run nothing.
+    pub(super) fn paste(&mut self, text: &str) -> Vec<Action> {
+        if let Some(finder) = self.finder.as_mut() {
+            finder.paste(text, &self.queries.all);
+            return vec![];
+        }
+        let is_editor_on_top = self.help.is_none() && self.picker.is_none() && self.focus == Focus::Editor;
+        if is_editor_on_top {
+            self.sheet_mut().paste(text);
+        }
+        vec![]
+    }
+
+    /// Whether the editor on screen waits for `recolour`.
+    pub(super) fn has_stale_colours(&self) -> bool {
+        self.sheet().editor.has_stale_colours()
+    }
+
+    /// Rebuilds the colours of the editor on screen, once its text stopped changing for a moment.
+    pub(super) fn recolour(&mut self) {
+        self.sheet_mut().editor.recolour();
+    }
+
     fn act(&mut self, act: Act) -> Vec<Action> {
         match act {
             Act::Run => return self.sheet_mut().run_editor(),
@@ -377,8 +397,7 @@ impl Sheet {
             name: connection.name().clone(),
             tier: connection.tier(),
             writes: connection.writes(),
-            editor: Field::default(),
-            colours: Vec::new(),
+            editor: Editor::default(),
             link: Link::Opening,
             tunnel: None,
             run: Run::Idle,
@@ -676,10 +695,27 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn the_colours_follow_the_text_as_it_is_typed() {
+    fn the_colours_follow_the_text_once_rebuilt() {
         let mut app = typed("SELECT 1");
         app.handle_key(KeyEvent::from(KeyCode::Backspace));
-        assert_eq!(app.sheet().colours, [vec![(0..6, crate::syntax::Token::Keyword)]]);
+        assert!(app.has_stale_colours());
+        app.recolour();
+        assert_eq!(app.sheet().editor.colours(), [vec![crate::syntax::Painted { bytes: 0..6, token: crate::syntax::Token::Keyword }]]);
+    }
+
+    #[test]
+    fn a_pasted_statement_with_line_ends_runs_nothing() {
+        let mut app = app();
+        assert_eq!(app.paste("DELETE FROM orders\nWHERE id = 7;"), []);
+        assert_eq!((app.sheet().editor.text(), &app.sheet().run), ("DELETE FROM orders\nWHERE id = 7;", &Run::Idle));
+    }
+
+    #[test]
+    fn a_paste_into_the_result_pane_types_nothing() {
+        let mut app = with_result();
+        press(&mut app, KeyCode::Tab);
+        app.paste("jjj");
+        assert_eq!(app.sheet().editor.text(), "SELECT 1");
     }
 
     #[test]

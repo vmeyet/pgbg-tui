@@ -138,7 +138,9 @@ On a connection that allows writes, a statement runs as typed, except that one r
 - Rows stream through a portal, a page at a time; nothing waits on the whole result.
 - The grid draws only the visible window; column widths come from the first page and the header, capped.
 - Values are decoded once, at the boundary, into `Value`; drawing formats only what is on screen.
-- Syntax colours are rebuilt only when the editor text changes, and kept in `App` as spans the editor view draws.
+- Syntax colours live in `tui/app/editor.rs` with the text they colour: an edit marks them stale, and the loop rebuilds them once the text stayed still for 40 ms, so a key never waits on tree-sitter.
+- The editor view draws only the lines in view, each in one pass over its spans.
+- The TUI asks the terminal for bracketed paste: a paste comes as one `Event::Paste`, inserted whole, so its line ends never run a statement.
 
 ## Glossary
 
