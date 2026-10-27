@@ -95,20 +95,9 @@ async fn stop_statements_when_client_gone(client: &Client) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::guard;
-    use crate::db::model::{LocalPort, Params, ResultSet, Statement, Value};
-    use crate::fixtures;
+    use crate::db::model::{LocalPort, Value};
+    use crate::fixtures::{self, run};
     use std::net::Ipv4Addr;
-
-    async fn session(writes: WritePolicy) -> Session {
-        let writes = if writes == WritePolicy::Allowed { "allowed" } else { "read-only" };
-        Session::open(&fixtures::test_database("local", &format!("writes = \"{writes}\"\n")), Route::Direct).await.unwrap()
-    }
-
-    async fn run(writes: WritePolicy, sql: &str) -> Result<ResultSet> {
-        let admitted = guard::admit(Statement::new(sql), Params::default(), writes).unwrap();
-        session(writes).await.run(&admitted).await
-    }
 
     #[test]
     fn the_driver_config_drops_sslmode_and_keeps_the_rest() {
