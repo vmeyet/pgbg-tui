@@ -42,8 +42,8 @@ When a boundary or a flow changes, change this page in the same MR.
 | `tui/ui.rs`, `tui/*_view.rs` | Drawing: layout in `ui.rs`, one view module per pane or modal |
 | `tui/grid_view/` | The results grid: only the visible rows and columns are drawn, the cursor's cell lit, each cell through its column's format (planned) |
 | `tui/chart_view/` | Draws a `Series` with ratatui's `BarChart` (bars across, so text labels stay readable) and `Chart` (braille line), one file per kind; a legend in vtui's user colours |
-| `tui/theme.rs` | The tier colours, the failure colour (never the production red) and the SQL token colours on top of vtui's palette |
-| `vtui` (git dependency) | Shared with the sibling TUIs: the terminal in raw mode (`Screen`), the palette (`Theme`), the input box (`Field`), the `ctrl-k` palette, the `?` overlay, fzf-style matching |
+| `tui/theme.rs` | pgbg's `Theme`: vtui's palette, read through `Deref`, with the tier colours and a production colour of its own (`danger` leaning to magenta), so a production frame never reads as an error drawn in `danger`; the SQL token colours are vtui's `Syntax` |
+| `vtui` (git dependency) | Shared with the sibling TUIs: the terminal in raw mode (`Screen`), the palette (`Theme`) and its code colours (`Syntax`), the input box (`Field`) and its cleaned paste, the `ctrl-k` palette and its `Pick` rows, the `?` overlay, fzf-style matching |
 | `log.rs` | The log file; never a secret, never a row |
 | `signal.rs` | The signals that stop pgbg (`SIGINT`, `SIGTERM`, `SIGHUP`) and the exit code each gives |
 
@@ -149,7 +149,7 @@ Charting a result:
 - Side effects live at the edges: `main.rs`, `signal.rs`, `commands/`, `tui/mod.rs`, `tui/backend/`, `tunnel/`, `secret/`, `config/` when it rewrites the file, `query/` when it lists and reads the queries folders, `history.rs` when it appends and reads its files.
 - `tui/app/` is pure: it never reads the clock nor does I/O; its tests drive it with keys and `Answer` values.
 - `chart/` is pure: a `ResultSet` in, a `Series` out; drawing lives in `tui/chart_view/`.
-- A program that takes the terminal (`$EDITOR` on a saved query) runs from the loop through `Screen::lend`, with the key stream dropped and pastes given back until it exits; the query is read again after.
+- A program that takes the terminal (`$EDITOR` on a saved query) runs from the loop through `Screen::lend`, with the key stream dropped and, through vtui, pastes given back until it exits; the query is read again after.
 - Secrets are read only in `secret/` and sent only by `Session::open` and the keychain write.
 
 ## Read only
@@ -218,7 +218,7 @@ On a connection that allows writes, a statement runs as typed, except that one r
 - Values are decoded once, at the boundary, into `Value`; drawing formats only what is on screen, and the row's detail at most 64 Ki characters of a value, its lines built once per row and width and kept by the app.
 - Syntax colours live in `tui/app/editor.rs` with the text they colour: an edit or an opened query marks them stale, and the loop rebuilds them once the text stayed still for 40 ms, so a key never waits on tree-sitter.
 - The editor view draws only the lines in view, each in one pass over its spans.
-- The TUI asks the terminal for bracketed paste: a paste comes as one `Event::Paste`, inserted whole, so its line ends never run a statement; it drops control characters and text-reversing marks.
+- vtui's `Screen` asks the terminal for bracketed paste: a paste comes as one `Event::Paste`, inserted whole, so its line ends never run a statement; `Field::paste` and `Palette::type_str` drop control characters and text-reversing marks.
 - Text from the database or the server (grid cells, the row's detail, chart labels and names, a failed run, the status line) is drawn through `render::printable`, its control characters and text-reversing marks escaped.
 
 ## Glossary

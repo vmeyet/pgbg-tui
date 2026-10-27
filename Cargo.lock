@@ -2755,13 +2755,14 @@ dependencies = [
 
 [[package]]
 name = "vtui"
-version = "0.1.0"
-source = "git+https://github.com/vmeyet/vtui?tag=v0.1.0#e388371e92b86e7403325cd9294e6d858314ee33"
+version = "0.3.0"
+source = "git+https://github.com/vmeyet/vtui?tag=v0.3.0#94c5ad2d1ec640d0fe8b0a7ed3959664b80fc9c0"
 dependencies = [
  "base64",
  "crossterm",
  "libc",
  "ratatui",
+ "tempfile",
  "tracing",
  "unicode-width",
 ]

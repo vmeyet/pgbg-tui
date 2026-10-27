@@ -26,21 +26,18 @@ use crate::signal::Signals;
 use anyhow::Result;
 use app::{Action, Answer, App, Fit, QueryAnswer};
 use backend::Backend;
-use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste, Event, EventStream, KeyEventKind};
+use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures_util::StreamExt;
 use ratatui::DefaultTerminal;
 use std::path::PathBuf;
-use std::sync::Once;
 use std::time::Duration;
+use theme::Theme;
 use tokio::sync::mpsc::{self, UnboundedReceiver};
 use tokio::time::sleep;
 use vtui::screen::Screen;
-use vtui::theme::Theme;
 
 /// How long the editor's text stays still before its colours are rebuilt, so typing never waits on them.
 const RECOLOUR_DELAY: Duration = Duration::from_millis(40);
-
-static PASTE_OFF_ON_PANIC: Once = Once::new();
 
 /// Runs the TUI on `first` until the user quits, with `connections` to switch to and the `config` file they come from,
 /// giving the terminal back on the way out; a signal while its sessions stop drops them at once, as a command does.
@@ -54,33 +51,11 @@ pub(crate) async fn run(connections: Vec<Connection>, first: Connection, config:
         backend.dispatch(action);
     }
     let (mut terminal, screen) = Screen::enter();
-    take_pastes();
     let screens = Screens { terminal: &mut terminal, screen: &screen };
     let outcome = event_loop(screens, &mut app, &mut backend, &mut incoming, &mut signals).await;
-    give_pastes_back();
     screen.leave();
     let stopped = signals.or_stopped(backend.stop()).await;
     outcome.and(stopped.map_err(Into::into))
-}
-
-/// Has the terminal send a paste as one event, so its line ends never reach the editor as `⏎`; a panic gives it back.
-fn take_pastes() {
-    PASTE_OFF_ON_PANIC.call_once(|| {
-        let earlier = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            give_pastes_back();
-            earlier(info);
-        }));
-    });
-    if let Err(err) = crossterm::execute!(std::io::stdout(), EnableBracketedPaste) {
-        tracing::warn!("the terminal will send pastes as keys: {err}");
-    }
-}
-
-fn give_pastes_back() {
-    if let Err(err) = crossterm::execute!(std::io::stdout(), DisableBracketedPaste) {
-        tracing::warn!("the terminal may keep bracketing pastes: {err}");
-    }
 }
 
 /// The folders of saved queries: the one nearest the working directory, and the one in the config folder.
@@ -98,14 +73,11 @@ struct Screens<'a> {
 }
 
 impl Screens<'_> {
-    /// Lends the terminal to the user's editor on `query`'s file until it exits, pastes as keys as a shell has them.
+    /// Lends the terminal to the user's editor on `query`'s file until it exits.
     fn edit_outside(&mut self, query: &Query, backend: &Backend) -> Result<()> {
         tokio::task::block_in_place(|| {
             let path = backend.query_file(query)?;
-            give_pastes_back();
-            let edited = self.screen.lend(self.terminal, || outside::edit(&path));
-            take_pastes();
-            edited
+            self.screen.lend(self.terminal, || outside::edit(&path))
         })
     }
 }

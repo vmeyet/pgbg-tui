@@ -1,13 +1,16 @@
 //! The connection picker over the screen: each connection's dot in its tier's colour, where it goes, whether it
 //! takes writes, and whether its session is open. vtui draws the popup around it.
-use super::app::{App, Note, Overlay, ROWS_SHOWN, Search, SessionState};
-use super::theme;
+use super::app::{App, Note, Overlay, Search, SessionState};
 use crate::connection::{Connection, WritePolicy};
 use ratatui::Frame;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use vtui::palette::view::{self, Popup};
+use vtui::palette::MAX_SHOWN;
+use vtui::palette::view::{self, Pick, Popup};
 use vtui::text::truncate;
+
+/// The columns vtui leaves between a pick's label and its detail.
+const GAP_WIDTH: usize = 2;
 
 const FOOTER: &str = "  ↑↓ pick · ⏎ opens · ^d removes · ^x closes · esc";
 
@@ -16,7 +19,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) {
     let Some(Overlay::Picker(picker)) = &app.overlay else { return };
     let prompt = view::prompt(&app.theme, &picker.search.palette, "", |_| vec![]);
     let popup = Popup { title: "Connections", prompt, footer: FOOTER };
-    let rows = ROWS_SHOWN - usize::from(picker.note.is_some());
+    let rows = MAX_SHOWN - usize::from(picker.note.is_some());
     view::draw(f, &app.theme, f.area(), popup, |room| {
         let mut lines = lines(app, &picker.search, rows, room);
         lines.extend(picker.note.as_ref().map(|note| note_line(app, note, room)));
@@ -29,7 +32,7 @@ fn note_line(app: &App, note: &Note, room: usize) -> Line<'static> {
     let (text, style) = match note {
         Note::ConfirmRemove(name) => (
             format!("  remove `{name}`? y removes it, any other key keeps it"),
-            Style::default().fg(theme::failure(&app.theme)).add_modifier(Modifier::BOLD),
+            Style::default().fg(app.theme.danger).add_modifier(Modifier::BOLD),
         ),
         Note::Said(said) => (format!("  {said}"), Style::default().fg(app.theme.muted)),
     };
@@ -38,34 +41,33 @@ fn note_line(app: &App, note: &Note, room: usize) -> Line<'static> {
 
 /// The `rows` in view, scrolled so the highlighted one shows.
 fn lines(app: &App, search: &Search<Connection>, rows: usize, room: usize) -> Vec<Line<'static>> {
-    if search.shown.is_empty() {
-        return vec![Line::styled("  no match", Style::default().fg(app.theme.muted))];
-    }
     let selected = search.palette.selected - search.first_in_view(rows);
-    search.in_view(rows).iter().enumerate().map(|(at, connection)| line(app, connection, at == selected, room)).collect()
+    let names: Vec<String> = search.in_view(rows).iter().map(|connection| connection.name().to_string()).collect();
+    let picks: Vec<Pick<'_>> =
+        search.in_view(rows).iter().zip(&names).map(|(connection, name)| pick(app, connection, name, room)).collect();
+    view::pick_lines(&app.theme, &picks, selected, room)
 }
 
-/// `▎● prod  via tunnel · read only  open`: the name is cut to leave room for its badge and state, the place to the room left.
-fn line(app: &App, connection: &Connection, is_selected: bool, room: usize) -> Line<'static> {
+/// `● prod  via tunnel · read only  open`: the dot in the tier's colour; vtui cuts the name before the badges,
+/// and the place is cut first to the room the name leaves.
+fn pick<'a>(app: &App, connection: &Connection, name: &'a str, room: usize) -> Pick<'a> {
+    let badges = badges(app, connection);
+    let place = connection.tunnel().map_or_else(|| connection.target().place(), |_| "via tunnel".to_owned());
+    let place_room = room.saturating_sub(Span::raw(name).width() + GAP_WIDTH + badges.width());
+    let mut detail = Line::styled(truncate(&place, place_room), Style::default().fg(app.theme.muted));
+    detail.spans.extend(badges.spans);
+    Pick { icon: "●", colour: app.theme.tier(connection.tier()), label: name, detail }
+}
+
+/// Whether the connection takes writes, then the state of its session.
+fn badges(app: &App, connection: &Connection) -> Line<'static> {
     let theme = &app.theme;
-    let (writes, writes_style) = match connection.writes() {
-        WritePolicy::ReadOnly => (" · read only", Style::default().fg(theme.faded)),
-        WritePolicy::Allowed => ("  WRITES", Style::default().fg(theme.danger).add_modifier(Modifier::BOLD)),
+    let writes = match connection.writes() {
+        WritePolicy::ReadOnly => Span::styled(" · read only", Style::default().fg(theme.faded)),
+        WritePolicy::Allowed => Span::styled("  WRITES", Style::default().fg(theme.danger).add_modifier(Modifier::BOLD)),
     };
     let (state, state_style) = session_state(app, connection);
-    let place = connection.tunnel().map_or_else(|| connection.target().place(), |_| "via tunnel".to_owned());
-    let kept = ["▎● ", writes, state].iter().map(|text| text.chars().count()).sum::<usize>();
-    let name = truncate(&connection.name().to_string(), room.saturating_sub(kept));
-    let taken = kept + name.chars().count() + "  ".len();
-    let name_style = if is_selected { Style::default().add_modifier(Modifier::BOLD) } else { Style::default() };
-    Line::from(vec![
-        Span::styled(if is_selected { "▎" } else { " " }, Style::default().fg(theme.accent)),
-        Span::styled("● ", Style::default().fg(theme::tier(theme, connection.tier()))),
-        Span::styled(name, name_style),
-        Span::styled(format!("  {}", truncate(&place, room.saturating_sub(taken))), Style::default().fg(theme.muted)),
-        Span::styled(writes, writes_style),
-        Span::styled(state, state_style),
-    ])
+    Line::from(vec![writes, Span::styled(state, state_style)])
 }
 
 /// `running…` while a statement runs, else `open`, `opening…` or `failed` once its session was asked for; nothing before.
@@ -77,7 +79,7 @@ fn session_state(app: &App, connection: &Connection) -> (&'static str, Style) {
     match sheet.session {
         SessionState::Opening => ("  opening…", Style::default().fg(app.theme.muted)),
         SessionState::Open => ("  open", Style::default().fg(app.theme.success)),
-        SessionState::Failed(_) => ("  failed", Style::default().fg(theme::failure(&app.theme))),
+        SessionState::Failed(_) => ("  failed", Style::default().fg(app.theme.danger)),
         SessionState::Closed => ("  closed", Style::default().fg(app.theme.muted)),
     }
 }
@@ -88,10 +90,10 @@ mod tests {
     use super::super::app::{Answer, App, Incoming, SessionId};
     use super::super::ui;
     use crate::fixtures::named;
+    use crate::tui::theme::Theme;
     use crossterm::event::{KeyCode, KeyEvent};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
-    use vtui::theme::Theme;
 
     fn drawn(app: &App, width: u16) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();

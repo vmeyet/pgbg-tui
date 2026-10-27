@@ -1,7 +1,6 @@
 //! The row's detail over the screen: each column's name and type, its whole value under it, wrapped, JSON indented
 //! and coloured; every piece of text drawn through `render::printable`.
 use super::app::{App, DetailFit, DetailScroll, DrawnDetail, DrawnRow, Overlay, Run};
-use super::theme;
 use crate::act::{self, Pane};
 use crate::db::model::{Column, Value};
 use crate::render;
@@ -103,7 +102,7 @@ fn painted_spans(theme: &Theme, line: &str, painted: &[Painted]) -> Vec<Span<'st
     let mut at = 0;
     for piece in painted {
         spans.push(Span::raw(render::printable(&line[at..piece.bytes.start]).into_owned()));
-        let colour = Style::default().fg(theme::token(theme, piece.token));
+        let colour = Style::default().fg(theme.syntax.colour(piece.token));
         spans.push(Span::styled(render::printable(&line[piece.bytes.clone()]).into_owned(), colour));
         at = piece.bytes.end;
     }

@@ -4,7 +4,6 @@ use super::{Action, App, ConfigChangeId, KeychainPassword, Overlay, SaveConnecti
 use crate::act::{self, Act, Pane};
 use crate::config::ConnectionChange;
 use crate::connection::{Connection, ConnectionName, StatementTimeout, Target, Tier, Tls, TunnelSpec, WritePolicy};
-use crate::render;
 use crate::secret::{KeychainItem, Secret, SecretSource};
 use anyhow::{Context, anyhow};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -179,12 +178,16 @@ impl Form {
         self.errors.iter().find(|(refused, _)| *refused == slot).map(|(_, why)| why.as_str())
     }
 
-    /// Types `text` on the line with the cursor, its printable characters only, but on the password line, which takes
+    /// Types `text` on the line with the cursor as vtui cleans a paste, on one line, but on the password line, which takes
     /// every character a password may hold but a line end; a choice line takes none.
     pub(super) fn paste(&mut self, text: &str) {
-        let is_password = self.at == Slot::Password;
-        let is_kept = |c: char| if is_password { !matches!(c, '\r' | '\n') } else { !render::is_unprintable(c) };
-        text.chars().filter(|&c| is_kept(c)).for_each(|c| self.type_char(c));
+        let is_line_end = |c: char| matches!(c, '\r' | '\n');
+        if self.at == Slot::Password {
+            return text.chars().filter(|&c| !is_line_end(c)).for_each(|c| self.password.push(c));
+        }
+        if let Some(field) = self.field_mut() {
+            field.paste(&text.replace(is_line_end, ""));
+        }
     }
 
     fn field_mut(&mut self) -> Option<&mut Field> {
@@ -735,7 +738,7 @@ mod tests {
     #[test]
     fn an_edit_cannot_take_out_a_statement_timeout_the_config_has() {
         let timed = named("local", "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\nstatement_timeout = \"5s\"\n");
-        let mut app = App::new(vec![timed.clone()], &timed, vtui::theme::Theme::default());
+        let mut app = App::new(vec![timed.clone()], &timed, crate::tui::theme::Theme::default());
         ctrl(&mut app, 'o');
         ctrl(&mut app, 'e');
         to(&mut app, Slot::StatementTimeout);
@@ -758,7 +761,7 @@ mod tests {
     fn a_new_password_for_the_keychain_item_the_config_names_is_sent_for_that_item() {
         let keyed =
             named("local", "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\npassword = { keychain = \"pgbg/local\" }\n");
-        let mut app = App::new(vec![keyed.clone()], &keyed, vtui::theme::Theme::default());
+        let mut app = App::new(vec![keyed.clone()], &keyed, crate::tui::theme::Theme::default());
         ctrl(&mut app, 'o');
         ctrl(&mut app, 'e');
         for _ in 0..4 {

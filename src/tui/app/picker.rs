@@ -228,9 +228,9 @@ pub(in crate::tui) mod tests {
     use crate::connection::WritePolicy;
     use crate::db::model::Statement;
     use crate::fixtures::named;
+    use crate::tui::theme::Theme;
     use crossterm::event::KeyModifiers;
     use std::time::Duration;
-    use vtui::theme::Theme;
 
     /// Three connections, the TUI on `local`.
     pub(in crate::tui) fn on_local() -> App {

@@ -1,17 +1,18 @@
 //! The `ctrl-r` search over the screen: a vtui palette over the statements run on the connection, newest first.
-use super::app::{App, Overlay, ROWS_SHOWN};
+use super::app::{App, Overlay};
 use crate::act::{self, Pane};
 use crate::history::Entry;
 use ratatui::Frame;
 use ratatui::style::Style;
 use ratatui::text::Line;
+use vtui::palette::MAX_SHOWN;
 use vtui::palette::view::{self, Pick, Popup};
 
 const WHEN_FORMAT: &str = "%m-%d %H:%M";
 
 /// A statement on one line, beside when it ran and what came of it.
 fn pick<'a>(app: &App, label: &'a str, detail: &'a str) -> Pick<'a> {
-    Pick { icon: "↺", colour: app.theme.accent, label, detail }
+    Pick { icon: "↺", colour: app.theme.accent, label, detail: view::faded(&app.theme, detail) }
 }
 
 fn detail(entry: &Entry) -> String {
@@ -26,11 +27,11 @@ fn one_line(statement: &str) -> String {
 pub(super) fn draw(f: &mut Frame<'_>, app: &App) {
     let Some(Overlay::Recall(recall)) = &app.overlay else { return };
     let theme = &app.theme;
-    let in_view = recall.search.in_view(ROWS_SHOWN);
+    let in_view = recall.search.in_view(MAX_SHOWN);
     let labels: Vec<String> = in_view.iter().map(|entry| one_line(&entry.statement)).collect();
     let details: Vec<String> = in_view.iter().map(detail).collect();
     let picks: Vec<Pick<'_>> = labels.iter().zip(&details).map(|(label, detail)| pick(app, label, detail)).collect();
-    let selected = recall.search.palette.selected - recall.search.first_in_view(ROWS_SHOWN);
+    let selected = recall.search.palette.selected - recall.search.first_in_view(MAX_SHOWN);
     let hints: Vec<String> = act::footer(Pane::Finder).map(|hint| format!("{} {}", hint.keys, hint.does)).collect();
     let footer = format!("  {}", hints.join(" · "));
     let title = format!("History of {}", recall.connection);
