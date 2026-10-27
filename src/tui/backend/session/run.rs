@@ -36,7 +36,7 @@ impl OnServer {
 /// sheet sends one run at a time, so it is the only one a run still to come can be cancelled by.
 pub(in crate::tui::backend) struct Cancels {
     receiver: UnboundedReceiver<RunId>,
-    pub(in crate::tui::backend) latest: Option<RunId>,
+    latest: Option<RunId>,
 }
 
 impl Cancels {
@@ -51,12 +51,17 @@ impl Cancels {
         of
     }
 
+    /// Whether the latest cancel heard is for `run`.
+    pub(in crate::tui::backend) fn is_latest(&self, run: RunId) -> bool {
+        self.latest == Some(run)
+    }
+
     /// Whether `run` was cancelled before it started, by its own cancel or by its session stopping.
     pub(super) fn was_cancelled(&mut self, run: RunId) -> bool {
         loop {
             match self.receiver.try_recv() {
                 Ok(of) => self.latest = self.latest.max(Some(of)),
-                Err(TryRecvError::Empty) => return self.latest == Some(run),
+                Err(TryRecvError::Empty) => return self.is_latest(run),
                 Err(TryRecvError::Disconnected) => return true,
             }
         }
@@ -141,4 +146,30 @@ async fn answer_to(session: &mut Session, writes: WritePolicy, queued: Queued) -
         }
     };
     Answered { incoming, outcome, rest }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::mpsc;
+
+    #[tokio::test]
+    async fn a_run_whose_cancel_was_heard_is_the_latest_cancelled() {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let mut cancels = Cancels::new(receiver);
+        sender.send(RunId::FIRST).unwrap();
+        cancels.recv().await;
+        assert!(cancels.is_latest(RunId::FIRST));
+    }
+
+    #[tokio::test]
+    async fn a_cancel_for_an_earlier_run_leaves_the_later_one_the_latest() {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let mut cancels = Cancels::new(receiver);
+        sender.send(RunId::FIRST.next()).unwrap();
+        sender.send(RunId::FIRST).unwrap();
+        cancels.recv().await;
+        cancels.recv().await;
+        assert!(cancels.is_latest(RunId::FIRST.next()));
+    }
 }

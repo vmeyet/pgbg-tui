@@ -8,7 +8,7 @@ use crate::db::{NotOpened, Opened, Session, TunnelStep, open_along};
 use crate::history::{Entry, Outcome, Store};
 use crate::tui::app::{Incoming, TunnelState};
 use crate::tunnel::{Died, Tunnel};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use run::{Answered, CANCELLED_BEFORE_SENT, run_until_answered};
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -31,10 +31,34 @@ pub(super) enum Woken {
     TunnelEnded(Died),
 }
 
+/// What the session task does next.
+pub(super) enum Next {
+    /// Waits for a job, the session's close or the tunnel's end.
+    Wait,
+    /// Acts on what woke it while it served the pages of a run.
+    Act(Woken),
+    /// Stops: pgbg quits.
+    Stop,
+}
+
+/// A run's history entry before it is answered: what was sent, and when.
+struct RunStart {
+    statement: String,
+    started_at: DateTime<Utc>,
+    clock: Instant,
+}
+
+impl RunStart {
+    fn of(queued: &Queued) -> Self {
+        Self { statement: queued.statement.as_str().to_owned(), started_at: Utc::now(), clock: Instant::now() }
+    }
+}
+
 /// The task that owns the session and its tunnel: it opens them, runs each statement in turn, and says when they are lost.
 struct SessionTask {
     connection: Connection,
     tunnel: Option<Tunnel>,
+    /// The open session, between runs: a run takes it out while it holds it.
     session: Option<Session>,
     /// The route of the open session, for the schema reader; none while it is not open.
     route: watch::Sender<Option<Route>>,
@@ -58,23 +82,29 @@ impl SessionTask {
 
     async fn serve_jobs(&mut self, mut queue: UnboundedReceiver<Job>) {
         self.open_or_fail_queued(&mut queue).await;
-        let mut pending = None;
+        let mut next = Next::Wait;
         loop {
-            let woken = match pending.take() {
-                Some(woken) => woken,
-                None => self.woken(&mut queue).await,
+            let woken = match next {
+                Next::Wait => self.woken(&mut queue).await,
+                Next::Act(woken) => woken,
+                Next::Stop => break,
             };
-            match woken {
-                Woken::Queued(Some(_)) if queue.is_closed() => {}
-                Woken::Queued(Some(Job::Run(queued))) => pending = self.run(queued, &mut queue).await,
-                Woken::Queued(Some(Job::NextPage { .. })) => {}
-                Woken::Queued(Some(Job::Open)) if self.session.is_none() => self.open_or_fail_queued(&mut queue).await,
-                Woken::Queued(Some(Job::Open)) => {}
-                Woken::Queued(None) => break,
-                Woken::Closed(why) => self.lose(why),
-                Woken::TunnelEnded(died) => self.lose_tunnel(&died),
-            }
+            next = self.act(woken, &mut queue).await;
         }
+    }
+
+    async fn act(&mut self, woken: Woken, queue: &mut UnboundedReceiver<Job>) -> Next {
+        match woken {
+            Woken::Queued(Some(_)) if queue.is_closed() => {}
+            Woken::Queued(Some(Job::Run(queued))) => return self.run(queued, queue).await,
+            Woken::Queued(Some(Job::NextPage { .. })) => {}
+            Woken::Queued(Some(Job::Open)) if self.session.is_none() => self.open_or_fail_queued(queue).await,
+            Woken::Queued(Some(Job::Open)) => {}
+            Woken::Queued(None) => return Next::Stop,
+            Woken::Closed(why) => self.lose(why),
+            Woken::TunnelEnded(died) => self.lose_tunnel(&died),
+        }
+        Next::Wait
     }
 
     async fn woken(&mut self, queue: &mut UnboundedReceiver<Job>) -> Woken {
@@ -86,19 +116,23 @@ impl SessionTask {
         }
     }
 
-    /// Opens the session and says how it went; the error, when it did not open.
-    async fn open(&mut self) -> Result<(), String> {
-        match self.connect().await {
-            Ok(session) => {
-                self.set_session(Some(session));
-                self.send(Incoming::Opened);
-                Ok(())
-            }
-            Err(error) => {
-                self.set_session(None);
-                self.send(Incoming::NotOpened(error.clone()));
-                Err(error)
-            }
+    /// Opens a session, tells the schema reader its route and says how it went; the error, when it did not open.
+    async fn open(&mut self) -> Result<Session, String> {
+        let opened = self.connect().await;
+        let route = opened.as_ref().ok().map(|_| self.tunnel.as_ref().map_or(Route::Direct, Tunnel::route));
+        self.route.send_replace(route);
+        match &opened {
+            Ok(_) => self.send(Incoming::Opened),
+            Err(error) => self.send(Incoming::NotOpened(error.clone())),
+        }
+        opened
+    }
+
+    /// The open session, taken out for a run, or one opened for it.
+    async fn take_or_open(&mut self) -> Result<Session, String> {
+        match self.session.take() {
+            Some(session) => Ok(session),
+            None => self.open().await,
         }
     }
 
@@ -125,58 +159,73 @@ impl SessionTask {
 
     /// Opens the session; when it does not open, every statement sent meanwhile fails with it, so a later open never sends one.
     async fn open_or_fail_queued(&mut self, queue: &mut UnboundedReceiver<Job>) {
-        let Err(error) = self.open().await else { return };
+        match self.open().await {
+            Ok(session) => self.session = Some(session),
+            Err(error) => self.fail_queued(queue, &error),
+        }
+    }
+
+    fn fail_queued(&self, queue: &mut UnboundedReceiver<Job>, error: &str) {
         while let Ok(job) = queue.try_recv() {
             if let Job::Run(queued) = job {
-                self.send(Incoming::Failed { run: queued.run, error: error.clone(), position: None });
+                self.send(Incoming::Failed { run: queued.run, error: error.to_owned(), position: None });
             }
         }
     }
 
-    /// Runs `queued`, then serves the pages of its result while its portal is open; returns what woke the task meanwhile
-    /// that it still has to act on.
-    async fn run(&mut self, queued: Queued, queue: &mut UnboundedReceiver<Job>) -> Option<Woken> {
-        let (statement, started_at, clock) = (queued.statement.as_str().to_owned(), Utc::now(), Instant::now());
-        if self.session.is_none()
-            && let Err(error) = self.open().await
-        {
-            self.send(Incoming::Failed { run: queued.run, error, position: None });
-            record(
-                self.history.as_ref(),
-                Entry { statement, connection: self.connection.name().clone(), started_at, took_ms: 0, outcome: Outcome::LinkError },
-            );
-            return None;
-        }
-        let session = self.session.as_mut()?;
-        let run = queued.run;
-        if self.cancelled.was_cancelled(run) {
-            self.send(Incoming::Failed { run, error: CANCELLED_BEFORE_SENT.to_owned(), position: None });
-            return None;
-        }
-        let woken = {
-            let token = session.cancel_token();
-            let Answered { incoming, outcome, rest } =
-                run_until_answered(session, self.connection.writes(), queued, &mut self.cancelled, &self.on_server).await;
-            let took_ms = u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX);
-            record(self.history.as_ref(), Entry { statement, connection: self.connection.name().clone(), started_at, took_ms, outcome });
-            self.answers.say(incoming);
-            if let Some(pages) = rest {
-                let (tunnel, cancelled) = (self.tunnel.as_mut(), &mut self.cancelled);
-                let (answers, idle_limit, on_server) = (&self.answers, self.idle_limit, &self.on_server);
-                let paging = Paging { pages, run, token, queue, cancelled, on_server, tunnel, answers, idle_limit };
-                serve_pages(paging).await
-            } else {
-                None
+    /// Runs `queued` on the open session, or one opened for it; says what the task does next.
+    async fn run(&mut self, queued: Queued, queue: &mut UnboundedReceiver<Job>) -> Next {
+        let start = RunStart::of(&queued);
+        let mut session = match self.take_or_open().await {
+            Ok(session) => session,
+            Err(error) => {
+                self.send(Incoming::Failed { run: queued.run, error, position: None });
+                self.record(start, Duration::ZERO, Outcome::LinkError);
+                return Next::Wait;
             }
         };
-        self.lose_if_lost(woken)
+        if self.cancelled.was_cancelled(queued.run) {
+            self.session = Some(session);
+            self.send(Incoming::Failed { run: queued.run, error: CANCELLED_BEFORE_SENT.to_owned(), position: None });
+            return Next::Wait;
+        }
+        let next = self.answer_and_page(&mut session, queued, queue, start).await;
+        self.keep_unless_lost(session, next)
     }
 
-    /// Closes a session that can run no more statements, and drops a pending close it already says.
-    fn lose_if_lost(&mut self, woken: Option<Woken>) -> Option<Woken> {
-        let Some(why) = self.session.as_ref().and_then(Session::lost) else { return woken };
+    /// Answers `queued` on `session`, then serves the pages of its result while its portal is open.
+    async fn answer_and_page(
+        &mut self,
+        session: &mut Session,
+        queued: Queued,
+        queue: &mut UnboundedReceiver<Job>,
+        start: RunStart,
+    ) -> Next {
+        let (run, token) = (queued.run, session.cancel_token());
+        let Answered { incoming, outcome, rest } =
+            run_until_answered(session, self.connection.writes(), queued, &mut self.cancelled, &self.on_server).await;
+        let took = start.clock.elapsed();
+        self.record(start, took, outcome);
+        self.send(incoming);
+        let Some(pages) = rest else { return Next::Wait };
+        let (tunnel, cancelled) = (self.tunnel.as_mut(), &mut self.cancelled);
+        let (answers, idle_limit, on_server) = (&self.answers, self.idle_limit, &self.on_server);
+        serve_pages(Paging { pages, run, token, queue, cancelled, on_server, tunnel, answers, idle_limit }).await
+    }
+
+    /// Keeps `session` for the next run, or closes it when it can run no more statements, dropping a pending close
+    /// it then already says.
+    fn keep_unless_lost(&mut self, session: Session, next: Next) -> Next {
+        let Some(why) = session.lost() else {
+            self.session = Some(session);
+            return next;
+        };
+        drop(session);
         self.lose(why);
-        woken.filter(|woken| !matches!(woken, Woken::Closed(_)))
+        match next {
+            Next::Act(Woken::Closed(_)) => Next::Wait,
+            next => next,
+        }
     }
 
     /// Closes the session a dead tunnel carried; the next statement starts both again.
@@ -198,16 +247,19 @@ impl SessionTask {
         }
     }
 
+    /// Closes the session, and tells the schema reader there is no route.
     fn lose(&mut self, why: String) {
-        self.set_session(None);
+        self.session = None;
+        self.route.send_replace(None);
         self.send(Incoming::Closed(why));
     }
 
-    /// Keeps `session`, and tells the schema reader the route it takes.
-    fn set_session(&mut self, session: Option<Session>) {
-        let route = session.as_ref().map(|_| self.tunnel.as_ref().map_or(Route::Direct, Tunnel::route));
-        self.session = session;
-        self.route.send_replace(route);
+    /// Adds the run `start` began to the history in the background: the next statement never waits on the disk.
+    fn record(&self, start: RunStart, took: Duration, outcome: Outcome) {
+        let Some(store) = self.history.as_ref() else { return };
+        let RunStart { statement, started_at, .. } = start;
+        let took_ms = u64::try_from(took.as_millis()).unwrap_or(u64::MAX);
+        drop(store.record(Entry { statement, connection: self.connection.name().clone(), started_at, took_ms, outcome }));
     }
 
     fn send(&self, incoming: Incoming) {
@@ -219,13 +271,6 @@ fn tunnel_state(step: TunnelStep) -> TunnelState {
     match step {
         TunnelStep::Starting => TunnelState::Starting,
         TunnelStep::Up(port) => TunnelState::Up(port),
-    }
-}
-
-/// Adds `entry` to the history in the background: the next statement never waits on the disk.
-fn record(history: Option<&Store>, entry: Entry) {
-    if let Some(store) = history {
-        drop(store.record(entry));
     }
 }
 

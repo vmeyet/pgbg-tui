@@ -1,5 +1,5 @@
 //! A result's portal held open across jobs: the session task serves its pages here until the portal closes.
-use super::session::{Cancels, Job, OnServer, SessionAnswers, Woken, ended, warn_if_still_running};
+use super::session::{Cancels, Job, Next, OnServer, SessionAnswers, Woken, ended, warn_if_still_running};
 use crate::db::model::{CancelToken, Extent, Page};
 use crate::db::{Fetched, Pages};
 use crate::tui::app::{Incoming, RunId};
@@ -79,8 +79,8 @@ fn idle_limit_before_the_server(idle_limit: Duration, on_server: Duration) -> Du
 
 /// Serves the pages of `paging.run` until its portal closes: on its last page, a cancel of the run, a new run, the idle
 /// limit, the session closing or its link or tunnel ending; a close before the last page sends an empty `Cut` page.
-/// Returns what woke the task that the session task still has to act on.
-pub(super) async fn serve_pages(paging: Paging<'_, '_>) -> Option<Woken> {
+/// Returns what the session task does next.
+pub(super) async fn serve_pages(paging: Paging<'_, '_>) -> Next {
     let Paging { mut pages, run, token, queue, cancelled, on_server, mut tunnel, answers, idle_limit } = paging;
     let outbox = Outbox { answers, run };
     let idle_limit = idle_limit_before_the_server(idle_limit, pages.idle_limit_on_server());
@@ -104,26 +104,26 @@ pub(super) async fn serve_pages(paging: Paging<'_, '_>) -> Option<Woken> {
                     }
                     Fetch::Last(page) => {
                         outbox.send(page);
-                        return None;
+                        return Next::Wait;
                     }
                     Fetch::Cancelled => {
                         outbox.send_cut();
-                        return None;
+                        return Next::Wait;
                     }
                     Fetch::Failed(error) => {
                         outbox.send_failure(error);
-                        return None;
+                        return Next::Wait;
                     }
                     Fetch::Closing => {
                         outbox.send_cut();
-                        return Some(Woken::Queued(None));
+                        return Next::Stop;
                     }
                 }
             }
             Held::Queued(Some(Job::NextPage { .. } | Job::Open)) if !is_queue_closed => {}
             Held::Cancelled(Some(of)) if of != run => {}
-            Held::Closed(why) => return Some(gone(pages, &outbox, Woken::Closed(why))),
-            Held::TunnelEnded(died) => return Some(gone(pages, &outbox, Woken::TunnelEnded(died))),
+            Held::Closed(why) => return gone(pages, &outbox, Woken::Closed(why)),
+            Held::TunnelEnded(died) => return gone(pages, &outbox, Woken::TunnelEnded(died)),
             held => {
                 close(pages).await;
                 outbox.send_cut();
@@ -134,18 +134,18 @@ pub(super) async fn serve_pages(paging: Paging<'_, '_>) -> Option<Woken> {
 }
 
 /// The link or the tunnel ended, so there is no transaction left to roll back.
-fn gone(pages: Pages<'_>, outbox: &Outbox<'_>, woken: Woken) -> Woken {
+fn gone(pages: Pages<'_>, outbox: &Outbox<'_>, woken: Woken) -> Next {
     drop(pages);
     outbox.send_cut();
-    woken
+    Next::Act(woken)
 }
 
 /// A new run waits once the portal is closed, and a closed queue stops the task; a cancel or the idle limit only closed it.
-fn still_to_act_on(held: Held, is_queue_closed: bool) -> Option<Woken> {
+fn still_to_act_on(held: Held, is_queue_closed: bool) -> Next {
     match held {
-        Held::Queued(Some(job)) if !is_queue_closed => Some(Woken::Queued(Some(job))),
-        Held::Queued(_) => Some(Woken::Queued(None)),
-        Held::Cancelled(_) | Held::Closed(_) | Held::TunnelEnded(_) | Held::Idle => None,
+        Held::Queued(Some(job)) if !is_queue_closed => Next::Act(Woken::Queued(Some(job))),
+        Held::Queued(_) => Next::Stop,
+        Held::Cancelled(_) | Held::Closed(_) | Held::TunnelEnded(_) | Held::Idle => Next::Wait,
     }
 }
 
@@ -155,7 +155,7 @@ async fn next_page<'s>(pages: Pages<'s>, run: RunId, token: &CancelToken, cancel
     on_server.starts(token);
     let fetched = token.unless_stopped(pages.next(), cancelled.stopping(run, token)).await;
     on_server.ended();
-    let is_cancelled = cancelled.latest == Some(run);
+    let is_cancelled = cancelled.is_latest(run);
     match fetched {
         Err(interrupted) => {
             warn_if_still_running(&interrupted.cancel);
