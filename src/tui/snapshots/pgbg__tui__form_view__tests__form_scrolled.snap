@@ -12,7 +12,7 @@ expression: terminal.backend()
 "│╰──────────────────│  tunnel                                                  │──────────────────╯│"
 "│╭ Result ──────────│  writes          ‹ read only ›                           │──────────────────╮│"
 "││ ⏎ runs the statem│  tls             ‹ as the url's sslmode says ›           │                  ││"
-"││                  │  timeout         the tier's                              │                  ││"
+"││                  │  timeout         stricter of the tier's and server's     │                  ││"
 "││                  │                                                          │                  ││"
 "││                  │ ⇥ next · ←→ choose · ⏎ saves · esc                       │                  ││"
 "││                  ╰──────────────────────────────────────────────────────────╯                  ││"

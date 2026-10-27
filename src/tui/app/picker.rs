@@ -147,8 +147,9 @@ impl App {
     }
 
     /// Takes the connections the config holds now, after the change `id`: the sheet of one gone closes, the sheet of one
-    /// changed opens again unless its session was closed, and the form that sent `id` closes.
-    pub(super) fn take_connections(&mut self, id: ConfigChangeId, connections: Vec<Connection>) -> Vec<Action> {
+    /// changed opens again unless its session was closed, the form that sent `id` closes, and the status line says
+    /// `warning`.
+    pub(super) fn take_connections(&mut self, id: ConfigChangeId, connections: Vec<Connection>, warning: Option<String>) -> Vec<Action> {
         let closed = self.close_gone(&connections);
         let reopened = self.reopen_changed(&connections);
         self.connections = connections;
@@ -156,6 +157,7 @@ impl App {
             picker.search.rank(&self.connections);
         }
         self.clear_said();
+        self.config_failure = warning;
         if self.is_form_waiting_on(id) {
             self.overlay = None;
         }
@@ -410,7 +412,7 @@ pub(in crate::tui) mod tests {
         ctrl(&mut app, 'o');
         let mut connections = app.connections.clone();
         connections.push(named("replica", "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\n"));
-        app.take_connections(ConfigChangeId::FIRST, connections);
+        app.take_connections(ConfigChangeId::FIRST, connections, None);
         assert_eq!(names(&app), ["local", "prod", "staging", "replica"]);
     }
 
@@ -543,7 +545,8 @@ pub(in crate::tui) mod tests {
         let mut app = on_prod_with_local_open();
         let prod =
             named("prod", "tier = \"production\"\nurl = \"postgres://nina@db.example.com/shop?sslmode=require\"\nwrites = \"allowed\"\n");
-        let actions = app.apply(Answer::Config { id: ConfigChangeId::FIRST, answer: ConfigAnswer::Changed(vec![prod.clone()]) });
+        let answer = ConfigAnswer::Changed { connections: vec![prod.clone()], warning: None };
+        let actions = app.apply(Answer::Config { id: ConfigChangeId::FIRST, answer });
         assert!(
             matches!(&*actions, [Action::Close(local), Action::Reopen { connection, .. }] if *local == name("local") && *connection == prod)
         );
@@ -557,9 +560,21 @@ pub(in crate::tui) mod tests {
         ctrl(&mut app, 'x');
         let local = named("local", "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\nwrites = \"allowed\"\n");
         let prod = app.connections[1].clone();
-        let actions = app.apply(Answer::Config { id: ConfigChangeId::FIRST, answer: ConfigAnswer::Changed(vec![local, prod]) });
+        let actions = app.apply(Answer::Config {
+            id: ConfigChangeId::FIRST,
+            answer: ConfigAnswer::Changed { connections: vec![local, prod], warning: None },
+        });
         let sheet = app.sheet_of(&name("local")).unwrap();
         assert_eq!((actions, &sheet.session, sheet.connection.writes()), (vec![], &SessionState::Closed, WritePolicy::Allowed));
+    }
+
+    #[test]
+    fn a_save_whose_keychain_step_failed_closes_the_form_and_warns_in_the_status_line() {
+        let mut app = on_prod_with_local_open();
+        let connections = app.connections.clone();
+        let warning = Some("saved `prod`, but the password did not reach the keychain".to_owned());
+        app.apply(Answer::Config { id: ConfigChangeId::FIRST, answer: ConfigAnswer::Changed { connections, warning: warning.clone() } });
+        assert_eq!(app.config_failure, warning);
     }
 
     fn failed(why: &str) -> Answer {

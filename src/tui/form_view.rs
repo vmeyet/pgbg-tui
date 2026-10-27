@@ -28,9 +28,10 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) {
     lines.push(Line::styled(FOOTER, Style::default().fg(app.theme.faded)));
     let area = centred(f.area(), width, lines.len() as u16 + 2);
     let inside = block.inner(area);
+    let scroll = scroll(line_of_cursor(form), inside.height);
     f.render_widget(Clear, area);
-    f.render_widget(Paragraph::new(lines.clone()).block(block).style(Style::default().bg(app.theme.surface)), area);
-    if let Some(at) = cursor(form, &lines, inside, room) {
+    f.render_widget(Paragraph::new(lines).block(block).style(Style::default().bg(app.theme.surface)).scroll((scroll, 0)), area);
+    if let Some(at) = cursor(form, inside, room, scroll) {
         f.set_cursor_position(at);
     }
 }
@@ -92,7 +93,9 @@ fn value(form: &Form, slot: Slot, room: usize) -> String {
         Slot::TunnelBefore => shown(form, slot, &form.tunnel_before, room),
         Slot::Writes => format!("‹ {} ›", if form.writes == WritePolicy::Allowed { "allowed" } else { "read only" }),
         Slot::Tls => format!("‹ {} ›", tls(form.tls)),
-        Slot::StatementTimeout if form.statement_timeout.text().is_empty() && form.at != slot => "the tier's".to_owned(),
+        Slot::StatementTimeout if form.statement_timeout.text().is_empty() && form.at != slot => {
+            "stricter of the tier's and server's".to_owned()
+        }
         Slot::StatementTimeout => shown(form, slot, &form.statement_timeout, room),
     }
 }
@@ -127,20 +130,30 @@ fn tls(tls: Option<Tls>) -> &'static str {
     }
 }
 
+/// The line of the slot with the cursor, counting each refusal above it.
+fn line_of_cursor(form: &Form) -> u16 {
+    let above = form.slots().into_iter().take_while(|&slot| slot != form.at);
+    above.map(|slot| 1 + u16::from(form.error(slot).is_some())).sum()
+}
+
+/// The lines the form scrolls by, so the line with the cursor stays among the `height` in view.
+fn scroll(cursor_line: u16, height: u16) -> u16 {
+    cursor_line.saturating_sub(height.saturating_sub(1))
+}
+
 /// Where the terminal's cursor goes: after the text before it in view, on a text line that has the keys.
-fn cursor(form: &Form, lines: &[Line<'_>], inside: Rect, room: usize) -> Option<Position> {
+fn cursor(form: &Form, inside: Rect, room: usize, scroll: u16) -> Option<Position> {
     let field = form.field()?;
-    let row =
-        form.slots().iter().take_while(|&&slot| slot != form.at).map(|&slot| 1 + usize::from(form.error(slot).is_some())).sum::<usize>();
     let (before, _, _) = field.split();
     let column = MARK_WIDTH + LABEL_WIDTH + Line::from(&before[scrolled(field, room)..]).width();
-    let is_shown = row < lines.len();
-    is_shown.then(|| Position { x: (inside.x + column as u16).min(inside.right().saturating_sub(1)), y: inside.y + row as u16 })
+    let x = (inside.x + column as u16).min(inside.right().saturating_sub(1));
+    Some(Position { x, y: inside.y + line_of_cursor(form) - scroll })
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::app::picker::tests::{ctrl, on_local, press};
+    use super::super::app::{App, Overlay, Slot};
     use super::super::ui;
     use crossterm::event::{KeyCode, KeyEvent};
     use ratatui::Terminal;
@@ -156,6 +169,28 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
         terminal.draw(|f| _ = ui::draw(f, &app)).unwrap();
         insta::assert_snapshot!("form", terminal.backend());
+    }
+
+    #[test]
+    fn a_form_taller_than_the_terminal_scrolls_so_the_line_with_the_cursor_stays_in_view() {
+        let mut app = on_local();
+        ctrl(&mut app, 'o');
+        ctrl(&mut app, 'a');
+        let tab_to = |app: &mut App, slot: Slot| {
+            while !matches!(&app.overlay, Some(Overlay::Form(form)) if form.at == slot) {
+                app.handle_key(KeyEvent::from(KeyCode::Tab));
+            }
+        };
+        tab_to(&mut app, Slot::PasswordFrom);
+        app.handle_key(KeyEvent::from(KeyCode::Right));
+        tab_to(&mut app, Slot::Tunnel);
+        press(&mut app, "ssh -N -L 127.0.0.1:{port}:localhost:5432 db.example.com");
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        tab_to(&mut app, Slot::StatementTimeout);
+        press(&mut app, "5s");
+        let mut terminal = Terminal::new(TestBackend::new(100, 15)).unwrap();
+        terminal.draw(|f| _ = ui::draw(f, &app)).unwrap();
+        insta::assert_snapshot!("form_scrolled_down", terminal.backend());
     }
 
     #[test]

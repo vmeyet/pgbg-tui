@@ -179,9 +179,12 @@ impl Form {
         self.errors.iter().find(|(refused, _)| *refused == slot).map(|(_, why)| why.as_str())
     }
 
-    /// Types the printable characters of `text` on the line with the cursor; a choice line takes none.
+    /// Types `text` on the line with the cursor, its printable characters only, but on the password line, which takes
+    /// every character a password may hold but a line end; a choice line takes none.
     pub(super) fn paste(&mut self, text: &str) {
-        text.chars().filter(|&c| !render::is_unprintable(c)).for_each(|c| self.type_char(c));
+        let is_password = self.at == Slot::Password;
+        let is_kept = |c: char| if is_password { !matches!(c, '\r' | '\n') } else { !render::is_unprintable(c) };
+        text.chars().filter(|&c| is_kept(c)).for_each(|c| self.type_char(c));
     }
 
     fn field_mut(&mut self) -> Option<&mut Field> {
@@ -586,7 +589,7 @@ mod tests {
         app.apply(Answer::Config { id: save.id, answer: failed("permission denied", None) });
         assert_eq!(form(&app).failure.as_deref(), Some("permission denied"));
         let again = saved(key(&mut app, KeyCode::Enter));
-        app.apply(Answer::Config { id: again.id, answer: ConfigAnswer::Changed(vec![local()]) });
+        app.apply(Answer::Config { id: again.id, answer: ConfigAnswer::Changed { connections: vec![local()], warning: None } });
         assert_eq!(app.overlay, None);
     }
 
@@ -603,7 +606,7 @@ mod tests {
         let save = adding_replica(&mut app);
         let other = save.id.next();
         app.apply(Answer::Config { id: other, answer: failed("permission denied", None) });
-        app.apply(Answer::Config { id: other, answer: ConfigAnswer::Changed(vec![local()]) });
+        app.apply(Answer::Config { id: other, answer: ConfigAnswer::Changed { connections: vec![local()], warning: None } });
         assert_eq!((form(&app).is_saving(), form(&app).failure.as_ref()), (true, None));
     }
 
@@ -668,6 +671,21 @@ mod tests {
         app.paste("hunter2\r\n");
         let save = saved(key(&mut app, KeyCode::Enter));
         assert_eq!(save.password.map(|typed| typed.password.expose().to_owned()).as_deref(), Some("hunter2"));
+    }
+
+    #[test]
+    fn a_pasted_password_keeps_its_tabs_and_control_characters_but_its_line_end() {
+        let mut app = on_local();
+        ctrl(&mut app, 'o');
+        ctrl(&mut app, 'e');
+        to(&mut app, Slot::PasswordFrom);
+        key(&mut app, KeyCode::Right);
+        to(&mut app, Slot::PasswordWhere);
+        press(&mut app, "pgbg/local");
+        to(&mut app, Slot::Password);
+        app.paste("hun\tter\u{1b}2\r\n");
+        let save = saved(key(&mut app, KeyCode::Enter));
+        assert_eq!(save.password.map(|typed| typed.password.expose().to_owned()).as_deref(), Some("hun\tter\u{1b}2"));
     }
 
     #[test]

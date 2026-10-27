@@ -5,7 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use vtui::help::Help;
 use vtui::theme::Theme;
 
-pub(super) use detail::{Detail, DetailFit, DetailScroll};
+pub(super) use detail::{Detail, DetailFit, DetailScroll, DrawnDetail, DrawnRow};
 pub(super) use form::{Form, PasswordFrom, Slot};
 use grid::Move;
 pub(super) use grid::{GAP, Grid, Room};
@@ -57,7 +57,7 @@ impl Focus {
 }
 
 /// What the frame just drawn had room for.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct Fit {
     /// The grid rows, a page for `PgDn`, and the columns its cells had.
     pub(super) grid: Room,
@@ -113,6 +113,8 @@ pub(super) struct App {
     pub(super) overlay: Option<Overlay>,
     pub(super) queries: Queries,
     fit: Fit,
+    /// The row's detail as a frame last built it.
+    pub(super) drawn_detail: Option<DrawnDetail>,
     pub(super) should_quit: bool,
     /// The id the next change to the config takes.
     next_config_change: ConfigChangeId,
@@ -136,6 +138,7 @@ impl App {
             overlay: None,
             queries: Queries::default(),
             fit: Fit::default(),
+            drawn_detail: None,
             should_quit: false,
             next_config_change: ConfigChangeId::FIRST,
             next_session: SessionId::FIRST.next(),
@@ -292,17 +295,20 @@ impl App {
 
     /// Tells the app what the frame just drawn had room for: the grid's cursor stays among its rows, and the keys
     /// leave a sidebar no longer drawn.
-    pub(super) fn fit(&mut self, fit: Fit) {
+    pub(super) fn fit(&mut self, mut fit: Fit) {
+        let built = fit.detail.drawn.take();
+        let room = fit.grid;
         self.fit = fit;
         if let Run::Done { grid, view: View::Grid, .. } = &mut self.sheet_mut().run {
-            grid.keep_in_view(fit.grid);
+            grid.keep_in_view(room);
         }
         if !self.is_drawn(self.focus) {
             self.focus = Focus::Editor;
         }
         if let Some(Overlay::Detail(detail)) = &mut self.overlay {
-            detail.scroll = DetailScroll::Lines(fit.detail.first_line);
+            detail.scroll = DetailScroll::Lines(self.fit.detail.first_line);
         }
+        self.keep_drawn_detail(built);
     }
 
     fn grid_step(&mut self, step: Move) -> Vec<Action> {
@@ -348,7 +354,9 @@ impl App {
             }
             Answer::Queries(QueryAnswer::Saved { connection, query, text }) => self.saved(&connection, query, &text),
             Answer::Queries(QueryAnswer::NotSaved { connection, path, error }) => self.not_saved(&connection, &path, &error),
-            Answer::Config { id, answer: ConfigAnswer::Changed(connections) } => return self.take_connections(id, connections),
+            Answer::Config { id, answer: ConfigAnswer::Changed { connections, warning } } => {
+                return self.take_connections(id, connections, warning);
+            }
             Answer::Config { id, answer: ConfigAnswer::Failed { why, password } } => self.config_failed(id, why, password),
             Answer::History { connection, entries } => self.history_read(&connection, entries),
             Answer::Copied(note) => self.copied(note),

@@ -92,6 +92,10 @@ Each entry says what changed, then where, then how to use it.
 
 ### Fixed
 
+- **A save whose keychain step fails keeps the connection the config took**: the connection form closes, the picker lists it, and the status line says the password did not reach the keychain (or the old item was not deleted); `pgbg password set` tries again.
+- **The connection form scrolls** on a short terminal, so the line with the cursor, such as `timeout`, stays in view.
+- **A pasted password keeps its tabs and other control characters**; only its line end is dropped.
+- **The row's detail opens on a screen wider than 820 columns**, and no longer rebuilds its lines on every frame.
 - **A `ctrl-c`, a `kill` or a closed terminal cancels the statement on the server** under `pgbg run`, `pgbg doctor` and `pgbg schema`, before the link and the tunnel go: a write on a connection that allows writes no longer commits after pgbg exits, even where the server cannot tell pgbg went (before PostgreSQL 14, off Linux, behind PgBouncer).
   Closing a session in the TUI sends the cancel again before it cuts the link, when the first one did not reach the server.
   A `before` or password command runs in a process group of its own, so what it started goes with it when pgbg stops waiting on it.

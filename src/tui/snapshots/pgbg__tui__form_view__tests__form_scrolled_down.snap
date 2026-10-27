@@ -1,0 +1,19 @@
+---
+source: src/tui/form_view.rs
+expression: terminal.backend()
+---
+"╭ ● local · local ──╭ Add a connection ────────────────────────────────────────╮───────────────────╮"
+"│╭ Editor ─ READ ONL│   ✗ `` is not a connection name: use letters, digits, `- │──────────────────╮│"
+"││                  │  tier            ‹ local ›                               │                  ││"
+"││                  │  url                                                     │                  ││"
+"││                  │   ✗ `url` is not a URL: relative URL without a base      │                  ││"
+"│╰──────────────────│  password from   ‹ keychain ›                            │──────────────────╯│"
+"│╭ Result ──────────│  keychain item                                           │──────────────────╮│"
+"││ ⏎ runs the statem│   ✗ `keychain` names no item                             │                  ││"
+"││                  │  password                                                │                  ││"
+"││                  │  tunnel          ssh -N -L 127.0.0.1:{port}:localhost:54 │                  ││"
+"││                  │  before tunnel                                           │                  ││"
+"││                  │  writes          ‹ read only ›                           │                  ││"
+"│╰──────────────────│  tls             ‹ as the url's sslmode says ›           │──────────────────╯│"
+"│ ⏎ run  ⌥⏎ new line│ ▎timeout         5s                                      │       connecting… │"
+"╰───────────────────╰──────────────────────────────────────────────────────────╯───────────────────╯"
