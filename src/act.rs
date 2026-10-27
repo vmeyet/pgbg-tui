@@ -44,6 +44,8 @@ pub(crate) enum Act {
     SwitchTab,
     Filter,
     ReadAgain,
+    TakeGhost,
+    Complete,
 }
 
 impl Act {
@@ -114,7 +116,9 @@ impl Act {
             Self::CopyMarkdown => Some(Self::SwitchTab),
             Self::SwitchTab => Some(Self::Filter),
             Self::Filter => Some(Self::ReadAgain),
-            Self::ReadAgain => None,
+            Self::ReadAgain => Some(Self::TakeGhost),
+            Self::TakeGhost => Some(Self::Complete),
+            Self::Complete => None,
         }
     }
 
@@ -169,6 +173,8 @@ pub(crate) enum Pane {
     Detail,
     /// A question on the footer line, the format to copy the result as: while open it takes every key.
     CopyAs,
+    /// The `ctrl-space` list of names at the cursor: while open it takes every key.
+    Completion,
 }
 
 /// Keys as the help or the footer writes them, and what they do in a few words.
@@ -225,6 +231,8 @@ pub(crate) const ROWS: &[Row] = &[
     )
     .help("⌥⏎ ⇧⏎", "break the line")
     .footer("⌥⏎", "new line"),
+    row(Act::TakeGhost, Pane::Editor, &[key(KeyCode::Right)]).help("→", "take the faded rest of the name"),
+    row(Act::Complete, Pane::Editor, &[control(' ')]).help("^space", "list the names that fit here"),
     row(Act::Run, Pane::Params, &[key(KeyCode::Enter)]).help("⏎", "run the statement with these values").footer("⏎", "run"),
     row(Act::Down, Pane::Params, &[key(KeyCode::Tab)]).help("⇥ ⇧⇥", "next, previous parameter").footer("⇥", "next"),
     row(Act::Up, Pane::Params, &[key(KeyCode::BackTab)]),
@@ -298,6 +306,11 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Up, Pane::Detail, &[key(KeyCode::Char('k')), key(KeyCode::Up)]),
     row(Act::Close, Pane::Detail, &[key(KeyCode::Esc)]).help("esc", "back to the grid").footer("esc", "closes"),
     row(Act::Quit, Pane::Detail, &[control('c')]).help("^c", "quit"),
+    row(Act::Down, Pane::Completion, &[key(KeyCode::Down), control('n')]).help("↓ ^n", "next, previous name").footer("↑↓", "pick"),
+    row(Act::Up, Pane::Completion, &[key(KeyCode::Up), control('p')]),
+    row(Act::Open, Pane::Completion, &[key(KeyCode::Enter), key(KeyCode::Tab)]).help("⏎ ⇥", "take the name").footer("⏎", "takes"),
+    row(Act::Close, Pane::Completion, &[key(KeyCode::Esc)]).help("esc", "close the list").footer("esc", "closes"),
+    row(Act::Quit, Pane::Completion, &[control('c')]).help("^c", "quit"),
     row(Act::CopyCsv, Pane::CopyAs, &[key(KeyCode::Char('c'))]).help("c", "copy the result as CSV").footer("c", "CSV"),
     row(Act::CopyJson, Pane::CopyAs, &[key(KeyCode::Char('j'))]).help("j", "copy it as JSON").footer("j", "JSON"),
     row(Act::CopyMarkdown, Pane::CopyAs, &[key(KeyCode::Char('m'))]).help("m", "copy it as a Markdown table").footer("m", "Markdown"),
@@ -320,7 +333,17 @@ fn is_the_key(own: &KeyEvent, pressed: KeyEvent) -> bool {
 fn works_in(row: &Row, pane: Pane) -> bool {
     row.pane == pane
         || (row.pane == Pane::Anywhere
-            && !matches!(pane, Pane::Finder | Pane::Picker | Pane::Form | Pane::Prompt | Pane::Detail | Pane::CopyAs | Pane::SchemaFilter))
+            && !matches!(
+                pane,
+                Pane::Finder
+                    | Pane::Picker
+                    | Pane::Form
+                    | Pane::Prompt
+                    | Pane::Detail
+                    | Pane::CopyAs
+                    | Pane::SchemaFilter
+                    | Pane::Completion
+            ))
 }
 
 /// What `key` does while `pane` has the keys; `None` leaves it to the pane, as text for the editor.
@@ -374,6 +397,7 @@ pub(crate) fn sections(pane: Pane, every_key: bool) -> Vec<Section> {
         (Pane::Prompt, "prompt"),
         (Pane::Detail, "row"),
         (Pane::CopyAs, "copy as"),
+        (Pane::Completion, "names"),
         (Pane::Anywhere, "anywhere"),
     ];
     let shown = panes.into_iter().filter(|&(listed, _)| every_key || listed == pane || listed == Pane::Anywhere);
@@ -412,6 +436,12 @@ mod tests {
     }
 
     #[test]
+    fn the_editor_help_lists_the_keys_that_complete_a_name() {
+        let keys: Vec<String> = help_rows(Pane::Editor).into_iter().map(|row| row.keys).collect();
+        assert!(keys.contains(&"→".to_owned()) && keys.contains(&"^space".to_owned()), "{keys:?}");
+    }
+
+    #[test]
     fn every_action_is_listed_once() {
         for (at, act) in Act::ALL.iter().enumerate() {
             assert!(!Act::ALL[at + 1..].contains(act), "{act:?}");
@@ -439,6 +469,7 @@ mod tests {
             Pane::Prompt,
             Pane::Detail,
             Pane::CopyAs,
+            Pane::Completion,
         ] {
             let keys: Vec<&KeyEvent> = ROWS.iter().filter(|row| works_in(row, pane)).flat_map(|row| row.keys).collect();
             for (at, key) in keys.iter().enumerate() {
@@ -481,6 +512,6 @@ mod tests {
     fn the_first_help_lists_the_focused_pane_and_what_works_anywhere() {
         let titles: Vec<&str> = sections(Pane::Result, false).iter().map(|section| section.title).collect();
         assert_eq!(titles, ["result", "anywhere"]);
-        assert_eq!(sections(Pane::Result, true).len(), 13);
+        assert_eq!(sections(Pane::Result, true).len(), 14);
     }
 }

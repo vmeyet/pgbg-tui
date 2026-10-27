@@ -6,7 +6,7 @@ use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Block, Paragraph};
 use std::ops::Range;
 use vtui::pane;
 use vtui::theme::Theme;
@@ -19,9 +19,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
     f.render_widget(block, area);
     let sheet = app.sheet();
     let (before, _, _) = sheet.editor.split();
-    let row = before.matches('\n').count();
-    let column = Line::from(before.rsplit('\n').next().unwrap_or_default()).width();
-    let scroll = row.saturating_sub(usize::from(inside.height.saturating_sub(1)));
+    let Place { row, column, scroll } = place(app, inside);
     let mark = Style::default().fg(app.theme.danger).add_modifier(Modifier::REVERSED);
     let window = Window { first: scroll, rows: usize::from(inside.height) };
     let ghost = sheet.ghost.as_ref().map(|ghost| Ghost { at: before.len(), rest: &ghost.rest });
@@ -35,6 +33,27 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
         return;
     }
     f.set_cursor_position(cursor_position(inside, column, row - scroll));
+}
+
+/// The line and column of the cursor in the text, and the first line in view of `inside`, so the cursor's line shows.
+struct Place {
+    row: usize,
+    column: usize,
+    scroll: usize,
+}
+
+fn place(app: &App, inside: Rect) -> Place {
+    let (before, _, _) = app.sheet().editor.split();
+    let row = before.matches('\n').count();
+    let column = Line::from(before.rsplit('\n').next().unwrap_or_default()).width();
+    Place { row, column, scroll: row.saturating_sub(usize::from(inside.height.saturating_sub(1))) }
+}
+
+/// Where the terminal's cursor stands in the editor pane drawn in `area`.
+pub(super) fn cursor_at(app: &App, area: Rect) -> Position {
+    let inside = Block::bordered().inner(area);
+    let Place { row, column, scroll } = place(app, inside);
+    cursor_position(inside, column, row - scroll)
 }
 
 /// Where the cursor at `column` of the `row`th line in view lands, kept inside `inside`.

@@ -6,6 +6,7 @@ use crate::format::Mode;
 use crossterm::event::{KeyCode, KeyEvent};
 use vtui::help::Help;
 
+pub(super) use completion::Completions;
 pub(super) use detail::{Detail, DetailFit, DetailScroll, DrawnDetail, DrawnRow};
 pub(super) use form::{Form, PasswordFrom, Slot};
 use grid::Move;
@@ -23,6 +24,7 @@ pub(super) use schema_tab::{SchemaRow, SchemaTab, SidebarTab};
 pub(super) use search::Search;
 pub(super) use sheet::{Run, SchemaState, SessionState, Sheet, View};
 
+mod completion;
 mod copy;
 mod detail;
 mod editor;
@@ -97,6 +99,8 @@ pub(super) enum Overlay {
     CopyAs,
     /// The schema tab's filter line, typed into from `/` until `⏎` or `esc`.
     SchemaFilter,
+    /// The `ctrl-space` list of names for the one before the cursor.
+    Completion(Completions),
 }
 
 /// The help after `key`: `?` lists every key, `j`/`k` scroll, any other key closes it.
@@ -277,6 +281,7 @@ impl App {
             Overlay::Detail(detail) => self.detail_key(detail, key),
             Overlay::CopyAs => self.copy_as_key(key),
             Overlay::SchemaFilter => self.schema_filter_key(key),
+            Overlay::Completion(completions) => self.completions_key(completions, key),
         }
     }
 
@@ -288,6 +293,8 @@ impl App {
         }
         match act {
             Act::Run => return self.sheet_mut().run_editor(),
+            Act::TakeGhost => return self.sheet_mut().edit(KeyEvent::from(KeyCode::Right)),
+            Act::Complete => return self.open_completions(),
             Act::Cancel => return self.sheet_mut().cancel(),
             Act::NewLine => return self.sheet_mut().edit(KeyEvent::from(KeyCode::Enter)),
             Act::SwitchPane => self.switch_pane(),

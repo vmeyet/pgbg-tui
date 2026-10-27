@@ -1,6 +1,6 @@
 //! The ghost: the rest of the best name for the word typed before the cursor, dimmed after it until the next key, and
 //! `→` to take it.
-use super::{Action, Sheet};
+use super::{Action, SessionState, Sheet};
 use crate::complete::{Ask, Index};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::ops::Range;
@@ -34,7 +34,7 @@ impl Sheet {
     /// Offers the ghost of the word before the cursor when the cursor ends it, from the index once there is one, else from
     /// the keywords; the first ask reads the schema.
     pub(super) fn ask_ghost(&mut self) -> Vec<Action> {
-        let actions = self.want_schema();
+        let actions = self.want_schema_while_open();
         let (before, under, _) = self.editor.split();
         if under.starts_with(is_name_char) {
             return actions;
@@ -45,9 +45,19 @@ impl Sheet {
         actions
     }
 
+    /// Asks for the schema completion needs, only while the session is open: typing never opens one again.
+    pub(super) fn want_schema_while_open(&mut self) -> Vec<Action> {
+        if self.session == SessionState::Open { self.want_schema() } else { vec![] }
+    }
+
     /// Puts the ghost's name in place of what was typed of it.
     pub(super) fn take_ghost(&mut self, ghost: Ghost) {
-        self.editor.replace_typed(ghost.typed, &ghost.insert);
+        self.put_name(ghost.typed, &ghost.insert);
+    }
+
+    /// Puts `insert` in place of the bytes `typed`, which end at the cursor.
+    pub(super) fn put_name(&mut self, typed: Range<usize>, insert: &str) {
+        self.editor.replace_typed(typed, insert);
         self.text_changed();
     }
 }
@@ -103,11 +113,20 @@ mod tests {
     }
 
     #[test]
-    fn the_first_name_typed_reads_the_schema() {
+    fn the_first_name_typed_on_an_open_session_reads_the_schema() {
         let mut app = typed("");
+        app.apply(to_shop(Incoming::Opened));
         let actions = app.handle_key(KeyEvent::from(KeyCode::Char('s')));
         assert!(matches!(actions.as_slice(), [Action::ReadSchema { connection, .. }] if *connection == shop()), "{actions:?}");
         assert_eq!(app.sheet().schema, SchemaState::Reading);
+    }
+
+    #[test]
+    fn typing_never_opens_a_failed_session_again() {
+        let mut app = typed("");
+        app.apply(to_shop(Incoming::NotOpened("connection refused".to_owned())));
+        assert_eq!(app.handle_key(KeyEvent::from(KeyCode::Char('s'))), []);
+        assert_eq!((&app.sheet().schema, rest(&app)), (&SchemaState::NotRead, Some("how")));
     }
 
     #[test]
