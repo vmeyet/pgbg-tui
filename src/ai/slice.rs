@@ -31,7 +31,8 @@ fn tables(catalog: &Catalog) -> impl Iterator<Item = (&SchemaNode, &Table)> {
 
 fn reason(table: &Table, named: &[String], asked: &[String]) -> Option<Reason> {
     let name = table.name.to_lowercase();
-    let is_asked = |word: &String| name.starts_with(word.as_str()) || word.starts_with(name.as_str());
+    let is_long_name = name.chars().count() >= MIN_WORD;
+    let is_asked = |word: &String| name.starts_with(word.as_str()) || (is_long_name && word.starts_with(name.as_str()));
     let has_asked_column = table.columns.iter().any(|column| asked.contains(&column.name.to_lowercase()));
     match () {
         () if named.contains(&name) => Some(Reason::NamedByStatement),
@@ -63,6 +64,7 @@ fn line(node: &SchemaNode, table: &Table) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::model::TableKind;
     use crate::fixtures::shop_catalog;
 
     fn tables_in(statement: &str, instruction: &str) -> Vec<String> {
@@ -91,6 +93,15 @@ mod tests {
     #[test]
     fn an_instruction_word_naming_a_column_brings_its_tables_after_the_named_ones() {
         assert_eq!(tables_in("", "customers by order_id"), ["public.customers", "billing.invoices"]);
+    }
+
+    #[test]
+    fn a_table_with_a_short_name_is_not_named_by_every_word_it_starts() {
+        let mut catalog = shop_catalog();
+        let short = Table { name: "o".into(), kind: TableKind::Table, estimated_rows: None, columns: vec![], indexes: vec![] };
+        catalog.schema.schemas[1].tables.push(short);
+        let lines = slice(&catalog, "", "the last order");
+        assert_eq!(lines, ["public.orders(id integer, customer_id integer, total numeric(10,2))"]);
     }
 
     #[test]

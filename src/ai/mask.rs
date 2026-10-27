@@ -26,10 +26,10 @@ pub(super) struct Masked {
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct UnknownMarker(pub(super) String);
 
-/// A marker at the start of some text: what it stands for and how many bytes it spans.
+/// A marker at the start of some text: what it stands for and how many bytes it spans; a number past `usize` is none.
 struct Marker {
     kind: LiteralKind,
-    number: usize,
+    number: Option<usize>,
     len: usize,
 }
 
@@ -91,8 +91,8 @@ impl Marker {
         let (kind, rest) = [(LiteralKind::String, LiteralKind::STRING_MARKER), (LiteralKind::Number, LiteralKind::NUMBER_MARKER)]
             .into_iter()
             .find_map(|(kind, opening)| Some((kind, text.strip_prefix(opening)?)))?;
-        let digits = rest.find(|c: char| !c.is_ascii_digit())?;
-        let number = rest[..digits].parse().ok()?;
+        let digits = rest.find(|c: char| !c.is_ascii_digit()).filter(|digits| *digits > 0)?;
+        let number = rest[..digits].parse().ok();
         rest[digits..].starts_with('>').then_some(Self { kind, number, len: text.len() - rest.len() + digits + 1 })
     }
 }
@@ -123,7 +123,7 @@ impl Literals {
     }
 
     fn literal(&self, marker: &Marker) -> Option<&Literal> {
-        self.0.get(marker.number.checked_sub(1)?).filter(|literal| literal.kind == marker.kind)
+        self.0.get(marker.number?.checked_sub(1)?).filter(|literal| literal.kind == marker.kind)
     }
 }
 
@@ -215,6 +215,12 @@ mod tests {
     fn a_marker_with_no_literal_stops_the_answer() {
         assert_eq!(put_back("SELECT 'a'", "SELECT '<literal 2>'"), Err(UnknownMarker("<literal 2>".into())));
         assert_eq!(put_back("SELECT 'a'", "SELECT <number 0>"), Err(UnknownMarker("<number 0>".into())));
+    }
+
+    #[test]
+    fn a_marker_past_any_count_stops_the_answer() {
+        let marker = "<literal 99999999999999999999999>";
+        assert_eq!(put_back("SELECT 'a'", &format!("SELECT '{marker}'")), Err(UnknownMarker(marker.into())));
     }
 
     #[test]
