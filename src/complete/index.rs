@@ -1,6 +1,6 @@
 //! The names of one catalog, lowercased and sorted once, so a prefix is a binary search.
-use super::keyword::{is_keyword, keywords};
-use crate::db::model::{Catalog, SchemaNode, Table};
+use super::keyword::keywords;
+use crate::db::model::{Catalog, SchemaNode, Table, needs_quotes, qualified, sql_name};
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
@@ -63,13 +63,13 @@ impl Index {
 
 impl Name {
     fn new(text: &str) -> Self {
-        Self { key: text.to_lowercase(), text: text.to_owned(), quoted: needs_quotes(text).then(|| quoted(text).into()) }
+        Self { key: text.to_lowercase(), text: text.to_owned(), quoted: needs_quotes(text).then(|| sql_name(text).into()) }
     }
 
     fn qualified(schema: &str, table: &str) -> Self {
         let is_quoted = needs_quotes(schema) || needs_quotes(table);
         let text = format!("{schema}.{table}");
-        let quoted = is_quoted.then(|| format!("{}.{}", quoted_if_needed(schema), quoted_if_needed(table)).into());
+        let quoted = is_quoted.then(|| qualified(schema, table).into());
         Self { key: text.to_lowercase(), text, quoted }
     }
 }
@@ -105,21 +105,6 @@ fn sorted(names: impl Iterator<Item = Name>) -> Vec<Name> {
     let mut names: Vec<Name> = names.collect();
     names.sort_unstable_by(|left, right| left.key.cmp(&right.key));
     names
-}
-
-/// Whether PostgreSQL reads `name` as written only between double quotes: an upper-case letter, a sign or a keyword.
-fn needs_quotes(name: &str) -> bool {
-    let is_plain = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '$';
-    let starts_plain = name.starts_with(|c: char| c.is_ascii_lowercase() || c == '_');
-    !starts_plain || !name.chars().all(is_plain) || is_keyword(&name.to_uppercase())
-}
-
-fn quoted(name: &str) -> String {
-    format!("\"{}\"", name.replace('"', "\"\""))
-}
-
-fn quoted_if_needed(name: &str) -> String {
-    if needs_quotes(name) { quoted(name) } else { name.to_owned() }
 }
 
 #[cfg(test)]

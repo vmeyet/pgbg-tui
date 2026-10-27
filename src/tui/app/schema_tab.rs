@@ -2,7 +2,8 @@
 use super::save::typed_into;
 use super::{Action, App, Focus, Overlay};
 use crate::act::{self, Act, Pane};
-use crate::db::model::{Catalog, Table};
+use crate::db::model::{Catalog, Column, ColumnKind, Extent, Index, Page, ResultSet, SchemaColumn, Statement, Table, Value, qualified};
+use crate::query::params::ParamInput;
 use crossterm::event::KeyEvent;
 use std::collections::BTreeSet;
 use vtui::field::Field;
@@ -28,6 +29,38 @@ pub(in crate::tui) struct SchemaTab {
 pub(in crate::tui) enum SchemaRow<'a> {
     Schema { name: &'a str, is_open: bool },
     Table { schema: &'a str, table: &'a Table },
+}
+
+const PREVIEW_ROWS: usize = 100;
+const DESCRIBED: [&str; 4] = ["", "name", "type", "detail"];
+
+/// A table's columns, then its indexes, one a row: what it holds, its name, its type or keys, and the rest.
+fn described(table: &Table) -> ResultSet {
+    let columns = DESCRIBED.iter().map(|name| Column { name: (*name).to_owned(), kind: ColumnKind::Text, type_name: "text".to_owned() });
+    let rows = table.columns.iter().map(column_row).chain(table.indexes.iter().map(index_row));
+    ResultSet::new(columns.collect(), Page { rows: rows.collect(), extent: Extent::All })
+}
+
+fn column_row(column: &SchemaColumn) -> Vec<Value> {
+    let nullable = if column.is_nullable { None } else { Some("not null".to_owned()) };
+    let default = column.default.as_ref().map(|default| format!("default {default}"));
+    let detail = [nullable, default].into_iter().flatten().collect::<Vec<_>>().join(" ");
+    texts(["column", &column.name, &column.type_name, &detail])
+}
+
+fn index_row(index: &Index) -> Vec<Value> {
+    let role = if index.is_primary {
+        "primary"
+    } else if index.is_unique {
+        "unique"
+    } else {
+        ""
+    };
+    texts(["index", &index.name, &index.columns.join(", "), role])
+}
+
+fn texts(cells: [&str; 4]) -> Vec<Value> {
+    cells.into_iter().map(|cell| Value::Text(cell.to_owned())).collect()
 }
 
 impl SchemaTab {
@@ -81,7 +114,9 @@ impl App {
         match act {
             Act::Down => self.step_schema(1),
             Act::Up => self.step_schema(-1),
-            Act::Open => self.fold_schema(),
+            Act::Open => self.open_schema_row(),
+            Act::Preview => return Some(self.preview_table()),
+            Act::Insert => self.insert_table(),
             Act::Filter => self.overlay = Some(Overlay::SchemaFilter),
             Act::ReadAgain => return Some(self.sheet_mut().read_schema_again()),
             _ => return None,
@@ -98,15 +133,44 @@ impl App {
         self.schema_tab.selected = self.schema_tab.selected.saturating_add_signed(delta).min(last);
     }
 
-    /// Folds or unfolds the schema under the cursor.
-    fn fold_schema(&mut self) {
-        let Some(catalog) = self.sheet().catalog() else { return };
-        let Some(SchemaRow::Schema { name, is_open }) = self.schema_tab.rows(catalog).get(self.schema_tab.selected).copied() else {
-            return;
-        };
-        let name = name.to_owned();
-        let closed = &mut self.schema_tab.closed;
-        _ = if is_open { closed.insert(name) } else { closed.remove(&name) };
+    fn selected_row(&self) -> Option<SchemaRow<'_>> {
+        self.schema_tab.rows(self.sheet().catalog()?).get(self.schema_tab.selected).copied()
+    }
+
+    /// The table under the cursor, as a statement names it.
+    fn selected_table_name(&self) -> Option<String> {
+        let Some(SchemaRow::Table { schema, table }) = self.selected_row() else { return None };
+        Some(qualified(schema, &table.name))
+    }
+
+    /// Folds or unfolds the schema under the cursor, or shows the columns and indexes of the table there.
+    fn open_schema_row(&mut self) {
+        match self.selected_row() {
+            Some(SchemaRow::Schema { name, is_open }) => {
+                let name = name.to_owned();
+                let closed = &mut self.schema_tab.closed;
+                _ = if is_open { closed.insert(name) } else { closed.remove(&name) };
+            }
+            Some(SchemaRow::Table { table, .. }) => {
+                let (result, reading) = (described(table), self.reading);
+                self.sheet_mut().show(result, &reading);
+            }
+            None => {}
+        }
+    }
+
+    /// Runs `SELECT * FROM` the table under the cursor, its first rows, as the editor's statements run.
+    fn preview_table(&mut self) -> Vec<Action> {
+        let Some(name) = self.selected_table_name() else { return vec![] };
+        let preview = Statement::new(format!("SELECT * FROM {name} LIMIT {PREVIEW_ROWS}"));
+        self.sheet_mut().run_statement(preview, None, ParamInput::default())
+    }
+
+    /// Puts the name of the table under the cursor in the editor at its cursor, and gives the editor the keys.
+    fn insert_table(&mut self) {
+        let Some(name) = self.selected_table_name() else { return };
+        self.sheet_mut().paste(&name);
+        self.focus = Focus::Editor;
     }
 
     /// Types `key` into the schema's filter: `⏎` keeps it, `esc` drops it, and the cursor goes back to the first row.
@@ -129,7 +193,7 @@ impl App {
 mod tests {
     use super::super::sheet::SchemaState;
     use super::super::tests::{app, app_on, shop, to_shop};
-    use super::super::{Answer, Fit, Incoming, SessionId};
+    use super::super::{Answer, Fit, Incoming, Run, RunId, SessionId};
     use super::*;
     use crate::fixtures::{self, shop_schema};
     use crossterm::event::KeyCode;
@@ -206,6 +270,56 @@ mod tests {
         assert_eq!(shown(&app), ["billing/", "public/", "orders", "customers"]);
         press(&mut app, KeyCode::Enter);
         assert_eq!(shown(&app).len(), 5);
+    }
+
+    fn on_orders() -> App {
+        let mut app = on_the_schema_tab();
+        press(&mut app, KeyCode::Char('/'));
+        "public.ord".chars().for_each(|c| _ = press(&mut app, KeyCode::Char(c)));
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('j'));
+        app
+    }
+
+    #[test]
+    fn p_on_a_table_runs_its_first_rows_as_a_statement() {
+        let statement = Statement::new("SELECT * FROM public.orders LIMIT 100");
+        assert_eq!(
+            press(&mut on_orders(), KeyCode::Char('p')),
+            [Action::Run { connection: shop(), run: RunId::FIRST, statement, input: ParamInput::default() }]
+        );
+    }
+
+    #[test]
+    fn p_on_a_schema_runs_nothing() {
+        assert_eq!(press(&mut on_the_schema_tab(), KeyCode::Char('p')), []);
+    }
+
+    #[test]
+    fn i_on_a_table_puts_its_name_at_the_editors_cursor_and_gives_it_the_keys() {
+        let mut app = on_orders();
+        app.sheet_mut().paste("SELECT * FROM ");
+        press(&mut app, KeyCode::Char('i'));
+        assert_eq!((app.sheet().editor.text(), app.focus), ("SELECT * FROM public.orders", Focus::Editor));
+    }
+
+    #[test]
+    fn enter_on_a_table_shows_its_columns_then_its_indexes() {
+        let mut app = on_orders();
+        press(&mut app, KeyCode::Enter);
+        let Run::Done { result, .. } = &app.sheet().run else { panic!("no result") };
+        let names: Vec<&Value> = result.rows().iter().map(|row| &row[1]).collect();
+        let text = |name: &str| Value::Text(name.to_owned());
+        assert_eq!(names, [&text("id"), &text("customer_id"), &text("total"), &text("orders_pkey")]);
+        assert_eq!(result.rows()[2][3], text("default 0"));
+    }
+
+    #[test]
+    fn enter_on_a_table_while_a_statement_runs_leaves_it_running() {
+        let mut app = on_orders();
+        press(&mut app, KeyCode::Char('p'));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.sheet().run, Run::Running { run: RunId::FIRST });
     }
 
     #[test]

@@ -309,6 +309,16 @@ mod tests {
     }
 
     #[test]
+    fn enter_on_a_table_shows_its_columns_and_indexes_in_the_result_pane() {
+        let mut app = on_the_schema_tab(false);
+        for _ in 0..3 {
+            app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        }
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        insta::assert_snapshot!("schema_table", render(&app, 100, 14).backend());
+    }
+
+    #[test]
     fn a_cut_schema_says_so_in_the_status_line() {
         let screen = format!("{:?}", render(&on_the_schema_tab(true), 100, 10).backend());
         assert!(screen.contains("first 20 000 tables · connected"), "{screen}");

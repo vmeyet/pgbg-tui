@@ -1,0 +1,18 @@
+---
+source: src/tui/ui.rs
+expression: "render(&app, 100, 14).backend()"
+---
+"╭ ● shop · local ──────────────────────────────────────────────────────────────────────────────────╮"
+"│╭ Queries [Schema] ──────────╮╭ Editor ─ READ ONLY ──────────────────────────────────────────────╮│"
+"││  ▾ billing                 ││                                                                  ││"
+"││      invoices              ││                                                                  ││"
+"││  ▾ public                  │╰──────────────────────────────────────────────────────────────────╯│"
+"││ ▎    orders                │╭ Result ─ 4 rows · 0 ms ─ [grid] chart ───────────────────────────╮│"
+"││      customers             ││            name         type           detail                    ││"
+"││                            ││ ▶  column  id           integer        not null                  ││"
+"││                            ││    column  customer_id  integer        not null                  ││"
+"││                            ││    column  total        numeric(10,2)  default 0                 ││"
+"││                            ││    index   orders_pkey  id             primary                   ││"
+"│╰────────────────────────────╯╰──────────────────────────────────────────────────────────────────╯│"
+"│ j/k move  ⏎ columns  p preview  i insert  / filter  [] queries  F1 keys  ^c quit       connected │"
+"╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
