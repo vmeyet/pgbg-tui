@@ -29,6 +29,7 @@ When a boundary or a flow changes, change this page in the same MR.
 | `query/` | Saved queries: the `.pgbg/queries/` tree, the header (`-- name:`, `-- connection:`, `-- chart:`, and `-- param:`, `-- format:` (planned)), load, and save |
 | `query/params.rs` (planned) | Parameters: the `{{name}}` of a statement turned into `$n` and the `Params` each run binds; pure |
 | `complete/` (planned) | Completion, pure: the `Index` built once from a `Schema` (names lowercased and sorted, so a prefix is a binary search; names in the session's `current_schemas(false)` bare, the others as `schema.table`), the `Context` at the cursor from the tokens of the statement under it, never of the whole editor (a table after `FROM` or `JOIN`, a column of `orders` after `o.` when `FROM orders o`, a keyword at a statement's start), and the ranked candidates |
+| `ai/` (planned) | Asking a command for SQL, pure: the `Prompt` (instruction, statement, schema slice, tier) as the text on the command's stdin, and its answer read back as statements; the backend runs the command |
 | `format/` (planned) | Formats, pure: for each `ColumnKind`, the ways a cell can read (raw first) and the text of one cell in one of them, the clock and the time zone passed in |
 | `export.rs` | A cell, a row or a whole result as text to paste: CSV (a NULL left empty), JSON (one object per row, as `--json` gives values, a later column of a name already taken suffixed `_2`, `_3`, past every real name) or a Markdown table; every value raw and whole, a CSV formula not guarded; pure |
 | `history.rs` | Every statement run, per connection: one JSON line each in `<data folder>/pgbg/history/<connection>.jsonl` (folder `0700`, file `0600`), rolled over to `.1` past 4 MB under an exclusive `flock`, so two pgbg never lose each other's lines, the file opened again a few times at most when another pgbg rolled it over meanwhile; the text, when, how long and what came of it, never a row, the server's words or a statement holding `PASSWORD` or a URL with a password; `History::distinct` lists each statement once for `ctrl-r`, which `Search` narrows as the finder does |
@@ -103,8 +104,8 @@ Running a statement with parameters (planned):
 
 1. `query::params` reads the `{{name}}` of the statement under the cursor from `db::lex`'s tokens, never inside a string, a comment or a quoted name, and the header's `-- param: since date = 2024-01-01`, `-- param: owner text optional`.
    A statement holding both a `$n` of its own and a `{{name}}` is refused, and a `{{` the lexer cannot read as a name is too: a doubt never runs.
-2. The parameter bar above the editor shows one field per name, filled with the last values given, else the default; `⏎` in a field runs.
-   A saved query keeps its values in `<data folder>/pgbg/params/<connection>.json` (`0600`), keyed by query path; unsaved text keeps them on its sheet until pgbg quits.
+2. The parameter bar above the editor shows one field per name, filled with the default; `⏎` in a field runs.
+   The values typed stay on the sheet until pgbg quits and are never written to disk.
 3. Each name becomes `$1`, `$2` (the same name the same number), so the guard classifies what the server gets; `admit` takes the values with the statement and refuses an `Admitted` whose count of values is not its count of `$n`.
    A name left empty, with no default and not `optional`, stops the run before anything is sent; an `optional` one is bound as NULL.
 4. Both ways of running bind them: the read-only portal and the one a connection that allows writes uses, which pass no parameters today.
@@ -113,9 +114,22 @@ Running a statement with parameters (planned):
 5. The history keeps the statement with its `{{name}}`, never the values.
 6. `pgbg run` takes `--param name=value`, `--params-file <file>` (one `name=value` a line) or `--params-file -` on stdin, so a value need not sit in argv or the shell's history.
 
+Asking a command for SQL (planned):
+
+1. `[ai] command = ["claude", "-p"]` in `config.toml` names any program that reads a prompt on stdin and writes SQL on stdout (`claude -p`, `llm`, a wrapper around ollama); without it, or with a program that cannot be run, the feature is off and the keys say so.
+   A connection says `ai = "on"` or `"off"`; a production connection is off unless it says on, since the schema slice leaves the machine with the command.
+2. `ctrl-g` in the editor asks for an instruction on the footer line; the prompt holds it, the statement under the cursor, the tier, and a slice of the schema: the tables the statement names and the closest matches in the index to the instruction's words, with their columns and types, never a row, a default, the history or a server's words.
+   The prompt is capped at 16 KiB, the schema slice cut first, table by table, and the prompt says when it was.
+3. The backend runs the command as it runs a `before` command: its own process group in `groups.rs`, the prompt written to stdin then closed, stdout read to its end up to 64 KiB, 60 s at most (`[ai] timeout`); `Esc`, a new ask or a closed sheet kills the group, and a late answer is dropped by its `AskId`.
+   No streaming: the answer is shown whole, once the command exits with 0; another exit shows its last lines of stderr.
+4. `ai::answer` drops a Markdown fence and the prose around it, and splits what is left with `db::lex`: one statement is shown as a diff against the statement under the cursor, several as a list to pick one from; `⏎` replaces the statement under the cursor (or inserts at the cursor when there is none), `esc` drops it.
+   An answer never runs by itself: running it is `⏎` again in the editor, through `db::guard` like any statement.
+5. The idle ghost, when `[ai] ghost = true`, asks for the rest of the statement after 1 s without a key, the local completion's ghost first; any key kills that command, and its answer shows only while the text is the one it was asked for.
+6. The log says which program ran, how long, how it exited and how many bytes went each way; never the prompt, the instruction or the answer.
+
 Formatting a cell (planned):
 
-1. A result opens with every column in the format the header's `-- format:` names, else the config's `[display] format` (`raw` or `readable`).
+1. A result opens with every column in the format the header's `-- format:` names, else the config's `[display] format` (`raw` or `readable`), else raw.
 2. `f` on a column steps through its kind's formats, `F` sets every column raw or readable; the sheet keeps the choice by column index with the result, and the grid widths are measured again on the first page.
 3. The loop passes the clock and the local time zone to the drawing, so `format/` stays pure; a relative time redraws each minute while one is shown.
 4. Formats are for reading only: `pgbg run`, `--json` and a copy give raw values.
@@ -232,3 +246,4 @@ One word per concept, in code, docs and UI.
 | completion | A name the editor offers at the cursor, from the schema or the keywords |
 | parameter | A `{{name}}` in a statement, filled in the parameter bar and bound when it runs |
 | format | How a column's cells read: raw, or a readable form of its kind |
+| ask | One sending of an instruction to the `[ai] command`, named by its `AskId`; its answer is a suggestion, never a run |
