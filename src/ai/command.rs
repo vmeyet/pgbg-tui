@@ -16,7 +16,7 @@ use tokio::time::{Instant, error::Elapsed, timeout};
 /// The most a reply holds: past it, the command is stopped.
 const MAX_REPLY_BYTES: usize = 64 * 1024;
 
-/// An ask running in a task of its own: cancelled or dropped, the command's whole process group is killed.
+/// An ask running in a task of its own: dropped, the command's whole process group is killed.
 #[derive(Debug)]
 pub(crate) struct Asking {
     task: JoinHandle<Result<String, CommandError>>,
@@ -44,11 +44,6 @@ impl Asking {
     pub(crate) fn start(settings: &AiSettings, prompt: &str) -> Self {
         let (settings, prompt) = (settings.clone(), prompt.to_owned());
         Self { task: tokio::spawn(async move { ask(&settings, &prompt).await }) }
-    }
-
-    /// Kills the command; [`Asking::reply`] then says it was.
-    pub(crate) fn cancel(&self) {
-        self.task.abort();
     }
 
     /// What the command printed, once it exited with 0.
@@ -170,6 +165,21 @@ impl fmt::Display for CommandError {
 
 impl std::error::Error for CommandError {}
 
+/// Two failures to spawn are equal when their kind is, as `io::Error` has no equality of its own.
+impl PartialEq for CommandError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::SpawnFailed(left), Self::SpawnFailed(right)) => left.kind() == right.kind(),
+            (Self::TimedOut(left), Self::TimedOut(right)) => left == right,
+            (Self::Failed { status, last_words }, Self::Failed { status: other_status, last_words: other_words }) => {
+                status == other_status && last_words == other_words
+            }
+            (Self::TooLong, Self::TooLong) | (Self::Killed, Self::Killed) => true,
+            _ => false,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,19 +246,6 @@ mod tests {
     #[tokio::test]
     async fn a_program_that_cannot_run_says_so() {
         assert!(matches!(asked(&["pgbg-no-such-program"], "").await, Err(CommandError::SpawnFailed(_))));
-    }
-
-    #[tokio::test]
-    #[ignore = "starts a process"]
-    async fn a_cancel_kills_the_command_and_what_it_started() {
-        let dir = tempfile::tempdir().unwrap();
-        let pid_file = dir.path().join("sleep.pid");
-        let argv = leaving_a_sleep(&pid_file);
-        let mut asking = Asking::start(&settings(&argv.iter().map(String::as_str).collect::<Vec<_>>()), "");
-        let sleep = written_pid(&pid_file).await;
-        asking.cancel();
-        assert!(matches!(asking.reply().await, Err(CommandError::Killed)));
-        assert!(is_gone(sleep).await);
     }
 
     #[tokio::test]

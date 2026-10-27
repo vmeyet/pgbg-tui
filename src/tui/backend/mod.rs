@@ -5,6 +5,7 @@ use crate::db::model::Statement;
 use crate::history::{History, Store};
 use crate::query::params::ParamInput;
 use crate::query::{Query, Roots};
+use ask::Asks;
 use config::ConfigFile;
 use futures_util::future;
 use paging::PAGES_IDLE_LIMIT;
@@ -15,6 +16,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 
+mod ask;
 mod clipboard;
 mod config;
 #[cfg(test)]
@@ -38,6 +40,7 @@ pub(super) struct Backend {
     history: Option<Store>,
     /// How long a result's portal waits for its next page.
     idle_limit: Duration,
+    asks: Asks,
 }
 
 impl Backend {
@@ -45,7 +48,8 @@ impl Backend {
     pub(super) fn new(roots: Roots, config: PathBuf, answers: UnboundedSender<Answer>) -> Self {
         let queries = QueryFiles { roots, answers: answers.clone() };
         let config = ConfigFile::start(config, answers.clone());
-        Self { sessions: BTreeMap::new(), answers, queries, config, history: None, idle_limit: PAGES_IDLE_LIMIT }
+        let asks = Asks::new(answers.clone());
+        Self { sessions: BTreeMap::new(), answers, queries, config, history: None, idle_limit: PAGES_IDLE_LIMIT, asks }
     }
 
     /// The backend recording each run in `history`.
@@ -83,6 +87,8 @@ impl Backend {
             Action::ListHistory(connection) => self.list_history(connection),
             Action::Copy { text, done } => clipboard::copy(text, done, self.answers.clone()),
             Action::CopyResult { result, format, done } => clipboard::export(result, format, done, self.answers.clone()),
+            Action::Ask { ask, prompt, settings } => self.asks.ask(ask, prompt, &settings),
+            Action::DropAsk(ask) => self.asks.drop_ask(ask),
         }
     }
 
