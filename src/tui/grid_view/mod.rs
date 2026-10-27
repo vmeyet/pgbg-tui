@@ -125,6 +125,49 @@ mod tests {
         terminal
     }
 
+    /// The wall clock, read in a release build only, by CI's own step: `cargo test --release --lib -- --ignored budget::`.
+    #[cfg(not(debug_assertions))]
+    mod budget {
+        use super::*;
+        use crate::db::model::{Extent, Page};
+        use crate::fixtures::best_of;
+        use std::time::Duration;
+
+        /// A 200 × 50 frame takes 0.4 ms on a laptop whatever the row in view, CI about four times that: ten times slower
+        /// fails, as drawing every row instead of the window would.
+        const FRAME_BUDGET: Duration = Duration::from_millis(4);
+
+        /// Ten thousand rows, the cap, of twenty columns: numbers, texts and times.
+        fn capped() -> ResultSet {
+            let kinds = [ColumnKind::Int, ColumnKind::Text, ColumnKind::Numeric, ColumnKind::TimestampTz];
+            let columns = (0..20).map(|index| column(&format!("c{index}"), kinds[index % 4].clone())).collect();
+            let cells = |n: i64| {
+                let at = chrono::DateTime::UNIX_EPOCH + chrono::Duration::hours(n);
+                [
+                    Value::Int(n),
+                    Value::Text(format!("customer {n}").into()),
+                    Value::Numeric(format!("{n}.50").into()),
+                    Value::TimestampTz(at),
+                ]
+            };
+            let rows = (0..10_000).map(|n| cells(n).into_iter().cycle().take(20).collect()).collect();
+            ResultSet::new(columns, Page { rows, extent: Extent::Cut })
+        }
+
+        #[test]
+        #[ignore = "reads the wall clock: CI runs it in release"]
+        fn a_frame_on_the_last_of_ten_thousand_rows_stays_within_the_budget() {
+            let result = capped();
+            let mut grid = Grid::raw(&result);
+            (grid.row, grid.top) = (9_999, 9_950);
+            let mut terminal = Terminal::new(TestBackend::new(200, 50)).unwrap();
+            let clock = Clock { now: at("2026-07-14T12:00:00Z"), zone: chrono::Local };
+            let view = GridView { result: &result, grid: &grid, theme: &Theme::default(), focused: true, clock: &clock };
+            let took = best_of(|| terminal.draw(|f| _ = draw(f, view, f.area())).unwrap().area);
+            assert!(took < FRAME_BUDGET, "took {took:?}");
+        }
+    }
+
     #[test]
     fn numbers_align_right_and_the_cursor_row_is_marked() {
         let result = orders();
