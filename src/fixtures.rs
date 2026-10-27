@@ -26,6 +26,10 @@ while True:
         threading.Thread(target=pipe, args=(source, sink), daemon=True).start()
 ";
 
+/// Held for the whole of every test that starts a tunnel: between picking a free port and binding it, or while a stopped
+/// tunnel's port is checked for silence, another test's tunnel could take that port.
+pub(crate) static TUNNEL_PORTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// How long a test waits on a child process: to write its pid, or to be gone.
 const PROCESS_WAIT: Duration = Duration::from_secs(5);
 const PROCESS_POLL: Duration = Duration::from_millis(20);

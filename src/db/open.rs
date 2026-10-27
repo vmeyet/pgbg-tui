@@ -88,6 +88,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "starts a tunnel"]
     async fn a_tunnel_that_does_not_start_says_so_before_any_login() {
+        let _ports = fixtures::TUNNEL_PORTS.lock().await;
         let dead = connection("tls = \"off\"\ntunnel = { command = [\"sh\", \"-c\", \"exit 255\", \"{port}\"] }");
         assert!(matches!(open_along(&dead, None, |_| {}).await, Err(NotOpened::Tunnel(_))));
     }
@@ -102,6 +103,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "starts a tunnel"]
     async fn a_tunnel_started_says_it_starts_then_on_which_port_it_is_up() {
+        let _ports = fixtures::TUNNEL_PORTS.lock().await;
         let listening = connection(&format!("tls = \"off\"\ntunnel = {{ command = [\"python3\", \"-c\", {HANG_UP:?}, \"{{port}}\"] }}"));
         let mut steps = vec![];
         let refused = open_along(&listening, None, |step| steps.push(step)).await;
@@ -112,6 +114,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "starts a tunnel"]
     async fn a_failed_login_gives_back_the_tunnel_it_started() {
+        let _ports = fixtures::TUNNEL_PORTS.lock().await;
         let listening = connection(&format!("tls = \"off\"\ntunnel = {{ command = [\"python3\", \"-c\", {HANG_UP:?}, \"{{port}}\"] }}"));
         let refused = open_along(&listening, None, |_| {}).await;
         assert!(matches!(refused, Err(NotOpened::Login { tunnel: Some(_), .. })), "{refused:?}");
