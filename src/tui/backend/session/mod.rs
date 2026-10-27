@@ -2,133 +2,27 @@
 //! cancels by `RunId`, and stops a statement as every stop does.
 use super::paging::{Paging, serve_pages};
 use super::schema::SchemaReader;
-use super::send;
-use crate::connection::{Connection, ConnectionName, WritePolicy};
-use crate::db::model::{CancelToken, Route, ServerError, Statement};
-use crate::db::{Interrupted, NotOpened, Opened, Pages, Session, Started, TunnelStep, open_along};
+use crate::connection::Connection;
+use crate::db::model::Route;
+use crate::db::{NotOpened, Opened, Session, TunnelStep, open_along};
 use crate::history::{Entry, Outcome, Store};
-use crate::query::params::{self, ParamInput};
-use crate::signal::STOP_WAIT;
-use crate::tui::app::{Answer, Incoming, RunId, SessionId, TunnelState};
+use crate::tui::app::{Incoming, TunnelState};
 use crate::tunnel::{Died, Tunnel};
 use chrono::Utc;
+use run::{Answered, CANCELLED_BEFORE_SENT, run_until_answered};
 use std::time::Duration;
-use tokio::sync::mpsc::error::TryRecvError;
-use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::watch;
-use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-const CANCELLED_BEFORE_SENT: &str = "cancelled before it was sent";
-const STOPPED_WITH_ITS_SESSION: &str = "cancelled: its session stopped";
+mod link;
+mod run;
+
+pub(super) use link::{Job, Queued, SessionAnswers, SessionLink};
+pub(super) use run::{Cancels, OnServer, warn_if_still_running};
+
 const TUNNEL_NOT_STARTED: &str = "its tunnel did not start";
 const TUNNEL_DIED: &str = "its tunnel died";
-
-/// Where the answers of one session go, each tagged with its connection and its `SessionId`.
-#[derive(Clone, Debug)]
-pub(super) struct SessionAnswers {
-    pub(super) connection: ConnectionName,
-    pub(super) session: SessionId,
-    pub(super) answers: UnboundedSender<Answer>,
-}
-
-impl SessionAnswers {
-    pub(super) fn say(&self, incoming: Incoming) {
-        send(&self.answers, Answer::Session { connection: self.connection.clone(), session: self.session, incoming });
-    }
-}
-
-/// The way to one session task, which serves the session `session`: jobs and cancels in.
-#[derive(Debug)]
-pub(super) struct SessionLink {
-    pub(super) session: SessionId,
-    jobs: UnboundedSender<Job>,
-    cancels: UnboundedSender<RunId>,
-    schema_asks: UnboundedSender<()>,
-    /// What the task has on the server and no cancel reached yet, shared with the task; an abort cancels it first.
-    pub(super) running: watch::Receiver<Option<CancelToken>>,
-    task: JoinHandle<()>,
-}
-
-/// What the session task is asked to do, in turn.
-#[derive(Debug)]
-pub(super) enum Job {
-    Run(Queued),
-    /// Fetch the next page of this run's result, while its portal is open.
-    NextPage {
-        run: RunId,
-    },
-    /// Open the session again, unless it is open.
-    Open,
-}
-
-/// A statement waiting for the session, and its run.
-#[derive(Debug)]
-pub(super) struct Queued {
-    pub(super) run: RunId,
-    /// As typed, `{{name}}` and all: the history keeps it so, never the values.
-    pub(super) statement: Statement,
-    pub(super) input: ParamInput,
-}
-
-impl SessionLink {
-    /// Starts the task that opens the session `answers` names on `connection` and runs each statement in turn, adding
-    /// each run to `history`; a result's portal waits `idle_limit` for its next page.
-    pub(super) fn start(connection: Connection, answers: SessionAnswers, history: Option<Store>, idle_limit: Duration) -> Self {
-        let (jobs, queue) = mpsc::unbounded_channel();
-        let (cancels, cancelled) = mpsc::unbounded_channel();
-        let (schema_asks, asks) = mpsc::unbounded_channel();
-        let (on_server, running) = watch::channel(None);
-        let (route, open_route) = watch::channel(None);
-        let session = answers.session;
-        let reader = SchemaReader { connection: connection.clone(), answers: answers.clone(), asks, route: open_route };
-        let (cancelled, on_server) = (Cancels { receiver: cancelled, latest: None }, OnServer(on_server));
-        let task = SessionTask { connection, tunnel: None, session: None, route, cancelled, on_server, answers, history, idle_limit };
-        Self { session, jobs, cancels, schema_asks, running, task: tokio::spawn(task.serve(queue, reader)) }
-    }
-
-    /// Queues `job` behind the one running.
-    pub(super) fn send(&self, job: Job) {
-        if self.jobs.send(job).is_err() {
-            tracing::warn!("the session task is gone: a statement or an open is dropped");
-        }
-    }
-
-    /// Reads the schema on a second session along the route of this one, opening this one first unless it is open.
-    pub(super) fn read_schema(&self) {
-        self.send(Job::Open);
-        if self.schema_asks.send(()).is_err() {
-            tracing::warn!("the session task is gone: the schema is not read");
-        }
-    }
-
-    /// Cancels `run` if the session is on it, or keeps it from the server if it has not started; a later run is never touched.
-    pub(super) fn cancel(&self, run: RunId) {
-        if self.cancels.send(run).is_err() {
-            tracing::warn!("the session task is gone: the cancel is dropped");
-        }
-    }
-
-    /// Stops the session task, which cancels the running statement and drops it, waiting `STOP_WAIT` at most;
-    /// past it, the server is asked to cancel a statement or a page whose cancel did not reach it, and the task is
-    /// aborted, which cuts the session's link.
-    pub(super) async fn stop(self) {
-        let Self { jobs, cancels, running, mut task, .. } = self;
-        drop((jobs, cancels));
-        match tokio::time::timeout(STOP_WAIT, &mut task).await {
-            Ok(Ok(())) => {}
-            Ok(Err(err)) => tracing::warn!("the session task failed: {err}"),
-            Err(_) => {
-                tracing::warn!("the session task did not stop within {STOP_WAIT:?}: it is aborted");
-                let on_server = running.borrow().clone();
-                if let Some(token) = on_server {
-                    warn_if_still_running(&token.cancel_as_stopping().await);
-                }
-                task.abort();
-            }
-        }
-    }
-}
 
 /// What woke the session task.
 pub(super) enum Woken {
@@ -149,72 +43,6 @@ struct SessionTask {
     answers: SessionAnswers,
     history: Option<Store>,
     idle_limit: Duration,
-}
-
-/// Holds the cancel token of what a session task has on the server, a statement or a page, for its link's abort.
-#[derive(Debug)]
-pub(super) struct OnServer(watch::Sender<Option<CancelToken>>);
-
-impl OnServer {
-    pub(super) fn starts(&self, token: &CancelToken) {
-        self.0.send_replace(Some(token.clone()));
-    }
-
-    pub(super) fn ended(&self) {
-        self.0.send_replace(None);
-    }
-}
-
-/// The cancels a session task is sent, each for a `RunId`, and the latest run one was heard for: ids only grow, and a
-/// sheet sends one run at a time, so it is the only one a run still to come can be cancelled by.
-pub(super) struct Cancels {
-    receiver: UnboundedReceiver<RunId>,
-    pub(super) latest: Option<RunId>,
-}
-
-impl Cancels {
-    /// The next cancel, kept when it is the latest; none once the session is stopping.
-    pub(super) async fn recv(&mut self) -> Option<RunId> {
-        let of = self.receiver.recv().await;
-        self.latest = self.latest.max(of);
-        of
-    }
-
-    /// Whether `run` was cancelled before it started, by its own cancel or by its session stopping.
-    fn was_cancelled(&mut self, run: RunId) -> bool {
-        loop {
-            match self.receiver.try_recv() {
-                Ok(of) => self.latest = self.latest.max(Some(of)),
-                Err(TryRecvError::Empty) => return self.latest == Some(run),
-                Err(TryRecvError::Disconnected) => return true,
-            }
-        }
-    }
-
-    /// Asks the server to cancel `run` at each of its cancels, and ends once the session is stopping.
-    pub(super) async fn stopping(&mut self, run: RunId, token: &CancelToken) {
-        while let Some(of) = self.recv().await {
-            if of == run {
-                cancel(token).await;
-            }
-        }
-    }
-}
-
-/// A run's answer for the app, what came of it for the history, and its portal while more pages wait in it.
-struct Answered<'s> {
-    incoming: Incoming,
-    outcome: Outcome,
-    rest: Option<Pages<'s>>,
-}
-
-impl Answered<'_> {
-    /// The answer to `run`, stopped with its session before the server answered.
-    fn stopped(run: RunId, interrupted: &Interrupted<()>) -> Self {
-        warn_if_still_running(&interrupted.cancel);
-        let incoming = Incoming::Failed { run, error: STOPPED_WITH_ITS_SESSION.to_owned(), position: None };
-        Self { incoming, outcome: Outcome::LinkError, rest: None }
-    }
 }
 
 impl SessionTask {
@@ -417,71 +245,21 @@ pub(super) async fn ended(tunnel: Option<&mut Tunnel>) -> Died {
     }
 }
 
-/// Runs `queued`, asking the server to cancel it when its cancel comes; a cancel for another run does nothing. A stop
-/// stops it as `CancelToken::unless_stopped` says. `on_server` holds its token until it is answered or dropped.
-async fn run_until_answered<'s>(
-    session: &'s mut Session,
-    writes: WritePolicy,
-    queued: Queued,
-    cancelled: &mut Cancels,
-    on_server: &OnServer,
-) -> Answered<'s> {
-    let token = session.cancel_token();
-    let run = queued.run;
-    on_server.starts(&token);
-    let answered = token.unless_stopped(answer_to(session, writes, queued), cancelled.stopping(run, &token)).await;
-    on_server.ended();
-    answered.unwrap_or_else(|interrupted| Answered::stopped(run, &interrupted))
-}
-
-/// Warns when the server did not take the cancel a stop sent it.
-pub(super) fn warn_if_still_running(cancel: &anyhow::Result<()>) {
-    if let Err(err) = cancel {
-        tracing::warn!("the statement may still run on the server: {err:#}");
-    }
-}
-
-/// Asks the server to cancel what the session runs; a request that failed is logged, and the statement runs on.
-async fn cancel(token: &CancelToken) {
-    if let Err(err) = token.cancel().await {
-        tracing::warn!("the cancel request failed: {err:#}");
-    }
-}
-
-async fn answer_to(session: &mut Session, writes: WritePolicy, queued: Queued) -> Answered<'_> {
-    let Queued { run, statement, input } = queued;
-    let admitted = match params::admit(&statement, &input.given, &input.specs, writes) {
-        Ok(admitted) => admitted,
-        Err(refusal) => {
-            return Answered { incoming: Incoming::Refused { run, why: refusal.to_string() }, outcome: Outcome::Refused, rest: None };
-        }
-    };
-    let started = Instant::now();
-    let (result, rest) = match session.start(&admitted).await {
-        Ok(Started { result, rest }) => (Ok(result), rest),
-        Err(err) => (Err(err), None),
-    };
-    let outcome = Outcome::of(&result);
-    let incoming = match result {
-        Ok(result) => Incoming::Result { run, result, took: started.elapsed() },
-        Err(err) => {
-            let position = err.downcast_ref::<ServerError>().and_then(|server| server.position);
-            Incoming::Failed { run, position, error: format!("{err:#}") }
-        }
-    };
-    Answered { incoming, outcome, rest }
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::Backend;
+    use super::run::STOPPED_WITH_ITS_SESSION;
     use super::*;
+    use crate::connection::{ConnectionName, WritePolicy};
     use crate::db::guard;
+    use crate::db::model::Statement;
     use crate::db::model::{Params, Route, Value};
     use crate::fixtures;
     use crate::query::Roots;
     use crate::query::params::ParamInput;
+    use crate::tui::app::{Answer, RunId, SessionId};
     use std::path::PathBuf;
+    use tokio::sync::mpsc;
 
     const SLEEP: &str = "SELECT pg_sleep(30)";
 
