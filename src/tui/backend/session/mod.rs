@@ -3,7 +3,7 @@
 use super::paging::{Paging, serve_pages};
 use super::schema::SchemaReader;
 use crate::connection::Connection;
-use crate::db::model::Route;
+use crate::db::model::{Route, Statement};
 use crate::db::{NotOpened, Opened, Session, TunnelStep, open_along};
 use crate::history::{Entry, Outcome, Store};
 use crate::tui::app::{Incoming, TunnelState};
@@ -43,14 +43,14 @@ pub(super) enum Next {
 
 /// A run's history entry before its answer comes: what was sent, and when.
 struct RunStart {
-    statement: String,
+    statement: Statement,
     started_at: DateTime<Utc>,
     clock: Instant,
 }
 
 impl RunStart {
     fn of(queued: &Queued) -> Self {
-        Self { statement: queued.statement.as_str().to_owned(), started_at: Utc::now(), clock: Instant::now() }
+        Self { statement: queued.statement.clone(), started_at: Utc::now(), clock: Instant::now() }
     }
 }
 

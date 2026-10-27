@@ -1,6 +1,6 @@
 //! What the server says about a session: its role, the server version, its timeout and what its role can write.
 //! Each is read in a read-only transaction, so asking writes nothing.
-use super::model::{ReadOnlyGaps, RoleFlag, RolePowers, RoleRights, ServerFacts};
+use super::model::{ReadOnlyGaps, RoleFlag, RoleName, RolePowers, RoleRights, ServerFacts};
 use super::{Isolation, Session, server_error};
 use crate::connection::StatementTimeout;
 use anyhow::{Context, Result};
@@ -74,7 +74,7 @@ impl Session {
         self.read_only(Isolation::EachStatement, async |transaction| {
             let row = transaction.query_one(SERVER_FACTS, &[]).await.map_err(server_error)?;
             Ok(ServerFacts {
-                user: row.try_get(0)?,
+                user: RoleName::new(row.try_get::<_, String>(0)?),
                 version: row.try_get(1)?,
                 statement_timeout: timeout_at(&row, 2)?,
                 server_statement_timeout: timeout_at(&row, 3)?,
@@ -164,7 +164,7 @@ fn listed_at(row: &Row) -> Result<Listed> {
 fn roles_holding(rows: &[Row]) -> Result<Vec<RolePowers>> {
     let mut roles: Vec<RolePowers> = Vec::new();
     for row in rows {
-        let role: String = row.try_get(0)?;
+        let role = RoleName::new(row.try_get::<_, String>(0)?);
         if roles.last().is_none_or(|last| last.role != role) {
             roles.push(RolePowers { role, ..RolePowers::default() });
         }
@@ -242,7 +242,7 @@ mod tests {
     }
 
     fn powers_of(rights: &RoleRights, role: &str) -> RolePowers {
-        rights.roles.iter().find(|powers| powers.role == role).cloned().unwrap_or_default()
+        rights.roles.iter().find(|powers| powers.role == RoleName::new(role)).cloned().unwrap_or_default()
     }
 
     #[tokio::test]
@@ -401,7 +401,7 @@ mod tests {
         let connection = fixtures::connection(&format!("tier = \"staging\"\ntls = \"off\"\nurl = \"{url}\"\n"));
         let mut session = Session::open(&connection, Route::Direct).await.unwrap();
         let facts = session.server_facts().await.unwrap();
-        assert_eq!(facts.user, url.username());
+        assert_eq!(facts.user, RoleName::new(url.username()));
         assert_eq!((facts.statement_timeout.as_millis(), facts.server_statement_timeout.as_millis()), (60_000, 120_000));
         assert!(facts.version.starts_with(|c: char| c.is_ascii_digit()), "{}", facts.version);
     }

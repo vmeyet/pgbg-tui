@@ -39,7 +39,7 @@ pub async fn run(
     };
     let took_ms = u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX);
     let entry =
-        Entry { statement: sql.to_owned(), connection: connection.name().clone(), started_at, took_ms, outcome: Outcome::of(&result) };
+        Entry { statement: Statement::new(sql), connection: connection.name().clone(), started_at, took_ms, outcome: Outcome::of(&result) };
     record(entry).await;
     print(&result?, json)
 }

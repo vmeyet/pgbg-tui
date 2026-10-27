@@ -6,8 +6,8 @@ pub(crate) use name::{needs_quotes, qualified, sql_name};
 pub(crate) use result::{Extent, Page, ResultSet};
 pub(crate) use route::{LocalPort, Route};
 pub(crate) use schema::{Catalog, Index, Schema, SchemaColumn, SchemaNode, Table, TableKind};
-use serde::Serialize;
-pub(crate) use server::{Named, ReadOnlyGaps, RoleFlag, RolePowers, RoleRights, ServerFacts};
+use serde::{Deserialize, Serialize};
+pub(crate) use server::{Named, ReadOnlyGaps, RoleFlag, RoleName, RolePowers, RoleRights, ServerFacts};
 use std::fmt;
 pub(crate) use value::Value;
 
@@ -23,7 +23,8 @@ mod value;
 pub(crate) mod words;
 
 /// One SQL statement, as typed: the unit pgbg runs.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub(crate) struct Statement(String);
 
 impl Statement {
@@ -119,7 +120,8 @@ pub(crate) enum ColumnKind {
     Other,
 }
 
-/// A column's name as the server sent it: one result may hold the same name twice, or an empty one.
+/// A column's name: as the server sent it, where one result may hold the same name twice or an empty one, or as a
+/// header names a column to find it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
 pub(crate) struct ColumnName(String);

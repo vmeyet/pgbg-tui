@@ -188,6 +188,7 @@ mod tests {
     use super::*;
     use crate::commands::doctor::report::Verdict;
     use crate::connection::StatementTimeout;
+    use crate::db::model::RoleName;
     use crate::fixtures;
 
     fn connection(extra: &str) -> Connection {
@@ -266,7 +267,7 @@ mod tests {
 
     fn facts(in_effect_ms: u64, server_ms: u64) -> ServerFacts {
         ServerFacts {
-            user: "nina".into(),
+            user: RoleName::new("nina"),
             version: "17.2".into(),
             statement_timeout: StatementTimeout::from_millis(in_effect_ms),
             server_statement_timeout: StatementTimeout::from_millis(server_ms),
@@ -302,7 +303,7 @@ mod tests {
     fn writer() -> RoleRights {
         let tables = Named { first: vec!["public.customers".into(), "public.orders".into()], count: 14 };
         RoleRights {
-            roles: vec![RolePowers { role: "nina".into(), flags: vec![RoleFlag::CreateDatabase], tables, ..RolePowers::default() }],
+            roles: vec![RolePowers { role: RoleName::new("nina"), flags: vec![RoleFlag::CreateDatabase], tables, ..RolePowers::default() }],
         }
     }
 
@@ -324,8 +325,8 @@ mod tests {
         let schemas = Named { first: vec!["public".into()], count: 1 };
         let rights = RoleRights {
             roles: vec![
-                RolePowers { role: "nina".into(), sequences, ..RolePowers::default() },
-                RolePowers { role: "PUBLIC".into(), schemas, ..RolePowers::default() },
+                RolePowers { role: RoleName::new("nina"), sequences, ..RolePowers::default() },
+                RolePowers { role: RoleName::new("PUBLIC"), schemas, ..RolePowers::default() },
             ],
         };
         let found = "not read only: `nina` advances 1 sequence: public.orders_id_seq; `PUBLIC` creates objects in 1 schema: public";
@@ -334,7 +335,8 @@ mod tests {
 
     #[test]
     fn a_superuser_says_so_first() {
-        let powers = RolePowers { role: "nina".into(), flags: vec![RoleFlag::Superuser, RoleFlag::CreateRole], ..RolePowers::default() };
+        let powers =
+            RolePowers { role: RoleName::new("nina"), flags: vec![RoleFlag::Superuser, RoleFlag::CreateRole], ..RolePowers::default() };
         let rights = RoleRights { roles: vec![powers] };
         assert_eq!(role(WritePolicy::ReadOnly, &rights).found, "not read only: `nina` is a superuser, creates roles");
     }

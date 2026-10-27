@@ -23,20 +23,21 @@ fn text(entries: &[Entry]) -> String {
 }
 
 fn row(entry: &Entry) -> Vec<String> {
-    let statement = entry.statement.split_whitespace().collect::<Vec<_>>().join(" ");
+    let statement = entry.statement.as_str().split_whitespace().collect::<Vec<_>>().join(" ");
     vec![entry.started_at.format(TIME_FORMAT).to_string(), format!("{} ms", entry.took_ms), entry.outcome.to_string(), statement]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::model::Statement;
     use crate::history::Outcome;
     use chrono::DateTime;
 
     #[test]
     fn an_entry_prints_on_one_line_when_how_long_what_came_of_it_and_the_statement() {
         let entry = Entry {
-            statement: "SELECT total\n  FROM orders".to_owned(),
+            statement: Statement::new("SELECT total\n  FROM orders"),
             connection: "shop".parse().unwrap(),
             started_at: DateTime::parse_from_rfc3339("2026-10-26T09:30:00Z").unwrap().to_utc(),
             took_ms: 38,
