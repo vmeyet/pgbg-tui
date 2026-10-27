@@ -78,6 +78,7 @@ fn session_state(app: &App, connection: &Connection) -> (&'static str, Style) {
         SessionState::Opening => ("  opening…", Style::default().fg(app.theme.muted)),
         SessionState::Open => ("  open", Style::default().fg(app.theme.success)),
         SessionState::Failed(_) => ("  failed", Style::default().fg(theme::failure(&app.theme))),
+        SessionState::Closed => ("  closed", Style::default().fg(app.theme.muted)),
     }
 }
 

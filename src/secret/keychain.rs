@@ -10,6 +10,7 @@ use std::fmt;
 use std::io::Write;
 use std::process::{Command, ExitStatus, Stdio};
 use std::str::FromStr;
+use zeroize::Zeroizing;
 
 const SECURITY: &str = "/usr/bin/security";
 const RUNNING_SECURITY: &str = "running /usr/bin/security for the macOS keychain";
@@ -95,14 +96,14 @@ impl Keychain {
         if !output.status.success() {
             return Err(failed("reading", account, output.status));
         }
-        let dump = String::from_utf8(output.stderr).map_err(|_password_bytes| not_utf8(account))?;
+        let dump = Zeroizing::new(String::from_utf8(output.stderr).map_err(|_password_bytes| not_utf8(account))?);
         from_dump(&dump).with_context(|| format!("reading the keychain item `{account}`"))
     }
 
     /// Saves `password` as the item `account`, over the one already there: safe to run twice.
     /// Written as hex through `security -i`, so it never shows in argv and is never read from the terminal.
     pub(crate) fn write(&self, account: &KeychainItem, password: &Secret) -> Result<()> {
-        let line = format!("add-generic-password -a {account} -s {} -U -X {}\n", self.service, hex(password.expose()));
+        let line = Zeroizing::new(format!("add-generic-password -a {account} -s {} -U -X {}\n", self.service, *hex(password.expose())));
         ensure!(line.len() <= LINE_LIMIT_BYTES, "the password is too long for the keychain: {} bytes", password.expose().len());
         let mut child = Command::new(SECURITY)
             .arg("-i")
@@ -144,8 +145,8 @@ fn not_utf8(account: &KeychainItem) -> anyhow::Error {
     anyhow!("the keychain item `{account}` is not UTF-8")
 }
 
-fn hex(text: &str) -> String {
-    text.bytes().map(|b| format!("{b:02x}")).collect()
+fn hex(text: &str) -> Zeroizing<String> {
+    Zeroizing::new(text.bytes().map(|b| format!("{b:02x}")).collect())
 }
 
 fn from_hex(digits: &str) -> Option<Vec<u8>> {
@@ -232,7 +233,7 @@ mod tests {
 
     #[test]
     fn hex_encodes_bytes() {
-        assert_eq!(hex("A{\"} é"), "417b227d20c3a9");
+        assert_eq!(*hex("A{\"} é"), "417b227d20c3a9");
     }
 
     #[cfg(target_os = "macos")]

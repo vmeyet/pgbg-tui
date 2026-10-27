@@ -71,7 +71,7 @@ fn words(text: &str, flag: &str) -> Result<Vec<String>> {
 }
 
 fn tunnel_spec(command: &str) -> Result<TunnelSpec> {
-    TunnelSpec::new(words(command, "--tunnel")?).context("in `--tunnel`")
+    TunnelSpec::new(words(command, "--tunnel")?, None).context("in `--tunnel`")
 }
 
 fn change_from(keys: &ConnectionKeys) -> Result<ConnectionChange> {

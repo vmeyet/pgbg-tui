@@ -1472,6 +1472,7 @@ dependencies = [
  "url",
  "uuid",
  "vtui",
+ "zeroize",
 ]
 
 [[package]]

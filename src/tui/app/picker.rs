@@ -4,6 +4,7 @@ use super::search::{Search, Searching};
 use super::{Action, App, ConfigChangeId, Form, Overlay, SessionState, Sheet};
 use crate::act::{Act, Pane};
 use crate::connection::{Connection, ConnectionName};
+use crate::secret::Secret;
 use crossterm::event::{KeyCode, KeyEvent};
 
 /// The picker: the connections matching the line typed, and the line it says under them.
@@ -59,7 +60,9 @@ impl App {
                 return vec![Action::RemoveConnection { id, connection: name }];
             }
             Picked::CloseSession { search, name } => {
-                self.drop_sheet(&name);
+                if let Some(sheet) = self.sheet_of_mut(&name) {
+                    sheet.close();
+                }
                 let note = Some(Note::Said(format!("closed the session of `{name}`")));
                 self.overlay = Some(Overlay::Picker(Picker { search, note }));
                 return vec![Action::Close(name)];
@@ -95,7 +98,7 @@ impl App {
                 None => None,
             },
             Act::Delete => name.map(|name| self.removal(name)),
-            Act::CloseSession => match name.filter(|name| self.sheet_of(name).is_some()) {
+            Act::CloseSession => match name.filter(|name| self.sheet_of(name).is_some_and(|sheet| sheet.session != SessionState::Closed)) {
                 Some(name) if name != *self.sheet().name() => return Picked::CloseSession { search, name },
                 Some(name) => Some(on_screen(&name)),
                 None => None,
@@ -110,11 +113,12 @@ impl App {
         if name == *self.sheet().name() { on_screen(&name) } else { Note::ConfirmRemove(name) }
     }
 
-    /// Shows the sheet of `connection`, starting one and opening its session when it has none, or when it failed.
+    /// Shows the sheet of `connection`, starting one and opening its session when it has none, or when it failed or
+    /// was closed.
     fn show(&mut self, connection: Connection) -> Vec<Action> {
         if let Some(open) = self.sheets.iter().position(|sheet| sheet.name() == connection.name()) {
             self.shown = open;
-            if !matches!(self.sheet().session, SessionState::Failed(_)) {
+            if !matches!(self.sheet().session, SessionState::Failed(_) | SessionState::Closed) {
                 return vec![];
             }
             self.sheet_mut().session = SessionState::Opening;
@@ -170,11 +174,12 @@ impl App {
         self.sheets.iter_mut().filter_map(reopen).collect()
     }
 
-    /// Says why the change `id` did not happen: in the form that sent it, else in the status line.
-    pub(super) fn config_failed(&mut self, id: ConfigChangeId, error: String) {
+    /// Says why the change `id` did not happen: in the form that sent it, which takes back the password it typed, else
+    /// in the status line.
+    pub(super) fn config_failed(&mut self, id: ConfigChangeId, why: String, password: Option<Secret>) {
         match &mut self.overlay {
-            Some(Overlay::Form(form)) if form.is_waiting_on(id) => form.failed(error),
-            _ => self.config_failure = Some(error),
+            Some(Overlay::Form(form)) if form.is_waiting_on(id) => form.failed(why, password),
+            _ => self.config_failure = Some(why),
         }
     }
 
@@ -452,8 +457,46 @@ pub(in crate::tui) mod tests {
     fn ctrl_x_closes_the_session_of_a_connection_not_on_screen() {
         let mut app = on_prod_with_local_open();
         assert_eq!(ctrl(&mut app, 'x'), [Action::Close(name("local"))]);
-        assert!(app.sheet_of(&name("local")).is_none());
+        assert_eq!(app.sheet_of(&name("local")).map(|sheet| &sheet.session), Some(&SessionState::Closed));
         assert_eq!(app.sheet().name(), &name("prod"));
+    }
+
+    #[test]
+    fn ctrl_x_keeps_the_text_of_the_editor_it_closes() {
+        let mut app = on_local();
+        press(&mut app, "SELECT 1");
+        switch_to(&mut app, "prod");
+        ctrl(&mut app, 'o');
+        ctrl(&mut app, 'x');
+        assert_eq!(app.sheet_of(&name("local")).map(|sheet| sheet.editor.text()), Some("SELECT 1"));
+    }
+
+    #[test]
+    fn a_connection_closed_with_ctrl_x_opens_again_once_picked() {
+        let mut app = on_prod_with_local_open();
+        ctrl(&mut app, 'x');
+        let local = app.connections[0].clone();
+        assert_eq!(key(&mut app, KeyCode::Enter), [Action::Open(local)]);
+        assert_eq!(app.sheet().session, SessionState::Opening);
+    }
+
+    #[test]
+    fn a_late_word_from_a_session_closed_with_ctrl_x_leaves_it_closed() {
+        let mut app = on_prod_with_local_open();
+        ctrl(&mut app, 'x');
+        app.apply(Answer::Session { connection: name("local"), incoming: Incoming::Opened });
+        assert_eq!(app.sheet_of(&name("local")).map(|sheet| &sheet.session), Some(&SessionState::Closed));
+    }
+
+    #[test]
+    fn a_statement_running_when_ctrl_x_closes_its_session_fails() {
+        let mut app = on_local();
+        press(&mut app, "SELECT pg_sleep(5)");
+        key(&mut app, KeyCode::Enter);
+        switch_to(&mut app, "prod");
+        ctrl(&mut app, 'o');
+        ctrl(&mut app, 'x');
+        assert!(matches!(app.sheet_of(&name("local")).map(|sheet| &sheet.run), Some(Run::Failed(_))));
     }
 
     #[test]
@@ -475,7 +518,7 @@ pub(in crate::tui) mod tests {
     }
 
     fn failed(why: &str) -> Answer {
-        Answer::Config { id: ConfigChangeId::FIRST, answer: ConfigAnswer::Failed(why.into()) }
+        Answer::Config { id: ConfigChangeId::FIRST, answer: ConfigAnswer::Failed { why: why.into(), password: None } }
     }
 
     #[test]

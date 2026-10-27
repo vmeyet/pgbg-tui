@@ -5,13 +5,21 @@ use serde::{Deserialize, Serialize};
 use std::env::VarError;
 use std::fmt;
 use std::process::Stdio;
+use zeroize::Zeroize;
 
 mod keychain;
 mod typed;
 
-/// A password, read when a session opens and dropped once connected, or typed in the TUI's connection form.
-#[derive(Clone, Default, PartialEq, Eq)]
+/// A password, read when a session opens and dropped once connected, or typed in the TUI's connection form; never
+/// copied, and wiped from memory when dropped.
+#[derive(Default, PartialEq, Eq)]
 pub(crate) struct Secret(String);
+
+impl Drop for Secret {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
 
 impl Secret {
     pub(crate) fn expose(&self) -> &str {

@@ -26,8 +26,8 @@ Each entry says what changed, then where, then how to use it.
 - **The connection picker** in the TUI: press `ctrl-o`, type a few letters of a connection's name, and `⏎` to switch to it.
   Each connection shows its tier's colour, where it goes, whether it takes writes, and whether its session is open.
   Sessions stay open until you quit, so switching back is instant, and each connection keeps its own editor text, result and saved query.
-  In the picker, `ctrl-d` removes the highlighted connection from your `config.toml` once you press `y`, with the keychain item no other connection names; `ctrl-x` closes its session and its tunnel.
-  `ctrl-a` adds a connection and `ctrl-e` edits the highlighted one in a form: tier, url, where the password comes from, the password itself for a keychain item (typed hidden), tunnel, writes, TLS and the statement timeout; `⇥` moves, `←`/`→` choose, `⏎` saves, and a refused line says why under it.
+  In the picker, `ctrl-d` removes the highlighted connection from your `config.toml` once you press `y`, with the keychain item no other connection names; `ctrl-x` closes its session and its tunnel, and keeps its editor text until you pick it again.
+  `ctrl-a` adds a connection and `ctrl-e` edits the highlighted one in a form: tier, url, where the password comes from, the password itself for a keychain item (typed hidden), tunnel and the command it runs before, writes, TLS and the statement timeout; `⇥` moves, `←`/`→` choose, `⏎` saves, and a refused line says why under it.
   A paste goes into the line with the cursor, and a line longer than the form scrolls with the cursor.
 - **Charts** in the TUI: on a result, press `v` to see it as a chart, and `v` again for the grid; the title says which one shows.
   pgbg puts the first text, date or time column across and the numeric columns up: bars for text or a few rows, a line over time otherwise, with gaps in time left as gaps.
@@ -96,6 +96,9 @@ Each entry says what changed, then where, then how to use it.
 - **A failed change to the config says why in the status line** until the next key, unless the form that asked is open; it no longer replaces the result on screen.
   A second `⏎` while the form saves sends nothing.
 - **`ctrl-x` in the connection picker keeps it open** and says which session it closed.
+- **`ctrl-x` keeps the sheet it closes**: the editor text stays, the picker says `closed`, and picking the connection opens a new session.
+- **A save the config refuses keeps the password typed** in the connection form, so a second `⏎` sends it again.
+- **The history stops waiting** on a disk whose files keep changing under the lock, such as some network mounts, and says so in the log.
 - **The finder and the connection picker always show their keys** at the bottom, however many matches or a question under the list; the picker follows a connection added or removed while it is open.
 - **A URL whose `options` or `application_name` hold `%20`** reaches the server as written, as in `options=-c%20role%3Dnina`; it failed with `unrecognized configuration parameter "+role"`.
 - **The editor colours SQL by meaning**: `NULL` as a constant, `1e3` as a number, and table names plain.
