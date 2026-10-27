@@ -1,6 +1,6 @@
 //! The format each column of a result opens in: the one a `-- format:` header names for it, else the config's default.
 use super::{Format, UnknownFormat, allowed, readable};
-use crate::db::model::{Column, ColumnKind};
+use crate::db::model::{Column, ColumnKind, ColumnName};
 use serde::Deserialize;
 use std::fmt;
 use std::str::FromStr;
@@ -28,7 +28,7 @@ impl Mode {
 /// One `column=format` of a `-- format:` header.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ColumnFormat {
-    pub(crate) column: String,
+    pub(crate) column: ColumnName,
     pub(crate) format: Format,
 }
 
@@ -59,7 +59,7 @@ impl FromStr for ColumnFormat {
             return Err(ColumnFormatError::NoColumn(word.to_owned()));
         };
         let format = format.parse().map_err(ColumnFormatError::Unknown)?;
-        Ok(Self { column: column.to_owned(), format })
+        Ok(Self { column: ColumnName::new(column), format })
     }
 }
 
@@ -75,7 +75,8 @@ pub(crate) fn opening(columns: &[Column], named: &[ColumnFormat], mode: Mode) ->
 }
 
 fn named_for(column: &Column, named: &[ColumnFormat]) -> Option<Format> {
-    let mut formats = named.iter().filter(|named| named.column.eq_ignore_ascii_case(column.name.as_str())).map(|named| named.format);
+    let mut formats =
+        named.iter().filter(|named| named.column.as_str().eq_ignore_ascii_case(column.name.as_str())).map(|named| named.format);
     formats.next_back().filter(|format| allowed(&column.kind).contains(format))
 }
 

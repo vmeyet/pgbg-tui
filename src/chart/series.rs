@@ -136,11 +136,12 @@ fn resolve(result: &ResultSet, spec: &ChartSpec) -> Result<ChartColumns, ChartEr
     Ok(ChartColumns { kind: spec.kind, x, y })
 }
 
-fn find_numbers(columns: &[Column], names: &[String]) -> Result<Vec<usize>, ChartError> {
+fn find_numbers(columns: &[Column], names: &[ColumnName]) -> Result<Vec<usize>, ChartError> {
     names.iter().map(|name| find(columns, name).and_then(|index| numeric(columns, index))).collect()
 }
 
-fn find(columns: &[Column], name: &str) -> Result<usize, ChartError> {
+fn find(columns: &[Column], name: &ColumnName) -> Result<usize, ChartError> {
+    let name = name.as_str();
     let exact = matching(columns, |column| column.name.as_str() == name);
     let folded = matching(columns, |column| column.name.as_str().eq_ignore_ascii_case(name));
     match (exact.as_slice(), folded.as_slice()) {

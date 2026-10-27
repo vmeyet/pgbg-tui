@@ -1,4 +1,5 @@
 use super::ChartKind;
+use crate::db::model::ColumnName;
 use std::fmt;
 use std::str::FromStr;
 
@@ -7,8 +8,8 @@ use std::str::FromStr;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ChartSpec {
     pub(crate) kind: ChartKind,
-    pub(crate) x: Option<String>,
-    pub(crate) y: Vec<String>,
+    pub(crate) x: Option<ColumnName>,
+    pub(crate) y: Vec<ColumnName>,
 }
 
 /// Why the text of a `-- chart:` header is not a chart.
@@ -68,8 +69,8 @@ fn with_part(spec: ChartSpec, word: &str) -> Result<ChartSpec, ChartSpecError> {
     }
 }
 
-fn column_name(name: &str) -> Result<String, ChartSpecError> {
-    if name.is_empty() { Err(ChartSpecError::EmptyColumn) } else { Ok(name.to_owned()) }
+fn column_name(name: &str) -> Result<ColumnName, ChartSpecError> {
+    if name.is_empty() { Err(ChartSpecError::EmptyColumn) } else { Ok(ColumnName::new(name)) }
 }
 
 #[cfg(test)]
@@ -82,13 +83,13 @@ mod tests {
 
     #[test]
     fn a_header_names_the_kind_x_and_y() {
-        let spec = ChartSpec { kind: ChartKind::Bar, x: Some("day".into()), y: vec!["orders".into()] };
+        let spec = ChartSpec { kind: ChartKind::Bar, x: Some(ColumnName::new("day")), y: vec![ColumnName::new("orders")] };
         assert_eq!(parse("bar x=day y=orders"), Ok(spec));
     }
 
     #[test]
     fn y_takes_several_columns_separated_by_commas() {
-        assert_eq!(parse("line y=orders,refunds").unwrap().y, ["orders", "refunds"]);
+        assert_eq!(parse("line y=orders,refunds").unwrap().y, [ColumnName::new("orders"), ColumnName::new("refunds")]);
     }
 
     #[test]

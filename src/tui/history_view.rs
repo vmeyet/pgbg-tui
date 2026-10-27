@@ -28,7 +28,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) {
     let Some(Overlay::Recall(recall)) = app.overlay() else { return };
     let theme = app.theme();
     let in_view = recall.search.in_view(MAX_SHOWN);
-    let labels: Vec<String> = in_view.iter().map(|entry| one_line(&entry.statement)).collect();
+    let labels: Vec<String> = in_view.iter().map(|entry| one_line(entry.statement.as_str())).collect();
     let details: Vec<String> = in_view.iter().map(detail).collect();
     let picks: Vec<Pick<'_>> = labels.iter().zip(&details).map(|(label, detail)| pick(app, label, detail)).collect();
     let selected = recall.search.palette.selected - recall.search.first_in_view(MAX_SHOWN);
@@ -49,6 +49,7 @@ mod tests {
     use super::super::app::tests::{app, shop};
     use super::super::app::{Action, Answer};
     use super::*;
+    use crate::db::model::Statement;
     use crate::history::Outcome;
     use chrono::DateTime;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -57,7 +58,7 @@ mod tests {
 
     fn entry(statement: &str, outcome: Outcome) -> Entry {
         let started_at = DateTime::parse_from_rfc3339("2026-10-26T09:30:00Z").unwrap().to_utc();
-        Entry { statement: statement.to_owned(), connection: shop(), started_at, took_ms: 38, outcome }
+        Entry { statement: Statement::new(statement), connection: shop(), started_at, took_ms: 38, outcome }
     }
 
     fn render(entries: Vec<Entry>) -> Terminal<TestBackend> {

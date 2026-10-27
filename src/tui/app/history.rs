@@ -41,7 +41,7 @@ impl App {
                 self.overlay = Some(Overlay::Recall(Recall { connection, all, search }));
             }
             Searching::Closed => {}
-            Searching::Picked(entry) => self.put_in_editor(&entry.statement),
+            Searching::Picked(entry) => self.put_in_editor(entry.statement.as_str()),
             Searching::Quit => return self.quit(),
         }
         vec![]
@@ -63,13 +63,14 @@ mod tests {
     use super::super::Answer;
     use super::super::tests::{app, shop, typed};
     use super::*;
+    use crate::db::model::Statement;
     use crate::history::Outcome;
     use chrono::DateTime;
     use crossterm::event::{KeyCode, KeyModifiers};
 
     fn entry(statement: &str) -> Entry {
         Entry {
-            statement: statement.to_owned(),
+            statement: Statement::new(statement),
             connection: shop(),
             started_at: DateTime::parse_from_rfc3339("2026-10-26T09:30:00Z").unwrap().to_utc(),
             took_ms: 38,

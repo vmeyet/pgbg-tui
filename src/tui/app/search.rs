@@ -35,7 +35,7 @@ impl Searched for Query {
 
 impl Searched for Entry {
     fn search_text(&self) -> String {
-        self.statement.clone()
+        self.statement.as_str().to_owned()
     }
 }
 

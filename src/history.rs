@@ -3,7 +3,7 @@
 use crate::config;
 use crate::connection::ConnectionName;
 use crate::db::guard::Refusal;
-use crate::db::model::{ResultSet, ServerError, TriedToWrite, UnknownType};
+use crate::db::model::{ResultSet, ServerError, Statement, TriedToWrite, UnknownType};
 use crate::query::params::ParamError;
 use chrono::{DateTime, Utc};
 use rustix::fs::{FlockOperation, flock};
@@ -73,7 +73,7 @@ impl fmt::Display for Outcome {
 /// One statement run.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Entry {
-    pub(crate) statement: String,
+    pub(crate) statement: Statement,
     pub(crate) connection: ConnectionName,
     pub(crate) started_at: DateTime<Utc>,
     pub(crate) took_ms: u64,
@@ -189,7 +189,7 @@ fn locked_if_current(file: File, path: &Path) -> io::Result<Option<File>> {
 }
 
 fn kept(entry: &Entry) -> Entry {
-    let statement = if holds_password(&entry.statement) { PASSWORD_KEPT_AS.to_owned() } else { entry.statement.clone() };
+    let statement = if holds_password(entry.statement.as_str()) { Statement::new(PASSWORD_KEPT_AS) } else { entry.statement.clone() };
     Entry { statement, ..entry.clone() }
 }
 
@@ -235,7 +235,7 @@ mod tests {
 
     fn entry(connection: &str, statement: &str, minute: u32) -> Entry {
         Entry {
-            statement: statement.to_owned(),
+            statement: Statement::new(statement),
             connection: connection.parse().unwrap(),
             started_at: DateTime::parse_from_rfc3339(&format!("2026-10-26T09:{minute:02}:00Z")).unwrap().to_utc(),
             took_ms: 38,
@@ -249,6 +249,13 @@ mod tests {
 
     fn shop() -> ConnectionName {
         "shop".parse().unwrap()
+    }
+
+    #[test]
+    fn an_entry_is_one_json_line_of_plain_fields() {
+        let line = r#"{"statement":"SELECT 1","connection":"shop","started_at":"2026-10-26T09:00:00Z","took_ms":38,"outcome":{"kind":"rows","count":4,"is_cut":false}}"#;
+        assert_eq!(serde_json::to_string(&entry("shop", "SELECT 1", 0)).unwrap(), line);
+        assert_eq!(serde_json::from_str::<Entry>(line).unwrap(), entry("shop", "SELECT 1", 0));
     }
 
     #[test]

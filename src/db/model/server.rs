@@ -1,16 +1,33 @@
 use crate::connection::StatementTimeout;
+use std::fmt;
 
 /// What the server says of the session pgbg opened on it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ServerFacts {
     /// The role the session logged in as.
-    pub(crate) user: String,
+    pub(crate) user: RoleName,
     /// `17.2`, as `server_version` spells it.
     pub(crate) version: String,
     /// The `statement_timeout` the session runs with.
     pub(crate) statement_timeout: StatementTimeout,
     /// The one the server applies before pgbg sets its own: a role's or a database's default, or the URL's `options`.
     pub(crate) server_statement_timeout: StatementTimeout,
+}
+
+/// A role's name as the server spells it, or `PUBLIC`, which stands for every role.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RoleName(String);
+
+impl RoleName {
+    pub(crate) fn new(name: impl Into<String>) -> Self {
+        Self(name.into())
+    }
+}
+
+impl fmt::Display for RoleName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 /// What the session could write, through the role it logged in as or any role it may become with `SET ROLE`.
@@ -23,7 +40,7 @@ pub(crate) struct RoleRights {
 /// What one role may write itself, not counting the roles it is a member of.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct RolePowers {
-    pub(crate) role: String,
+    pub(crate) role: RoleName,
     pub(crate) flags: Vec<RoleFlag>,
     /// The schemas it may create objects in.
     pub(crate) schemas: Named,
