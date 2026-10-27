@@ -1,14 +1,13 @@
 //! Classifies a statement before it is sent: a read, a write, or more than one statement.
 //! A best effort that spares a round trip; the read-only transaction and role are what hold.
 use super::lex::{self, Lexed, Placed, Token};
+use super::model::words::{LOCKS, WRITES};
 use super::model::{Params, Statement};
 use crate::connection::WritePolicy;
 use std::fmt;
 use std::ops::Range;
 
 const READS: [&str; 6] = ["SELECT", "WITH", "VALUES", "TABLE", "EXPLAIN", "SHOW"];
-/// Words that change data or create a table (`SELECT ... INTO`).
-const WRITES: [&str; 5] = ["INSERT", "UPDATE", "DELETE", "MERGE", "INTO"];
 /// The words `EXPLAIN` takes before the statement it explains: its options and their values.
 const EXPLAIN_OPTIONS: [&str; 23] = [
     "ANALYZE",
@@ -37,8 +36,6 @@ const EXPLAIN_OPTIONS: [&str; 23] = [
 ];
 /// The reads that are queries: what `EXPLAIN` may explain, since with `ANALYZE` it runs it, and what a cursor holds.
 const QUERIES: [&str; 4] = ["SELECT", "WITH", "VALUES", "TABLE"];
-/// Row locks a `SELECT` takes; `FOR UPDATE` is caught by `UPDATE` already.
-const LOCKS: [[&str; 2]; 2] = [["FOR", "SHARE"], ["KEY", "SHARE"]];
 /// The words before a row lock's `UPDATE` or `SHARE`, which make it a lock rather than a statement of its own.
 const LOCK_OPENERS: [&str; 2] = ["FOR", "KEY"];
 /// The writes a confirmation names with the table or object they write to.
@@ -76,11 +73,6 @@ pub(crate) enum Write {
         target: Option<String>,
     },
     Several,
-}
-
-/// Whether the guard reads `word`, bare, as a sign of a write: a name spelt so is safe from it only in quotes.
-pub(crate) fn reads_as_write(word: &str) -> bool {
-    lex::is_one_of(word, &WRITES) || LOCKS.iter().flatten().any(|lock| lock.eq_ignore_ascii_case(word))
 }
 
 /// Where a statement stops being a read: at one of its words, counted among its words only, or at a second statement.

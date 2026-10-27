@@ -1,5 +1,5 @@
 //! A name as a statement must write it: bare when PostgreSQL and the guard read it back the same, else in double quotes.
-use crate::db::guard;
+use super::words;
 use std::borrow::Cow;
 
 /// The keywords PostgreSQL reserves, which a table or a schema can only be named by in quotes.
@@ -20,7 +20,7 @@ fn is_reserved(name: &str) -> bool {
 pub(crate) fn needs_quotes(name: &str) -> bool {
     let is_plain = name.chars().next().is_some_and(|first| first.is_ascii_lowercase() || first == '_')
         && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '$');
-    !is_plain || is_reserved(name) || guard::reads_as_write(name)
+    !is_plain || is_reserved(name) || words::reads_as_write(name)
 }
 
 /// `name` bare when PostgreSQL reads it back the same, else quoted with its quotes doubled.
