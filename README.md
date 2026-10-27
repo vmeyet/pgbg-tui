@@ -104,9 +104,9 @@ No password goes in `config.toml`, and pgbg refuses one there.
 It comes from one of three places:
 
 ```toml
-password = { keychain = "pgbg/prod" }                 # the macOS keychain
-password = { env = "PROD_PGPASSWORD" }                # an environment variable
-password = { command = ["pass", "show", "shop/prod"] } # a command that prints it
+password = { keychain = "pgbg/prod" }                     # the macOS keychain
+# password = { env = "SHOP_PGPASSWORD" }                  # an environment variable
+# password = { command = ["pass", "show", "shop/prod"] }  # a command that prints it
 ```
 
 `pgbg password set prod` saves a password in the keychain.
