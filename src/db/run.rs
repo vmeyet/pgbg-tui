@@ -5,7 +5,6 @@ use super::model::{Column, Extent, InsideUserTransaction, Page, Params, ResultSe
 use super::{Isolation, Session, bind, decode, roll_back, server_error};
 use anyhow::{Context, Result};
 use futures_util::{StreamExt, TryStreamExt, future};
-use std::mem::ManuallyDrop;
 use std::pin::pin;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, IsolationLevel, Portal, RowStream, Statement as Prepared, Transaction};
@@ -14,6 +13,8 @@ use tokio_postgres::{Client, IsolationLevel, Portal, RowStream, Statement as Pre
 pub(super) const ROW_CAP: usize = 10_000;
 const PROBE_SAVEPOINT: &str = "SAVEPOINT pgbg_probe";
 const RELEASE_PROBE: &str = "RELEASE SAVEPOINT pgbg_probe";
+/// The cursor a result inside the user's transaction is read through.
+const CURSOR: &str = "pgbg_result";
 
 /// How many rows one fetch from a portal asks for: never 0, which the protocol reads as every row.
 #[derive(Clone, Copy, Debug)]
@@ -44,6 +45,17 @@ pub(super) enum UserTransaction {
     Unsure,
 }
 
+/// How a connection that allows writes runs a statement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WritePath {
+    /// Unchanged, every row it returns read.
+    AsIs,
+    /// Through a portal in a transaction of its own, committed once its first `ROW_CAP` rows are read.
+    OwnTransaction,
+    /// Inside the user's transaction, through a cursor its first `ROW_CAP` rows are read from.
+    UsersCursor,
+}
+
 impl UserTransaction {
     /// The transaction once the server ran a statement taking `step`, or refused it.
     fn after(self, step: TransactionStep, has_run: bool) -> Self {
@@ -68,41 +80,58 @@ impl Session {
         result
     }
 
-    /// Runs `admitted` as `run_writes_alone` does, and keeps track of the transaction the user began; until the server
-    /// answers a statement that opens or ends one, the session is unsure of it.
+    /// Runs `admitted` on its `WritePath`, and keeps track of the transaction the user began; until the server answers
+    /// a statement that opens or ends one, the session is unsure of it.
     async fn run_writes(&mut self, admitted: &Admitted) -> Result<ResultSet> {
         let step = admitted.transaction_step;
         if step != TransactionStep::Keeps {
             self.marks.user_transaction = UserTransaction::Unsure;
         }
-        let result = self.run_writes_alone(admitted).await;
+        let result = async {
+            let statement = bind::prepare(&self.client, admitted).await?;
+            match self.write_path(&statement, admitted).await? {
+                WritePath::AsIs => fetch(&self.client, &statement, &admitted.params).await,
+                WritePath::OwnTransaction => self.fetch_in_own_transaction(&statement, &admitted.params).await,
+                WritePath::UsersCursor => self.fetch_through_cursor(&statement, admitted).await,
+            }
+        };
+        let result = result.await;
         self.marks.user_transaction = self.marks.user_transaction.after(step, result.is_ok());
         result
     }
 
-    /// A statement that returns rows goes through a portal, so the server sends no row past the cap: in its own
-    /// committed transaction, or in the one the user began; one without rows runs as is.
-    async fn run_writes_alone(&mut self, admitted: &Admitted) -> Result<ResultSet> {
-        let statement = bind::prepare(&self.client, admitted).await?;
-        if statement.columns().is_empty() {
-            return fetch(&self.client, &statement, &admitted.params).await;
+    /// Only a statement that returns rows and leaves the user's transaction as it is leaves the as-is path; a `CALL`
+    /// may commit, which it cannot inside a transaction of pgbg.
+    async fn write_path(&mut self, statement: &Prepared, admitted: &Admitted) -> Result<WritePath> {
+        let returns_rows = !statement.columns().is_empty();
+        if !returns_rows || admitted.transaction_step != TransactionStep::Keeps {
+            return Ok(WritePath::AsIs);
         }
-        if self.is_in_user_transaction().await? {
-            return self.fetch_in_user_transaction(&statement, &admitted.params).await;
+        if !self.is_in_user_transaction().await? {
+            return Ok(WritePath::OwnTransaction);
         }
-        let transaction = self.client.transaction().await.map_err(server_error)?;
-        let portal = bind_portal(&transaction, &statement, &admitted.params).await?;
-        let first = fetch_capped(&transaction, &portal).await?;
-        transaction.commit().await.map_err(server_error)?;
-        Ok(ResultSet::new(columns(&statement), first))
+        Ok(if admitted.is_query { WritePath::UsersCursor } else { WritePath::AsIs })
     }
 
-    /// The driver binds a portal only in a transaction handle; the `BEGIN` it sends for one inside the user's only
-    /// warns, and the handle is never dropped, since its drop would send `ROLLBACK`: the user's transaction stays theirs.
-    async fn fetch_in_user_transaction(&mut self, statement: &Prepared, params: &Params) -> Result<ResultSet> {
-        let users = ManuallyDrop::new(self.client.transaction().await.map_err(server_error)?);
-        let portal = bind_portal(&users, statement, params).await?;
-        Ok(ResultSet::new(columns(statement), fetch_capped(&users, &portal).await?))
+    async fn fetch_in_own_transaction(&mut self, statement: &Prepared, params: &Params) -> Result<ResultSet> {
+        let transaction = self.client.transaction().await.map_err(server_error)?;
+        let portal = bind_portal(&transaction, statement, params).await?;
+        let first = fetch_capped(&transaction, &portal).await?;
+        transaction.commit().await.map_err(server_error)?;
+        Ok(ResultSet::new(columns(statement), first))
+    }
+
+    /// A cursor of SQL, since the driver binds a portal only in a transaction handle of its own, whose start or drop
+    /// would roll the user's back.
+    async fn fetch_through_cursor(&self, statement: &Prepared, admitted: &Admitted) -> Result<ResultSet> {
+        let declare = format!("DECLARE {CURSOR} NO SCROLL CURSOR FOR {}", admitted.statement.as_str());
+        let declare = self.client.prepare_typed(&declare, statement.params()).await.map_err(server_error)?;
+        self.client.execute_raw(&declare, bind::as_text(&admitted.params)).await.map_err(server_error)?;
+        let fetch = format!("FETCH FORWARD {} FROM {CURSOR}", CAPPED_FETCH.rows());
+        let rows = self.client.query_raw(&fetch, std::iter::empty::<&str>()).await.map_err(server_error)?;
+        let first = first_rows(rows).await?;
+        self.client.batch_execute(&format!("CLOSE {CURSOR}")).await.map_err(server_error)?;
+        Ok(ResultSet::new(columns(statement), first))
     }
 
     /// Whether a `BEGIN` the user ran left a transaction open, asking the server only when the session is unsure.
@@ -267,8 +296,12 @@ mod tests {
         assert_eq!((result.rows().len(), result.is_whole()), (ROW_CAP, false));
     }
 
+    async fn try_on(session: &mut Session, sql: &str) -> Result<ResultSet> {
+        session.run(&guard::admit(Statement::new(sql), Params::default(), WritePolicy::Allowed).unwrap()).await
+    }
+
     async fn run_on(session: &mut Session, sql: &str) -> ResultSet {
-        session.run(&guard::admit(Statement::new(sql), Params::default(), WritePolicy::Allowed).unwrap()).await.unwrap()
+        try_on(session, sql).await.unwrap()
     }
 
     #[tokio::test]
@@ -408,6 +441,89 @@ mod tests {
         let admitted = guard::admit(Statement::new("SELECT 1"), Params::default(), WritePolicy::Allowed).unwrap();
         let err = writer.run(&admitted).await.unwrap_err();
         assert!(err.to_string().contains("current transaction is aborted"), "{err}");
+    }
+
+    /// Runs, on a fresh `table`, the user's `BEGIN`, an insert, a statement that fails, two selects, a second insert
+    /// and the user's `COMMIT`; gives the rows the table keeps and the state the server leaves the session in.
+    async fn kept_after_a_failed_transaction_of_the_user(table: &str) -> (Vec<Vec<Value>>, Vec<Vec<Value>>) {
+        run(WritePolicy::Allowed, &format!("DROP TABLE IF EXISTS {table}")).await.unwrap();
+        run(WritePolicy::Allowed, &format!("CREATE TABLE {table} (id int)")).await.unwrap();
+        let mut writer = session(WritePolicy::Allowed).await;
+        let pid = run_on(&mut writer, "SELECT pg_backend_pid()").await.rows()[0][0].to_string();
+        run_on(&mut writer, "BEGIN").await;
+        run_on(&mut writer, &format!("INSERT INTO {table} VALUES (1)")).await;
+        let select = format!("SELECT id FROM {table}");
+        for sql in ["SELECT 1 / 0", &select, &select, &format!("INSERT INTO {table} VALUES (2)")] {
+            assert!(try_on(&mut writer, sql).await.is_err(), "{sql}");
+        }
+        run_on(&mut writer, "COMMIT").await;
+        let kept = run(WritePolicy::ReadOnly, &format!("SELECT id FROM {table}")).await.unwrap().rows().to_vec();
+        let state = run(WritePolicy::ReadOnly, &format!("SELECT state FROM pg_stat_activity WHERE pid = {pid}")).await.unwrap();
+        (kept, state.rows().to_vec())
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_transaction_of_the_user_that_failed_keeps_nothing_once_committed() {
+        assert_eq!(kept_after_a_failed_transaction_of_the_user("orders_failed").await.0, Vec::<Vec<Value>>::new());
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_commit_of_a_transaction_of_the_user_that_failed_leaves_none_open() {
+        let (_, state) = kept_after_a_failed_transaction_of_the_user("orders_failed_ended").await;
+        assert_eq!(state, [[Value::Text("idle".into())]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_result_read_inside_a_failed_transaction_of_the_user_never_ends_it() {
+        run(WritePolicy::Allowed, "DROP TABLE IF EXISTS orders_still_failed").await.unwrap();
+        run(WritePolicy::Allowed, "CREATE TABLE orders_still_failed (id int)").await.unwrap();
+        let mut writer = session(WritePolicy::Allowed).await;
+        run_on(&mut writer, "BEGIN").await;
+        run_on(&mut writer, "INSERT INTO orders_still_failed VALUES (1)").await;
+        let select = guard::admit(Statement::new("SELECT id FROM orders_still_failed"), Params::default(), WritePolicy::Allowed).unwrap();
+        let prepared = bind::prepare(&writer.client, &select).await.unwrap();
+        assert!(try_on(&mut writer, "SELECT 1 / 0").await.is_err());
+        assert!(writer.fetch_through_cursor(&prepared, &select).await.is_err());
+        assert!(try_on(&mut writer, "INSERT INTO orders_still_failed VALUES (2)").await.is_err());
+        run_on(&mut writer, "COMMIT").await;
+        let kept = run(WritePolicy::ReadOnly, "SELECT id FROM orders_still_failed").await.unwrap();
+        assert_eq!(kept.rows(), Vec::<Vec<Value>>::new());
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_read_inside_a_transaction_of_the_user_binds_its_values() {
+        let mut writer = session(WritePolicy::Allowed).await;
+        run_on(&mut writer, "BEGIN").await;
+        let params = Params::new(vec![Some(ParamValue::new("41"))], vec![]);
+        let admitted = guard::admit(Statement::new("SELECT $1::int4 + 1"), params, WritePolicy::Allowed).unwrap();
+        assert_eq!(writer.run(&admitted).await.unwrap().rows(), [[Value::Int(42)]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_with_that_changes_rows_inside_a_transaction_of_the_user_returns_them() {
+        run(WritePolicy::Allowed, "DROP TABLE IF EXISTS orders_moved").await.unwrap();
+        run(WritePolicy::Allowed, "CREATE TABLE orders_moved (id int)").await.unwrap();
+        let mut writer = session(WritePolicy::Allowed).await;
+        run_on(&mut writer, "BEGIN").await;
+        let moved = run_on(&mut writer, "WITH added AS (INSERT INTO orders_moved VALUES (7) RETURNING id) SELECT id FROM added").await;
+        assert_eq!(moved.rows(), [[Value::Int(7)]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_procedure_with_an_inout_parameter_that_commits_runs_when_writes_are_allowed() {
+        run(WritePolicy::Allowed, "DROP TABLE IF EXISTS orders_counted").await.unwrap();
+        run(WritePolicy::Allowed, "CREATE TABLE orders_counted (id int)").await.unwrap();
+        let procedure = "CREATE OR REPLACE PROCEDURE count_orders(INOUT total int) LANGUAGE plpgsql AS $$ \
+                         BEGIN INSERT INTO orders_counted VALUES (1); COMMIT; SELECT count(*) INTO total FROM orders_counted; END $$";
+        run(WritePolicy::Allowed, procedure).await.unwrap();
+        let result = run(WritePolicy::Allowed, "CALL count_orders(NULL)").await.unwrap();
+        assert_eq!(result.rows(), [[Value::Int(1)]]);
     }
 
     async fn after_the_user_ends(ending: &str) -> UserTransaction {

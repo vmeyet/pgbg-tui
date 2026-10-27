@@ -35,8 +35,8 @@ const EXPLAIN_OPTIONS: [&str; 23] = [
     "NONE",
     "BINARY",
 ];
-/// What `EXPLAIN ANALYZE`, which runs the statement it explains, may run.
-const EXPLAINED_READS: [&str; 4] = ["SELECT", "WITH", "VALUES", "TABLE"];
+/// The reads that are queries: what `EXPLAIN` may explain, since with `ANALYZE` it runs it, and what a cursor holds.
+const QUERIES: [&str; 4] = ["SELECT", "WITH", "VALUES", "TABLE"];
 /// Row locks a `SELECT` takes; `FOR UPDATE` is caught by `UPDATE` already.
 const LOCKS: [[&str; 2]; 2] = [["FOR", "SHARE"], ["KEY", "SHARE"]];
 
@@ -47,6 +47,8 @@ pub(crate) struct Admitted {
     pub(super) params: Params,
     pub(super) mode: Mode,
     pub(super) transaction_step: TransactionStep,
+    /// A query the guard reads as changing nothing, so a cursor can hold it.
+    pub(super) is_query: bool,
 }
 
 /// What a statement does to a transaction the user began, read from its first words; the server's answer to it
@@ -92,7 +94,8 @@ pub(crate) fn admit(statement: Statement, params: Params, writes: WritePolicy) -
         WritePolicy::ReadOnly => check_read(&tokens, &words).map(|()| (Mode::ReadOnly, TransactionStep::Keeps))?,
     };
     check_params(&tokens, &params)?;
-    Ok(Admitted { statement, params, mode, transaction_step })
+    let is_query = words.first().is_some_and(|first| QUERIES.contains(first)) && check_read(&tokens, &words).is_ok();
+    Ok(Admitted { statement, params, mode, transaction_step, is_query })
 }
 
 /// The words of `tokens` out of `sql`, in upper case as the guard's lists write them; PostgreSQL folds ASCII only.
@@ -192,12 +195,12 @@ fn holds_more_than_one_statement(tokens: &[Placed]) -> bool {
     after_first_end.any(|placed| placed.token != Token::End)
 }
 
-/// The words of the statement `EXPLAIN` explains, past its options; with `ANALYZE` it runs, so it must be a read.
+/// The words of the statement `EXPLAIN` explains, past its options; it must be a read whatever the options, since a
+/// quoted `"analyze"` is no word and still runs it.
 fn explained<'a, 'w>(words: &'a [&'w str]) -> Result<&'a [&'w str], Refusal> {
-    let (options, statement) = words.split_at(words.iter().take_while(|word| EXPLAIN_OPTIONS.contains(word)).count());
-    let runs = options.iter().any(|option| matches!(*option, "ANALYZE" | "ANALYSE"));
+    let statement = &words[words.iter().take_while(|word| EXPLAIN_OPTIONS.contains(word)).count()..];
     match statement.first() {
-        Some(first) if runs && !EXPLAINED_READS.contains(first) => Err(Refusal::Write((*first).to_owned())),
+        Some(first) if !QUERIES.contains(first) => Err(Refusal::Write((*first).to_owned())),
         _ => Ok(statement),
     }
 }
@@ -302,6 +305,21 @@ mod tests {
     fn an_explain_analyze_of_what_is_not_a_read_is_refused() {
         assert_eq!(refused_word("EXPLAIN ANALYZE EXECUTE close_orders"), "EXECUTE");
         assert_eq!(refused_word("EXPLAIN (ANALYZE) CREATE TABLE orders_copy AS SELECT 1"), "CREATE");
+    }
+
+    #[test]
+    fn an_explain_analyze_with_its_option_quoted_or_spelt_otherwise_explains_a_read_only() {
+        assert_eq!(refused_word("EXPLAIN (\"analyze\") CREATE TABLE orders_copy AS SELECT 1"), "CREATE");
+        assert_eq!(refused_word("EXPLAIN (\"analyze\" true, \"format\" 'json') CREATE TABLE orders_copy AS SELECT 1"), "CREATE");
+        assert_eq!(refused_word("EXPLAIN (ANALYSE 1) CREATE TABLE orders_copy AS SELECT 1"), "CREATE");
+        assert_eq!(refused_word("EXPLAIN (analyze 'on') EXECUTE close_orders"), "EXECUTE");
+        assert_eq!(verdict("EXPLAIN (\"analyze\", \"format\" 'json') SELECT * FROM orders"), Ok(Mode::ReadOnly));
+    }
+
+    #[test]
+    fn an_explain_without_analyze_explains_a_read_only() {
+        assert_eq!(refused_word("EXPLAIN CREATE TABLE orders_copy AS SELECT 1"), "CREATE");
+        assert_eq!(refused_word("EXPLAIN (FORMAT JSON) EXECUTE close_orders"), "EXECUTE");
     }
 
     #[test]

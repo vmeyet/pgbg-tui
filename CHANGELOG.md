@@ -124,6 +124,9 @@ Each entry says what changed, then where, then how to use it.
 
 - **Reading the schema no longer fails with `could not open relation with OID`** when another session drops a table during the read, in the TUI's sidebar and `pgbg schema`.
   pgbg names plain index columns from its own snapshot, and reads once more if an expression index still loses the race.
+- **A result read inside your own transaction never ends it**, on a connection that allows writes: pgbg reads the first 10 000 rows of a query through a cursor there, so a transaction that failed stays failed until your `COMMIT` or `ROLLBACK`, as in `psql`.
+- **A `CALL` that commits inside its procedure runs** on a connection that allows writes, `INOUT` parameters included; it failed with `invalid transaction termination`.
+- **`EXPLAIN` only ever explains a read**, whatever its options say: `EXPLAIN ("analyze") CREATE TABLE ... AS ...` is refused on a read-only connection, as the unquoted form was.
 - **A string reads the same to pgbg's guard and to the server**: every read-only transaction sets `standard_conforming_strings = on`, and a connection that allows writes sets it for its session, so a server set otherwise cannot hide part of a statement inside what pgbg took for a string.
 - **A character outside ASCII, a no-break space included, is part of a word**, as PostgreSQL reads it, where pgbg took some for blanks.
 - **`⇧⇥`** now moves back a field in the connection form on terminals that report it with `shift` held, as most do.
