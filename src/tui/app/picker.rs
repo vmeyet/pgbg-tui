@@ -121,17 +121,22 @@ impl App {
     /// Shows the sheet of `connection`, starting one and opening its session when it has none, or when it failed or
     /// was closed.
     fn show(&mut self, connection: Connection) -> Vec<Action> {
-        if let Some(open) = self.sheets.iter().position(|sheet| sheet.name() == connection.name()) {
-            self.shown = open;
-            if !matches!(self.sheet().session, SessionState::Failed(_) | SessionState::Closed) {
-                return vec![];
+        let Some(open) = self.sheets.iter().position(|sheet| sheet.name() == connection.name()) else {
+            let session = self.new_session();
+            self.sheets.push(Sheet::new(&connection, session));
+            self.shown = self.sheets.len() - 1;
+            return vec![Action::Open { connection, session }];
+        };
+        self.shown = open;
+        match self.sheet().session {
+            SessionState::Failed(_) => self.sheet_mut().session = SessionState::Opening,
+            SessionState::Closed => {
+                let session = self.new_session();
+                self.sheet_mut().reopen(connection.clone(), session);
             }
-            self.sheet_mut().session = SessionState::Opening;
-            return vec![Action::Open(connection)];
+            SessionState::Opening | SessionState::Open => return vec![],
         }
-        self.sheets.push(Sheet::new(&connection));
-        self.shown = self.sheets.len() - 1;
-        vec![Action::Open(connection)]
+        vec![Action::Open { connection, session: self.sheet().session_id }]
     }
 
     /// Forgets the sheet of `name`, which is not the one on screen.
@@ -171,12 +176,17 @@ impl App {
     fn reopen_changed(&mut self, connections: &[Connection]) -> Vec<Action> {
         let changed =
             |sheet: &Sheet| connections.iter().find(|c| c.name() == sheet.name()).filter(|&now| *now != sheet.connection).cloned();
-        let reopen = |sheet: &mut Sheet| {
-            let now = changed(sheet)?;
-            sheet.reopen(now.clone());
-            Some(Action::Reopen(now))
-        };
-        self.sheets.iter_mut().filter_map(reopen).collect()
+        let reopened: Vec<Connection> = self.sheets.iter().filter_map(changed).collect();
+        reopened.into_iter().map(|now| self.reopen(now)).collect()
+    }
+
+    /// Opens a new session on the sheet of `connection`, as the config now says.
+    fn reopen(&mut self, connection: Connection) -> Action {
+        let session = self.new_session();
+        if let Some(sheet) = self.sheet_of_mut(connection.name()) {
+            sheet.reopen(connection.clone(), session);
+        }
+        Action::Reopen { connection, session }
     }
 
     /// Says why the change `id` did not happen: in the form that sent it, which takes back the password it typed, else
@@ -208,7 +218,7 @@ fn on_screen(name: &ConnectionName) -> Note {
 #[cfg(test)]
 pub(in crate::tui) mod tests {
     use super::super::tests::orders;
-    use super::super::{Answer, ConfigAnswer, Incoming, QueryAnswer, Run, RunId, SessionState};
+    use super::super::{Answer, ConfigAnswer, Incoming, QueryAnswer, Run, RunId, SessionId, SessionState};
     use super::*;
     use crate::connection::WritePolicy;
     use crate::db::model::Statement;
@@ -280,7 +290,7 @@ pub(in crate::tui) mod tests {
     fn picking_a_connection_not_yet_open_shows_it_and_opens_its_session() {
         let mut app = on_local();
         let actions = switch_to(&mut app, "prod");
-        assert!(matches!(&*actions, [Action::Open(prod)] if prod.name() == &name("prod")), "{actions:?}");
+        assert!(matches!(&*actions, [Action::Open { connection: prod, .. }] if prod.name() == &name("prod")), "{actions:?}");
         assert_eq!((app.sheet().name(), &app.sheet().session, app.overlay.is_none()), (&name("prod"), &SessionState::Opening, true));
     }
 
@@ -291,6 +301,7 @@ pub(in crate::tui) mod tests {
         key(&mut app, KeyCode::Enter);
         app.apply(Answer::Session {
             connection: name("local"),
+            session: SessionId::FIRST,
             incoming: Incoming::Result { run: RunId::FIRST, result: orders(), took: Duration::ZERO },
         });
         switch_to(&mut app, "prod");
@@ -308,6 +319,7 @@ pub(in crate::tui) mod tests {
         switch_to(&mut app, "prod");
         app.apply(Answer::Session {
             connection: name("local"),
+            session: SessionId::FIRST,
             incoming: Incoming::Result { run: RunId::FIRST, result: orders(), took: Duration::ZERO },
         });
         assert_eq!(app.sheet().run, Run::Idle);
@@ -381,10 +393,11 @@ pub(in crate::tui) mod tests {
     fn picking_a_connection_whose_session_failed_opens_it_again() {
         let mut app = on_local();
         switch_to(&mut app, "prod");
-        app.apply(Answer::Session { connection: name("prod"), incoming: Incoming::NotOpened("no route".into()) });
+        let session = app.sheet().session_id;
+        app.apply(Answer::Session { connection: name("prod"), session, incoming: Incoming::NotOpened("no route".into()) });
         switch_to(&mut app, "local");
         let actions = switch_to(&mut app, "prod");
-        assert!(matches!(&*actions, [Action::Open(prod)] if prod.name() == &name("prod")), "{actions:?}");
+        assert!(matches!(&*actions, [Action::Open { connection: prod, .. }] if prod.name() == &name("prod")), "{actions:?}");
         assert_eq!(app.sheet().session, SessionState::Opening);
     }
 
@@ -481,7 +494,7 @@ pub(in crate::tui) mod tests {
         let mut app = on_prod_with_local_open();
         ctrl(&mut app, 'x');
         let local = app.connections[0].clone();
-        assert_eq!(key(&mut app, KeyCode::Enter), [Action::Open(local)]);
+        assert!(matches!(&*key(&mut app, KeyCode::Enter), [Action::Open { connection, .. }] if *connection == local));
         assert_eq!(app.sheet().session, SessionState::Opening);
     }
 
@@ -489,8 +502,19 @@ pub(in crate::tui) mod tests {
     fn a_late_word_from_a_session_closed_with_ctrl_x_leaves_it_closed() {
         let mut app = on_prod_with_local_open();
         ctrl(&mut app, 'x');
-        app.apply(Answer::Session { connection: name("local"), incoming: Incoming::Opened });
+        app.apply(Answer::Session { connection: name("local"), session: SessionId::FIRST, incoming: Incoming::Opened });
         assert_eq!(app.sheet_of(&name("local")).map(|sheet| &sheet.session), Some(&SessionState::Closed));
+    }
+
+    #[test]
+    fn words_of_a_session_closed_with_ctrl_x_never_reach_the_one_opened_after_it() {
+        let mut app = on_prod_with_local_open();
+        let closed = app.sheet_of(&name("local")).unwrap().session_id;
+        ctrl(&mut app, 'x');
+        key(&mut app, KeyCode::Enter);
+        app.apply(Answer::Session { connection: name("local"), session: closed, incoming: Incoming::Opened });
+        app.apply(Answer::Session { connection: name("local"), session: closed, incoming: Incoming::Closed("gone".into()) });
+        assert_eq!(app.sheet().session, SessionState::Opening);
     }
 
     #[test]
@@ -517,7 +541,9 @@ pub(in crate::tui) mod tests {
         let prod =
             named("prod", "tier = \"production\"\nurl = \"postgres://nina@db.example.com/shop?sslmode=require\"\nwrites = \"allowed\"\n");
         let actions = app.apply(Answer::Config { id: ConfigChangeId::FIRST, answer: ConfigAnswer::Changed(vec![prod.clone()]) });
-        assert_eq!(actions, [Action::Close(name("local")), Action::Reopen(prod)]);
+        assert!(
+            matches!(&*actions, [Action::Close(local), Action::Reopen { connection, .. }] if *local == name("local") && *connection == prod)
+        );
         assert_eq!(app.sheet().connection.writes(), WritePolicy::Allowed);
         assert_eq!(app.connections.len(), 1);
     }

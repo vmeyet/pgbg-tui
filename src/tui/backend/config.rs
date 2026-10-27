@@ -17,7 +17,7 @@ pub(in crate::tui) struct ConfigFile {
 /// One change of the config, waiting for the one before it.
 enum Change {
     Remove { id: ConfigChangeId, name: ConnectionName },
-    Save(SaveConnection),
+    Save(Box<SaveConnection>),
 }
 
 impl ConfigFile {
@@ -38,7 +38,7 @@ impl ConfigFile {
     /// `pgbg password set` does, so a change the config refuses never touches the keychain; an edit that names a new
     /// item then deletes the old one no other connection names.
     pub(super) fn save(&self, save: SaveConnection) {
-        self.queue(Change::Save(save));
+        self.queue(Change::Save(Box::new(save)));
     }
 
     fn queue(&self, change: Change) {
@@ -69,7 +69,7 @@ impl Change {
     fn made(self, path: &Path) -> ConfigAnswer {
         match self {
             Self::Remove { name, .. } => changed(path, |path| remove(path, &name)),
-            Self::Save(save) => save_answer(path, save, &Keychain::PGBG),
+            Self::Save(save) => save_answer(path, *save, &Keychain::PGBG),
         }
     }
 }

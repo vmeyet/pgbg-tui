@@ -50,7 +50,7 @@ pub(crate) async fn run(connections: Vec<Connection>, first: Connection, config:
     let mut app = App::new(connections, &first, theme);
     let (answers, mut incoming) = mpsc::unbounded_channel();
     let mut backend = Backend::new(find_roots().await?, config, answers).with_history(Store::from_env());
-    for action in std::iter::once(Action::Open(first)).chain(App::start()) {
+    for action in app.start() {
         backend.dispatch(action);
     }
     let (mut terminal, screen) = Screen::enter();

@@ -1,5 +1,5 @@
 //! What the runner calls: a session for each connection opened, each served by a task that owns it, and the saved queries.
-use super::app::{Action, Answer, Incoming, RunId, TunnelState};
+use super::app::{Action, Answer, Incoming, RunId, SessionId, TunnelState};
 use crate::connection::{Connection, ConnectionName, WritePolicy};
 use crate::db::model::{CancelToken, ServerError, Statement};
 use crate::db::{NotOpened, Opened, Pages, Session, Started, TunnelStep, guard, open_along};
@@ -47,9 +47,10 @@ pub(super) struct Backend {
     idle_limit: Duration,
 }
 
-/// The way to one session task: jobs and cancels in.
+/// The way to one session task, which serves the session `session`: jobs and cancels in.
 #[derive(Debug)]
 struct SessionLink {
+    session: SessionId,
     jobs: UnboundedSender<Job>,
     cancels: UnboundedSender<RunId>,
     /// What the task has on the server and no cancel reached yet, shared with the task; an abort cancels it first.
@@ -97,9 +98,9 @@ impl Backend {
     /// Hands `action` over without waiting on it; the loop never awaits the database.
     pub(super) fn dispatch(&mut self, action: Action) {
         match action {
-            Action::Open(connection) => self.open(connection),
+            Action::Open { connection, session } => self.open(connection, session),
             Action::Run { connection, run, statement } => self.run(&connection, run, statement),
-            Action::NextPage { connection, run } => self.next_page(&connection, run),
+            Action::NextPage { connection, session, run } => self.next_page(&connection, session, run),
             Action::Cancel { connection, run } => self.cancel(&connection, run),
             Action::ListQueries => self.queries.list(),
             Action::OpenQuery { connection, query } => self.queries.open(connection, query),
@@ -109,9 +110,9 @@ impl Backend {
                 tracing::warn!("{} goes to the loop, which lends the terminal, not to the backend", query.path);
             }
             Action::Close(connection) => self.close(&connection),
-            Action::Reopen(connection) => {
+            Action::Reopen { connection, session } => {
                 self.close(connection.name());
-                self.open(connection);
+                self.open(connection, session);
             }
             Action::RemoveConnection { id, connection } => self.config.remove(id, connection),
             Action::SaveConnection(save) => self.config.save(save),
@@ -140,18 +141,20 @@ impl Backend {
         }
     }
 
-    /// Starts the task that opens a session on `connection`, or asks the one that serves it to open it again unless it is open.
-    fn open(&mut self, connection: Connection) {
-        if let Some(session) = self.sessions.get(connection.name()) {
-            session.send(Job::Open);
-            return;
+    /// Starts the task that opens the session `session` on `connection`, or asks the one that serves it to open it again
+    /// unless it is open; a task serving an older session of `connection` stops first.
+    fn open(&mut self, connection: Connection, session: SessionId) {
+        match self.sessions.get(connection.name()) {
+            Some(link) if link.session == session => return link.send(Job::Open),
+            Some(_) => self.close(connection.name()),
+            None => {}
         }
         let name = connection.name().clone();
         let (cancels, cancelled) = mpsc::unbounded_channel();
         let (on_server, running) = watch::channel(None);
         let (answers, history, idle_limit) = (self.answers.clone(), self.history.clone(), self.idle_limit);
         let on_server = OnServer(on_server);
-        let task = SessionTask { connection, tunnel: None, session: None, cancelled, on_server, answers, history, idle_limit };
+        let task = SessionTask { connection, id: session, tunnel: None, session: None, cancelled, on_server, answers, history, idle_limit };
         _ = self.sessions.insert(name, SessionLink::start(task, cancels, running));
     }
 
@@ -165,9 +168,9 @@ impl Backend {
     }
 
     /// Asks the session of `connection` for the next page of `run`; nothing comes when its portal is closed.
-    fn next_page(&self, connection: &ConnectionName, run: RunId) {
-        if let Some(session) = self.sessions.get(connection) {
-            session.send(Job::NextPage { run });
+    fn next_page(&self, connection: &ConnectionName, session: SessionId, run: RunId) {
+        if let Some(link) = self.sessions.get(connection).filter(|link| link.session == session) {
+            link.send(Job::NextPage { run });
         }
     }
 
@@ -191,7 +194,7 @@ impl SessionLink {
     /// `running` says what it has on the server.
     fn start(task: SessionTask, cancels: UnboundedSender<RunId>, running: watch::Receiver<Option<CancelToken>>) -> Self {
         let (jobs, queue) = mpsc::unbounded_channel();
-        Self { jobs, cancels, running, task: tokio::spawn(task.serve(queue)) }
+        Self { session: task.id, jobs, cancels, running, task: tokio::spawn(task.serve(queue)) }
     }
 
     /// Queues `job` behind the one running.
@@ -212,7 +215,7 @@ impl SessionLink {
     /// past it, the server is asked to cancel a statement or a page whose cancel did not reach it, and the task is
     /// aborted, which cuts the session's link.
     async fn stop(self) {
-        let Self { jobs, cancels, running, mut task } = self;
+        let Self { jobs, cancels, running, mut task, .. } = self;
         drop((jobs, cancels));
         match tokio::time::timeout(STOP_WAIT, &mut task).await {
             Ok(Ok(())) => {}
@@ -241,6 +244,8 @@ enum Woken {
 /// The task that owns the session and its tunnel: it opens them, runs each statement in turn, and says when they are lost.
 struct SessionTask {
     connection: Connection,
+    /// Which session of the connection this task serves, on every answer it sends.
+    id: SessionId,
     tunnel: Option<Tunnel>,
     session: Option<Session>,
     cancelled: UnboundedReceiver<RunId>,
@@ -331,8 +336,9 @@ impl SessionTask {
     /// Opens the session along the tunnel kept, or one started again, as `pgbg run` does; the tunnel stays for the
     /// next try when the login fails, and its state goes out as it changes.
     async fn connect(&mut self) -> Result<Session, String> {
-        let (answers, name) = (&self.answers, self.connection.name());
-        let on_tunnel = |step| send(answers, Answer::Session { connection: name.clone(), incoming: Incoming::Tunnel(tunnel_state(step)) });
+        let (answers, name, id) = (&self.answers, self.connection.name(), self.id);
+        let on_tunnel =
+            |step| send(answers, Answer::Session { connection: name.clone(), session: id, incoming: Incoming::Tunnel(tunnel_state(step)) });
         match open_along(&self.connection, self.tunnel.take(), on_tunnel).await {
             Ok(Opened { session, tunnel }) => {
                 self.tunnel = tunnel;
@@ -385,13 +391,14 @@ impl SessionTask {
                 run_until_answered(session, self.connection.writes(), queued, &mut self.cancelled, &self.on_server).await;
             let took_ms = u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX);
             record(self.history.as_ref(), Entry { statement, connection: self.connection.name().clone(), started_at, took_ms, outcome });
-            send(&self.answers, Answer::Session { connection: self.connection.name().clone(), incoming });
+            send(&self.answers, Answer::Session { connection: self.connection.name().clone(), session: self.id, incoming });
             if let Some(pages) = rest {
                 let tunnel = self.tunnel.as_mut();
-                let (connection, answers, idle_limit, on_server) =
-                    (self.connection.name(), &self.answers, self.idle_limit, &self.on_server);
+                let (connection, session, answers, idle_limit, on_server) =
+                    (self.connection.name(), self.id, &self.answers, self.idle_limit, &self.on_server);
                 let cancelled = &mut self.cancelled;
-                serve_pages(Paging { pages, run, token, queue, cancelled, on_server, tunnel, connection, answers, idle_limit }).await
+                let paging = Paging { pages, run, token, queue, cancelled, on_server, tunnel, connection, session, answers, idle_limit };
+                serve_pages(paging).await
             } else {
                 None
             }
@@ -431,7 +438,7 @@ impl SessionTask {
     }
 
     fn send(&self, incoming: Incoming) {
-        send(&self.answers, Answer::Session { connection: self.connection.name().clone(), incoming });
+        send(&self.answers, Answer::Session { connection: self.connection.name().clone(), session: self.id, incoming });
     }
 }
 
@@ -577,7 +584,7 @@ mod tests {
     fn started_on(connection: Connection) -> (Backend, UnboundedReceiver<Answer>) {
         let (sender, answers) = mpsc::unbounded_channel();
         let mut backend = Backend::new(Roots::default(), PathBuf::from("config.toml"), sender);
-        backend.open(connection);
+        backend.open(connection, SessionId::FIRST);
         (backend, answers)
     }
 
@@ -658,7 +665,7 @@ mod tests {
         );
         let (mut backend, mut answers) = started_on(shop.clone());
         answers_until(&mut answers, |answer| matches!(answer, Incoming::NotOpened(_))).await;
-        backend.open(shop);
+        backend.open(shop, SessionId::FIRST);
         let again = answers_until(&mut answers, |answer| matches!(answer, Incoming::NotOpened(_))).await;
         assert_eq!(again[0], Incoming::Tunnel(TunnelState::Starting));
     }
@@ -747,10 +754,10 @@ mod tests {
     async fn an_answer_names_the_connection_whose_session_gave_it() {
         let (mut backend, mut answers) = started();
         let copy = fixtures::test_database_as("shop-copy");
-        backend.open(copy.clone());
+        backend.open(copy.clone(), SessionId::FIRST);
         backend.run(copy.name(), RunId::FIRST, Statement::new("SELECT 1"));
         let connection = loop {
-            if let Answer::Session { connection, incoming: Incoming::Result { .. } } = answers.recv().await.unwrap() {
+            if let Answer::Session { connection, incoming: Incoming::Result { .. }, .. } = answers.recv().await.unwrap() {
                 break connection;
             }
         };
@@ -762,7 +769,7 @@ mod tests {
     async fn opening_a_connection_twice_keeps_its_one_session() {
         let (mut backend, mut answers) = started();
         let pid = backend_pid(&backend, &mut answers).await;
-        backend.open(connection());
+        backend.open(connection(), SessionId::FIRST);
         let again = answer_to(&backend, &mut answers, RunId::FIRST.next(), "SELECT pg_backend_pid()").await;
         assert!(matches!(again, Incoming::Result { result, .. } if result.rows()[0][0] == pid));
     }

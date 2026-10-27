@@ -3,7 +3,7 @@ use super::{Job, OnServer, Woken, cancel, ended, send};
 use crate::connection::ConnectionName;
 use crate::db::model::{CancelToken, Extent, Page};
 use crate::db::{Fetched, Pages};
-use crate::tui::app::{Answer, Incoming, RunId};
+use crate::tui::app::{Answer, Incoming, RunId, SessionId};
 use crate::tunnel::{Died, Tunnel};
 use std::pin::pin;
 use std::time::Duration;
@@ -24,6 +24,7 @@ pub(super) struct Paging<'a, 's> {
     pub(super) on_server: &'a OnServer,
     pub(super) tunnel: Option<&'a mut Tunnel>,
     pub(super) connection: &'a ConnectionName,
+    pub(super) session: SessionId,
     pub(super) answers: &'a UnboundedSender<Answer>,
     pub(super) idle_limit: Duration,
 }
@@ -52,6 +53,7 @@ enum Fetch<'s> {
 /// Where the pages of one run go.
 struct Outbox<'a> {
     connection: &'a ConnectionName,
+    session: SessionId,
     answers: &'a UnboundedSender<Answer>,
     run: RunId,
 }
@@ -67,7 +69,7 @@ impl Outbox<'_> {
     }
 
     fn say(&self, incoming: Incoming) {
-        send(self.answers, Answer::Session { connection: self.connection.clone(), incoming });
+        send(self.answers, Answer::Session { connection: self.connection.clone(), session: self.session, incoming });
     }
 
     /// Says the portal closed before its last page, so the result is cut.
@@ -80,8 +82,8 @@ impl Outbox<'_> {
 /// limit, the session closing or its link or tunnel ending; a close before the last page sends an empty `Cut` page.
 /// Returns what woke the task that the session task still has to act on.
 pub(super) async fn serve_pages(paging: Paging<'_, '_>) -> Option<Woken> {
-    let Paging { mut pages, run, token, queue, cancelled, on_server, mut tunnel, connection, answers, idle_limit } = paging;
-    let outbox = Outbox { connection, answers, run };
+    let Paging { mut pages, run, token, queue, cancelled, on_server, mut tunnel, connection, session, answers, idle_limit } = paging;
+    let outbox = Outbox { connection, session, answers, run };
     let mut deadline = Instant::now() + idle_limit;
     loop {
         let held = tokio::select! {
@@ -217,7 +219,7 @@ mod tests {
     fn started(idle_limit: Duration) -> (Backend, UnboundedReceiver<Answer>) {
         let (sender, answers) = mpsc::unbounded_channel();
         let mut backend = Backend { idle_limit, ..Backend::new(Roots::default(), PathBuf::from("config.toml"), sender) };
-        backend.open(fixtures::test_database_as("shop"));
+        backend.open(fixtures::test_database_as("shop"), SessionId::FIRST);
         (backend, answers)
     }
 
@@ -236,7 +238,7 @@ mod tests {
     }
 
     fn ask_next_page(backend: &Backend) {
-        backend.next_page(&shop(), RunId::FIRST);
+        backend.next_page(&shop(), SessionId::FIRST, RunId::FIRST);
     }
 
     async fn on_a_side_session(sql: &str) -> Vec<Vec<Value>> {
