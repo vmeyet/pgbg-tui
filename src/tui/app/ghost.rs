@@ -30,13 +30,11 @@ impl Sheet {
     /// the keywords; the first ask reads the schema.
     pub(super) fn ask_ghost(&mut self) -> Vec<Action> {
         let actions = self.want_schema_while_open();
-        let (before, under, _) = self.editor.split();
+        let (_, under, _) = self.editor.split();
         if under.starts_with(is_name_char) {
             return actions;
         }
-        let index = self.index.as_deref().unwrap_or_else(|| Index::of_keywords());
-        let ask = Ask::at(self.editor.text(), before.len());
-        self.ghost = ask.and_then(|ask| ghost_of(index, &ask));
+        self.ghost = self.ask().and_then(|asked| ghost_of(asked.index, &asked.ask));
         actions
     }
 
@@ -69,11 +67,11 @@ mod tests {
     use super::super::{Incoming, SchemaState};
     use super::*;
     use crate::db::model::Catalog;
-    use crate::fixtures::shop_schema;
+    use crate::fixtures::shop_catalog;
     use std::sync::Arc;
 
     fn indexed(app: &mut super::super::App) {
-        let catalog = Arc::new(Catalog { schema: shop_schema(), search_path: vec!["public".to_owned()], is_cut: false });
+        let catalog = Arc::new(shop_catalog());
         let index = Arc::new(Index::new(&catalog));
         app.apply(to_shop(Incoming::Schema(Ok(Arc::clone(&catalog)))));
         app.apply(to_shop(Incoming::Index { catalog, index }));

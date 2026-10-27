@@ -145,10 +145,10 @@ fn is_subsequence(query: &str, key: &str) -> bool {
 mod tests {
     use super::*;
     use crate::db::model::Catalog;
-    use crate::fixtures::shop_schema;
+    use crate::fixtures::{shop_catalog, shop_schema};
 
     fn index() -> Index {
-        Index::new(&Catalog { schema: shop_schema(), search_path: vec!["public".to_owned()], is_cut: false })
+        Index::new(&shop_catalog())
     }
 
     fn ask(marked: &str) -> Ask {
