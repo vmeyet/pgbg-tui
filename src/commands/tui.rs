@@ -7,5 +7,5 @@ pub async fn run(connection: Option<&ConnectionName>) -> Result<()> {
     let path = config::path();
     let config = super::load(&path)?;
     let first = super::pick(&config.connections, connection, &path)?;
-    crate::tui::run(config.connections, first, path, config.format).await
+    crate::tui::run(config.connections, first, path, config.format, config.ai).await
 }

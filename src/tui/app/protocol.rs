@@ -1,6 +1,6 @@
 //! The messages between the app and the backend: the actions the app asks for, and the answers that come back.
 use super::Confirmed;
-use crate::ai::{AnswerError, CommandError, Prompt};
+use crate::ai::{AnswerError, CommandError, NotSent, Prompt};
 use crate::complete::Index;
 use crate::config::{AiSettings, ConnectionChange};
 use crate::connection::{Connection, ConnectionName};
@@ -11,6 +11,7 @@ use crate::history::Entry;
 use crate::query::params::ParamInput;
 use crate::query::{Query, QueryPath};
 use crate::secret::{KeychainItem, Secret};
+use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -55,7 +56,6 @@ impl SessionId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::tui) struct AskId(u64);
 
-#[expect(dead_code, reason = "`ctrl-g` asks, the next step")]
 impl AskId {
     pub(in crate::tui) const FIRST: Self = Self(1);
 
@@ -103,10 +103,8 @@ pub(in crate::tui) enum Action {
     /// Build the text of `result` in `format` off the loop, then copy it as `Copy` does.
     CopyResult { result: ResultSet, format: Format, done: String },
     /// Ask the `[ai] command` of `settings` with `prompt`, killing the command of the ask before it.
-    #[expect(dead_code, reason = "`ctrl-g` asks, the next step")]
     Ask { ask: AskId, prompt: Prompt, settings: AiSettings },
     /// Kill the command of `ask` if it still runs; its answer never comes.
-    #[expect(dead_code, reason = "`ctrl-g` asks, the next step")]
     DropAsk(AskId),
 }
 
@@ -157,6 +155,11 @@ pub(in crate::tui) enum Answer {
 /// Why `ctrl-g` shows no answer.
 #[derive(Debug, PartialEq)]
 pub(in crate::tui) enum AskFailure {
+    /// `[ai]` names no command.
+    NoCommand,
+    /// The connection says `ai = "off"`.
+    Off,
+    NotSent(NotSent),
     Command(CommandError),
     Answer(AnswerError),
 }
@@ -245,4 +248,16 @@ pub(in crate::tui) enum TunnelState {
     Up(LocalPort),
     /// It did not start, or it stopped, and how.
     Died(String),
+}
+
+impl fmt::Display for AskFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoCommand => f.write_str("^g asks nothing: config.toml names no [ai] command"),
+            Self::Off => f.write_str("^g asks nothing: this connection says ai = \"off\""),
+            Self::NotSent(not_sent) => write!(f, "not asked: {not_sent}"),
+            Self::Command(failed) => failed.fmt(f),
+            Self::Answer(unread) => unread.fmt(f),
+        }
+    }
 }

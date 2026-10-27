@@ -165,7 +165,6 @@ impl Connection {
         self.schema
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "`ctrl-g` reads it, the next step"))]
     pub(crate) fn ai(&self) -> AiAsking {
         self.ai
     }

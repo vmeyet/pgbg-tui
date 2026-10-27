@@ -1,8 +1,8 @@
 //! Drawing: the frame in the tier's colour, the panes inside it, and the key hints under them.
 use super::app::{App, Fit, Overlay, SessionState, SidebarTab, TunnelState};
 use super::{
-    completion_view, detail_view, editor_view, finder_view, form_view, help_view, history_view, param_bar_view, picker_view, prompt_view,
-    result_view, sidebar_view, table_finder_view,
+    ask_view, completion_view, detail_view, editor_view, finder_view, form_view, help_view, history_view, param_bar_view, picker_view,
+    prompt_view, result_view, sidebar_view, table_finder_view,
 };
 use crate::act::{self, Hint, Pane};
 use crate::render::printable;
@@ -83,8 +83,10 @@ fn layout(area: Rect, has_sidebar: bool, has_params: bool) -> Areas {
 /// The session's state on the right, as wide as it needs up to half the row, and the keys that fit on the left.
 /// An open prompt takes the whole row.
 fn footer(f: &mut Frame<'_>, app: &App, area: Rect) {
-    if let Some(Overlay::Prompt(prompt)) = app.overlay() {
-        return prompt_view::draw(f, app, prompt, area);
+    match app.overlay() {
+        Some(Overlay::Prompt(prompt)) => return prompt_view::draw(f, app, prompt, area),
+        Some(Overlay::Ask(step)) => return ask_view::footer(f, app, step, area),
+        _ => {}
     }
     let status = status(app, usize::from(area.width / STATUS_SHARE_OF_ROW));
     let status_columns = u16::try_from(status.width()).unwrap_or(area.width);
@@ -120,6 +122,9 @@ fn hint_text(hint: Hint) -> [String; 2] {
 fn status(app: &App, width: usize) -> Line<'static> {
     if let Some(why) = app.config_failure() {
         return failure(app, why, width);
+    }
+    if let Some(why) = app.ask_failure() {
+        return failure(app, &why.to_string(), width);
     }
     if let Some(note) = app.note() {
         return Line::styled(truncate(&format!("✓ {} ", printable(note)), width), Style::default().fg(app.theme().muted));

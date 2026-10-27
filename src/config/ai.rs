@@ -60,6 +60,16 @@ pub(super) fn read(table: AiTable, connections: &[Connection]) -> Result<ReadAi>
     Ok(ReadAi { settings: Some(AiSettings { command, env, timeout, literals }), warnings })
 }
 
+impl AiSettings {
+    /// These settings without the variables a password of `connections` names: a connection added or changed since the
+    /// config loaded may name one.
+    pub(crate) fn without_passwords_of(&self, connections: &[Connection]) -> Self {
+        let passwords = password_variables(connections);
+        let env = self.env.iter().filter(|name| !passwords.contains(name.as_str())).cloned().collect();
+        Self { env, ..self.clone() }
+    }
+}
+
 fn password_variables(connections: &[Connection]) -> BTreeSet<&str> {
     connections
         .iter()
@@ -187,6 +197,13 @@ mod tests {
         );
         let read = settings("command = [\"llm\"]\nenv = [\"SHOP_TOKEN\"]", &[shop]).unwrap();
         assert!(read.warnings.is_empty(), "{:?}", read.warnings);
+    }
+
+    #[test]
+    fn a_variable_a_password_names_since_the_config_loaded_is_left_out() {
+        let read = settings("command = [\"llm\"]\nenv = [\"SHOP_PGPASSWORD\", \"OPENAI_API_KEY\"]", &[]).unwrap().settings.unwrap();
+        let now = read.without_passwords_of(&[shop_with_password_in("SHOP_PGPASSWORD")]);
+        assert_eq!(now.env, ["PATH", "HOME", "LANG", "TERM", "OPENAI_API_KEY"]);
     }
 
     #[test]

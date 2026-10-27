@@ -51,6 +51,7 @@ pub(crate) enum Act {
     Preview,
     Insert,
     FindTable,
+    Ask,
 }
 
 impl Act {
@@ -108,6 +109,12 @@ pub(crate) enum Pane {
     CopyAs,
     /// The `ctrl-space` list of names at the cursor: while open it takes every key.
     Completion,
+    /// The `ctrl-g` instruction on the footer line: while open it takes every key.
+    Instruction,
+    /// An ask waiting on the `[ai] command`: while it waits it takes every key.
+    Asking,
+    /// The `[ai] command`'s answer: while shown it takes every key.
+    Answer,
 }
 
 /// Keys as the help or the footer writes them, and what they do in a few words.
@@ -166,6 +173,7 @@ pub(crate) const ROWS: &[Row] = &[
     .footer("⌥⏎", "new line"),
     row(Act::TakeGhost, Pane::Editor, &[key(KeyCode::Right)]).help("→", "take the faded rest of the name"),
     row(Act::Complete, Pane::Editor, &[control(' ')]).help("^space", "list the names that fit here"),
+    row(Act::Ask, Pane::Editor, &[control('g')]).help("^g", "ask the [ai] command for SQL"),
     row(Act::Run, Pane::Params, &[key(KeyCode::Enter)]).help("⏎", "run the statement with these values").footer("⏎", "run"),
     row(Act::Down, Pane::Params, &[key(KeyCode::Tab)]).help("⇥ ⇧⇥", "next, previous parameter").footer("⇥", "next"),
     row(Act::Up, Pane::Params, &[key(KeyCode::BackTab)]),
@@ -260,6 +268,13 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Open, Pane::Completion, &[key(KeyCode::Enter), key(KeyCode::Tab)]).help("⏎ ⇥", "take the name").footer("⏎", "takes"),
     row(Act::Close, Pane::Completion, &[key(KeyCode::Esc)]).help("esc", "close the list").footer("esc", "closes"),
     row(Act::Quit, Pane::Completion, &[control('c')]).help("^c", "quit"),
+    row(Act::Open, Pane::Instruction, &[key(KeyCode::Enter)]).help("⏎", "send the instruction").footer("⏎", "ask"),
+    row(Act::Close, Pane::Instruction, &[key(KeyCode::Esc)]).help("esc", "ask nothing").footer("esc", "cancel"),
+    row(Act::Quit, Pane::Instruction, &[control('c')]).help("^c", "quit"),
+    row(Act::Close, Pane::Asking, &[key(KeyCode::Esc)]).help("esc", "stop the command").footer("esc", "stop"),
+    row(Act::Quit, Pane::Asking, &[control('c')]).help("^c", "quit"),
+    row(Act::Close, Pane::Answer, &[key(KeyCode::Esc)]).help("esc", "drop the answer").footer("esc", "drop"),
+    row(Act::Quit, Pane::Answer, &[control('c')]).help("^c", "quit"),
     row(Act::CopyCsv, Pane::CopyAs, &[key(KeyCode::Char('c'))]).help("c", "copy the result as CSV").footer("c", "CSV"),
     row(Act::CopyJson, Pane::CopyAs, &[key(KeyCode::Char('j'))]).help("j", "copy it as JSON").footer("j", "JSON"),
     row(Act::CopyMarkdown, Pane::CopyAs, &[key(KeyCode::Char('m'))]).help("m", "copy it as a Markdown table").footer("m", "Markdown"),
@@ -294,6 +309,9 @@ fn works_in(row: &Row, pane: Pane) -> bool {
                     | Pane::CopyAs
                     | Pane::SchemaFilter
                     | Pane::Completion
+                    | Pane::Instruction
+                    | Pane::Asking
+                    | Pane::Answer
             ))
 }
 
@@ -351,6 +369,9 @@ pub(crate) fn sections(pane: Pane, every_key: bool) -> Vec<Section> {
         (Pane::Detail, "row"),
         (Pane::CopyAs, "copy as"),
         (Pane::Completion, "names"),
+        (Pane::Instruction, "ask"),
+        (Pane::Asking, "asking"),
+        (Pane::Answer, "answer"),
         (Pane::Anywhere, "anywhere"),
     ];
     let shown = panes.into_iter().filter(|&(listed, _)| every_key || listed == pane || listed == Pane::Anywhere);
@@ -419,6 +440,9 @@ mod tests {
             Pane::Detail,
             Pane::CopyAs,
             Pane::Completion,
+            Pane::Instruction,
+            Pane::Asking,
+            Pane::Answer,
         ] {
             let keys: Vec<&KeyEvent> = ROWS.iter().filter(|row| works_in(row, pane)).flat_map(|row| row.keys).collect();
             for (at, key) in keys.iter().enumerate() {
@@ -461,6 +485,6 @@ mod tests {
     fn the_first_help_lists_the_focused_pane_and_what_works_anywhere() {
         let titles: Vec<&str> = sections(Pane::Result, false).iter().map(|section| section.title).collect();
         assert_eq!(titles, ["result", "anywhere"]);
-        assert_eq!(sections(Pane::Result, true).len(), 16);
+        assert_eq!(sections(Pane::Result, true).len(), 19);
     }
 }
