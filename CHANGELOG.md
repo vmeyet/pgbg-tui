@@ -52,7 +52,7 @@ Each entry says what changed, then where, then how to use it.
   JSON shows indented and coloured; `j`/`k` scroll, `esc` goes back to the grid.
 - **Copy** from the grid: `h`/`l` move the grid's cursor from column to column, the grid scrolling only when it leaves the view; `y` copies the cell under it, `Y` the row as a CSV line, and `c` then `c`, `j` or `m` the whole result as CSV, JSON or a Markdown table.
   Values are copied whole and as the database gave them, NUMERIC with every digit; the status line says what was copied.
-  It goes to your terminal's clipboard (OSC 52, so it works over ssh and in tmux with `set-clipboard on`) and to `pbcopy` on a Mac.
+  It goes to your terminal's clipboard (OSC 52, so it works over ssh and in tmux with `set-clipboard on`) and to `pbcopy` on a Mac, or the first of `wl-copy`, `xclip` and `xsel` elsewhere.
 - **`pgbg doctor <connection>`** checks a connection, one line per check: `✓` fine, `!` worth a look, `✗` broken, each with how to fix it.
   It reads the config and the mode of `config.toml`, says whether TLS is on and why, starts and stops the tunnel, logs in, and shows the server's version and the statement timeout in effect, with where it comes from: the connection, its tier or the server.
   It says what the role can write: superuser, `CREATEROLE`, `CREATEDB`, `BYPASSRLS`, `pg_write_all_data`, new schemas, and the schemas, tables and sequences it may change; a read-only connection whose role can write gets `!`, since only a read-only role truly stops a write.
@@ -131,6 +131,7 @@ Each entry says what changed, then where, then how to use it.
 ### Fixed
 
 - **A relative time over a month counts calendar months and years**, in a `relative` column: a day short of a year reads `11 mo ago`, not `12 mo ago`, and a span of years no longer drifts with leap days.
+- **Copying over 100 KB works on Linux**, from the TUI's grid: it goes through `wl-copy`, `xclip` or `xsel`, and when none takes it the status line says the copy was too big for the terminal.
 - **A `before` or password command leaves nothing running**, in `config.toml`: a helper it started in the background is stopped once it ends.
 - **Completion and `ctrl-g` follow a closed connection you edited**, in the TUI: once picked again, it reads the schema of the connection as it now stands, where it kept the old one's tables.
 - **A password or a secret connection key inside a dollar-quoted string is kept out of the history and never sent to the AI**, as in `SELECT dblink_connect($$password=... host=...$$)` or `$q$sslpassword=...$q$`.
