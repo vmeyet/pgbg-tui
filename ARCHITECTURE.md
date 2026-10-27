@@ -17,16 +17,16 @@ When a boundary or a flow changes, change this page in the same MR.
 | `secret/` | `Secret` (prints `<redacted>`, never cloned, wiped from memory on drop, as is the hex line written to `security -i`) and its sources (a `KeychainItem` is one word `security -i` cannot split): keychain through `/usr/bin/security`, environment variable, command; `SecretSource::read` reads one when a session opens; `Secret::from_stdin` reads one typed hidden or piped in, and the TUI's connection form types one into a `Secret` it never shows |
 | `tunnel/` | `Tunnel`: a child process forwarding a free `127.0.0.1` port to the database; start, wait for the port, stop; its `Route` is what a session opens along |
 | `db/` | The only module that sees `tokio_postgres`: connect over rustls, open a session along its route, through the connection's tunnel when it has one (`open_once` for a command, which owns the tunnel and stops it), run a statement, stream rows, cancel |
-| `db/model/` | The neutral model: `ResultSet` (its columns, and its rows a `Page` at a time, `push`ed on; its `Extent` says whether it holds them all, was cut, or has more waiting in its portal), `Column`, `ColumnKind`, `Value`, `Schema` (its tables, their columns and indexes, filtered by name, and `Schema::complete` for the editor), `Table`, `ServerError`, `Route` (direct, or a tunnel's `LocalPort`), and `CancelToken`, whose driver part only `db/` reads |
+| `db/model/` | The neutral model: `ResultSet` (its columns, and its rows a `Page` at a time, `push`ed on; its `Extent` says whether it holds them all, was cut, or has more waiting in its portal), `Column`, `ColumnKind`, `Value`, `Schema` (its tables, their columns and indexes, filtered by name; completion lives in `complete/` (planned), which replaces `Schema::complete` and `CompletionContext`), `Table`, `ServerError`, `Route` (direct, or a tunnel's `LocalPort`), and `CancelToken`, whose driver part only `db/` reads |
 | `db/pages.rs` | `Session::start`: a statement's first page of 500 rows, and on a read-only connection its portal kept open in `Pages`, in its `BEGIN READ ONLY` transaction, until `next` fetches the last page or `close` rolls it back; a read-only session has the server end a transaction left idle 6 minutes (`idle_in_transaction_session_timeout`, unless the server's own is stricter), behind the TUI's own 5-minute limit (planned) |
-| `db/schema.rs` | `Session::read_schema`: every schema, table, column and index the role can read, from `pg_class`, `pg_attribute` and `pg_index` in one read-only transaction, a partition left to its parent; the TUI reads it on a second session along the same route, opened with the same password read and closed once read, so its statements never wait on it (planned) |
+| `db/schema.rs` | `Session::read_schema`: every schema, table, column and index the role can read, from `pg_class`, `pg_attribute` and `pg_index` in one read-only transaction, a partition left to its parent; the TUI reads it on a second session along the same route, only when first needed, so its statements never wait on it (planned) |
 | `db/server.rs` | What the server says of a session (`ServerFacts`: user, version, the `statement_timeout` in effect and the server's own, from `pg_settings`) and what its role can write (`RoleRights`: for the login role, each role it may `SET ROLE` to and `PUBLIC`, the flags, `pg_write_all_data`, database `CREATE`, and the schemas, tables and sequences each may write, read from the ACLs so each grant names its role), read with `Session::read_only` like the schema |
 | `db/lex.rs` (planned) | The tokenizer: words, strings, comments, dollar quotes and `{{name}}`, each with its place; the guard, completion and parameters read the same tokens |
 | `db/guard.rs` | Classifies a statement before it is sent: read, write, or more than one statement; `admit` turns a statement into an `Admitted`, the only kind a session runs; `statement_at` finds the statement under the editor's cursor with the same tokenizer |
 | `db/decode.rs` | Wire values to `Value`, by column type, a domain by its base type; a value it cannot decode is `Unsupported`, never an error |
 | `query/` | Saved queries: the `.pgbg/queries/` tree, the header (`-- name:`, `-- connection:`, `-- chart:`, and `-- param:`, `-- format:` (planned)), load, and save |
 | `query/params.rs` (planned) | Parameters: the `{{name}}` of a statement turned into `$n` and the `Params` each run binds; pure |
-| `complete/` (planned) | Completion, pure: the `Index` built once from a `Schema` (names lowercased and sorted, so a prefix is a binary search), the `Context` at the cursor from the tokens of the statement under it (a table after `FROM` or `JOIN`, a column of `orders` after `o.` when `FROM orders o`, a keyword at a statement's start), and the ranked candidates |
+| `complete/` (planned) | Completion, pure: the `Index` built once from a `Schema` (names lowercased and sorted, so a prefix is a binary search; names in the session's `current_schemas(false)` bare, the others as `schema.table`), the `Context` at the cursor from the tokens of the statement under it, never of the whole editor (a table after `FROM` or `JOIN`, a column of `orders` after `o.` when `FROM orders o`, a keyword at a statement's start), and the ranked candidates |
 | `format/` (planned) | Formats, pure: for each `ColumnKind`, the ways a cell can read (raw first) and the text of one cell in one of them, the clock and the time zone passed in |
 | `export.rs` | A cell, a row or a whole result as text to paste: CSV (a NULL left empty), JSON (one object per row, as `--json` gives values) or a Markdown table; every value raw and whole; pure |
 | `history.rs` | Every statement run, per connection: one JSON line each in `<data folder>/pgbg/history/<connection>.jsonl` (folder `0700`, file `0600`), rolled over to `.1` past 4 MB under an exclusive `flock`, so two pgbg never lose each other's lines, the file opened again a few times at most when another pgbg rolled it over meanwhile; the text, when, how long and what came of it, never a row, the server's words or a statement holding `PASSWORD` or a URL with a password; `History::distinct` lists each statement once for `ctrl-r`, which `Search` narrows as the finder does |
@@ -77,20 +77,29 @@ Switching connection:
 
 Completing a name (planned):
 
-1. Once a session opens, its task opens a second session along the same route, reads the schema, closes it and answers `Incoming::Schema`; a failed read is a warning, never a lost session.
-   The backend builds the `complete::Index` on a blocking thread and the sheet keeps it with the `Schema` behind an `Arc`, shared and never changed; `r` in the schema tab reads it again, and so does a session opened again.
-2. Each key in the editor asks `complete` for the context at the cursor and the candidates, in the app, before the frame: under a millisecond, so it never waits on the database.
-3. Candidates rank by: a prefix before a fuzzy match, a column of a table the statement names before any other, then shorter first; at most 50 are kept.
-4. The best one shows dimmed after the cursor (vtui's `complete::ghost`); `→` at the end of the word takes it, quoted when its name needs it; `ctrl-space` opens the list.
-5. A schema past 20 000 tables keeps the first ones in name order and says it is cut; completion and the sidebar work on what was kept.
+1. The schema is read once it is first needed: the schema tab opened, or a first completion asked; `schema = "off"` on a connection never reads it, and `r` in the schema tab reads it again.
+   The session task opens a second session along the same route, reading the password again from its source (a command runs again), reads the schema and `current_schemas(false)`, closes it and answers `Incoming::Schema`; no password is kept between the two opens, and a failed read is a warning, never a lost session.
+   That second session is one more login: it takes a slot of the role's `CONNECTION LIMIT` or of a PgBouncer pool, which can make the main session's reopen fail while it lasts, and one more IAP websocket through a `gcloud` tunnel; that is why it is lazy, short and can be turned off.
+   The catalog query keeps the first 20 000 tables in name order (`LIMIT` in the SQL), and the status line says when it is cut.
+2. The backend builds the `complete::Index` on a blocking thread and the sheet keeps it with the `Schema` behind an `Arc`, shared and never changed.
+3. Only a key that types an identifier character or `.` asks for candidates; the context comes from the tokens of the statement under the cursor alone.
+4. The ghost is prefix only, a binary search in the index: the rest of the first candidate shows dimmed after the cursor, and `→` at the end of the word takes it, quoted when its name needs it.
+5. `ctrl-space` opens the list, where a fuzzy match joins the prefix ones: a prefix before a fuzzy match, a column of a table the statement names before any other, then shorter first; at most 50 are kept.
+6. A test holds the budget: 20 000 tables and 200 000 columns, one key, under a millisecond in a release build.
 
-Running a saved query with parameters (planned):
+Running a statement with parameters (planned):
 
 1. `query::params` reads the `{{name}}` of the statement under the cursor from `db::lex`'s tokens, never inside a string, a comment or a quoted name, and the header's `-- param: since date = 2024-01-01`, `-- param: owner text optional`.
-2. The parameter bar above the editor shows one field per name, filled with the last values given for this query on this connection, else the default; `⏎` in a field runs.
-3. The statement is sent with each name as `$1`, `$2` (the same name the same number), so the guard classifies what the server gets; a name left empty, with no default and not `optional`, stops the run before anything is sent, and an `optional` one is bound as NULL.
-4. The session prepares the statement with the header's types, looked up by the server (`to_regtype`) from a bound name, else with the types the server infers, and binds each value in text: the server parses it with that type's own input, and a value it cannot read fails with its words.
-5. The history keeps the statement with its `{{name}}`, never the values; the values go in `<data folder>/pgbg/params/<connection>.json` (`0600`), keyed by query path.
+   A statement holding both a `$n` of its own and a `{{name}}` is refused, and a `{{` the lexer cannot read as a name is too: a doubt never runs.
+2. The parameter bar above the editor shows one field per name, filled with the last values given, else the default; `⏎` in a field runs.
+   A saved query keeps its values in `<data folder>/pgbg/params/<connection>.json` (`0600`), keyed by query path; unsaved text keeps them on its sheet until pgbg quits.
+3. Each name becomes `$1`, `$2` (the same name the same number), so the guard classifies what the server gets; `admit` takes the values with the statement and refuses an `Admitted` whose count of values is not its count of `$n`.
+   A name left empty, with no default and not `optional`, stops the run before anything is sent; an `optional` one is bound as NULL.
+4. Both ways of running bind them: the read-only portal and the one a connection that allows writes uses, which pass no parameters today.
+   The statement is prepared with unknown types (id 0) where the header names none, so the server infers them; a header type is looked up first with `SELECT to_regtype($1)::oid`, the name itself bound, and a type the server does not know stops the run.
+   Each value goes through one `ToSql` wrapper that accepts any type and encodes as text (`encode_format`): the server parses it with that type's own input, and a value it cannot read fails with its words.
+5. The history keeps the statement with its `{{name}}`, never the values.
+6. `pgbg run` takes `--param name=value`, `--params-file <file>` (one `name=value` a line) or `--params-file -` on stdin, so a value need not sit in argv or the shell's history.
 
 Formatting a cell (planned):
 

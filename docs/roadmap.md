@@ -55,7 +55,7 @@ The MR that ships a step ticks its box.
 
 ## 8. Schema
 
-- [ ] The schema read on a second session along the same route once a session opens, kept by its sheet, read again with `r` in the sidebar; the status line says how many tables, or that it is cut
+- [ ] The schema read on a second session along the same route when first needed, its password read again, capped at 20 000 tables in the SQL, with `current_schemas(false)`; kept by its sheet, read again with `r`, `schema = "off"` on a connection
 - [ ] Schema sidebar: a second tab beside the queries (`[` `]`), schemas, tables, columns and indexes, `/` to filter
 - [ ] From a table in the sidebar: `p` previews `SELECT * FROM <table> LIMIT 100`, `i` puts its name in the editor, `⏎` shows its columns, types and indexes in the result pane
 
@@ -78,15 +78,15 @@ The MR that ships a step ticks its box.
 ## 12. Completion
 
 - [ ] `db/lex.rs`: the guard's tokenizer on its own, shared by the guard, completion and parameters
-- [ ] `complete/`: what the cursor wants (a table, a column of a table or alias, a keyword) from the statement under it, and the candidates ranked from the schema's index; pure, under a millisecond on 50 000 columns
-- [ ] Ghost in the editor: the rest of the best candidate, dimmed after the cursor, taken with `→` at the end of the word
-- [ ] `ctrl-space` lists the candidates in a popup at the cursor: `↑↓` to pick, `⏎` or `⇥` to take, `esc` to close
+- [ ] `complete/`, replacing `Schema::complete`: what the cursor wants (a table, a column of a table or alias, a keyword) from the statement under it, names in the search path bare; a prefix search in the index, asked only after an identifier character or `.`; a test holds it under a millisecond on 200 000 columns
+- [ ] Ghost in the editor: the rest of the best candidate, dimmed after the cursor, prefix only, taken with `→` at the end of the word
+- [ ] `ctrl-space` lists the candidates, prefix then fuzzy, in a popup at the cursor: `↑↓` to pick, `⏎` or `⇥` to take, `esc` to close
 
 ## 13. Parameters
 
-- [ ] `{{name}}` in a statement, outside strings and comments, and `-- param: name type = default` in the header; each name becomes `$n`, so the guard and the statement under the cursor read the statement as sent
-- [ ] Bound, never spliced: each value goes in text, and the server reads it as the type it infers or the header names; `pgbg run --param name=value`
-- [ ] The parameter bar above the editor: one field per parameter of the statement under the cursor, `⏎` runs, an empty one without a default stops the run; the last values kept per query and connection
+- [ ] `{{name}}` in a statement, outside strings and comments, and `-- param: name type = default` in the header; each name becomes `$n`, so the guard reads the statement as sent; one mixing `$n` and `{{name}}`, or a `{{` the lexer cannot read, is refused
+- [ ] Bound, never spliced, by both ways of running: `Admitted` carries the values and checks their count, each goes in text through one `ToSql` wrapper, typed by the server's inference or a bound `to_regtype`; `pgbg run --param` and `--params-file`
+- [ ] The parameter bar above the editor: one field per parameter of the statement under the cursor, `⏎` runs, an empty one without a default stops the run; the last values kept per query and connection, and on the sheet for unsaved text
 
 ## 14. Formats
 
