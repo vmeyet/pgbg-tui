@@ -1,3 +1,4 @@
+use super::TypeName;
 use std::fmt;
 
 /// An error the server reported, in its own words: `ERROR: relation "orders" does not exist`.
@@ -24,6 +25,18 @@ impl fmt::Display for ServerError {
 }
 
 impl std::error::Error for ServerError {}
+
+/// A type a statement's header names that the server does not know: the run stops before the statement is sent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct UnknownType(pub(crate) TypeName);
+
+impl fmt::Display for UnknownType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "the server knows no type `{}`", self.0.as_str())
+    }
+}
+
+impl std::error::Error for UnknownType {}
 
 #[cfg(test)]
 mod tests {

@@ -1,8 +1,7 @@
 //! A statement's values as the driver binds them: each in text, so the server reads it with its parameter's own type.
 use super::guard::Admitted;
-use super::model::{Params, TypeName};
+use super::model::{Params, TypeName, UnknownType};
 use super::server_error;
-use crate::query::params::ParamError;
 use anyhow::Result;
 use bytes::BytesMut;
 use std::error::Error;
@@ -61,7 +60,7 @@ pub(super) async fn prepare(client: &impl GenericClient, admitted: &Admitted) ->
 async fn looked_up(client: &impl GenericClient, name: &TypeName) -> Result<Type> {
     let row = client.query_one(TYPE_ID, &[&AsText(Some(name.as_str()))]).await.map_err(server_error)?;
     let oid: Option<u32> = row.try_get(0).map_err(server_error)?;
-    let oid = oid.ok_or_else(|| ParamError::UnknownType(name.clone()))?;
+    let oid = oid.ok_or_else(|| UnknownType(name.clone()))?;
     Ok(Type::from_oid(oid).unwrap_or_else(|| Type::new(name.as_str().to_owned(), oid, Kind::Simple, String::new())))
 }
 
