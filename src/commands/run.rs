@@ -12,6 +12,7 @@ use chrono::Utc;
 use std::io::IsTerminal;
 use std::path::Path;
 use std::time::Instant;
+use tokio::sync::oneshot;
 
 /// The path that makes `--file` or `--params-file` read stdin.
 const STDIN: &str = "-";
@@ -83,7 +84,7 @@ async fn given(assignments: &[Assignment], file: Option<&Path>) -> Result<Given>
 /// The text of the file at `path`, or of stdin for `-`; `what` says what it holds in an error.
 async fn read_text(path: &Path, what: &str) -> Result<String> {
     if path == Path::new(STDIN) {
-        let read = tokio::task::spawn_blocking(|| std::io::read_to_string(std::io::stdin())).await?;
+        let read = on_a_thread_of_its_own(|| std::io::read_to_string(std::io::stdin())).await?;
         return read.with_context(|| format!("reading {what} from stdin"));
     }
     tokio::fs::read_to_string(path).await.with_context(|| format!("reading {}", path.display()))
@@ -105,8 +106,8 @@ async fn admit(connection: &Connection, sql: &str, given: &Given, yes: bool) -> 
     }
 }
 
-/// Runs `admitted`; when the server finds a write in a read, as in a function that writes, nothing ran, and it runs
-/// again as a write once the user says yes on the terminal.
+/// Runs `admitted`; when the server finds a write in a read, as in a function that writes, the write was refused, and
+/// it runs again as a write once the user says yes on the terminal: what it did before the write may then run twice.
 async fn run_asking_for_hidden_writes(session: &mut Session, admitted: Admitted) -> Result<ResultSet> {
     match session.run(&admitted).await {
         Err(err) if err.is::<TriedToWrite>() => {
@@ -124,9 +125,22 @@ async fn is_confirmed_at_the_terminal(write: &Write) -> Result<bool> {
     if !std::io::stdin().is_terminal() {
         return Ok(false);
     }
-    eprint!("{write}? [y/N] ");
-    let answer = tokio::task::spawn_blocking(|| std::io::stdin().lines().next().transpose()).await??;
+    eprint!("{}", question(write));
+    let answer = on_a_thread_of_its_own(|| std::io::stdin().lines().next().transpose()).await??;
     Ok(answer.is_some_and(|answer| matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")))
+}
+
+/// The question that asks for `write`, its names escaped so none can rewrite the terminal line.
+fn question(write: &Write) -> String {
+    format!("{}? [y/N] ", render::printable(&write.to_string()))
+}
+
+/// What `read` gives, read on a thread of its own: dropped on a signal, it leaves the thread blocked and lets pgbg exit,
+/// where the runtime would wait for a blocking task.
+async fn on_a_thread_of_its_own<T: Send + 'static>(read: impl FnOnce() -> T + Send + 'static) -> Result<T> {
+    let (sender, read_back) = oneshot::channel();
+    std::thread::Builder::new().name("pgbg-stdin".into()).spawn(move || sender.send(read()))?;
+    Ok(read_back.await?)
 }
 
 fn print(result: &ResultSet, json: bool) -> Result<()> {
@@ -148,7 +162,9 @@ fn text(result: &ResultSet) -> String {
 mod tests {
     use super::*;
     use crate::db::model::{ColumnKind, Value};
+    use crate::db::{guard, lex};
     use crate::fixtures::column;
+    use std::time::Duration;
 
     #[test]
     fn a_result_prints_its_header_its_rows_and_their_count() {
@@ -163,5 +179,22 @@ mod tests {
     fn a_result_of_one_row_says_row() {
         let result = ResultSet::whole(vec![column("total", ColumnKind::Int)], vec![vec![Value::Int(3)]]);
         assert!(text(&result).ends_with("(1 row)\n"));
+    }
+
+    #[test]
+    fn the_question_escapes_a_name_that_would_rewrite_the_terminal_line() {
+        let sql = "DELETE FROM \"orders\r\x1b[2K\u{202e}SELECT from nothing\"";
+        let write = guard::write_in(sql, &lex::tokens(sql)).unwrap();
+        assert_eq!(question(&write), "DELETE from \"orders\\r\\u{1b}[2K\\u{202e}SELECT from nothing\"? [y/N] ");
+    }
+
+    #[test]
+    fn a_read_dropped_halfway_leaves_the_runtime_free_to_shut_down() {
+        let (blocked, _never_written) = std::io::pipe().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_time().start_paused(true).build().unwrap();
+        let reading = on_a_thread_of_its_own(move || std::io::read_to_string(blocked));
+        let read = runtime.block_on(async { tokio::time::timeout(Duration::ZERO, reading).await });
+        assert!(read.is_err(), "nothing was written");
+        drop(runtime);
     }
 }

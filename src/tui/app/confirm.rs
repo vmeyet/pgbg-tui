@@ -1,7 +1,6 @@
 //! Before a write is sent, the footer line asks for it: `y` sends it, any other key drops it.
 use super::sheet::ToRun;
 use super::{Action, App, Overlay, Prompt};
-use crate::connection::ConnectionName;
 use crate::db::guard::Write;
 
 /// A statement the guard read as a write, waiting for a `y`.
@@ -31,12 +30,13 @@ impl App {
         vec![]
     }
 
-    /// Asks for `to_run`, which tried to write on `connection`, once its sheet is on screen and no overlay takes the
-    /// keys; otherwise its failed run says so, and running it again asks.
-    pub(super) fn ask_for_hidden_write(&mut self, connection: &ConnectionName, to_run: ToRun) {
-        if self.overlay.is_some() || self.sheet().name() != connection {
+    /// Asks for the statement of the sheet on screen that tried to write, once no overlay takes the keys; a sheet off
+    /// screen keeps its own until it shows.
+    pub(super) fn ask_for_hidden_write(&mut self) {
+        if self.overlay.is_some() {
             return;
         }
+        let Some(to_run) = self.sheet_mut().take_tried_to_write() else { return };
         self.overlay = Some(Overlay::Prompt(Prompt::SendWrite(Box::new(WriteToSend { write: Write::Hidden, to_run }))));
     }
 
@@ -48,7 +48,8 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::super::fixtures::{app_on, connection, first_run, shop, to_shop, with_focus};
-    use super::super::{Focus, Incoming, Run, RunId};
+    use super::super::picker::tests::{on_local, press as picker_press, switch_to};
+    use super::super::{Answer, Focus, Incoming, Run, RunId};
     use super::*;
     use crate::db::model::Statement;
     use crate::failure::Failure;
@@ -158,6 +159,31 @@ mod tests {
         app.overlay = Some(Overlay::CopyAs);
         app.apply(to_shop(Incoming::Failed { run: RunId::FIRST, failure: Failure::TriedToWrite }));
         assert_eq!(app.overlay, Some(Overlay::CopyAs));
+    }
+
+    #[test]
+    fn a_statement_that_tried_to_write_under_an_overlay_is_asked_once_the_overlay_closes() {
+        let mut app = typed_on("allowed", "SELECT archive_orders()");
+        press(&mut app, KeyCode::Enter);
+        app.overlay = Some(Overlay::CopyAs);
+        app.apply(to_shop(Incoming::Failed { run: RunId::FIRST, failure: Failure::TriedToWrite }));
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(asked(&app).as_deref(), Some("this statement tried to write, and may run twice: run it"));
+    }
+
+    #[test]
+    fn a_statement_that_tried_to_write_off_screen_is_asked_once_its_sheet_shows() {
+        let mut app = on_local();
+        switch_to(&mut app, "staging");
+        let session = app.sheet().session_id;
+        picker_press(&mut app, "SELECT archive_orders()");
+        press(&mut app, KeyCode::Enter);
+        switch_to(&mut app, "local");
+        let failed = Incoming::Failed { run: RunId::FIRST, failure: Failure::TriedToWrite };
+        app.apply(Answer::Session { connection: "staging".parse().unwrap(), session, incoming: failed });
+        assert_eq!(asked(&app), None);
+        switch_to(&mut app, "staging");
+        assert_eq!(asked(&app).as_deref(), Some("this statement tried to write, and may run twice: run it"));
     }
 
     #[test]

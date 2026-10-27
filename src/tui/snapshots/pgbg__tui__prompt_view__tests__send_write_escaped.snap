@@ -1,0 +1,10 @@
+---
+source: src/tui/prompt_view.rs
+expression: terminal.backend()
+---
+"╭ ● shop · production ─────────────────────────────────────────────────────────╮"
+"│╭ [Queries] Schema ──────────╮╭ Editor · orders/purge.sql ─ WRITES ──────────╮│"
+"││ no saved query under       │╭ Result ──────────────────────────────────────╮│"
+"│╰────────────────────────────╯╰──────────────────────────────────────────────╯│"
+"│ DELETE from "orders\u{1b}[2K\u{202e}sredro"?  y sends  any other key cancels │"
+"╰──────────────────────────────────────────────────────────────────────────────╯"

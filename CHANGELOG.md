@@ -133,6 +133,10 @@ Each entry says what changed, then where, then how to use it.
 
 ### Fixed
 
+- **The question before a write shows its table names escaped**, in `pgbg run` and the TUI's footer: a control character or a mark that reverses text in a name can no longer hide the verb.
+- **`pgbg run` stops on ctrl-c while it waits on stdin**, for `--file -`, `--params-file -` or a write's `y/N`: it exits within 3 seconds, its tunnel with it.
+- **A function that tried to write no longer says nothing ran**, in the TUI and `pgbg run`: what it did before the write may have run, and confirming runs it again.
+  In the TUI, an answer that lands while another connection or an overlay shows asks once its sheet is back, instead of waiting for the next `⏎`.
 - **The TUI redraws whole after your editor exits**, after `ctrl-e` on a saved query: it could come back blank or half drawn, and it now takes a resize made while the editor ran.
 - **The `ctrl-t` finder's keys fit a narrow terminal**, in the TUI: the hints that do not fit go whole, `esc closes` last, instead of being cut mid-word.
 - **A relative time over a month counts calendar months and years**, in a `relative` column: a day short of a year reads `11 mo ago`, not `12 mo ago`, and a span of years no longer drifts with leap days.

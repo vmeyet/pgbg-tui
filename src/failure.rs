@@ -44,7 +44,7 @@ pub(crate) enum Failure {
     /// pgbg kept the statement from the server: the guard, its parameters, a type the server does not know, or a write
     /// not confirmed.
     Refused(String),
-    /// The server refused a write in a statement the guard read as a read, so nothing of it ran.
+    /// The server refused a write in a statement the guard read as a read; what the statement did before it already ran.
     TriedToWrite,
     CancelledBeforeSent,
     StoppedWithItsSession,
