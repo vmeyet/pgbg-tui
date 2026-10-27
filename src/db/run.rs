@@ -226,6 +226,7 @@ mod tests {
 
     async fn run(writes: WritePolicy, sql: &str) -> Result<ResultSet> {
         let admitted = guard::admit(Statement::new(sql), Params::default(), writes).unwrap();
+        let _changing = fixtures::changing_the_catalog().await;
         session(writes).await.run(&admitted).await
     }
 

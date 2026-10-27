@@ -162,6 +162,7 @@ mod tests {
     }
 
     async fn write(session: &mut Session, sql: &str) {
+        let _changing = fixtures::changing_the_catalog().await;
         session.run(&guard::admit(Statement::new(sql), Params::default(), WritePolicy::Allowed).unwrap()).await.unwrap();
     }
 
@@ -174,6 +175,15 @@ mod tests {
             write(&mut session, statement).await;
         }
         session
+    }
+
+    async fn read(session: &mut Session) -> Catalog {
+        read_capped(session, TABLE_CAP, "").await
+    }
+
+    async fn read_capped(session: &mut Session, cap: TableCap, filter: &str) -> Catalog {
+        let _reading = fixtures::reading_the_catalog().await;
+        session.read_schema_capped(cap, filter).await.unwrap()
     }
 
     fn tables_of<'a>(schema: &'a Schema, name: &str) -> &'a [Table] {
@@ -191,7 +201,7 @@ mod tests {
             ],
         )
         .await;
-        let schema = session.read_schema().await.unwrap().schema;
+        let schema = read(&mut session).await.schema;
         let [orders] = tables_of(&schema, "shop_read") else { panic!("{schema:?}") };
         let described: Vec<_> = orders.columns.iter().map(|c| (c.name.as_str(), c.type_name.as_str(), c.is_nullable)).collect();
         assert_eq!(described, [("id", "integer", false), ("customer", "text", false), ("total", "numeric(10,2)", true)]);
@@ -219,7 +229,7 @@ mod tests {
             ],
         )
         .await;
-        let schema = session.read_schema().await.unwrap().schema;
+        let schema = read(&mut session).await.schema;
         let kinds: Vec<_> = tables_of(&schema, "shop_kinds").iter().map(|table| (table.name.as_str(), table.kind)).collect();
         assert_eq!(
             kinds,
@@ -244,7 +254,7 @@ mod tests {
             ],
         )
         .await;
-        let schema = session.read_schema().await.unwrap().schema;
+        let schema = read(&mut session).await.schema;
         let kinds: Vec<_> = tables_of(&schema, "shop_parts").iter().map(|table| (table.name.as_str(), table.kind)).collect();
         assert_eq!(kinds, [("orders", TableKind::Partitioned)]);
     }
@@ -270,7 +280,7 @@ mod tests {
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_read_past_the_table_cap_keeps_the_first_tables_by_name_and_says_it_is_cut() {
         let mut session = session_reading_only("shop_cap", "pgbg_test_cap", &["orders", "customers", "invoices"]).await;
-        let catalog = session.read_schema_capped(TableCap(2), "").await.unwrap();
+        let catalog = read_capped(&mut session, TableCap(2), "").await;
         assert_eq!((names_in(&catalog, "shop_cap"), catalog.is_cut), (vec!["customers", "invoices"], true));
     }
 
@@ -278,7 +288,7 @@ mod tests {
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_filter_is_read_before_the_cap_so_a_table_past_it_still_comes() {
         let mut session = session_reading_only("shop_cap_filter", "pgbg_test_cap_filter", &["customers", "invoices", "orders"]).await;
-        let catalog = session.read_schema_capped(TableCap(1), "ORD").await.unwrap();
+        let catalog = read_capped(&mut session, TableCap(1), "ORD").await;
         assert_eq!((names_in(&catalog, "shop_cap_filter"), catalog.is_cut), (vec!["orders"], false));
     }
 
@@ -286,7 +296,7 @@ mod tests {
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_read_of_as_many_tables_as_the_cap_is_whole() {
         let mut session = session_reading_only("shop_cap_whole", "pgbg_test_cap_whole", &["orders", "customers"]).await;
-        let catalog = session.read_schema_capped(TableCap(2), "").await.unwrap();
+        let catalog = read_capped(&mut session, TableCap(2), "").await;
         assert_eq!((names_in(&catalog, "shop_cap_whole"), catalog.is_cut), (vec!["customers", "orders"], false));
     }
 
@@ -294,13 +304,13 @@ mod tests {
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn the_read_names_the_schemas_of_the_search_path_that_exist() {
         let mut session = session_on("shop_path", &["SET search_path = shop_path, nowhere, public"]).await;
-        assert_eq!(session.read_schema().await.unwrap().search_path, ["shop_path", "public"]);
+        assert_eq!(read(&mut session).await.search_path, ["shop_path", "public"]);
     }
 
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn the_schema_leaves_the_catalogs_out() {
-        let schema = session().await.read_schema().await.unwrap().schema;
+        let schema = read(&mut session().await).await.schema;
         let names: Vec<&str> = schema.schemas.iter().map(|node| node.name.as_str()).collect();
         assert!(!names.iter().any(|name| name.starts_with("pg_") || *name == "information_schema"), "{names:?}");
     }
@@ -320,7 +330,7 @@ mod tests {
             ],
         )
         .await;
-        let schema = session.read_schema().await.unwrap().schema;
+        let schema = read(&mut session).await.schema;
         let [customers] = tables_of(&schema, "shop_private") else { panic!("{schema:?}") };
         assert_eq!(customers.name, "customers");
         assert_eq!(customers.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id"]);
