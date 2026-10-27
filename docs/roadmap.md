@@ -55,7 +55,7 @@ The MR that ships a step ticks its box.
 
 ## 8. Schema
 
-- [ ] The schema read on a second session along the same route when first needed, its password read again, capped at 20 000 tables in the SQL, with `current_schemas(false)`; kept by its sheet, read again with `r`, `schema = "off"` on a connection
+- [x] The schema read on a second session along the same route when first needed, its password read again, capped at 20 000 tables in the SQL, with `current_schemas(false)`; kept by its sheet, read again with `r`, `schema = "off"` on a connection
 - [ ] Schema sidebar: a second tab beside the queries (`[` `]`), schemas, tables, columns and indexes, `/` to filter
 - [ ] `ctrl-t` finds a table from anywhere, fzf-narrowed like `ctrl-p`, with the same actions as the sidebar
 - [ ] From a table in the sidebar or the finder: `p` previews `SELECT * FROM <table> LIMIT 100`, `i` puts its name in the editor, `⏎` shows its columns, types and indexes in the result pane

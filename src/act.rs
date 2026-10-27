@@ -39,6 +39,9 @@ pub(crate) enum Act {
     CopyCsv,
     CopyJson,
     CopyMarkdown,
+    SwitchTab,
+    Filter,
+    ReadAgain,
 }
 
 impl Act {
@@ -102,7 +105,10 @@ impl Act {
             Self::CopyResult => Some(Self::CopyCsv),
             Self::CopyCsv => Some(Self::CopyJson),
             Self::CopyJson => Some(Self::CopyMarkdown),
-            Self::CopyMarkdown => None,
+            Self::CopyMarkdown => Some(Self::SwitchTab),
+            Self::SwitchTab => Some(Self::Filter),
+            Self::Filter => Some(Self::ReadAgain),
+            Self::ReadAgain => None,
         }
     }
 
@@ -139,6 +145,10 @@ pub(crate) enum Pane {
     Result,
     /// The saved queries in the sidebar.
     Queries,
+    /// The schema in the sidebar, its other tab.
+    Schema,
+    /// The line that filters the schema's tables: while open it takes every key.
+    SchemaFilter,
     /// The `ctrl-p` finder over every saved query: while open it takes every key, and only its own work.
     Finder,
     /// The `ctrl-o` connection picker, a popup like the finder.
@@ -226,6 +236,22 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Down, Pane::Queries, &[key(KeyCode::Char('j')), key(KeyCode::Down)]).help("j k", "next, previous query").footer("j/k", "move"),
     row(Act::Up, Pane::Queries, &[key(KeyCode::Char('k')), key(KeyCode::Up)]),
     row(Act::Open, Pane::Queries, &[key(KeyCode::Enter)]).help("⏎", "open the query, fold the folder").footer("⏎", "open"),
+    row(Act::SwitchTab, Pane::Queries, &[key(KeyCode::Char('[')), key(KeyCode::Char(']'))])
+        .help("[ ]", "the schema instead")
+        .footer("[]", "schema"),
+    row(Act::Down, Pane::Schema, &[key(KeyCode::Char('j')), key(KeyCode::Down)]).help("j k", "next, previous table").footer("j/k", "move"),
+    row(Act::Up, Pane::Schema, &[key(KeyCode::Char('k')), key(KeyCode::Up)]),
+    row(Act::Open, Pane::Schema, &[key(KeyCode::Enter)]).help("⏎", "fold the schema"),
+    row(Act::Filter, Pane::Schema, &[key(KeyCode::Char('/'))])
+        .help("/", "keep the tables whose name holds what you type")
+        .footer("/", "filter"),
+    row(Act::ReadAgain, Pane::Schema, &[key(KeyCode::Char('r'))]).help("r", "read the schema again"),
+    row(Act::SwitchTab, Pane::Schema, &[key(KeyCode::Char('[')), key(KeyCode::Char(']'))])
+        .help("[ ]", "the queries instead")
+        .footer("[]", "queries"),
+    row(Act::Open, Pane::SchemaFilter, &[key(KeyCode::Enter)]).help("⏎", "keep the filter").footer("⏎", "keep"),
+    row(Act::Close, Pane::SchemaFilter, &[key(KeyCode::Esc)]).help("esc", "drop the filter").footer("esc", "drop"),
+    row(Act::Quit, Pane::SchemaFilter, &[control('c')]).help("^c", "quit"),
     row(Act::Down, Pane::Finder, &[key(KeyCode::Down), control('n')]).help("↓ ^n", "next, previous query").footer("↑↓", "pick"),
     row(Act::Up, Pane::Finder, &[key(KeyCode::Up), control('p')]),
     row(Act::Open, Pane::Finder, &[key(KeyCode::Enter)]).help("⏎", "open it in the editor").footer("⏎", "opens"),
@@ -233,7 +259,7 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Close, Pane::Finder, &[key(KeyCode::Esc)]).help("esc", "close the finder").footer("esc", "closes"),
     row(Act::Find, Pane::Anywhere, &[control('p')]).help("^p", "find a saved query").footer("^p", "find"),
     row(Act::Cancel, Pane::Anywhere, &[key(KeyCode::Esc)]).help("esc", "cancel the running statement"),
-    row(Act::SwitchPane, Pane::Anywhere, &[key(KeyCode::Tab)]).help("tab", "next pane: editor, result, queries").footer("⇥", "pane"),
+    row(Act::SwitchPane, Pane::Anywhere, &[key(KeyCode::Tab)]).help("tab", "next pane: editor, result, sidebar").footer("⇥", "pane"),
     row(Act::Help, Pane::Anywhere, &[key(KeyCode::F(1))]).help("F1", "these keys, from the editor too").footer("F1", "keys"),
     row(Act::Down, Pane::Picker, &[key(KeyCode::Down), control('n')]).help("↓ ^n", "next, previous connection").footer("↑↓", "pick"),
     row(Act::Up, Pane::Picker, &[key(KeyCode::Up), control('p')]),
@@ -278,7 +304,7 @@ fn is_the_key(own: &KeyEvent, pressed: KeyEvent) -> bool {
 fn works_in(row: &Row, pane: Pane) -> bool {
     row.pane == pane
         || (row.pane == Pane::Anywhere
-            && !matches!(pane, Pane::Finder | Pane::Picker | Pane::Form | Pane::Prompt | Pane::Detail | Pane::CopyAs))
+            && !matches!(pane, Pane::Finder | Pane::Picker | Pane::Form | Pane::Prompt | Pane::Detail | Pane::CopyAs | Pane::SchemaFilter))
 }
 
 /// What `key` does while `pane` has the keys; `None` leaves it to the pane, as text for the editor.
@@ -323,6 +349,8 @@ pub(crate) fn sections(pane: Pane, every_key: bool) -> Vec<Section> {
         (Pane::Editor, "editor"),
         (Pane::Result, "result"),
         (Pane::Queries, "queries"),
+        (Pane::Schema, "schema"),
+        (Pane::SchemaFilter, "schema filter"),
         (Pane::Finder, "finder"),
         (Pane::Picker, "picker"),
         (Pane::Form, "form"),
@@ -382,9 +410,19 @@ mod tests {
 
     #[test]
     fn no_key_does_two_actions_in_one_pane() {
-        for pane in
-            [Pane::Editor, Pane::Result, Pane::Queries, Pane::Finder, Pane::Picker, Pane::Form, Pane::Prompt, Pane::Detail, Pane::CopyAs]
-        {
+        for pane in [
+            Pane::Editor,
+            Pane::Result,
+            Pane::Queries,
+            Pane::Schema,
+            Pane::SchemaFilter,
+            Pane::Finder,
+            Pane::Picker,
+            Pane::Form,
+            Pane::Prompt,
+            Pane::Detail,
+            Pane::CopyAs,
+        ] {
             let keys: Vec<&KeyEvent> = ROWS.iter().filter(|row| works_in(row, pane)).flat_map(|row| row.keys).collect();
             for (at, key) in keys.iter().enumerate() {
                 assert!(!keys[at + 1..].contains(key), "{key:?} in {pane:?}");
@@ -421,6 +459,6 @@ mod tests {
     fn the_first_help_lists_the_focused_pane_and_what_works_anywhere() {
         let titles: Vec<&str> = sections(Pane::Result, false).iter().map(|section| section.title).collect();
         assert_eq!(titles, ["result", "anywhere"]);
-        assert_eq!(sections(Pane::Result, true).len(), 10);
+        assert_eq!(sections(Pane::Result, true).len(), 12);
     }
 }

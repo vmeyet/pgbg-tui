@@ -17,8 +17,9 @@ pub(super) use protocol::{
 };
 pub(super) use queries::{Finder, Queries};
 pub(super) use save::Prompt;
+pub(super) use schema_tab::{SchemaRow, SchemaTab, SidebarTab};
 pub(super) use search::Search;
-pub(super) use sheet::{Run, SessionState, Sheet, View};
+pub(super) use sheet::{Run, SchemaState, SessionState, Sheet, View};
 
 mod copy;
 mod detail;
@@ -30,6 +31,7 @@ pub(super) mod picker;
 mod protocol;
 pub(super) mod queries;
 mod save;
+mod schema_tab;
 mod search;
 mod sheet;
 
@@ -86,11 +88,13 @@ pub(super) enum Overlay {
     Detail(Detail),
     /// A question on the footer line: which format the whole result is copied as.
     CopyAs,
+    /// The schema tab's filter line, typed into from `/` until `⏎` or `esc`.
+    SchemaFilter,
 }
 
 /// The help after `key`: `?` lists every key, `j`/`k` scroll, any other key closes it.
-fn help_after(help: Help, key: KeyEvent, focus: Focus) -> Option<Help> {
-    let last_row = vtui::help::last_row(&act::sections(focus.pane(), help.every_key));
+fn help_after(help: Help, key: KeyEvent, pane: Pane) -> Option<Help> {
+    let last_row = vtui::help::last_row(&act::sections(pane, help.every_key));
     match key.code {
         KeyCode::Char('?') if !help.every_key => Some(Help { scroll: 0, every_key: true }),
         KeyCode::Char('j') | KeyCode::Down => Some(Help { scroll: (help.scroll + 1).min(last_row), ..help }),
@@ -112,6 +116,8 @@ pub(super) struct App {
     pub(super) focus: Focus,
     pub(super) overlay: Option<Overlay>,
     pub(super) queries: Queries,
+    pub(super) sidebar: SidebarTab,
+    pub(super) schema_tab: SchemaTab,
     fit: Fit,
     /// The row's detail as a frame last built it.
     pub(super) drawn_detail: Option<DrawnDetail>,
@@ -137,6 +143,8 @@ impl App {
             focus: Focus::Editor,
             overlay: None,
             queries: Queries::default(),
+            sidebar: SidebarTab::Queries,
+            schema_tab: SchemaTab::default(),
             fit: Fit::default(),
             drawn_detail: None,
             should_quit: false,
@@ -169,7 +177,7 @@ impl App {
         if let Some(overlay) = self.overlay.take() {
             return self.overlay_key(overlay, key);
         }
-        if let Some(act) = act::act_for(key, self.focus.pane()) {
+        if let Some(act) = act::act_for(key, self.pane()) {
             return self.act(act);
         }
         if self.focus == Focus::Editor {
@@ -190,6 +198,10 @@ impl App {
         }
         if let Some(Overlay::Recall(recall)) = self.overlay.as_mut() {
             recall.search.paste(text, &recall.all);
+            return vec![];
+        }
+        if self.overlay == Some(Overlay::SchemaFilter) {
+            self.schema_tab.filter.paste(text);
             return vec![];
         }
         let is_editor_on_top = self.overlay.is_none() && self.focus == Focus::Editor;
@@ -213,7 +225,7 @@ impl App {
     fn overlay_key(&mut self, overlay: Overlay, key: KeyEvent) -> Vec<Action> {
         match overlay {
             Overlay::Help(help) => {
-                self.overlay = help_after(help, key, self.focus).map(Overlay::Help);
+                self.overlay = help_after(help, key, self.pane()).map(Overlay::Help);
                 vec![]
             }
             Overlay::Finder(finder) => {
@@ -233,10 +245,16 @@ impl App {
             }
             Overlay::Detail(detail) => self.detail_key(detail, key),
             Overlay::CopyAs => self.copy_as_key(key),
+            Overlay::SchemaFilter => self.schema_filter_key(key),
         }
     }
 
     fn act(&mut self, act: Act) -> Vec<Action> {
+        if self.pane() == Pane::Schema
+            && let Some(actions) = self.schema_act(act)
+        {
+            return actions;
+        }
         match act {
             Act::Run => return self.sheet_mut().run_editor(),
             Act::Cancel => return self.sheet_mut().cancel(),
@@ -266,7 +284,9 @@ impl App {
             Act::CopyCell => return self.copy_cell(),
             Act::CopyRow => return self.copy_row(),
             Act::CopyResult => self.ask_copy_format(),
+            Act::SwitchTab => return self.switch_tab(),
             Act::Close | Act::Delete | Act::CloseSession | Act::Add | Act::Edit | Act::CopyCsv | Act::CopyJson | Act::CopyMarkdown => {}
+            Act::Filter | Act::ReadAgain => {}
         }
         vec![]
     }
