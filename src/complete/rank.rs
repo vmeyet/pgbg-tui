@@ -27,10 +27,18 @@ pub(crate) struct Candidate {
 }
 
 /// Names of one kind an ask draws from, and whether they are columns of a table the statement names.
+#[derive(Clone, Copy)]
 struct Source<'a> {
     names: &'a [Name],
     kind: Kind,
     is_in_scope: bool,
+}
+
+/// How a name matches what was typed: every prefix match ranks before any fuzzy one.
+#[derive(Clone, Copy)]
+enum Tier {
+    Prefix,
+    Fuzzy,
 }
 
 /// A name that matches what was typed, and what ranks it.
@@ -60,19 +68,22 @@ impl Index {
         let sources = self.sources(&ask.want);
         let best = |is_in_scope: bool| {
             let tier = sources.iter().filter(|source| source.is_in_scope == is_in_scope);
-            tier.flat_map(|source| starting(source.names, &key).iter().map(|name| source.matched(name, false))).min_by(Match::compare)
+            tier.flat_map(|source| source.found(Tier::Prefix, &key)).min_by(Match::compare)
         };
         best(true).or_else(|| best(false)).map(|best| best.candidate(&ask.prefix))
     }
 
-    /// The best names for `ask`, prefix and fuzzy matches together, at most 50.
+    /// The best names for `ask`, at most 50: the prefix matches, a binary search each, then fuzzy ones only to fill the
+    /// list, since a prefix match ranks before any fuzzy one.
     pub(crate) fn candidates(&self, ask: &Ask) -> Vec<Candidate> {
         let key = ask.prefix.to_lowercase();
         let sources = self.sources(&ask.want);
-        let mut seen = HashSet::new();
-        let matches = sources.iter().flat_map(|source| source.matching(&key));
-        let matches = matches.filter(|found| seen.insert((found.kind, found.name.key.as_str()))).collect();
-        best_of(matches).iter().map(|found| found.candidate(&ask.prefix)).collect()
+        let mut best = best_distinct(&sources, Tier::Prefix, &key);
+        if best.len() < MAX_LISTED {
+            best.extend(best_distinct(&sources, Tier::Fuzzy, &key));
+            best.truncate(MAX_LISTED);
+        }
+        best.iter().map(|found| found.candidate(&ask.prefix)).collect()
     }
 
     fn sources(&self, want: &Want) -> Vec<Source<'_>> {
@@ -95,16 +106,28 @@ impl<'a> Source<'a> {
         Match { is_fuzzy, is_in_scope: self.is_in_scope, kind: self.kind, name }
     }
 
-    fn matching(&self, key: &str) -> impl Iterator<Item = Match<'a>> {
-        self.names.iter().filter_map(move |name| match (name.key.starts_with(key), is_subsequence(key, &name.key)) {
-            (true, _) => Some(self.matched(name, false)),
-            (false, true) => Some(self.matched(name, true)),
-            (false, false) => None,
-        })
+    /// The names that match `key` in `tier`: those that start with it, a binary search, or those that hold its
+    /// characters in order without starting with it.
+    fn found<'k>(self, tier: Tier, key: &'k str) -> Box<dyn Iterator<Item = Match<'a>> + 'k>
+    where
+        'a: 'k,
+    {
+        match tier {
+            Tier::Prefix => Box::new(starting(self.names, key).iter().map(move |name| self.matched(name, false))),
+            Tier::Fuzzy => {
+                let is_fuzzy = move |name: &&Name| !name.key.starts_with(key) && is_subsequence(key, &name.key);
+                Box::new(self.names.iter().filter(is_fuzzy).map(move |name| self.matched(name, true)))
+            }
+        }
     }
 }
 
-impl Match<'_> {
+impl<'a> Match<'a> {
+    /// What tells two matches apart: one kind of name is listed once, from whichever source gave it first.
+    fn identity(&self) -> (Kind, &'a str) {
+        (self.kind, self.name.key.as_str())
+    }
+
     fn compare(&self, other: &Self) -> Ordering {
         let rank = |found: &Self| (found.is_fuzzy, !found.is_in_scope, found.name.key.len(), found.name.key.as_str());
         rank(self).cmp(&rank(other))
@@ -120,14 +143,30 @@ impl Match<'_> {
     }
 }
 
-/// The first 50 of `matches` in rank order, without sorting the rest.
-fn best_of(mut matches: Vec<Match<'_>>) -> Vec<Match<'_>> {
-    if matches.len() > MAX_LISTED {
-        matches.select_nth_unstable_by(MAX_LISTED - 1, Match::compare);
-        matches.truncate(MAX_LISTED);
+/// The best 50 matches of `key` in `tier` from `sources`, each name once: a column of a table the statement names wins
+/// over the same name among every column, which is the only list it can come twice from.
+fn best_distinct<'a>(sources: &[Source<'a>], tier: Tier, key: &str) -> Vec<Match<'a>> {
+    let mut seen = HashSet::new();
+    let in_scope = sources.iter().filter(|source| source.is_in_scope).flat_map(|source| source.found(tier, key));
+    let in_scope: Vec<Match<'a>> = in_scope.filter(|found| seen.insert(found.identity())).collect();
+    let others = sources.iter().filter(|source| !source.is_in_scope).flat_map(|source| source.found(tier, key));
+    best_of(in_scope.into_iter().chain(others), |found| !found.is_in_scope && seen.contains(&found.identity()))
+}
+
+/// The first 50 of `matches` in rank order but those `is_twice`, kept sorted as they come, so a long list is read once
+/// and never stored; `is_twice` only weighs a match that would make the list.
+fn best_of<'a>(matches: impl Iterator<Item = Match<'a>>, is_twice: impl Fn(&Match<'a>) -> bool) -> Vec<Match<'a>> {
+    let mut best: Vec<Match<'a>> = Vec::with_capacity(MAX_LISTED + 1);
+    for found in matches {
+        let is_beaten = best.len() == MAX_LISTED && best.last().is_some_and(|last| found.compare(last) != Ordering::Less);
+        if is_beaten || is_twice(&found) {
+            continue;
+        }
+        let at = best.partition_point(|kept| kept.compare(&found) != Ordering::Greater);
+        best.insert(at, found);
+        best.truncate(MAX_LISTED);
     }
-    matches.sort_unstable_by(Match::compare);
-    matches
+    best
 }
 
 /// A keyword in lower case once what was typed of it holds a lower-case letter.
