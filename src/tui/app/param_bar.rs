@@ -36,12 +36,17 @@ impl ParamBar {
         if key.code == KeyCode::Enter {
             return;
         }
-        editor::apply(self.fields.entry(name.clone()).or_default(), key);
+        editor::apply(self.field_mut(name), key);
     }
 
     /// Pastes `text` in the field of `name`, its line ends as spaces.
     pub(super) fn paste(&mut self, name: &ParamName, text: &str) {
-        self.fields.entry(name.clone()).or_default().paste(&text.replace(['\r', '\n'], " "));
+        self.field_mut(name).paste(&text.replace(['\r', '\n'], " "));
+    }
+
+    /// The field of `name`, made on first use as a secret one, so a value never shows in `Debug` or a log.
+    fn field_mut(&mut self, name: &ParamName) -> &mut Field {
+        self.fields.entry(name.clone()).or_insert_with(|| Field::secret(""))
     }
 
     /// The values typed for `names`; a name left empty falls back to its header's default.
@@ -153,6 +158,17 @@ mod tests {
 
     fn name(text: &str) -> ParamName {
         text.parse().unwrap()
+    }
+
+    #[test]
+    fn the_debug_of_the_app_never_shows_a_value_typed_or_pasted() {
+        let mut app = typed(SINCE_AND_OWNER);
+        press(&mut app, KeyCode::Tab);
+        type_in(&mut app, "2025-03-01");
+        press(&mut app, KeyCode::Tab);
+        app.paste("maria");
+        let printed = format!("{app:?}");
+        assert!(!printed.contains("2025-03-01") && !printed.contains("maria"), "{printed}");
     }
 
     #[test]

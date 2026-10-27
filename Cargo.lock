@@ -2757,8 +2757,8 @@ dependencies = [
 
 [[package]]
 name = "vtui"
-version = "0.3.0"
-source = "git+https://github.com/vmeyet/vtui?tag=v0.3.0#94c5ad2d1ec640d0fe8b0a7ed3959664b80fc9c0"
+version = "0.4.0"
+source = "git+https://github.com/vmeyet/vtui?tag=v0.4.0#0913f0313ed70b92fc5231656f0cb62b24695897"
 dependencies = [
  "base64",
  "crossterm",
@@ -2766,6 +2766,7 @@ dependencies = [
  "ratatui",
  "tempfile",
  "tracing",
+ "unicode-segmentation",
  "unicode-width",
 ]
 

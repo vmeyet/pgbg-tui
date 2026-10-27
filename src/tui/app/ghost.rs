@@ -56,9 +56,8 @@ impl Sheet {
 }
 
 fn ghost_of(index: &Index, ask: &Ask) -> Option<Ghost> {
-    let candidate = index.ghost(ask)?;
-    let rest = candidate.rest_after(&ask.prefix).to_owned();
-    (!rest.is_empty()).then(|| Ghost { typed: ask.typed.clone(), rest, insert: candidate.insert })
+    let ghosted = index.ghost(ask)?;
+    (!ghosted.rest.is_empty()).then(|| Ghost { typed: ask.typed.clone(), rest: ghosted.rest, insert: ghosted.insert })
 }
 
 #[cfg(test)]

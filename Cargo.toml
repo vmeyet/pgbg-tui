@@ -39,7 +39,7 @@ tree-sitter-highlight = "0.27"
 tree-sitter-sequel = "0.3"
 url = "2.5"
 uuid = "1"
-vtui = { git = "https://github.com/vmeyet/vtui", tag = "v0.3.0" }
+vtui = { git = "https://github.com/vmeyet/vtui", tag = "v0.4.0" }
 zeroize = "1.8"
 
 [dev-dependencies]

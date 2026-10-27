@@ -1,6 +1,5 @@
 ---
 source: src/tui/completion_view.rs
-assertion_line: 78
 expression: terminal.backend()
 ---
 "╭ ● shop · local ──────────────────────────────────────────╮"
@@ -14,7 +13,7 @@ expression: terminal.backend()
 "│╭ Result │offset keyword│────────────────────────────────╮│"
 "││ ⏎ runs │for    keyword│der the cursor                  ││"
 "││        │not    keyword│                                ││"
-"││        │from   keyword│                                ││"
+"││        │cross  keyword│                                ││"
 "││        ╰──────────────╯                                ││"
 "││                                                        ││"
 "││                                                        ││"
