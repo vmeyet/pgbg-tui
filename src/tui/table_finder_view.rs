@@ -9,7 +9,7 @@ use ratatui::text::Line;
 use vtui::palette::MAX_SHOWN;
 use vtui::palette::view::{self, Pick, Popup};
 
-/// What the finder says when it lists no table: why there is no schema yet, or that nothing matches.
+/// What the finder shows when it lists no table: why there is no schema yet, or that nothing matches.
 fn nothing_listed(app: &App) -> String {
     let sheet = app.sheet();
     if sheet.connection.schema() == SchemaReading::Off {

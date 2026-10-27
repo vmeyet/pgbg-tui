@@ -25,7 +25,7 @@ use crate::tunnel::Tunnel;
 use anyhow::{Result, anyhow};
 use std::path::Path;
 
-/// `err` and each of its causes on stderr, escaped: a server error can quote a value from the database.
+/// Prints `err` and each of its causes on stderr, escaped: a server error can quote a value from the database.
 pub fn print_error(err: &anyhow::Error) {
     eprintln!("\x1b[31m✗\x1b[0m {}", printable(&err.to_string()));
     for cause in err.chain().skip(1) {
@@ -33,13 +33,13 @@ pub fn print_error(err: &anyhow::Error) {
     }
 }
 
-/// `text` on stderr as a warning, escaped.
+/// Prints `text` on stderr as a warning, escaped.
 fn warn(text: &str) {
     eprintln!("! {}", printable(text));
 }
 
-/// `work` on a session opened on `connection` along its route; its tunnel, when it has one, stops once it is done.
-/// A signal stops the opening, or cancels the statement `work` has on the server; see `cancelled_on_signal`.
+/// Runs `work` on a session opened on `connection` along its route; its tunnel, when it has one, stops once `work` is done.
+/// A signal stops the opening, or cancels the statement `work` runs on the server; see `cancelled_on_signal`.
 async fn on_session<T>(connection: &Connection, work: impl AsyncFnOnce(&mut Session) -> Result<T>) -> Result<T> {
     let mut signals = Signals::listen()?;
     let Attempt { session, tunnel } = signals.or_stopped(open_once(connection)).await??;
@@ -51,8 +51,9 @@ async fn on_session<T>(connection: &Connection, work: impl AsyncFnOnce(&mut Sess
     result
 }
 
-/// `work` on `session`; a signal stops it as `CancelToken::unless_stopped` says, while its link and tunnel still stand:
-/// a server that cannot tell pgbg went (before PostgreSQL 14, off Linux, behind a pooler) would finish it.
+/// Runs `work` on `session`; a signal stops it as `CancelToken::unless_stopped` says, while its link and tunnel are
+/// still up. Otherwise a server that cannot tell pgbg is gone (before PostgreSQL 14, off Linux, behind a pooler) would
+/// run it to its end.
 async fn cancelled_on_signal<T>(
     signals: &mut Signals,
     session: &mut Session,
@@ -77,7 +78,7 @@ async fn stop(tunnel: Option<Tunnel>) {
     }
 }
 
-/// Each key of the config this pgbg ignores, on stderr.
+/// Warns on stderr of each config key this version of pgbg ignores.
 fn warn_of_ignored_keys(warnings: &[String], path: &Path) {
     if warnings.is_empty() {
         return;
@@ -88,7 +89,7 @@ fn warn_of_ignored_keys(warnings: &[String], path: &Path) {
     eprintln!("  in {}", path.display());
 }
 
-/// The config at `path`, once each key it ignores is warned of on stderr.
+/// Loads the config at `path`, warning on stderr of each key it ignores.
 fn load(path: &Path) -> Result<Config> {
     let loaded = Config::read(path)?;
     warn_of_ignored_keys(&loaded.warnings, path);

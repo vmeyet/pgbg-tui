@@ -1,4 +1,4 @@
-//! A result's portal held open across jobs: the session task serves its pages here until the portal closes.
+//! A result's portal, kept open across jobs: the session task serves its pages here until the portal closes.
 use super::session::{Cancels, Job, Mailbox, Next, OnServer, SessionAnswers, Woken, ended, warn_if_still_running};
 use crate::db::model::{CancelToken, Extent, Page};
 use crate::db::{Fetched, Pages};
@@ -7,8 +7,8 @@ use crate::tunnel::{Died, Tunnel};
 use std::time::Duration;
 use tokio::time::{Instant, sleep_until};
 
-/// How long a portal waits for the grid to ask for its next page before it is closed: its transaction holds a snapshot,
-/// which keeps the server from cleaning up the rows it can still see.
+/// How long a portal waits for the grid to ask for its next page before it is closed.
+/// Its transaction holds a snapshot, which stops the server from cleaning up the rows that snapshot can still see.
 pub(super) const PAGES_IDLE_LIMIT: Duration = Duration::from_mins(5);
 
 /// What serving the pages of `run` borrows from the session task while the portal stays open.
@@ -36,7 +36,7 @@ enum Fetch<'s> {
     Last(Page),
     /// The run's cancel stopped the fetch, so the portal is gone.
     Cancelled,
-    /// The server failed the fetch in these words, so the portal is gone.
+    /// The server failed the fetch with this message, so the portal is gone.
     Failed(String),
     /// The session is stopping: the fetch was dropped, and the portal goes with the session.
     Closing,
@@ -53,7 +53,7 @@ impl Outbox<'_> {
         self.say(Incoming::Page { run: self.run, page });
     }
 
-    /// Says the server failed the next page, so the result is cut.
+    /// Reports that the server failed the next page, so the result is cut.
     fn send_failure(&self, error: String) {
         self.say(Incoming::PageFailed { run: self.run, error });
     }
@@ -62,19 +62,20 @@ impl Outbox<'_> {
         self.answers.say(incoming);
     }
 
-    /// Says the portal closed before its last page, so the result is cut.
+    /// Reports that the portal closed before its last page, so the result is cut.
     fn send_cut(&self) {
         self.send(Page { rows: vec![], extent: Extent::Cut });
     }
 }
 
-/// The idle limit, kept a tenth short of the server's, so pgbg closes the portal before the server ends the session.
+/// The idle limit, kept a tenth below the server's, so pgbg closes the portal before the server ends the session.
 fn idle_limit_before_the_server(idle_limit: Duration, on_server: Duration) -> Duration {
     idle_limit.min(on_server.saturating_sub(on_server / 10))
 }
 
-/// Serves the pages of `paging.run` until its portal closes: on its last page, a cancel of the run, a new run, the idle
-/// limit, the session closing or its link or tunnel ending; a close before the last page sends an empty `Cut` page.
+/// Serves the pages of `paging.run` until its portal closes: after its last page, a cancel of the run, a new run, the
+/// idle limit, the session closing, or the end of its link or tunnel.
+/// A close before the last page sends an empty `Cut` page.
 /// Returns what the session task does next.
 pub(super) async fn serve_pages(paging: Paging<'_, '_>) -> Next {
     let Paging { mut pages, run, token, mailbox, mut tunnel, idle_limit } = paging;
@@ -130,14 +131,14 @@ pub(super) async fn serve_pages(paging: Paging<'_, '_>) -> Next {
     }
 }
 
-/// The link or the tunnel ended, so there is no transaction left to roll back.
+/// Drops the portal and cuts the result without a rollback: the link or the tunnel ended, and the transaction with it.
 fn gone(pages: Pages<'_>, outbox: &Outbox<'_>, woken: Woken) -> Next {
     drop(pages);
     outbox.send_cut();
     Next::Act(woken)
 }
 
-/// A new run waits once the portal is closed, and a closed queue stops the task; a cancel or the idle limit only closed it.
+/// What to do once the portal is closed: run a queued job, stop when the queue is closed, or else wait.
 fn still_to_act_on(held: Held, is_queue_closed: bool) -> Next {
     match held {
         Held::Queued(Some(job)) if !is_queue_closed => Next::Act(Woken::Queued(Some(job))),
@@ -146,8 +147,9 @@ fn still_to_act_on(held: Held, is_queue_closed: bool) -> Next {
     }
 }
 
-/// Fetches the next page, asking the server to cancel it when its run's cancel comes; a stop stops it as
-/// `CancelToken::unless_stopped` says. `on_server` holds `token` until it is fetched or dropped.
+/// Fetches the next page, asking the server to cancel it when its run's cancel comes.
+/// A stop ends it as `CancelToken::unless_stopped` describes; `on_server` holds `token` until the page is fetched or
+/// dropped.
 async fn next_page<'s>(pages: Pages<'s>, run: RunId, token: &CancelToken, cancelled: &mut Cancels, on_server: &OnServer) -> Fetch<'s> {
     on_server.starts(token);
     let fetched = token.unless_stopped(pages.next(), cancelled.stopping(run, token)).await;
@@ -165,7 +167,7 @@ async fn next_page<'s>(pages: Pages<'s>, run: RunId, token: &CancelToken, cancel
     }
 }
 
-/// Ends the portal's transaction; on a failure the session task finds the session lost.
+/// Ends the portal's transaction; if that fails, the session task later finds the session lost.
 async fn close(pages: Pages<'_>) {
     if let Err(err) = pages.close().await {
         tracing::warn!("closing a result's portal failed: {err:#}");
@@ -252,7 +254,7 @@ mod tests {
         assert_eq!((last.rows.len(), last.extent), (200, Extent::All));
     }
 
-    /// Runs a result bigger than a page as the second run, after the first one read the session's backend pid.
+    /// Runs a result bigger than a page as the second run, after the first run read the session's backend pid.
     async fn holding_a_portal(backend: &Backend, answers: &mut UnboundedReceiver<Answer>) -> Value {
         run(backend, RunId::FIRST, "SELECT pg_backend_pid()");
         let Incoming::Result { result, .. } = next(answers).await else { panic!("no pid") };

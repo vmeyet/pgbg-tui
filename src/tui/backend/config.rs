@@ -1,5 +1,5 @@
-//! The config file, changed off the loop through the same `config` functions the command line uses; after each
-//! change the connections are read back and sent as `ConfigAnswer::Changed`, with the id of the change.
+//! The config file, changed off the loop through the same `config` functions the command line uses.
+//! After each change the connections are read back and sent as `ConfigAnswer::Changed`, with the id of the change.
 use super::super::app::{Answer, ConfigAnswer, ConfigChangeId, KeychainPassword, SaveConnection, Saving};
 use crate::config::{self, Config};
 use crate::connection::ConnectionName;
@@ -8,35 +8,35 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
-/// The way to the task that changes the config one change at a time, so each answer comes in the order asked.
+/// The handle to the task that changes the config one change at a time, so answers come back in the order asked.
 #[derive(Debug)]
 pub(in crate::tui) struct ConfigFile {
     changes: UnboundedSender<Change>,
 }
 
-/// One change of the config, waiting for the one before it.
+/// One change to the config, waiting for the change before it.
 enum Change {
     Remove { id: ConfigChangeId, name: ConnectionName },
     Save(Box<SaveConnection>),
 }
 
 impl ConfigFile {
-    /// Starts the task that changes the config at `path`, and sends what each change came to on `answers`.
+    /// Starts the task that changes the config at `path`, and sends the outcome of each change on `answers`.
     pub(super) fn start(path: PathBuf, answers: UnboundedSender<Answer>) -> Self {
         let (changes, queue) = mpsc::unbounded_channel();
         tokio::spawn(change_in_turn(path, answers, queue));
         Self { changes }
     }
 
-    /// Removes the connection `name`, and first the keychain item no other connection names, as
-    /// `pgbg connection remove` does.
+    /// Removes the connection `name` as `pgbg connection remove` does, first deleting its keychain item when no other
+    /// connection names it.
     pub(super) fn remove(&self, id: ConfigChangeId, name: ConnectionName) {
         self.queue(Change::Remove { id, name });
     }
 
-    /// Writes the connection as `pgbg connection add|edit` does, then the password typed to its keychain item as
-    /// `pgbg password set` does, so a change the config refuses never touches the keychain; an edit that names a new
-    /// item then deletes the old one no other connection names.
+    /// Writes the connection as `pgbg connection add|edit` does, then the typed password to its keychain item as
+    /// `pgbg password set` does, so a change the config refuses never touches the keychain.
+    /// An edit that names a new item then deletes the old item when no other connection names it.
     pub(super) fn save(&self, save: SaveConnection) {
         self.queue(Change::Save(Box::new(save)));
     }
@@ -48,7 +48,8 @@ impl ConfigFile {
     }
 }
 
-/// Makes each change on a blocking thread, since they are files and processes, the next one only once it answered.
+/// Makes each change on a blocking thread, since changes touch files and processes, and starts the next only once the
+/// last one has answered.
 async fn change_in_turn(path: PathBuf, answers: UnboundedSender<Answer>, mut queue: UnboundedReceiver<Change>) {
     while let Some(change) = queue.recv().await {
         let id = change.id();
@@ -74,8 +75,8 @@ impl Change {
     }
 }
 
-/// What `save` came to: a config that did not take it hands the password typed back, so the form keeps it; once it
-/// did, its connections come back, with a warning when the keychain did not follow.
+/// The outcome of `save`: when the config refuses it, the typed password goes back so the form keeps it.
+/// Once the config takes it, the connections come back, with a warning when the keychain step failed.
 fn save_answer(path: &Path, save: SaveConnection, keychain: &Keychain) -> ConfigAnswer {
     let replaced = match written(path, &save) {
         Ok(replaced) => replaced,
@@ -88,14 +89,14 @@ fn save_answer(path: &Path, save: SaveConnection, keychain: &Keychain) -> Config
     }
 }
 
-/// Writes the connection, and gives the keychain item an edit stops naming, which no other connection names.
+/// Writes the connection, and returns the keychain item that an edit stops naming and that no other connection names.
 fn written(path: &Path, save: &SaveConnection) -> Result<Option<KeychainItem>> {
     let replaced = replaced_item(path, save)?;
     write_connection(path, save)?;
     Ok(replaced)
 }
 
-/// Writes the password typed to its item, then deletes the item `replaced`.
+/// Writes the typed password to its item, then deletes the item `replaced`.
 fn keychain_followed(save: &SaveConnection, replaced: Option<KeychainItem>, keychain: &Keychain) -> Result<()> {
     if let Some(KeychainPassword { item, password }) = &save.password {
         keychain.write(item, password).context("the password did not reach the keychain")?;
@@ -126,7 +127,7 @@ fn remove(path: &Path, name: &ConnectionName) -> Result<()> {
     config::remove_connection(path, name)
 }
 
-/// What `change` came to: the connections read back, or why it failed.
+/// The outcome of `change`: the connections read back, or why it failed.
 fn changed(path: &Path, change: impl FnOnce(&Path) -> Result<()>) -> ConfigAnswer {
     match change(path).and_then(|()| Config::read(path)) {
         Ok(loaded) => ConfigAnswer::Changed { connections: loaded.config.connections, warning: None },
