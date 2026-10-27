@@ -1,4 +1,6 @@
-//! The header of a saved query: its leading `--` lines, `-- name:`, `-- connection:`, `-- chart:` and `-- format:`.
+//! The header of a saved query: its leading `--` lines, `-- name:`, `-- connection:`, `-- chart:`, `-- format:` and
+//! `-- param:`.
+use super::params::ParamSpec;
 use crate::chart::ChartSpec;
 use crate::connection::ConnectionName;
 use crate::format::{self, ColumnFormat};
@@ -14,6 +16,8 @@ pub(crate) struct Header {
     pub(crate) chart: Option<ChartSpec>,
     /// The format each column it names opens in.
     pub(crate) formats: Vec<ColumnFormat>,
+    /// One per `-- param:` line, in order; a later one for a name wins.
+    pub(crate) params: Vec<ParamSpec>,
     pub(crate) warnings: Vec<String>,
 }
 
@@ -38,6 +42,10 @@ impl Header {
             "format" => match format::parse_column_formats(value) {
                 Ok(formats) => Self { formats, ..self },
                 Err(err) => self.warned(&format!("format: {err}")),
+            },
+            "param" => match value.parse() {
+                Ok(param) => Self { params: [self.params, vec![param]].concat(), ..self },
+                Err(err) => self.warned(&format!("param: {err}")),
             },
             unknown => self.warned(&format!("unknown header key `{unknown}`")),
         }
@@ -83,6 +91,13 @@ mod tests {
     fn a_format_header_that_does_not_parse_is_a_warning() {
         let header = Header::parse("-- format: created_at=pretty\nSELECT 1");
         assert_eq!((header.formats, header.warnings.len()), (vec![], 1));
+    }
+
+    #[test]
+    fn each_param_line_declares_a_parameter() {
+        let header = Header::parse("-- param: since date = 2024-01-01\n-- param: owner text optional\n-- param: 1st\nSELECT 1");
+        let names: Vec<String> = header.params.iter().map(|param| param.name.to_string()).collect();
+        assert_eq!((names, header.warnings.len()), (vec!["since".to_owned(), "owner".to_owned()], 1));
     }
 
     #[test]

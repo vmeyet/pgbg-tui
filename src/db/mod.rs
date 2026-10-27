@@ -178,7 +178,7 @@ impl Session {
     /// A statement that returns rows goes through a portal in its own committed transaction, so the
     /// server sends no row past the cap; one inside a transaction the user began, or one without rows, runs as is.
     async fn run_writes(&mut self, admitted: &Admitted) -> Result<ResultSet> {
-        let statement = self.client.prepare(admitted.statement.as_str()).await.map_err(server_error)?;
+        let statement = bind::prepare(&self.client, admitted).await?;
         if statement.columns().is_empty() || self.is_in_user_transaction().await? {
             return fetch(&self.client, &statement, &admitted.params).await;
         }
@@ -200,7 +200,7 @@ impl Session {
 
     async fn run_read_only(&mut self, admitted: &Admitted) -> Result<ResultSet> {
         self.read_only(async |transaction| {
-            let statement = transaction.prepare(admitted.statement.as_str()).await.map_err(server_error)?;
+            let statement = bind::prepare(transaction, admitted).await?;
             let portal = bind_portal(transaction, &statement, &admitted.params).await?;
             Ok(ResultSet::new(columns(&statement), fetch_capped(transaction, &portal).await?))
         })
@@ -731,7 +731,7 @@ mod tests {
     }
 
     async fn run_with(writes: WritePolicy, sql: &str, values: &[Option<&str>]) -> Result<ResultSet> {
-        let params = Params::new(values.iter().map(|value| value.map(str::to_owned)).collect());
+        let params = Params::new(values.iter().map(|value| value.map(str::to_owned)).collect(), vec![]);
         session(writes).await.run(&guard::admit(Statement::new(sql), params, writes).unwrap()).await
     }
 
@@ -740,6 +740,32 @@ mod tests {
     async fn a_value_is_read_by_the_server_as_the_type_it_gives_its_parameter() {
         let result = run_with(WritePolicy::ReadOnly, "SELECT $1::int4 + 1, $2::date", &[Some("41"), Some("2024-01-01")]).await.unwrap();
         assert_eq!(result.rows()[0].iter().map(Value::to_string).collect::<Vec<_>>(), ["42", "2024-01-01"]);
+    }
+
+    async fn run_typed(writes: WritePolicy, sql: &str, value: &str, type_name: &str) -> Result<ResultSet> {
+        let params = Params::new(vec![Some(value.to_owned())], vec![Some(model::TypeName::new(type_name))]);
+        session(writes).await.run(&guard::admit(Statement::new(sql), params, writes).unwrap()).await
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_parameter_takes_the_type_its_header_names() {
+        let result = run_typed(WritePolicy::ReadOnly, "SELECT $1 + 1", "41", "int4").await.unwrap();
+        assert_eq!(result.rows(), [[Value::Int(42)]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_type_of_several_words_is_looked_up_on_writes_too() {
+        let result = run_typed(WritePolicy::Allowed, "SELECT pg_typeof($1)::text", "2024-01-01", "timestamp with time zone").await.unwrap();
+        assert_eq!(result.rows(), [[Value::Text("timestamp with time zone".into())]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_type_the_server_does_not_know_stops_the_run() {
+        let err = run_typed(WritePolicy::ReadOnly, "SELECT $1", "1", "no_such_kind").await.unwrap_err();
+        assert!(err.to_string().contains("the server knows no type `no_such_kind`"), "{err}");
     }
 
     #[tokio::test]

@@ -1,6 +1,7 @@
 use crate::connection::{Connection, ConnectionName};
 use crate::db::model::{ResultSet, Statement};
 use crate::history::{Entry, Outcome, Store};
+use crate::query::Header;
 use crate::query::params::{self, Assignment, Given};
 use crate::render;
 use anyhow::{Context, Result, anyhow};
@@ -53,7 +54,11 @@ async fn read_params_file(path: &Path) -> Result<String> {
 }
 
 async fn run_statement(connection: &Connection, sql: &str, given: &Given) -> Result<ResultSet> {
-    let admitted = params::admit(&Statement::new(sql), given, connection.writes())?;
+    let header = Header::parse(sql);
+    for warning in &header.warnings {
+        super::warn(warning);
+    }
+    let admitted = params::admit(&Statement::new(sql), given, &header.params, connection.writes())?;
     super::on_session(connection, async |session| session.run(&admitted).await).await
 }
 

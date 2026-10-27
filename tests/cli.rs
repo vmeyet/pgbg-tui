@@ -223,6 +223,12 @@ fn run_binds_a_param_given_on_the_command_line() {
 
 #[test]
 #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+fn run_binds_the_default_and_the_type_its_header_declares() {
+    assert_eq!(first_value_on_the_test_database(&["--", "-- param: total int4 = 41\nSELECT {{total}} + 1"], ""), 42);
+}
+
+#[test]
+#[ignore = "needs PGBG_TEST_DATABASE_URL"]
 fn run_binds_a_param_read_from_stdin() {
     assert_eq!(first_value_on_the_test_database(&["SELECT {{owner}} || '!'", "--params-file", "-"], "owner=nina\n"), "nina!");
 }
