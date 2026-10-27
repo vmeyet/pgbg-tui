@@ -190,6 +190,11 @@ impl CancelToken {
         };
         sent.map_err(server_error)
     }
+
+    /// `cancel`, given up after `wait`: a server out of reach must not hold pgbg up as it stops.
+    pub(crate) async fn cancel_within(&self, wait: Duration) -> Result<()> {
+        timeout(wait, self.cancel()).await.with_context(|| format!("the server did not take the cancel within {}s", wait.as_secs()))?
+    }
 }
 
 /// Why the link `ended` watches ended, once it has.

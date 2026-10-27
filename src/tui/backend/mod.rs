@@ -17,6 +17,7 @@ use std::pin::pin;
 use std::time::Duration;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
@@ -27,6 +28,8 @@ mod queries;
 
 /// How long closing a session waits for its task to finish a cancel before it aborts the task, so the terminal comes back soon.
 const STOP_WAIT: Duration = Duration::from_secs(2);
+/// How long closing a session waits for the server to take a cancel request before it aborts the session task.
+const CANCEL_WAIT: Duration = Duration::from_secs(1);
 const CANCELLED_BEFORE_SENT: &str = "cancelled before it was sent";
 const TUNNEL_NOT_STARTED: &str = "its tunnel did not start";
 const TUNNEL_DIED: &str = "its tunnel died";
@@ -49,6 +52,8 @@ pub(super) struct Backend {
 struct SessionLink {
     jobs: UnboundedSender<Job>,
     cancels: UnboundedSender<RunId>,
+    /// What the task has on the server and no cancel reached yet, shared with the task; an abort cancels it first.
+    running: watch::Receiver<Option<CancelToken>>,
     task: JoinHandle<()>,
 }
 
@@ -143,9 +148,11 @@ impl Backend {
         }
         let name = connection.name().clone();
         let (cancels, cancelled) = mpsc::unbounded_channel();
+        let (on_server, running) = watch::channel(None);
         let (answers, history, idle_limit) = (self.answers.clone(), self.history.clone(), self.idle_limit);
-        let task = SessionTask { connection, tunnel: None, session: None, cancelled, answers, history, idle_limit };
-        _ = self.sessions.insert(name, SessionLink::start(task, cancels));
+        let on_server = OnServer(on_server);
+        let task = SessionTask { connection, tunnel: None, session: None, cancelled, on_server, answers, history, idle_limit };
+        _ = self.sessions.insert(name, SessionLink::start(task, cancels, running));
     }
 
     /// Queues `statement` on the session of `connection`; its answer comes back as an `Answer`.
@@ -180,10 +187,11 @@ impl Backend {
 }
 
 impl SessionLink {
-    /// Starts `task`, which opens its session and runs each statement in turn; its cancels come through `cancels`.
-    fn start(task: SessionTask, cancels: UnboundedSender<RunId>) -> Self {
+    /// Starts `task`, which opens its session and runs each statement in turn; its cancels come through `cancels`, and
+    /// `running` says what it has on the server.
+    fn start(task: SessionTask, cancels: UnboundedSender<RunId>, running: watch::Receiver<Option<CancelToken>>) -> Self {
         let (jobs, queue) = mpsc::unbounded_channel();
-        Self { jobs, cancels, task: tokio::spawn(task.serve(queue)) }
+        Self { jobs, cancels, running, task: tokio::spawn(task.serve(queue)) }
     }
 
     /// Queues `job` behind the one running.
@@ -201,15 +209,22 @@ impl SessionLink {
     }
 
     /// Cancels the running statement and lets the session task finish it, waiting `STOP_WAIT` at most;
-    /// past it, the task is aborted, which cuts the session's link so the server stops the statement.
+    /// past it, the server is asked to cancel a statement or a page whose cancel did not reach it, and the task is
+    /// aborted, which cuts the session's link.
     async fn stop(self) {
-        let Self { jobs, cancels, mut task } = self;
+        let Self { jobs, cancels, running, mut task } = self;
         drop((jobs, cancels));
         match tokio::time::timeout(STOP_WAIT, &mut task).await {
             Ok(Ok(())) => {}
             Ok(Err(err)) => tracing::warn!("the session task failed: {err}"),
             Err(_) => {
                 tracing::warn!("the session task did not stop within {STOP_WAIT:?}: it is aborted");
+                let on_server = running.borrow().clone();
+                if let Some(token) = on_server
+                    && let Err(err) = token.cancel_within(CANCEL_WAIT).await
+                {
+                    tracing::warn!("the statement may still run on the server: {err:#}");
+                }
                 task.abort();
             }
         }
@@ -229,9 +244,31 @@ struct SessionTask {
     tunnel: Option<Tunnel>,
     session: Option<Session>,
     cancelled: UnboundedReceiver<RunId>,
+    on_server: OnServer,
     answers: UnboundedSender<Answer>,
     history: Option<Store>,
     idle_limit: Duration,
+}
+
+/// Holds the cancel token of what a session task has on the server, a statement or a page, for its link's abort.
+#[derive(Debug)]
+struct OnServer(watch::Sender<Option<CancelToken>>);
+
+impl OnServer {
+    fn starts(&self, token: &CancelToken) {
+        self.0.send_replace(Some(token.clone()));
+    }
+
+    fn ended(&self) {
+        self.0.send_replace(None);
+    }
+
+    /// Cancels what is on the server as the session closes; once the server took it, an abort has nothing to cancel.
+    async fn cancel_as_closing(&self, token: &CancelToken) {
+        if cancel(token).await {
+            self.ended();
+        }
+    }
 }
 
 /// A run's answer for the app, what came of it for the history, and its portal while more pages wait in it.
@@ -329,15 +366,16 @@ impl SessionTask {
         let woken = {
             let token = session.cancel_token();
             let Answered { incoming, outcome, rest } =
-                run_until_answered(session, self.connection.writes(), queued, &mut self.cancelled).await;
+                run_until_answered(session, self.connection.writes(), queued, &mut self.cancelled, &self.on_server).await;
             let took_ms = u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX);
             record(self.history.as_ref(), Entry { statement, connection: self.connection.name().clone(), started_at, took_ms, outcome });
             send(&self.answers, Answer::Session { connection: self.connection.name().clone(), incoming });
             if let Some(pages) = rest {
                 let tunnel = self.tunnel.as_mut();
-                let (connection, answers, idle_limit) = (self.connection.name(), &self.answers, self.idle_limit);
-                serve_pages(Paging { pages, run, token, queue, cancelled: &mut self.cancelled, tunnel, connection, answers, idle_limit })
-                    .await
+                let (connection, answers, idle_limit, on_server) =
+                    (self.connection.name(), &self.answers, self.idle_limit, &self.on_server);
+                let cancelled = &mut self.cancelled;
+                serve_pages(Paging { pages, run, token, queue, cancelled, on_server, tunnel, connection, answers, idle_limit }).await
             } else {
                 None
             }
@@ -449,36 +487,43 @@ fn was_cancelled(cancelled: &mut UnboundedReceiver<RunId>, run: RunId) -> bool {
 }
 
 /// Runs `queued`, asking the server to cancel it when its cancel comes or its session closes; a cancel for another
-/// run does nothing.
+/// run does nothing. `on_server` holds its token while it runs.
 async fn run_until_answered<'s>(
     session: &'s mut Session,
     writes: WritePolicy,
     queued: Queued,
     cancelled: &mut UnboundedReceiver<RunId>,
+    on_server: &OnServer,
 ) -> Answered<'s> {
     let token = session.cancel_token();
     let run = queued.run;
+    on_server.starts(&token);
     let mut answer = pin!(answer_to(session, writes, queued));
     let mut is_closing = false;
-    loop {
+    let answered = loop {
         tokio::select! {
-            answer = &mut answer => return answer,
+            answer = &mut answer => break answer,
             cancel_of = cancelled.recv(), if !is_closing => match cancel_of {
-                Some(cancelled) if cancelled == run => cancel(&token).await,
+                Some(cancelled) if cancelled == run => _ = cancel(&token).await,
                 Some(_) => {}
                 None => {
                     is_closing = true;
-                    cancel(&token).await;
+                    on_server.cancel_as_closing(&token).await;
                 }
             },
         }
-    }
+    };
+    on_server.ended();
+    answered
 }
 
-async fn cancel(token: &CancelToken) {
-    if let Err(err) = token.cancel().await {
+/// Whether the server took the cancel request.
+async fn cancel(token: &CancelToken) -> bool {
+    let sent = token.cancel().await;
+    if let Err(err) = &sent {
         tracing::warn!("the cancel request failed: {err:#}");
     }
+    sent.is_ok()
 }
 
 async fn answer_to(session: &mut Session, writes: WritePolicy, queued: Queued) -> Answered<'_> {

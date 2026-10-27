@@ -1,5 +1,5 @@
 //! A result's portal held open across jobs: the session task serves its pages here until the portal closes.
-use super::{Job, Woken, cancel, ended, send};
+use super::{Job, OnServer, Woken, cancel, ended, send};
 use crate::connection::ConnectionName;
 use crate::db::model::{CancelToken, Extent, Page};
 use crate::db::{Fetched, Pages};
@@ -21,6 +21,7 @@ pub(super) struct Paging<'a, 's> {
     pub(super) token: CancelToken,
     pub(super) queue: &'a mut UnboundedReceiver<Job>,
     pub(super) cancelled: &'a mut UnboundedReceiver<RunId>,
+    pub(super) on_server: &'a OnServer,
     pub(super) tunnel: Option<&'a mut Tunnel>,
     pub(super) connection: &'a ConnectionName,
     pub(super) answers: &'a UnboundedSender<Answer>,
@@ -79,7 +80,7 @@ impl Outbox<'_> {
 /// limit, the session closing or its link or tunnel ending; a close before the last page sends an empty `Cut` page.
 /// Returns what woke the task that the session task still has to act on.
 pub(super) async fn serve_pages(paging: Paging<'_, '_>) -> Option<Woken> {
-    let Paging { mut pages, run, token, queue, cancelled, mut tunnel, connection, answers, idle_limit } = paging;
+    let Paging { mut pages, run, token, queue, cancelled, on_server, mut tunnel, connection, answers, idle_limit } = paging;
     let outbox = Outbox { connection, answers, run };
     let mut deadline = Instant::now() + idle_limit;
     loop {
@@ -93,7 +94,7 @@ pub(super) async fn serve_pages(paging: Paging<'_, '_>) -> Option<Woken> {
         let is_queue_closed = queue.is_closed();
         match held {
             Held::Queued(Some(Job::NextPage { run: of })) if of == run && !is_queue_closed => {
-                match next_page(pages, run, &token, cancelled).await {
+                match next_page(pages, run, &token, cancelled, on_server).await {
                     Fetch::More(page, rest) => {
                         outbox.send(page);
                         pages = rest;
@@ -146,8 +147,16 @@ fn still_to_act_on(held: Held, is_queue_closed: bool) -> Option<Woken> {
     }
 }
 
-/// Fetches the next page, asking the server to cancel it when its run's cancel comes or the session closes.
-async fn next_page<'s>(pages: Pages<'s>, run: RunId, token: &CancelToken, cancelled: &mut UnboundedReceiver<RunId>) -> Fetch<'s> {
+/// Fetches the next page, asking the server to cancel it when its run's cancel comes or the session closes;
+/// `on_server` holds `token` while it is fetched.
+async fn next_page<'s>(
+    pages: Pages<'s>,
+    run: RunId,
+    token: &CancelToken,
+    cancelled: &mut UnboundedReceiver<RunId>,
+    on_server: &OnServer,
+) -> Fetch<'s> {
+    on_server.starts(token);
     let mut fetched = pin!(pages.next());
     let (mut is_closing, mut is_cancelled) = (false, false);
     let fetched = loop {
@@ -156,16 +165,17 @@ async fn next_page<'s>(pages: Pages<'s>, run: RunId, token: &CancelToken, cancel
             cancel_of = cancelled.recv(), if !is_closing => match cancel_of {
                 Some(of) if of == run => {
                     is_cancelled = true;
-                    cancel(token).await;
+                    _ = cancel(token).await;
                 }
                 Some(_) => {}
                 None => {
                     is_closing = true;
-                    cancel(token).await;
+                    on_server.cancel_as_closing(token).await;
                 }
             },
         }
     };
+    on_server.ended();
     match fetched {
         Ok(Fetched { rest: Some(rest), .. }) if is_closing => {
             close(rest).await;
@@ -296,6 +306,22 @@ mod tests {
         while on_a_side_session(&is_active).await.is_empty() {}
         backend.cancel(&shop(), RunId::FIRST);
         assert_eq!(page_of(next(&mut answers).await), Page { rows: vec![], extent: Extent::Cut });
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_page_on_the_server_leaves_its_cancel_to_an_abort_until_it_ends() {
+        let (backend, mut answers) = started(PAGES_IDLE_LIMIT);
+        run(&backend, RunId::FIRST, SLOW_AFTER_THE_FIRST_PAGE);
+        next(&mut answers).await;
+        ask_next_page(&backend);
+        let is_active = format!("SELECT 1 FROM pg_stat_activity WHERE query = '{SLOW_AFTER_THE_FIRST_PAGE}' AND state = 'active'");
+        while on_a_side_session(&is_active).await.is_empty() {}
+        let running = backend.sessions[&shop()].running.clone();
+        assert!(running.borrow().is_some());
+        backend.cancel(&shop(), RunId::FIRST);
+        next(&mut answers).await;
+        assert!(running.borrow().is_none());
     }
 
     #[tokio::test]

@@ -359,3 +359,83 @@ fn schema_json_lists_the_tables_the_filter_keeps() {
     assert_eq!(json["schemas"][0]["tables"][0]["indexes"][0]["is_primary"], true);
     assert_eq!(json["schemas"][0]["tables"].as_array().unwrap().len(), 1);
 }
+
+/// A proxy to `argv[1]:argv[2]` that writes its port to `argv[3]` and keeps the server's side of a link open once the
+/// client hangs up, as a pooler or a server that cannot check does: only a cancel request then stops a statement.
+const HIDING_HANG_UPS: &str = "
+import socket, sys, threading
+server = socket.create_server(('127.0.0.1', 0))
+open(sys.argv[3], 'w').write(str(server.getsockname()[1]))
+links = []
+def pipe(source, sink, hides_hang_up):
+    try:
+        while data := source.recv(65536):
+            sink.sendall(data)
+    except OSError:
+        pass
+    if not hides_hang_up:
+        sink.close()
+while True:
+    client, _ = server.accept()
+    upstream = socket.create_connection((sys.argv[1], int(sys.argv[2])))
+    links.append(upstream)
+    threading.Thread(target=pipe, args=(client, upstream, True), daemon=True).start()
+    threading.Thread(target=pipe, args=(upstream, client, False), daemon=True).start()
+";
+const SLOW_INSERT: &str = "INSERT INTO cli_cancelled_orders SELECT 1 FROM pg_sleep(3)";
+const ACTIVE_INSERTS: &str =
+    "SELECT count(*) FROM pg_stat_activity WHERE state = 'active' AND query LIKE 'INSERT INTO cli_cancelled_orders%'";
+const STATEMENT_WAIT: Duration = Duration::from_secs(10);
+
+/// `[connections.<name>]` on `url`, local and allowing writes.
+fn writable(name: &str, url: &str) -> String {
+    format!("[connections.{name}]\ntier = \"local\"\nurl = \"{url}\"\nwrites = \"allowed\"\n")
+}
+
+/// The single value `sql` returns on `shop`, as JSON.
+fn value_of(dir: &Path, config: &str, sql: &str) -> serde_json::Value {
+    let output = pgbg_in(dir, config, &["run", "shop", sql, "--json"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["rows"][0][0].clone()
+}
+
+/// `HIDING_HANG_UPS` in front of `database`, and the URL through it.
+fn hiding_hang_ups(dir: &Path, database: &url::Url) -> (Child, url::Url) {
+    let written = dir.join("proxy-port");
+    let (host, port) = (database.host_str().unwrap().to_owned(), database.port().unwrap_or(5432).to_string());
+    let proxy = Command::new("python3").args(["-c", HIDING_HANG_UPS, &host, &port, &written.display().to_string()]).spawn().unwrap();
+    assert!(within(TUNNEL_WAIT, || std::fs::read_to_string(&written).is_ok_and(|port| !port.is_empty())));
+    let mut proxied = database.clone();
+    proxied.set_host(Some("127.0.0.1")).unwrap();
+    proxied.set_port(Some(std::fs::read_to_string(&written).unwrap().parse().unwrap())).unwrap();
+    (proxy, proxied)
+}
+
+#[test]
+#[ignore = "needs PGBG_TEST_DATABASE_URL"]
+fn ctrl_c_on_pgbg_run_cancels_its_write_even_where_the_server_cannot_see_pgbg_go() {
+    let database = url::Url::parse(&std::env::var("PGBG_TEST_DATABASE_URL").unwrap()).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let direct = writable("shop", database.as_str());
+    for sql in ["DROP TABLE IF EXISTS cli_cancelled_orders", "CREATE TABLE cli_cancelled_orders (id int)"] {
+        let output = pgbg_in(dir.path(), &direct, &["run", "shop", sql]);
+        assert!(output.status.success(), "{}", stderr(&output));
+    }
+    let (mut proxy, proxied) = hiding_hang_ups(dir.path(), &database);
+    let config = dir.path().join("proxied.toml");
+    std::fs::write(&config, writable("shop", proxied.as_str())).unwrap();
+    let mut pgbg = Command::new(env!("CARGO_BIN_EXE_pgbg"))
+        .args(["run", "shop", SLOW_INSERT])
+        .env("PGBG_CONFIG", &config)
+        .env("PGBG_LOG", "off")
+        .env("PGBG_DATA_DIR", dir.path())
+        .spawn()
+        .unwrap();
+    assert!(within(STATEMENT_WAIT, || value_of(dir.path(), &direct, ACTIVE_INSERTS) == 1));
+    kill_process(Pid::from_child(&pgbg), Signal::INT).unwrap();
+    assert_eq!(pgbg.wait().unwrap().code(), Some(128 + Signal::INT.as_raw()));
+    assert!(within(STATEMENT_WAIT, || value_of(dir.path(), &direct, ACTIVE_INSERTS) == 0));
+    proxy.kill().unwrap();
+    proxy.wait().unwrap();
+    assert_eq!(value_of(dir.path(), &direct, "SELECT count(*) FROM cli_cancelled_orders"), 0);
+}

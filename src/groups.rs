@@ -1,26 +1,77 @@
-//! Every live tunnel's process group, so a panic kills them where no `Drop` runs: release builds abort.
+//! The process groups pgbg owns (a tunnel's, a `before` or password command's), so nothing they start outlives them,
+//! and a panic kills them where no `Drop` runs: release builds abort.
+use rustix::io::Errno;
 use rustix::process::{Pid, Signal, kill_process_group};
 use std::collections::BTreeSet;
+use std::process::{Output, Stdio};
 use std::sync::{Mutex, Once, PoisonError};
+use tokio::process::Command;
 
-/// Shared by every tunnel and the panic hook, which runs on whichever thread panics.
+/// A child given this as its group id leads a group of its own.
+pub(crate) const OWN_GROUP: i32 = 0;
+
+/// Shared by every owned group and the panic hook, which runs on whichever thread panics.
 static LIVE: Mutex<BTreeSet<i32>> = Mutex::new(BTreeSet::new());
 static HOOK: Once = Once::new();
 
 /// Keeps `group` until `kill` takes it, and has a panic kill it.
-pub(super) fn register(group: Pid) {
+pub(crate) fn register(group: Pid) {
     HOOK.call_once(kill_live_groups_on_panic);
     LIVE.lock().unwrap_or_else(PoisonError::into_inner).insert(group.as_raw_nonzero().get());
 }
 
 /// Kills `group` and forgets it, so neither a second kill nor a panic signals an id the system may reuse; a group
 /// the panic hook already killed is not signalled again.
-pub(super) fn kill(group: Pid) -> rustix::io::Result<()> {
+pub(crate) fn kill(group: Pid) -> rustix::io::Result<()> {
     let was_live = LIVE.lock().unwrap_or_else(PoisonError::into_inner).remove(&group.as_raw_nonzero().get());
     if !was_live {
         return Ok(());
     }
     kill_process_group(group, Signal::KILL)
+}
+
+/// Forgets `group` without a signal: its leader was reaped, so its id may already be another's.
+fn forget(group: Pid) {
+    LIVE.lock().unwrap_or_else(PoisonError::into_inner).remove(&group.as_raw_nonzero().get());
+}
+
+/// A group owned until its leader is reaped: dropped before, the whole group is killed.
+struct Owned(Option<Pid>);
+
+impl Owned {
+    fn new(leader: Option<u32>) -> Self {
+        let group = leader.and_then(|id| Pid::from_raw(id as i32));
+        if let Some(group) = group {
+            register(group);
+        }
+        Self(group)
+    }
+
+    fn reaped(mut self) {
+        if let Some(group) = self.0.take() {
+            forget(group);
+        }
+    }
+}
+
+impl Drop for Owned {
+    fn drop(&mut self) {
+        let Some(group) = self.0.take() else { return };
+        match kill(group) {
+            Ok(()) | Err(Errno::SRCH) => {}
+            Err(err) => tracing::warn!("a command's process group could not be killed: {err}"),
+        }
+    }
+}
+
+/// Runs `command` to its end as `Command::output` does, in a group of its own: dropped halfway (a timeout, a stop), it
+/// kills the whole group, so nothing the command started outlives it.
+pub(crate) async fn output(command: &mut Command) -> std::io::Result<Output> {
+    let child = command.process_group(OWN_GROUP).kill_on_drop(true).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let group = Owned::new(child.id());
+    let output = child.wait_with_output().await;
+    group.reaped();
+    output
 }
 
 /// How the build treats a panic: an abort ends the process, an unwind may be caught.

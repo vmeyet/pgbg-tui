@@ -96,11 +96,8 @@ fn from_variable(variable: &str, value: Result<String, VarError>) -> Result<Secr
 
 async fn from_command(argv: &[String]) -> Result<Secret> {
     let (program, args) = argv.split_first().ok_or_else(|| anyhow!("`command` is empty"))?;
-    let output = tokio::process::Command::new(program)
-        .args(args)
-        .stdin(Stdio::null())
-        .kill_on_drop(true)
-        .output()
+    let mut command = tokio::process::Command::new(program);
+    let output = crate::groups::output(command.args(args).stdin(Stdio::null()))
         .await
         .with_context(|| format!("running `{program}` for the password"))?;
     if !output.status.success() {
@@ -135,6 +132,15 @@ mod tests {
     async fn a_command_source_reads_what_the_command_prints_without_its_newline() {
         let secret = SecretSource::Command(vec!["printf".into(), "hunter2\\n".into()]).read().await.unwrap();
         assert_eq!(secret.expose(), "hunter2");
+    }
+
+    #[tokio::test]
+    #[ignore = "starts a process"]
+    async fn a_password_command_dropped_halfway_takes_what_it_started_with_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pid");
+        let source = SecretSource::Command(crate::fixtures::leaving_a_sleep(&pid_file));
+        assert!(crate::fixtures::sleep_goes_when_dropped(source.read(), &pid_file).await);
     }
 
     #[tokio::test]
