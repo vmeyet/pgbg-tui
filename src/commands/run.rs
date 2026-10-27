@@ -1,22 +1,31 @@
+use crate::cli::StatementArgs;
 use crate::connection::{Connection, ConnectionName};
 use crate::db::model::{ResultSet, Statement};
 use crate::history::{Entry, Outcome, Store};
-use crate::query::Header;
 use crate::query::params::{self, Assignment, Given};
+use crate::query::{Header, Roots};
 use crate::render;
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::Utc;
 use std::path::Path;
 use std::time::Instant;
 
-/// Reads `--params-file` from stdin.
+/// Reads `--file` or `--params-file` from stdin.
 const STDIN: &str = "-";
 
 /// Runs one statement on the connection named `connection`, its `{{name}}` bound to the values of `assignments` and of
 /// the `name=value` lines of `params_file`, adds it to the connection's history, and prints its result: a plain table,
 /// or JSON with `json`.
-pub async fn run(connection: &ConnectionName, sql: &str, assignments: &[Assignment], params_file: Option<&Path>, json: bool) -> Result<()> {
+pub async fn run(
+    connection: &ConnectionName,
+    statement: &StatementArgs,
+    assignments: &[Assignment],
+    params_file: Option<&Path>,
+    json: bool,
+) -> Result<()> {
     let connection = super::connection(Some(connection))?;
+    check_one_reader_of_stdin(statement.file.as_deref(), params_file)?;
+    let sql = &statement_text(statement).await?;
     let given = given(assignments, params_file).await?;
     let (started_at, clock) = (Utc::now(), Instant::now());
     let result = run_statement(&connection, sql, &given).await;
@@ -25,6 +34,26 @@ pub async fn run(connection: &ConnectionName, sql: &str, assignments: &[Assignme
         Entry { statement: sql.to_owned(), connection: connection.name().clone(), started_at, took_ms, outcome: Outcome::of(&result) };
     record(entry).await;
     print(&result?, json)
+}
+
+fn check_one_reader_of_stdin(file: Option<&Path>, params_file: Option<&Path>) -> Result<()> {
+    let is_stdin = |path: Option<&Path>| path == Some(Path::new(STDIN));
+    if is_stdin(file) && is_stdin(params_file) {
+        bail!("stdin can hold the statement or the parameters, not both: give one of them a file");
+    }
+    Ok(())
+}
+
+/// The text of the statement as typed, of the saved query, or of the file `statement` names.
+async fn statement_text(statement: &StatementArgs) -> Result<String> {
+    if let Some(path) = &statement.query {
+        let roots = Roots::find_here().await?;
+        return roots.read(&roots.named(path).await?).await;
+    }
+    match &statement.file {
+        Some(path) => read_text(path, "the statement").await,
+        None => Ok(statement.sql.clone().unwrap_or_default()),
+    }
 }
 
 /// Adds `entry` to its connection's history, waiting for it before pgbg exits.
@@ -39,16 +68,17 @@ async fn record(entry: Entry) {
 /// statement holds.
 async fn given(assignments: &[Assignment], file: Option<&Path>) -> Result<Given> {
     let from_file = match file {
-        Some(path) => params::assignments(&read_params_file(path).await?).map_err(|err| anyhow!("{}: {err}", path.display()))?,
+        Some(path) => params::assignments(&read_text(path, "the parameters").await?).map_err(|err| anyhow!("{}: {err}", path.display()))?,
         None => vec![],
     };
     Ok(Given::new(assignments.to_vec(), from_file)?)
 }
 
-async fn read_params_file(path: &Path) -> Result<String> {
+/// The text of the file at `path`, or of stdin for `-`; `what` says what it holds in an error.
+async fn read_text(path: &Path, what: &str) -> Result<String> {
     if path == Path::new(STDIN) {
         let read = tokio::task::spawn_blocking(|| std::io::read_to_string(std::io::stdin())).await?;
-        return read.context("reading the parameters from stdin");
+        return read.with_context(|| format!("reading {what} from stdin"));
     }
     tokio::fs::read_to_string(path).await.with_context(|| format!("reading {}", path.display()))
 }

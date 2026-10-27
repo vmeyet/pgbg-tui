@@ -35,8 +35,9 @@ pub enum Command {
     Run {
         /// The connection's name in `config.toml`.
         connection: ConnectionName,
-        /// One SQL statement; each `{{name}}` in it is bound to the value given for it, never spliced into the text.
-        sql: String,
+        /// What to run.
+        #[command(flatten)]
+        statement: StatementArgs,
         /// The value of `{{name}}`, as `name=value`; may be given once per name.
         #[arg(long = "param", value_name = "NAME=VALUE")]
         params: Vec<Assignment>,
@@ -129,6 +130,20 @@ pub enum ConnectionCommand {
         #[arg(long)]
         keep_password: bool,
     },
+}
+
+/// Where `run` takes its statement from: one of the three.
+#[derive(Args, Debug)]
+#[group(required = true, multiple = false)]
+pub struct StatementArgs {
+    /// One SQL statement; each `{{name}}` in it is bound to the value given for it, never spliced into the text.
+    pub sql: Option<String>,
+    /// A saved query, by its path under `.pgbg/queries/` or the user's queries folder: `orders/daily`.
+    #[arg(long, value_name = "PATH")]
+    pub query: Option<String>,
+    /// A file holding the statement, or `-` for stdin.
+    #[arg(long, value_name = "FILE")]
+    pub file: Option<PathBuf>,
 }
 
 /// The keys `add` and `edit` share.
@@ -233,6 +248,14 @@ mod tests {
         let run = parse(&["run", "shop", "SELECT {{day}}", "--param", "day=2024-01-01", "--params-file", "-"]).unwrap();
         assert!(matches!(run.command, Some(Command::Run { params, params_file: Some(_), .. }) if params.len() == 1));
         assert!(parse(&["run", "shop", "SELECT {{day}}", "--param", "day"]).is_err());
+    }
+
+    #[test]
+    fn run_takes_its_statement_from_one_place_only() {
+        assert!(parse(&["run", "shop", "--query", "orders/daily"]).is_ok());
+        assert!(parse(&["run", "shop", "--file", "-"]).is_ok());
+        assert!(parse(&["run", "shop"]).is_err());
+        assert!(parse(&["run", "shop", "SELECT 1", "--query", "orders/daily"]).is_err());
     }
 
     #[test]
