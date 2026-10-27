@@ -96,6 +96,10 @@ Each entry says what changed, then where, then how to use it.
 - **A copy as JSON keeps every column under its own name**: a name two columns share takes a suffix no other column has, so `count, count, count_2` gives `count`, `count_3` and `count_2`.
 - **A lone carriage return in a Markdown copy** becomes `<br>` too, so each row stays one line.
 - **Row counts read the same everywhere**: `first 1 500 rows · more…` in the title, `copied first 1 500 rows as CSV` after a copy, thousands apart in `pgbg run` too.
+- **A write whose TUI session closes between two round trips never commits**: closing it, quitting, or a config change asks the server to cancel the statement, then drops it, so pgbg sends nothing more on that session; a cancel the server got while idle between two round trips let the rest, `COMMIT` included, go through.
+  Every stop works this way, in the TUI and under `pgbg run`, `pgbg doctor` and `pgbg schema`: pgbg waits 1 second for the server to take the cancel and 3 seconds in all.
+- **A statement running when its connection is edited fails with its old session** in the TUI; the sheet stayed on `running…` for good.
+- **`Esc` on a statement queued behind a page being fetched keeps it from the server**; the cancel was lost and the statement ran.
 - **A save whose keychain step fails keeps the connection the config took**: the connection form closes, the picker lists it, and the status line says the password did not reach the keychain (or the old item was not deleted); `pgbg password set` tries again.
 - **The connection form scrolls** on a short terminal, so the line with the cursor, such as `timeout`, stays in view.
 - **A pasted password keeps its tabs and other control characters**; only its line end is dropped.
@@ -113,7 +117,7 @@ Each entry says what changed, then where, then how to use it.
 - **In the chart view, the grid keys do nothing**: `j`, `k`, `PgDn` and `y` moved and copied the hidden grid.
 - **A failed save in the connection form keeps a password typed while it saved**; the one sent came back over it.
 - **Closing a session stops its running statement**: `ctrl-x` in the picker, a connection removed or edited, or quitting cancels it on the server, and a write on a connection that allows writes never commits after it.
-  pgbg waits 2 seconds for the cancel, then cuts the link, so the server stops the statement within a second; a statement still queued is never sent.
+  pgbg waits 3 seconds at most, then cuts the link, so the server stops the statement within a second; a statement still queued is never sent.
 - **The connection form saves a new password for the keychain item the connection already names**; it kept the old one.
   Adding a connection under a name already taken is refused beside its line, and never touches the keychain item it names.
 - **A failed change to the config says why in the status line** until the next key, unless the form that asked is open; it no longer replaces the result on screen.

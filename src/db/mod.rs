@@ -15,6 +15,7 @@ use tokio_postgres::tls::MakeTlsConnect;
 use tokio_postgres::{Client, Config, NoTls, Portal, RowStream, Socket, Statement as Prepared, Transaction};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
+mod cancel;
 mod decode;
 pub(crate) mod guard;
 pub(crate) mod model;
@@ -23,6 +24,7 @@ mod pages;
 mod schema;
 mod server;
 
+pub(crate) use cancel::Interrupted;
 pub(crate) use open::{Attempt, NotOpened, Opened, TunnelStep, open_along, open_once};
 pub(crate) use pages::{Fetched, Pages, Started};
 
@@ -218,23 +220,6 @@ impl Drop for Session {
         if self.marks.is_mid_statement {
             self.link.abort();
         }
-    }
-}
-
-impl CancelToken {
-    /// Asks the server to cancel the statement the session is running; that statement then fails
-    /// with the server's words. With nothing running, the server does nothing.
-    pub(crate) async fn cancel(&self) -> Result<()> {
-        let sent = match self.tls {
-            Tls::On => self.token.cancel_query(MakeRustlsConnect::with_webpki_roots()).await,
-            Tls::Off => self.token.cancel_query(NoTls).await,
-        };
-        sent.map_err(server_error)
-    }
-
-    /// `cancel`, given up after `wait`: a server out of reach must not hold pgbg up as it stops.
-    pub(crate) async fn cancel_within(&self, wait: Duration) -> Result<()> {
-        timeout(wait, self.cancel()).await.with_context(|| format!("the server did not take the cancel within {}s", wait.as_secs()))?
     }
 }
 

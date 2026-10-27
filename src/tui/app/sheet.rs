@@ -11,6 +11,7 @@ use std::time::Duration;
 
 pub(in crate::tui) const LOST_SESSION: &str = "session lost, ⏎ opens a new one";
 const CLOSED_WHILE_RUNNING: &str = "cancelled: its session was closed";
+const REOPENED_WHILE_RUNNING: &str = "cancelled: its session was reopened";
 /// The grid asks for the next page once its cursor is this close to the last row it has, so the page comes before the
 /// cursor gets there.
 const NEAR_END_ROWS: usize = 100;
@@ -128,13 +129,15 @@ impl Sheet {
         self.connection.name()
     }
 
-    /// Takes `connection` as it is now and waits for its new session `session_id`; the editor and the last run stay.
+    /// Takes `connection` as it is now and waits for its new session `session_id`; the editor and the last run stay,
+    /// but a statement running on the old session fails with it.
     pub(super) fn reopen(&mut self, connection: Connection, session_id: SessionId) {
         self.connection = connection;
         self.session_id = session_id;
         self.session = SessionState::Opening;
         self.tunnel = None;
         self.stop_paging();
+        self.fail_running(REOPENED_WHILE_RUNNING);
     }
 
     /// Takes `connection` as it is now and leaves the session closed: picking the sheet opens it as it is then.
@@ -147,8 +150,13 @@ impl Sheet {
         self.session = SessionState::Closed;
         self.tunnel = None;
         self.stop_paging();
+        self.fail_running(CLOSED_WHILE_RUNNING);
+    }
+
+    /// Fails the running statement in `why`: the session it ran on is gone, and its answer with it.
+    fn fail_running(&mut self, why: &str) {
         if self.is_running() {
-            self.run = Run::Failed(CLOSED_WHILE_RUNNING.to_owned());
+            self.run = Run::Failed(why.to_owned());
         }
     }
 

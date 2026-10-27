@@ -18,16 +18,12 @@ pub mod tui;
 
 use crate::config::{self, Config};
 use crate::connection::{Connection, ConnectionName};
-use crate::db::{Attempt, Session, open_once};
+use crate::db::{Attempt, Interrupted, Session, open_once};
 use crate::render::printable;
 use crate::signal::Signals;
 use crate::tunnel::Tunnel;
 use anyhow::{Result, anyhow};
 use std::path::Path;
-use std::time::Duration;
-
-/// How long a stopping pgbg waits for the server to take a cancel request.
-const CANCEL_WAIT: Duration = Duration::from_secs(1);
 
 /// `err` and each of its causes on stderr, escaped: a server error can quote a value from the database.
 pub fn print_error(err: &anyhow::Error) {
@@ -55,22 +51,22 @@ async fn on_session<T>(connection: &Connection, work: impl AsyncFnOnce(&mut Sess
     result
 }
 
-/// `work` on `session`; a signal first has the server cancel the statement `work` has on it, while its link and tunnel
-/// still stand: a server that cannot tell pgbg went (before PostgreSQL 14, off Linux, behind a pooler) would finish it.
+/// `work` on `session`; a signal stops it as `CancelToken::unless_stopped` says, while its link and tunnel still stand:
+/// a server that cannot tell pgbg went (before PostgreSQL 14, off Linux, behind a pooler) would finish it.
 async fn cancelled_on_signal<T>(
     signals: &mut Signals,
     session: &mut Session,
     work: impl AsyncFnOnce(&mut Session) -> Result<T>,
 ) -> Result<T> {
     let token = session.cancel_token();
-    let stopped = match signals.or_stopped(work(session)).await {
+    let Interrupted { by, cancel } = match token.unless_stopped(work(session), signals.next()).await {
         Ok(outcome) => return outcome,
-        Err(stopped) => stopped,
+        Err(interrupted) => interrupted,
     };
-    if let Err(err) = token.cancel_within(CANCEL_WAIT).await {
+    if let Err(err) = cancel {
         warn(&format!("the statement may still run on the server: {err:#}"));
     }
-    Err(stopped.into())
+    Err(by.into())
 }
 
 /// Stops `tunnel` and warns when its forward outlives it.
