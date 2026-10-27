@@ -1,6 +1,7 @@
 //! One statement on the server: its cancels, the token an abort reaches it by, and its answer.
 use super::link::Queued;
 use crate::connection::WritePolicy;
+use crate::db::guard::Admitted;
 use crate::db::model::{CancelToken, ServerError};
 use crate::db::{Interrupted, Pages, Session, Started};
 use crate::history::Outcome;
@@ -13,6 +14,7 @@ use tokio::time::Instant;
 
 pub(super) const CANCELLED_BEFORE_SENT: &str = "cancelled before it was sent";
 pub(super) const STOPPED_WITH_ITS_SESSION: &str = "cancelled: its session stopped";
+const UNCONFIRMED_WRITE: &str = "a write runs only once confirmed";
 
 /// Holds the cancel token of what a session task has on the server, a statement or a page, for its link's abort.
 #[derive(Debug)]
@@ -125,8 +127,8 @@ async fn cancel(token: &CancelToken) {
 }
 
 async fn answer_to(session: &mut Session, writes: WritePolicy, queued: Queued) -> Answered<'_> {
-    let Queued { run, statement, input } = queued;
-    let admitted = match params::admit(&statement, &input.given, &input.specs, writes) {
+    let run = queued.run;
+    let admitted = match admit(&queued, writes) {
         Ok(admitted) => admitted,
         Err(refusal) => {
             return Answered { incoming: Incoming::Refused { run, why: refusal.to_string() }, outcome: Outcome::Refused, rest: None };
@@ -148,10 +150,43 @@ async fn answer_to(session: &mut Session, writes: WritePolicy, queued: Queued) -
     Answered { incoming, outcome, rest }
 }
 
+/// `queued` filled and cleared for a connection of policy `writes`; a write the user did not confirm is refused here too.
+fn admit(queued: &Queued, writes: WritePolicy) -> anyhow::Result<Admitted> {
+    let admitted = params::admit(&queued.statement, &queued.input.given, &queued.input.specs, writes)?;
+    if admitted.write().is_some() && queued.confirmed.is_none() {
+        anyhow::bail!(UNCONFIRMED_WRITE);
+    }
+    Ok(admitted)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::model::Statement;
+    use crate::query::params::ParamInput;
+    use crate::tui::app::Confirmed;
     use tokio::sync::mpsc;
+
+    fn queued(sql: &str, confirmed: Option<Confirmed>) -> Queued {
+        Queued { run: RunId::FIRST, statement: Statement::new(sql), input: ParamInput::default(), confirmed }
+    }
+
+    #[test]
+    fn an_unconfirmed_write_is_refused() {
+        let refusal = admit(&queued("DELETE FROM orders", None), WritePolicy::Allowed).unwrap_err();
+        assert_eq!(refusal.to_string(), UNCONFIRMED_WRITE);
+    }
+
+    #[test]
+    fn a_confirmed_write_is_admitted() {
+        let admitted = admit(&queued("DELETE FROM orders", Some(Confirmed::FOR_TESTS)), WritePolicy::Allowed).unwrap();
+        assert!(admitted.write().is_some());
+    }
+
+    #[test]
+    fn an_unconfirmed_read_is_admitted() {
+        assert!(admit(&queued("SELECT * FROM orders", None), WritePolicy::Allowed).is_ok());
+    }
 
     #[tokio::test]
     async fn a_run_whose_cancel_was_heard_is_the_latest_cancelled() {

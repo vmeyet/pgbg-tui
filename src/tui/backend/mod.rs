@@ -1,5 +1,5 @@
 //! What the runner calls: a session for each connection opened, each served by a task that owns it, and the saved queries.
-use super::app::{Action, Answer, RunId, SessionId};
+use super::app::{Action, Answer, Confirmed, RunId, SessionId};
 use crate::connection::{Connection, ConnectionName};
 use crate::db::model::Statement;
 use crate::history::{History, Store};
@@ -59,7 +59,7 @@ impl Backend {
     pub(super) fn dispatch(&mut self, action: Action) {
         match action {
             Action::Open { connection, session } => self.open(connection, session),
-            Action::Run { connection, run, statement, input } => self.run(&connection, run, statement, input),
+            Action::Run { connection, run, statement, input, confirmed } => self.run(&connection, run, statement, input, confirmed),
             Action::NextPage { connection, session, run } => self.next_page(&connection, session, run),
             Action::ReadSchema { connection, session } => self.read_schema(&connection, session),
             Action::Cancel { connection, run } => self.cancel(&connection, run),
@@ -117,13 +117,13 @@ impl Backend {
         _ = self.sessions.insert(name, link);
     }
 
-    /// Queues `statement` on the session of `connection`; its answer comes back as an `Answer`.
-    fn run(&self, connection: &ConnectionName, run: RunId, statement: Statement, input: ParamInput) {
+    /// Queues `statement` on the session of `connection`, a write only when `confirmed`; its answer comes back as an `Answer`.
+    fn run(&self, connection: &ConnectionName, run: RunId, statement: Statement, input: ParamInput, confirmed: Option<Confirmed>) {
         let Some(session) = self.sessions.get(connection) else {
             tracing::warn!("no session for `{connection}`: the statement is dropped");
             return;
         };
-        session.send(Job::Run(Queued { run, statement, input }));
+        session.send(Job::Run(Queued { run, statement, input, confirmed }));
     }
 
     /// Asks the session of `connection` for the next page of `run`; nothing comes when its portal is closed.
