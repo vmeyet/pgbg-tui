@@ -10,7 +10,7 @@ struct TunnelEntry {
     before: Option<Vec<String>>,
 }
 
-/// How to reach a database out of reach: `command` forwards a local port, written `{port}` in it,
+/// How to reach a database this machine cannot reach straight: `command` forwards a local port, written `{port}` in it,
 /// and `before`, when set, runs once first.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(try_from = "TunnelEntry")]

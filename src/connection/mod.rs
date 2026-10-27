@@ -61,7 +61,7 @@ pub(crate) struct Connection {
 #[serde(try_from = "String", into = "String")]
 pub struct ConnectionName(String);
 
-/// Whether the TUI reads a connection's schema, on a second login, once the sidebar or completion first needs it;
+/// Whether the TUI reads a connection's schema, through a second login, the first time the sidebar or completion needs it.
 /// `schema = "off"` saves that login where a pooler or `CONNECTION LIMIT` has no slot to spare.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -71,7 +71,7 @@ pub(crate) enum SchemaReading {
     Off,
 }
 
-/// Sets the colour and the timeout of a connection.
+/// The kind of database a connection reaches, which sets its colour and its default timeout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum Tier {
@@ -153,7 +153,7 @@ impl Connection {
 }
 
 impl Tier {
-    /// None on a local database; a minute on staging and half that on production, where a slow statement costs the most.
+    /// The tier's default timeout: none on a local database, and the shortest on production, where a slow statement costs the most.
     fn statement_timeout(self) -> StatementTimeout {
         match self {
             Self::Local => StatementTimeout::NONE,

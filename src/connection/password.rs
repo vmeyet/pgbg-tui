@@ -3,8 +3,8 @@ use serde::Deserialize;
 use serde::de::{Deserializer, Error, MapAccess, SeqAccess, Visitor, value::MapAccessDeserializer};
 use std::fmt;
 
-/// The `password` key as written: a source, or a plain password of any type, which is refused once
-/// parsed so that no parse error ever quotes it.
+/// The `password` key as written: a source, or a plain password of any type.
+/// A plain password is refused only once parsed, so no parse error ever quotes it.
 pub(super) enum PasswordEntry {
     Plain,
     Source(SecretSource),
