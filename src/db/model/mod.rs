@@ -8,7 +8,7 @@ pub(crate) use schema::{Catalog, Index, Schema, SchemaColumn, SchemaNode, Table,
 use serde::Serialize;
 pub(crate) use server::{Named, RoleFlag, RolePowers, RoleRights, ServerFacts};
 use std::fmt;
-pub(crate) use value::Value;
+pub(crate) use value::{JsonText, Value};
 
 mod cancel;
 mod error;

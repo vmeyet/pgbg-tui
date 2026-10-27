@@ -284,7 +284,7 @@ mod tests {
     fn a_long_label_is_cut_to_its_first_characters() {
         let long = result(
             vec![column("customer", ColumnKind::Text), column("total", ColumnKind::Int)],
-            vec![vec![Value::Text("n".repeat(500)), Value::Int(1)]],
+            vec![vec![Value::Text("n".repeat(500).into()), Value::Int(1)]],
         );
         assert_eq!(Series::from_result(&long, &spec("bar")).unwrap().labels[0].chars().count(), MAX_LABEL_CHARS);
     }

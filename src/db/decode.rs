@@ -1,5 +1,5 @@
 //! Wire values to `Value`, by column type; a type pgbg does not know decodes as `Value::Unsupported`.
-use super::model::{Column, ColumnKind, ColumnName, TypeName, Value};
+use super::model::{Column, ColumnKind, ColumnName, JsonText, TypeName, Value};
 use chrono::{DateTime, Utc};
 use tokio_postgres::Row;
 use tokio_postgres::types::{FromSql, Kind, Type};
@@ -67,15 +67,15 @@ fn cell(ty: &Type, raw: &[u8]) -> Value {
         ColumnKind::Int => typed(ty, raw, Value::Int),
         ColumnKind::Float if *ty == Type::FLOAT4 => typed(ty, raw, real),
         ColumnKind::Float => typed(ty, raw, Value::Float),
-        ColumnKind::Numeric => numeric_text(raw).map_or(Value::Unsupported, Value::Numeric),
-        ColumnKind::Text => Value::Text(String::from_utf8_lossy(raw).into_owned()),
-        ColumnKind::Json => typed(ty, raw, Value::Json),
+        ColumnKind::Numeric => numeric_text(raw).map_or(Value::Unsupported, |text| Value::Numeric(text.into_boxed_str())),
+        ColumnKind::Text => Value::Text(String::from_utf8_lossy(raw).into()),
+        ColumnKind::Json => typed(ty, raw, |json: serde_json::Value| Value::Json(JsonText::of(&json))),
         ColumnKind::Uuid => typed(ty, raw, Value::Uuid),
         ColumnKind::Date => date(raw),
         ColumnKind::Time => typed(ty, raw, Value::Time),
         ColumnKind::Timestamp => timestamp(ty, raw, Value::Timestamp),
         ColumnKind::TimestampTz => timestamp(ty, raw, |at: DateTime<Utc>| Value::TimestampTz(at)),
-        ColumnKind::Bytes => typed(ty, raw, Value::Bytes),
+        ColumnKind::Bytes => typed(ty, raw, |bytes: &[u8]| Value::Bytes(bytes.into())),
         ColumnKind::Other if *ty == Type::VOID => Value::Null,
         ColumnKind::Other => Value::Unsupported,
     }
