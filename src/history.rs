@@ -1,7 +1,7 @@
 //! Every statement run, per connection: one JSON line each in `<data folder>/pgbg/history/<connection>.jsonl`, oldest first.
 //! A line never holds a password or a row.
 use crate::config;
-use crate::connection::ConnectionName;
+use crate::connection::{ConnectionName, SECRET_KEYS};
 use crate::db::model::{ResultSet, Statement};
 use crate::failure::Failure;
 use chrono::{DateTime, Utc};
@@ -217,12 +217,14 @@ fn kept(entry: &Entry) -> Entry {
     Entry { statement, ..entry.clone() }
 }
 
-/// Whether `password` stands as a word of its own, as in `ALTER ROLE nina PASSWORD '...'`, or a URL holds one, as in
+/// Whether `password` or a secret key a connection refuses stands as a word of its own, as in
+/// `ALTER ROLE nina PASSWORD '...'` or `sslpassword=...`, or a URL holds a password, as in
 /// `postgresql://nina:...@db.example.com`; `password_hash` is another word.
 pub(crate) fn holds_password(statement: &str) -> bool {
     let is_word_char = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
-    let has_password_word = statement.split(|c: char| !is_word_char(c)).any(|word| word.eq_ignore_ascii_case(PASSWORD_WORD));
-    has_password_word || statement.match_indices(SCHEME_END).any(|(at, _)| is_url_with_password(&statement[..at], &statement[at..]))
+    let is_secret = |word: &str| [PASSWORD_WORD].iter().chain(&SECRET_KEYS).any(|secret| word.eq_ignore_ascii_case(secret));
+    let has_secret_word = statement.split(|c: char| !is_word_char(c)).any(is_secret);
+    has_secret_word || statement.match_indices(SCHEME_END).any(|(at, _)| is_url_with_password(&statement[..at], &statement[at..]))
 }
 
 /// Whether a scheme ends `before` and `after` opens on `://user:password@`.
@@ -362,6 +364,16 @@ mod tests {
         store(&dir).append(&entry("shop", dblink, 1)).unwrap();
         store(&dir).append(&entry("shop", "SELECT 'https://db.example.com/nina@shop'", 2)).unwrap();
         assert_eq!(statements(&store(&dir).read(&shop()).unwrap()), ["SELECT 'https://db.example.com/nina@shop'", PASSWORD_KEPT_AS]);
+    }
+
+    #[test]
+    fn a_statement_naming_a_secret_connection_key_is_not_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        store(&dir).append(&entry("shop", "SELECT dblink_connect('host=db.example.com sslpassword=hunter2')", 1)).unwrap();
+        store(&dir)
+            .append(&entry("shop", "SELECT dblink('postgresql://db.example.com/shop?oauth_client_secret=hunter2', 'SELECT 1')", 2))
+            .unwrap();
+        assert_eq!(statements(&store(&dir).read(&shop()).unwrap()), [PASSWORD_KEPT_AS, PASSWORD_KEPT_AS]);
     }
 
     #[test]
