@@ -181,7 +181,7 @@ mod tests {
     use super::*;
     use crate::connection::ConnectionName;
     use crate::connection::WritePolicy;
-    use crate::db::model::{Route, Statement, Value};
+    use crate::db::model::{Params, Route, Statement, Value};
     use crate::db::{Session, guard};
     use crate::fixtures;
     use crate::query::Roots;
@@ -232,7 +232,7 @@ mod tests {
 
     async fn on_a_side_session(sql: &str) -> Vec<Vec<Value>> {
         let mut session = Session::open(&fixtures::test_database_as("shop"), Route::Direct).await.unwrap();
-        session.run(&guard::admit(Statement::new(sql), WritePolicy::ReadOnly).unwrap()).await.unwrap().rows().to_vec()
+        session.run(&guard::admit(Statement::new(sql), Params::default(), WritePolicy::ReadOnly).unwrap()).await.unwrap().rows().to_vec()
     }
 
     fn page_of(incoming: Incoming) -> Page {

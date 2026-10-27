@@ -31,6 +31,26 @@ impl Statement {
     }
 }
 
+/// The values bound to a statement's `$1`, `$2`…, in order: each sent as text, for the server to read with the type it
+/// gives the parameter; `None` binds NULL.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Params(Vec<Option<String>>);
+
+impl Params {
+    #[cfg_attr(not(test), expect(dead_code, reason = "`{{name}}` parameters fill it, the next step"))]
+    pub(crate) fn new(values: Vec<Option<String>>) -> Self {
+        Self(values)
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub(crate) fn values(&self) -> &[Option<String>] {
+        &self.0
+    }
+}
+
 /// What a column holds, grouped the way pgbg shows and charts it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]

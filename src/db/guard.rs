@@ -1,7 +1,7 @@
 //! Classifies a statement before it is sent: a read, a write, or more than one statement.
 //! A best effort that spares a round trip; the read-only transaction and role are what hold.
 use super::lex::{self, Placed, Token};
-use super::model::Statement;
+use super::model::{Params, Statement};
 use crate::connection::WritePolicy;
 use std::fmt;
 use std::ops::Range;
@@ -12,10 +12,11 @@ const WRITES: [&str; 7] = ["INSERT", "UPDATE", "DELETE", "MERGE", "INTO", "ANALY
 /// Row locks a `SELECT` takes; `FOR UPDATE` is caught by `UPDATE` already.
 const LOCKS: [[&str; 2]; 2] = [["FOR", "SHARE"], ["KEY", "SHARE"]];
 
-/// A statement cleared to run, and how to run it; `admit` makes one.
+/// A statement cleared to run, the values bound to its `$n`, and how to run it; `admit` makes one.
 #[derive(Debug)]
 pub(crate) struct Admitted {
     pub(super) statement: Statement,
+    pub(super) params: Params,
     pub(super) mode: Mode,
 }
 
@@ -34,15 +35,29 @@ pub(crate) enum Refusal {
     /// The statement may change something; holds the word that says so.
     Write(String),
     Multiple,
+    /// The statement numbers `expected` parameters, and `given` values came with it.
+    Params {
+        expected: u32,
+        given: usize,
+    },
 }
 
-/// `statement` cleared for a connection of policy `writes`, or why it is not.
-pub(crate) fn admit(statement: Statement, writes: WritePolicy) -> Result<Admitted, Refusal> {
-    if writes == WritePolicy::Allowed {
-        return Ok(Admitted { statement, mode: Mode::Writes });
-    }
-    check_read(&tokens(statement.as_str()))?;
-    Ok(Admitted { statement, mode: Mode::ReadOnly })
+/// `statement` with `params` bound to its `$n`, cleared for a connection of policy `writes`, or why it is not.
+pub(crate) fn admit(statement: Statement, params: Params, writes: WritePolicy) -> Result<Admitted, Refusal> {
+    let tokens = tokens(statement.as_str());
+    let mode = match writes {
+        WritePolicy::Allowed => Mode::Writes,
+        WritePolicy::ReadOnly => check_read(&tokens).map(|()| Mode::ReadOnly)?,
+    };
+    check_params(&tokens, &params)?;
+    Ok(Admitted { statement, params, mode })
+}
+
+fn check_params(tokens: &[Token], params: &Params) -> Result<(), Refusal> {
+    let numbered = tokens.iter().filter_map(|token| if let Token::Numbered(n) = token { Some(*n) } else { None });
+    let expected = numbered.max().unwrap_or(0);
+    let is_matched = usize::try_from(expected).is_ok_and(|expected| expected == params.len());
+    if is_matched { Ok(()) } else { Err(Refusal::Params { expected, given: params.len() }) }
 }
 
 fn check_read(tokens: &[Token]) -> Result<(), Refusal> {
@@ -120,6 +135,7 @@ impl fmt::Display for Refusal {
                 write!(f, "`{word}` is not a read, and this connection is read only: set `writes = \"allowed\"` on it to run writes")
             }
             Self::Multiple => f.write_str("one statement at a time: this text holds more than one"),
+            Self::Params { expected, given } => write!(f, "the statement takes {expected} parameters, and {given} values came with it"),
         }
     }
 }
@@ -131,7 +147,7 @@ mod tests {
     use super::*;
 
     fn verdict(sql: &str) -> Result<Mode, Refusal> {
-        admit(Statement::new(sql), WritePolicy::ReadOnly).map(|admitted| admitted.mode)
+        admit(Statement::new(sql), Params::default(), WritePolicy::ReadOnly).map(|admitted| admitted.mode)
     }
 
     fn refused_word(sql: &str) -> String {
@@ -286,7 +302,28 @@ mod tests {
 
     #[test]
     fn a_connection_that_allows_writes_runs_anything_as_is() {
-        let admitted = admit(Statement::new("DELETE FROM orders; DELETE FROM customers"), WritePolicy::Allowed);
+        let admitted = admit(Statement::new("DELETE FROM orders; DELETE FROM customers"), Params::default(), WritePolicy::Allowed);
         assert_eq!(admitted.map(|admitted| admitted.mode), Ok(Mode::Writes));
+    }
+
+    fn admitted_with(sql: &str, values: usize, writes: WritePolicy) -> Result<Mode, Refusal> {
+        let params = Params::new(vec![Some("7".to_owned()); values]);
+        admit(Statement::new(sql), params, writes).map(|admitted| admitted.mode)
+    }
+
+    #[test]
+    fn a_statement_runs_with_one_value_for_each_of_its_parameters() {
+        assert_eq!(admitted_with("SELECT * FROM orders WHERE id = $1 OR id = $2 OR id = $1", 2, WritePolicy::ReadOnly), Ok(Mode::ReadOnly));
+    }
+
+    #[test]
+    fn a_count_of_values_that_is_not_the_count_of_parameters_is_refused() {
+        assert_eq!(admitted_with("SELECT $1, $2", 1, WritePolicy::ReadOnly), Err(Refusal::Params { expected: 2, given: 1 }));
+        assert_eq!(admitted_with("SELECT 1", 1, WritePolicy::Allowed), Err(Refusal::Params { expected: 0, given: 1 }));
+    }
+
+    #[test]
+    fn a_parameter_in_a_string_needs_no_value() {
+        assert_eq!(admitted_with("SELECT '$1'", 0, WritePolicy::ReadOnly), Ok(Mode::ReadOnly));
     }
 }

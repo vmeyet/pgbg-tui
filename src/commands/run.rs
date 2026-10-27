@@ -1,6 +1,6 @@
 use crate::connection::{Connection, ConnectionName};
 use crate::db::guard;
-use crate::db::model::{ResultSet, Statement};
+use crate::db::model::{Params, ResultSet, Statement};
 use crate::history::{Entry, Outcome, Store};
 use crate::render;
 use anyhow::Result;
@@ -29,7 +29,7 @@ async fn record(entry: Entry) {
 }
 
 async fn run_statement(connection: &Connection, sql: &str) -> Result<ResultSet> {
-    let admitted = guard::admit(Statement::new(sql), connection.writes())?;
+    let admitted = guard::admit(Statement::new(sql), Params::default(), connection.writes())?;
     super::on_session(connection, async |session| session.run(&admitted).await).await
 }
 

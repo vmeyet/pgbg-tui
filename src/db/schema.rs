@@ -142,7 +142,7 @@ mod tests {
     use super::*;
     use crate::connection::WritePolicy;
     use crate::db::guard;
-    use crate::db::model::{Route, Statement};
+    use crate::db::model::{Params, Route, Statement};
     use crate::fixtures;
 
     async fn session() -> Session {
@@ -150,7 +150,7 @@ mod tests {
     }
 
     async fn write(session: &mut Session, sql: &str) {
-        session.run(&guard::admit(Statement::new(sql), WritePolicy::Allowed).unwrap()).await.unwrap();
+        session.run(&guard::admit(Statement::new(sql), Params::default(), WritePolicy::Allowed).unwrap()).await.unwrap();
     }
 
     /// A session on a fresh schema named `schema`, made by `sql`.
