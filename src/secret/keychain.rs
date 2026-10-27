@@ -1,6 +1,6 @@
 //! The macOS keychain through `/usr/bin/security`, service `pgbg`, one item per keychain account.
-//! Reads name the service and account in argv, which hold nothing secret; the password comes back on
-//! a pipe. Writes go through `security -i`, so the password never shows in argv.
+//! Reads name the service and account in argv, which hold nothing secret; the password comes back on a pipe.
+//! Writes go through `security -i`, so the password never shows in argv.
 //! Items are owned by Apple's signed binary, so a rebuilt pgbg never triggers an access prompt.
 //! An error gives `security`'s exit status only: what it prints may hold the password.
 use super::Secret;
