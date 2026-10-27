@@ -9,6 +9,7 @@ mod db;
 mod export;
 #[cfg(test)]
 mod fixtures;
+mod groups;
 mod history;
 pub mod log;
 mod query;

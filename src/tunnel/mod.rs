@@ -1,6 +1,7 @@
 //! A tunnel: a child process pgbg owns that forwards a free `127.0.0.1` port to a database out of reach.
 use crate::connection::TunnelSpec;
 use crate::db::model::{LocalPort, Route};
+use crate::groups::{self, OWN_GROUP};
 use anyhow::{Context, Result, anyhow, bail};
 use rustix::io::Errno;
 use rustix::process::Pid;
@@ -28,9 +29,6 @@ const HANDED_OFF: &str = "the tunnel ended cleanly before its port answered, so 
 const LAST_WORDS_TIMEOUT: Duration = Duration::from_secs(1);
 const LAST_WORDS_LINES: usize = 5;
 const LAST_WORDS_LINE_CHARS: usize = 200;
-const OWN_GROUP: i32 = 0;
-
-mod groups;
 
 /// A running tunnel; dropping it kills its whole process group.
 #[derive(Debug)]
@@ -188,7 +186,8 @@ impl Drop for Tunnel {
 /// Runs `before` to its end; it must be safe to run twice, since each start runs it again.
 async fn run_before(before: &[String]) -> Result<()> {
     let (program, args) = before.split_first().ok_or_else(|| anyhow!("`tunnel.before` is empty"))?;
-    let running = Command::new(program).args(args).stdin(Stdio::null()).kill_on_drop(true).output();
+    let mut command = Command::new(program);
+    let running = groups::output(command.args(args).stdin(Stdio::null()));
     let output = timeout(BEFORE_TIMEOUT, running)
         .await
         .map_err(|_elapsed| anyhow!("`tunnel.before` (`{program}`) did not end within {}s", BEFORE_TIMEOUT.as_secs()))?
@@ -460,6 +459,16 @@ time.sleep(60)
             return;
         }
         assert!(until_gone(group_of_a_tunnel_left_by_a_panicking_pgbg().await).await);
+    }
+
+    #[tokio::test]
+    #[ignore = "starts a process"]
+    async fn a_before_command_dropped_halfway_takes_what_it_started_with_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pid");
+        let before = fixtures::leaving_a_sleep(&pid_file);
+        let starting = spec(&["python3", "-c", LISTEN, "{port}"], Some(&before.iter().map(String::as_str).collect::<Vec<_>>()));
+        assert!(fixtures::sleep_goes_when_dropped(Tunnel::start(&starting), &pid_file).await);
     }
 
     #[tokio::test]

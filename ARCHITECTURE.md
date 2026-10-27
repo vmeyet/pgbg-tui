@@ -16,6 +16,7 @@ When a boundary or a flow changes, change this page in the same MR.
 | `connection/` | `Connection`: name, tier, target, tunnel, secret source, write policy, TLS, statement timeout; parsed once from config |
 | `secret/` | `Secret` (prints `<redacted>`, never cloned, wiped from memory on drop, as is the hex line written to `security -i`) and its sources (a `KeychainItem` is one word `security -i` cannot split): keychain through `/usr/bin/security`, environment variable, command; `SecretSource::read` reads one when a session opens; `Secret::from_stdin` reads one typed hidden or piped in, and the TUI's connection form types one into a `Secret` it never shows |
 | `tunnel/` | `Tunnel`: a child process forwarding a free `127.0.0.1` port to the database; start, wait for the port, stop; its `Route` is what a session opens along |
+| `groups.rs` | The process groups pgbg owns (a tunnel's, a `before` or password command's): each one killed whole when dropped, and every live one by a panic hook |
 | `db/` | The only module that sees `tokio_postgres`: connect over rustls, open a session along its route, through the connection's tunnel when it has one (`open_once` for a command, which owns the tunnel and stops it), run a statement, stream rows, cancel |
 | `db/model/` | The neutral model: `ResultSet` (its columns, and its rows a `Page` at a time, `push`ed on; its `Extent` says whether it holds them all, was cut, or has more waiting in its portal), `Column`, `ColumnKind`, `Value`, `Schema` (its tables, their columns and indexes, filtered by name; completion lives in `complete/` (planned), which replaces `Schema::complete` and `CompletionContext`), `Table`, `ServerError`, `Route` (direct, or a tunnel's `LocalPort`), and `CancelToken`, whose driver part only `db/` reads |
 | `db/pages.rs` | `Session::start`: a statement's first page of 500 rows, and on a read-only connection its portal kept open in `Pages`, in its `BEGIN READ ONLY` transaction, until `next` fetches the last page or `close` rolls it back; a read-only session has the server end a transaction left idle 6 minutes (`idle_in_transaction_session_timeout`, unless the server's own is stricter), behind the TUI's own 5-minute limit |
@@ -59,8 +60,9 @@ Running a statement:
 5. A server error comes back as a `ServerError` with the server's position; the editor marks that character until the text changes.
 6. `Esc` on a running statement returns `Action::Cancel { connection, run }`; the session task sends the server a cancel request over a link of its own, with the session's TLS, only while that run is on the server, and before the next one starts.
    The statement fails with the server's words, and the transaction is always rolled back at the end; a run cancelled before it started is never sent.
-7. Closing a session (`ctrl-c` to quit, `ctrl-x` in the picker, a connection removed or changed) cancels its running statement first, and one not yet sent never is; pgbg waits 2 seconds at most for the session task, then aborts it.
-   A `Session` dropped in the middle of a statement cuts its link instead of letting it finish, so the server stops the statement and rolls it back (`client_connection_check_interval`).
+7. Closing a session (`ctrl-c` to quit, `ctrl-x` in the picker, a connection removed or changed) cancels its running statement first, and one not yet sent never is; pgbg waits 2 seconds at most for the session task, then sends the cancel again when the task's did not reach the server, and aborts it.
+   A `Session` dropped in the middle of a statement cuts its link instead of letting it finish.
+   Only a server that sees pgbg go stops the statement then (`client_connection_check_interval`: PostgreSQL 14 or later, on Linux, and not behind PgBouncer in transaction pooling); elsewhere the cancel request is what stops it.
 
 Switching connection:
 
@@ -75,7 +77,7 @@ Switching connection:
    A statement sent while its session fails to open fails with it, and is never sent on a later open; once pgbg quits, one still queued is never sent.
 6. Opening sets `statement_timeout`: the connection's own, else the stricter of its tier's (none on local, 60 s on staging, 30 s on production) and the one the server already applies, read from `pg_settings`.
    It is a session setting, so behind PgBouncer in transaction pooling it does not follow pgbg's next transaction: there, give the role its own `statement_timeout`.
-7. Opening gives up after 10 seconds, TLS and login included, unless the `url` sets `connect_timeout`; and each session asks the server to stop its statement once pgbg is gone (`client_connection_check_interval`).
+7. Opening gives up after 10 seconds, TLS and login included, unless the `url` sets `connect_timeout`; and each session asks the server to stop its statement once pgbg is gone (`client_connection_check_interval`), best effort, as step 7 above says.
 
 Completing a name (planned):
 
@@ -156,16 +158,16 @@ On a connection that allows writes, a statement runs as typed, except that one r
 ## Tunnels
 
 - A tunnel is a command with a `{port}` placeholder: `ssh -N -o ControlPath=none -o ExitOnForwardFailure=yes -L 127.0.0.1:{port}:localhost:5432 bastion`, `gcloud compute start-iap-tunnel ... --local-host-port=localhost:{port}`, `cloud-sql-proxy --port {port} ...`.
-- An optional `before` command runs first, once, within 2 minutes, and is safe to run twice (starting a stopped bastion).
+- An optional `before` command runs first, once, within 2 minutes, and is safe to run twice (starting a stopped bastion); like a password command, it runs in a process group of its own, killed whole when pgbg stops waiting on it.
 - pgbg picks the free port, so two pgbg can run side by side; the child runs in its own process group, and stopping or dropping the `Tunnel` kills the whole group, so an `ssh` or `gcloud` it started dies too.
 - Only what stays in that group dies with it: an ssh `ControlMaster` or `ssh -f` keeps the forward elsewhere, so `stop` fails when the port still answers, and a command that ends cleanly before its port answers is said to have handed the forward off.
 - pgbg cannot make the command bind `127.0.0.1` only, nor know who answers on the port: the examples bind it explicitly, and a tunnelled connection needs TLS or `tls = "off"` on purpose, never the clear a local host gets.
 - A tunnel is ready once its port takes a TCP connection, within 30 seconds; one that dies first says how it exited and its last lines of stderr, never its arguments.
-- `SIGINT`, `SIGTERM` and `SIGHUP` stop pgbg through `signal.rs`: `pgbg run`, `pgbg doctor` and `pgbg schema` drop their work, so every `Drop` runs and the tunnel goes; the TUI quits as `ctrl-c` does, cancelling every running statement, and each session task stops its tunnel, warning when its port still answers; pgbg exits with `128 + n`. Only a `SIGKILL` leaves a tunnel behind.
+- `SIGINT`, `SIGTERM` and `SIGHUP` stop pgbg through `signal.rs`: `pgbg run`, `pgbg doctor` and `pgbg schema` have the server cancel their statement (within a second) while the link and the tunnel still stand, stop the tunnel, and are dropped past 3 seconds or on a second signal, so every `Drop` runs and the tunnel goes; the TUI quits as `ctrl-c` does, cancelling every running statement, and each session task stops its tunnel, warning when its port still answers; pgbg exits with `128 + n`. Only a `SIGKILL` leaves a tunnel behind.
 - A session through a tunnel connects to `hostaddr=127.0.0.1` on the tunnel's port, and TLS still checks the certificate against the URL's host; that is why the config refuses a `hostaddr` of its own.
 - The session task owns the tunnel with the session: the status line shows `⇄ tunnel :<port>`, `starting…` or how it died; a tunnel that dies closes its session and says why, and the next statement starts both again.
 - A session reopened while its tunnel still runs keeps that tunnel.
-- Release builds abort on a panic, so no `Drop` runs: `tunnel/groups.rs` keeps every live process group in a registry, and a panic hook kills them all.
+- Release builds abort on a panic, so no `Drop` runs: `groups.rs` keeps every live process group in a registry, and a panic hook kills them all.
 - The hook kills them only when the panic ends the process: always in a release build, and on the main thread only when the build unwinds, since a tokio task, a blocking thread or a test catches its own panic and goes on.
 - A tunnel seen ended has its group killed at once, before its id can be reused, and a group the hook killed is never signalled again.
 

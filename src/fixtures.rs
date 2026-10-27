@@ -1,6 +1,9 @@
 //! Invented fixtures the tests share: the connection `shop`, the test database, tunnels to it, and results of `orders`.
 use crate::connection::{Connection, Entry, WritePolicy};
 use crate::db::model::{Column, ColumnKind, Index, ResultSet, Schema, SchemaColumn, SchemaNode, Table, TableKind, Value};
+use rustix::process::{Pid, test_kill_process};
+use std::path::Path;
+use std::time::Duration;
 
 /// The environment variable naming the throwaway database the `#[ignore]`d tests run against.
 const DATABASE_URL: &str = "PGBG_TEST_DATABASE_URL";
@@ -19,6 +22,39 @@ while True:
     for source, sink in ((client, upstream), (upstream, client)):
         threading.Thread(target=pipe, args=(source, sink), daemon=True).start()
 ";
+
+/// How long a test waits on a child process: to write its pid, or to be gone.
+const PROCESS_WAIT: Duration = Duration::from_secs(5);
+const PROCESS_POLL: Duration = Duration::from_millis(20);
+
+/// A shell line that starts a `sleep` it does not wait on, as `gcloud` starts helpers, writes that `sleep`'s pid to
+/// `pid_file`, then waits for it.
+pub(crate) fn leaving_a_sleep(pid_file: &Path) -> Vec<String> {
+    let line = "sleep 60 & echo $! > \"$1\"; wait";
+    ["sh", "-c", line, "sh"].into_iter().map(str::to_owned).chain([pid_file.display().to_string()]).collect()
+}
+
+/// Drops `work` once the command it runs wrote its `sleep`'s pid to `pid_file`, then says whether that `sleep` went too.
+pub(crate) async fn sleep_goes_when_dropped<T>(work: impl Future<Output = T>, pid_file: &Path) -> bool {
+    let written = async {
+        loop {
+            if let Some(pid) = std::fs::read_to_string(pid_file).ok().and_then(|pid| pid.trim().parse().ok()).and_then(Pid::from_raw) {
+                return pid;
+            }
+            tokio::time::sleep(PROCESS_POLL).await;
+        }
+    };
+    let pid = tokio::select! {
+        _ = work => panic!("the command ended on its own"),
+        pid = tokio::time::timeout(PROCESS_WAIT, written) => pid.unwrap(),
+    };
+    let gone = async {
+        while test_kill_process(pid).is_ok() {
+            tokio::time::sleep(PROCESS_POLL).await;
+        }
+    };
+    tokio::time::timeout(PROCESS_WAIT, gone).await.is_ok()
+}
 
 /// The connection named `name` that the TOML table `entry` describes.
 pub(crate) fn named(name: &str, entry: &str) -> Connection {

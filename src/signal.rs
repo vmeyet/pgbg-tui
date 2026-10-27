@@ -2,10 +2,13 @@
 use anyhow::Result;
 use std::fmt;
 use std::process::ExitCode;
+use std::time::Duration;
 use tokio::signal::unix::{SignalKind, signal};
 
 /// The exit code of a process a signal stopped is this plus the signal's number, as shells report it.
 const SIGNALLED_EXIT_BASE: i32 = 128;
+/// How long stopped work has to end on its own (a session cancels its statement, a tunnel stops) before it is dropped.
+const STOP_WAIT: Duration = Duration::from_secs(3);
 
 /// The signal that stopped pgbg; `main` exits with its code.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,13 +30,20 @@ impl fmt::Display for Stopped {
 
 impl std::error::Error for Stopped {}
 
-/// Runs `work` to its end, or until a signal asks pgbg to stop: `work` is then dropped, and with it any tunnel it holds.
+/// Runs `work` to its end, or until a signal asks pgbg to stop: `work` then has `STOP_WAIT` to end on its own, as it
+/// hears the same signal, and is dropped past it or on a second signal, and with it any tunnel it holds.
 pub async fn until_stopped<T>(work: impl Future<Output = Result<T>>) -> Result<T> {
     let mut signals = Signals::listen()?;
+    let mut work = Box::pin(work);
+    let stopped = tokio::select! {
+        outcome = &mut work => return outcome,
+        stopped = signals.next() => stopped,
+    };
     tokio::select! {
-        outcome = work => outcome,
-        stopped = signals.next() => Err(stopped.into()),
+        _ = tokio::time::timeout(STOP_WAIT, work) => {}
+        _ = signals.next() => {}
     }
+    Err(stopped.into())
 }
 
 /// The signals pgbg stops on, listened to from the moment it is built so none is missed.
@@ -60,6 +70,14 @@ impl Signals {
             _ = self.hangup.recv() => SignalKind::hangup(),
         };
         Stopped(kind)
+    }
+
+    /// `work`'s outcome, or the signal that came first, `work` then dropped.
+    pub(crate) async fn or_stopped<T>(&mut self, work: impl Future<Output = T>) -> Result<T, Stopped> {
+        tokio::select! {
+            outcome = work => Ok(outcome),
+            stopped = self.next() => Err(stopped),
+        }
     }
 }
 

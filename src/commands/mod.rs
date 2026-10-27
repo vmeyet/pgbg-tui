@@ -20,9 +20,14 @@ use crate::config::{self, Config};
 use crate::connection::{Connection, ConnectionName};
 use crate::db::{Attempt, Session, open_once};
 use crate::render::printable;
+use crate::signal::Signals;
 use crate::tunnel::Tunnel;
 use anyhow::{Result, anyhow};
 use std::path::Path;
+use std::time::Duration;
+
+/// How long a stopping pgbg waits for the server to take a cancel request.
+const CANCEL_WAIT: Duration = Duration::from_secs(1);
 
 /// `err` and each of its causes on stderr, escaped: a server error can quote a value from the database.
 pub fn print_error(err: &anyhow::Error) {
@@ -38,14 +43,34 @@ fn warn(text: &str) {
 }
 
 /// `work` on a session opened on `connection` along its route; its tunnel, when it has one, stops once it is done.
+/// A signal stops the opening, or cancels the statement `work` has on the server; see `cancelled_on_signal`.
 async fn on_session<T>(connection: &Connection, work: impl AsyncFnOnce(&mut Session) -> Result<T>) -> Result<T> {
-    let Attempt { session, tunnel } = open_once(connection).await?;
+    let mut signals = Signals::listen()?;
+    let Attempt { session, tunnel } = signals.or_stopped(open_once(connection)).await??;
     let result = match session {
-        Ok(mut session) => work(&mut session).await,
+        Ok(mut session) => cancelled_on_signal(&mut signals, &mut session, work).await,
         Err(err) => Err(err),
     };
     stop(tunnel).await;
     result
+}
+
+/// `work` on `session`; a signal first has the server cancel the statement `work` has on it, while its link and tunnel
+/// still stand: a server that cannot tell pgbg went (before PostgreSQL 14, off Linux, behind a pooler) would finish it.
+async fn cancelled_on_signal<T>(
+    signals: &mut Signals,
+    session: &mut Session,
+    work: impl AsyncFnOnce(&mut Session) -> Result<T>,
+) -> Result<T> {
+    let token = session.cancel_token();
+    let stopped = match signals.or_stopped(work(session)).await {
+        Ok(outcome) => return outcome,
+        Err(stopped) => stopped,
+    };
+    if let Err(err) = token.cancel_within(CANCEL_WAIT).await {
+        warn(&format!("the statement may still run on the server: {err:#}"));
+    }
+    Err(stopped.into())
 }
 
 /// Stops `tunnel` and warns when its forward outlives it.
