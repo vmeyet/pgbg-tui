@@ -178,11 +178,9 @@ async fn close(pages: Pages<'_>) {
 #[cfg(test)]
 mod tests {
     use super::super::Backend;
+    use super::super::fixtures::{on_a_side_session, shop};
     use super::*;
-    use crate::connection::ConnectionName;
-    use crate::connection::WritePolicy;
-    use crate::db::model::{Params, Route, Statement, Value};
-    use crate::db::{Session, guard};
+    use crate::db::model::{Statement, Value};
     use crate::fixtures;
     use crate::query::Roots;
     use crate::query::params::ParamInput;
@@ -201,10 +199,6 @@ mod tests {
     #[test]
     fn a_server_more_patient_than_the_idle_limit_leaves_it_as_it_is() {
         assert_eq!(idle_limit_before_the_server(PAGES_IDLE_LIMIT, Duration::from_mins(6)), PAGES_IDLE_LIMIT);
-    }
-
-    fn shop() -> ConnectionName {
-        fixtures::test_database_as("shop").name().clone()
     }
 
     fn started(idle_limit: Duration) -> (Backend, UnboundedReceiver<Answer>) {
@@ -230,11 +224,6 @@ mod tests {
 
     fn ask_next_page(backend: &Backend) {
         backend.next_page(&shop(), SessionId::FIRST, RunId::FIRST);
-    }
-
-    async fn on_a_side_session(sql: &str) -> Vec<Vec<Value>> {
-        let mut session = Session::open(&fixtures::test_database_as("shop"), Route::Direct).await.unwrap();
-        session.run(&guard::admit(Statement::new(sql), Params::default(), WritePolicy::ReadOnly).unwrap()).await.unwrap().rows().to_vec()
     }
 
     fn page_of(incoming: Incoming) -> Page {

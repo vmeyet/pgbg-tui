@@ -66,3 +66,83 @@ fn answer(connection: &Connection, read: anyhow::Result<Catalog>) -> Result<Arc<
         Failure::from(&err)
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::fixtures::{SLEEP, answer_to, answers_until, next_answer, shop, started, started_on, until_sleeping};
+    use super::*;
+    use crate::db::model::Statement;
+    use crate::fixtures;
+    use crate::query::params::ParamInput;
+    use crate::tui::app::{RunId, SessionId, TunnelState};
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn the_schema_is_read_while_a_statement_runs() {
+        let (backend, mut answers) = started();
+        backend.run(&shop(), RunId::FIRST, Statement::new(SLEEP), ParamInput::default(), None);
+        until_sleeping().await;
+        let _reading = fixtures::reading_the_catalog().await;
+        backend.read_schema(&shop(), SessionId::FIRST);
+        let answer = next_answer(&mut answers).await;
+        assert!(matches!(&answer, Incoming::Schema(Ok(catalog)) if !catalog.search_path.is_empty()), "{answer:?}");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn the_completion_index_of_a_schema_read_follows_it() {
+        let (backend, mut answers) = started();
+        let _reading = fixtures::reading_the_catalog().await;
+        backend.read_schema(&shop(), SessionId::FIRST);
+        let seen = answers_until(&mut answers, |answer| matches!(answer, Incoming::Index { .. })).await;
+        let read = seen.iter().find_map(|answer| if let Incoming::Schema(Ok(catalog)) = answer { Some(catalog) } else { None });
+        let is_built_from_it =
+            matches!((read, seen.last()), (Some(read), Some(Incoming::Index { catalog, .. })) if Arc::ptr_eq(read, catalog));
+        assert!(is_built_from_it, "{seen:?}");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn the_schema_is_read_through_the_tunnel_of_the_session() {
+        let _ports = fixtures::TUNNEL_PORTS.lock().await;
+        let marker = "pgbg-test-schema-through-the-tunnel";
+        let (backend, mut answers) = started_on(fixtures::tunnelled(marker));
+        let _reading = fixtures::reading_the_catalog().await;
+        backend.read_schema(&shop(), SessionId::FIRST);
+        let seen = answers_until(&mut answers, |answer| matches!(answer, Incoming::Schema(_))).await;
+        let tunnels_started = seen.iter().filter(|answer| **answer == Incoming::Tunnel(TunnelState::Starting)).count();
+        assert!(matches!(seen.last(), Some(Incoming::Schema(Ok(_)))) && tunnels_started == 1, "{seen:?}");
+    }
+
+    /// `shop` on the test database, its password from the shell line `line`, which gets `file` as `$1`.
+    fn with_password_command(line: &str, file: &std::path::Path) -> Connection {
+        let command = format!("password = {{ command = [\"sh\", \"-c\", {line:?}, \"sh\", {:?}] }}\n", file.display().to_string());
+        fixtures::test_database("local", &command)
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn the_schema_session_reads_the_password_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let reads = dir.path().join("reads");
+        let (backend, mut answers) = started_on(with_password_command("echo read >> \"$1\"; echo nina-password", &reads));
+        let _reading = fixtures::reading_the_catalog().await;
+        backend.read_schema(&shop(), SessionId::FIRST);
+        answers_until(&mut answers, |answer| matches!(answer, Incoming::Schema(_))).await;
+        assert_eq!(std::fs::read_to_string(&reads).unwrap(), "read\nread\n");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_schema_read_that_fails_leaves_the_session_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let once = "[ -e \"$1\" ] && exit 1; touch \"$1\"; echo nina-password";
+        let (backend, mut answers) = started_on(with_password_command(once, &dir.path().join("read")));
+        let _reading = fixtures::reading_the_catalog().await;
+        backend.read_schema(&shop(), SessionId::FIRST);
+        let seen = answers_until(&mut answers, |answer| matches!(answer, Incoming::Schema(_))).await;
+        assert!(matches!(seen.last(), Some(Incoming::Schema(Err(_)))), "{seen:?}");
+        let after = answer_to(&backend, &mut answers, RunId::FIRST, "SELECT 1").await;
+        assert!(matches!(after, Incoming::Result { .. }), "{after:?}");
+    }
+}

@@ -14,6 +14,7 @@ use std::fs::{DirBuilder, File, OpenOptions};
 use std::io::{self, Write};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tokio::task::JoinHandle;
 
 const PATH_VARIABLE: &str = "PGBG_DATA_DIR";
@@ -87,6 +88,20 @@ pub(crate) struct Entry {
     pub(crate) started_at: DateTime<Utc>,
     pub(crate) took_ms: u64,
     pub(crate) outcome: Outcome,
+}
+
+impl Entry {
+    /// The run of `statement` on `connection` that began at `started_at` and was answered `took` later.
+    pub(crate) fn of_run(
+        statement: Statement,
+        connection: ConnectionName,
+        started_at: DateTime<Utc>,
+        took: Duration,
+        outcome: Outcome,
+    ) -> Self {
+        let took_ms = u64::try_from(took.as_millis()).unwrap_or(u64::MAX);
+        Self { statement, connection, started_at, took_ms, outcome }
+    }
 }
 
 /// A connection's history, newest first.
@@ -267,6 +282,20 @@ mod tests {
         let line = r#"{"statement":"SELECT 1","connection":"shop","started_at":"2026-10-26T09:00:00Z","took_ms":38,"outcome":{"kind":"rows","count":4,"is_cut":false}}"#;
         assert_eq!(serde_json::to_string(&entry("shop", "SELECT 1", 0)).unwrap(), line);
         assert_eq!(serde_json::from_str::<Entry>(line).unwrap(), entry("shop", "SELECT 1", 0));
+    }
+
+    #[test]
+    fn a_run_keeps_how_long_it_took_in_milliseconds() {
+        let start = entry("shop", "SELECT 1", 0);
+        let ran = Entry::of_run(start.statement.clone(), shop(), start.started_at, Duration::from_millis(38), start.outcome);
+        assert_eq!(ran, start);
+    }
+
+    #[test]
+    fn a_run_too_long_to_count_keeps_the_longest_time() {
+        let start = entry("shop", "SELECT 1", 0);
+        let ran = Entry::of_run(start.statement, shop(), start.started_at, Duration::MAX, start.outcome);
+        assert_eq!(ran.took_ms, u64::MAX);
     }
 
     #[test]

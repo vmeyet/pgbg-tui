@@ -37,9 +37,7 @@ pub async fn run(
         Ok(admitted) => super::on_session(&connection, async |session| run_asking_for_hidden_writes(session, admitted).await).await,
         Err(err) => Err(err),
     };
-    let took_ms = u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX);
-    let entry =
-        Entry { statement: Statement::new(sql), connection: connection.name().clone(), started_at, took_ms, outcome: Outcome::of(&result) };
+    let entry = Entry::of_run(Statement::new(sql), connection.name().clone(), started_at, clock.elapsed(), Outcome::of(&result));
     record(entry).await;
     print(&result?, json)
 }
