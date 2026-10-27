@@ -16,6 +16,8 @@ pub(crate) enum Token {
     Word(String),
     /// A `;`.
     End,
+    /// `$1`, `$2`: a parameter the statement numbers itself.
+    Numbered(u32),
     Other,
 }
 
@@ -23,7 +25,7 @@ impl Token {
     pub(crate) fn word(&self) -> Option<&str> {
         match self {
             Self::Word(word) => Some(word),
-            Self::End | Self::Other => None,
+            Self::End | Self::Numbered(_) | Self::Other => None,
         }
     }
 }
@@ -42,7 +44,7 @@ pub(crate) fn tokens(sql: &str) -> Vec<Placed> {
             ';' => (Some(Token::End), after),
             c if c.is_alphabetic() || c == '_' => word(rest),
             '\'' | '"' => (Some(Token::Other), after_quoted(after, c)),
-            '$' => (Some(Token::Other), after_dollar(rest)),
+            '$' => dollar(rest),
             _ => (Some(Token::Other), after),
         };
         if let Some(token) = token {
@@ -116,12 +118,21 @@ fn after_escape_string(body: &str) -> &str {
     ""
 }
 
-/// After a `$tag$...$tag$` literal; a `$` that opens none, such as the parameter `$1`, is skipped alone.
+/// The parameter `$1`, a `$tag$...$tag$` literal, or a lone `$`, at the start of `rest`.
+fn dollar(rest: &str) -> (Option<Token>, &str) {
+    let digits_end = rest[1..].find(|c: char| !c.is_ascii_digit()).map_or(rest.len(), |at| at + 1);
+    if digits_end > 1 {
+        let number = rest[1..digits_end].parse().unwrap_or(u32::MAX);
+        return (Some(Token::Numbered(number)), &rest[digits_end..]);
+    }
+    (Some(Token::Other), after_dollar(rest))
+}
+
+/// After a `$tag$...$tag$` literal; a `$` that opens none is skipped alone.
 fn after_dollar(rest: &str) -> &str {
     let tag_end = rest[1..].find(|c: char| !(c.is_alphanumeric() || c == '_')).map(|at| at + 1);
-    let opens_quote = tag_end.is_some_and(|end| rest[end..].starts_with('$')) && !rest[1..].starts_with(|c: char| c.is_ascii_digit());
     match tag_end {
-        Some(end) if opens_quote => {
+        Some(end) if rest[end..].starts_with('$') => {
             let tag = &rest[..=end];
             let body = &rest[tag.len()..];
             body.find(tag).map_or("", |at| &body[at + tag.len()..])
@@ -138,6 +149,20 @@ mod tests {
     fn each_token_spans_its_bytes() {
         let spans: Vec<Range<usize>> = tokens("SELECT 'a;b' ;").into_iter().map(|placed| placed.range).collect();
         assert_eq!(spans, [0..6, 7..12, 13..14]);
+    }
+
+    fn numbered(sql: &str) -> Vec<Token> {
+        tokens(sql).into_iter().map(|placed| placed.token).filter(|token| matches!(token, Token::Numbered(_))).collect()
+    }
+
+    #[test]
+    fn a_numbered_parameter_holds_its_number() {
+        assert_eq!(numbered("SELECT $1, $12"), [Token::Numbered(1), Token::Numbered(12)]);
+    }
+
+    #[test]
+    fn a_dollar_quote_or_a_lone_dollar_is_no_numbered_parameter() {
+        assert_eq!(numbered("SELECT $tag$ $1 $tag$, '$2', $"), []);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! A result shown a page at a time: its portal stays open between pages, in its `BEGIN READ ONLY` transaction.
 use super::guard::{Admitted, Mode};
 use super::model::{Column, Extent, Page, ResultSet};
-use super::{FetchSize, Marks, Session, begin_read_only, columns, fetch_page, roll_back, server_error, why_ended};
+use super::{FetchSize, Marks, Session, begin_read_only, bind_portal, columns, fetch_page, roll_back, server_error, why_ended};
 use anyhow::Result;
 use std::time::Duration;
 use tokio::sync::watch;
@@ -48,7 +48,7 @@ impl Session {
         let Self { client, limits, marks, ended, .. } = self;
         let idle_limit_on_server = limits.idle.on_server();
         let transaction = marks.during(begin_read_only(client, limits)).await?;
-        let bound = marks.during(bind(&transaction, admitted.statement.as_str())).await;
+        let bound = marks.during(bind(&transaction, admitted)).await;
         let Bound { columns, portal } = match bound {
             Ok(bound) => bound,
             Err(err) => {
@@ -101,9 +101,9 @@ impl Marks {
     }
 }
 
-async fn bind(transaction: &Transaction<'_>, sql: &str) -> Result<Bound> {
-    let statement = transaction.prepare(sql).await.map_err(server_error)?;
-    let portal = transaction.bind(&statement, &[]).await.map_err(server_error)?;
+async fn bind(transaction: &Transaction<'_>, admitted: &Admitted) -> Result<Bound> {
+    let statement = transaction.prepare(admitted.statement.as_str()).await.map_err(server_error)?;
+    let portal = bind_portal(transaction, &statement, &admitted.params).await?;
     Ok(Bound { columns: columns(&statement), portal })
 }
 
@@ -111,7 +111,7 @@ async fn bind(transaction: &Transaction<'_>, sql: &str) -> Result<Bound> {
 mod tests {
     use super::*;
     use crate::connection::WritePolicy;
-    use crate::db::model::{Route, Statement, Value};
+    use crate::db::model::{Params, Route, Statement, Value};
     use crate::db::{ROW_CAP, guard};
     use crate::fixtures;
 
@@ -120,7 +120,7 @@ mod tests {
     }
 
     fn read_only(sql: &str) -> Admitted {
-        guard::admit(Statement::new(sql), WritePolicy::ReadOnly).unwrap()
+        guard::admit(Statement::new(sql), Params::default(), WritePolicy::ReadOnly).unwrap()
     }
 
     fn numbers_up_to(count: usize) -> String {
@@ -153,6 +153,20 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_paged_result_binds_its_values() {
+        let mut session = session("").await;
+        let admitted = guard::admit(
+            Statement::new("SELECT generate_series(1, $1::int4)"),
+            Params::new(vec![Some("700".into())]),
+            WritePolicy::ReadOnly,
+        );
+        let Started { rest, .. } = session.start(&admitted.unwrap()).await.unwrap();
+        let last = rest.unwrap().next().await.unwrap();
+        assert_eq!((last.page.rows.len(), last.page.extent), (200, Extent::All));
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_result_of_one_page_keeps_no_portal() {
         let mut session = session("").await;
         let Started { result, rest } = session.start(&read_only(&numbers_up_to(12))).await.unwrap();
@@ -163,7 +177,7 @@ mod tests {
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_result_on_a_connection_that_allows_writes_is_cut_at_the_row_cap_and_keeps_no_portal() {
         let mut session = session("writes = \"allowed\"\n").await;
-        let admitted = guard::admit(Statement::new(numbers_up_to(ROW_CAP + 1)), WritePolicy::Allowed).unwrap();
+        let admitted = guard::admit(Statement::new(numbers_up_to(ROW_CAP + 1)), Params::default(), WritePolicy::Allowed).unwrap();
         let Started { result, rest } = session.start(&admitted).await.unwrap();
         assert_eq!((result.rows().len(), result.extent(), rest.is_none()), (ROW_CAP, Extent::Cut, true));
     }

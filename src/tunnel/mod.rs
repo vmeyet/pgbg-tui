@@ -258,7 +258,7 @@ mod tests {
     use crate::connection::WritePolicy;
     use crate::db::Session;
     use crate::db::guard;
-    use crate::db::model::{Statement, Value};
+    use crate::db::model::{Params, Statement, Value};
     use crate::fixtures::{self, FORWARD};
     use rustix::process::{Signal, kill_process, test_kill_process_group};
 
@@ -499,7 +499,8 @@ time.sleep(60)
         let connection = fixtures::connection(&format!("tier = \"local\"\nurl = \"{unreachable}\"\n"));
         let tunnel = Tunnel::start(&spec(&["python3", "-c", FORWARD, "{port}", &host, &port], None)).await.unwrap();
         let mut session = Session::open(&connection, tunnel.route()).await.unwrap();
-        let result = session.run(&guard::admit(Statement::new("SELECT 7"), WritePolicy::ReadOnly).unwrap()).await.unwrap();
+        let result =
+            session.run(&guard::admit(Statement::new("SELECT 7"), Params::default(), WritePolicy::ReadOnly).unwrap()).await.unwrap();
         assert_eq!(result.rows(), [[Value::Int(7)]]);
     }
 }

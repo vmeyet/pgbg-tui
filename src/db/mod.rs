@@ -3,7 +3,7 @@ use crate::connection::{Connection, StatementTimeout, Target, TimeoutChoice, Tls
 use anyhow::{Context, Result, anyhow};
 use futures_util::{StreamExt, TryStreamExt, future};
 use guard::{Admitted, Mode};
-use model::{CancelToken, Column, Extent, Page, ResultSet, Route, ServerError, Value};
+use model::{CancelToken, Column, Extent, Page, Params, ResultSet, Route, ServerError, Value};
 use std::pin::pin;
 use std::time::Duration;
 use tokio::sync::watch;
@@ -15,10 +15,11 @@ use tokio_postgres::tls::MakeTlsConnect;
 use tokio_postgres::{Client, Config, NoTls, Portal, RowStream, Socket, Statement as Prepared, Transaction};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
+mod bind;
 mod cancel;
 mod decode;
 pub(crate) mod guard;
-mod lex;
+pub(crate) mod lex;
 pub(crate) mod model;
 mod open;
 mod pages;
@@ -30,7 +31,6 @@ pub(crate) use open::{Attempt, NotOpened, Opened, TunnelStep, open_along, open_o
 pub(crate) use pages::{Fetched, Pages, Started};
 pub(crate) use schema::read_schema_along;
 
-const NO_PARAMETERS: [&str; 0] = [];
 /// The rows pgbg keeps of a result; past it the result is cut, so a big table cannot fill the memory.
 const ROW_CAP: usize = 10_000;
 /// How long opening a session waits for the server, unless the URL's `connect_timeout` says otherwise.
@@ -166,11 +166,10 @@ impl Session {
 
     /// Runs `admitted` alone and returns its first `ROW_CAP` rows; a read-only one is always rolled back.
     pub(crate) async fn run(&mut self, admitted: &Admitted) -> Result<ResultSet> {
-        let sql = admitted.statement.as_str();
         self.marks.is_mid_statement = true;
         let result = match admitted.mode {
-            Mode::Writes => self.run_writes(sql).await,
-            Mode::ReadOnly => self.run_read_only(sql).await,
+            Mode::Writes => self.run_writes(admitted).await,
+            Mode::ReadOnly => self.run_read_only(admitted).await,
         };
         self.marks.is_mid_statement = false;
         result
@@ -178,13 +177,13 @@ impl Session {
 
     /// A statement that returns rows goes through a portal in its own committed transaction, so the
     /// server sends no row past the cap; one inside a transaction the user began, or one without rows, runs as is.
-    async fn run_writes(&mut self, sql: &str) -> Result<ResultSet> {
-        let statement = self.client.prepare(sql).await.map_err(server_error)?;
+    async fn run_writes(&mut self, admitted: &Admitted) -> Result<ResultSet> {
+        let statement = self.client.prepare(admitted.statement.as_str()).await.map_err(server_error)?;
         if statement.columns().is_empty() || self.is_in_user_transaction().await? {
-            return fetch(&self.client, &statement).await;
+            return fetch(&self.client, &statement, &admitted.params).await;
         }
         let transaction = self.client.transaction().await.map_err(server_error)?;
-        let portal = transaction.bind(&statement, &[]).await.map_err(server_error)?;
+        let portal = bind_portal(&transaction, &statement, &admitted.params).await?;
         let first = fetch_capped(&transaction, &portal).await?;
         transaction.commit().await.map_err(server_error)?;
         Ok(ResultSet::new(columns(&statement), first))
@@ -199,10 +198,10 @@ impl Session {
         }
     }
 
-    async fn run_read_only(&mut self, sql: &str) -> Result<ResultSet> {
+    async fn run_read_only(&mut self, admitted: &Admitted) -> Result<ResultSet> {
         self.read_only(async |transaction| {
-            let statement = transaction.prepare(sql).await.map_err(server_error)?;
-            let portal = transaction.bind(&statement, &[]).await.map_err(server_error)?;
+            let statement = transaction.prepare(admitted.statement.as_str()).await.map_err(server_error)?;
+            let portal = bind_portal(transaction, &statement, &admitted.params).await?;
             Ok(ResultSet::new(columns(&statement), fetch_capped(transaction, &portal).await?))
         })
         .await
@@ -328,9 +327,15 @@ async fn set_statement_timeout(client: &Client, timeout: StatementTimeout) -> Re
     client.batch_execute(&sql).await.map_err(server_error).context("setting the statement timeout")
 }
 
-/// Streams the rows of `statement`, prepared first so a result without rows still has its columns.
-async fn fetch(client: &Client, statement: &Prepared) -> Result<ResultSet> {
-    let rows = client.query_raw(statement, NO_PARAMETERS).await.map_err(server_error)?;
+/// `statement` bound to a portal with `params`, each in text.
+async fn bind_portal(transaction: &Transaction<'_>, statement: &Prepared, params: &Params) -> Result<Portal> {
+    let values = bind::as_text(params);
+    transaction.bind(statement, &bind::borrowed(&values)).await.map_err(server_error)
+}
+
+/// Streams the rows of `statement` run with `params`, prepared first so a result without rows still has its columns.
+async fn fetch(client: &Client, statement: &Prepared, params: &Params) -> Result<ResultSet> {
+    let rows = client.query_raw(statement, bind::as_text(params)).await.map_err(server_error)?;
     Ok(ResultSet::new(columns(statement), first_rows(rows).await?))
 }
 
@@ -387,7 +392,7 @@ mod tests {
     use crate::connection::WritePolicy;
     use crate::fixtures;
     use model::LocalPort;
-    use model::Statement;
+    use model::{Params, Statement};
     use std::net::Ipv4Addr;
     use std::time::Duration;
     use url::Url;
@@ -398,7 +403,7 @@ mod tests {
     }
 
     async fn run(writes: WritePolicy, sql: &str) -> Result<ResultSet> {
-        let admitted = guard::admit(Statement::new(sql), writes).unwrap();
+        let admitted = guard::admit(Statement::new(sql), Params::default(), writes).unwrap();
         session(writes).await.run(&admitted).await
     }
 
@@ -515,7 +520,7 @@ mod tests {
     }
 
     async fn run_on(session: &mut Session, sql: &str) -> ResultSet {
-        session.run(&guard::admit(Statement::new(sql), WritePolicy::Allowed).unwrap()).await.unwrap()
+        session.run(&guard::admit(Statement::new(sql), Params::default(), WritePolicy::Allowed).unwrap()).await.unwrap()
     }
 
     #[tokio::test]
@@ -564,7 +569,7 @@ mod tests {
     }
 
     async fn on(mut session: Session, sql: &str) -> Result<ResultSet> {
-        session.run(&guard::admit(Statement::new(sql), WritePolicy::ReadOnly).unwrap()).await
+        session.run(&guard::admit(Statement::new(sql), Params::default(), WritePolicy::ReadOnly).unwrap()).await
     }
 
     #[tokio::test]
@@ -682,7 +687,7 @@ mod tests {
 
     async fn ended_on_the_server() -> Session {
         let mut doomed = session(WritePolicy::ReadOnly).await;
-        let admitted = guard::admit(Statement::new("SELECT pg_backend_pid()"), WritePolicy::ReadOnly).unwrap();
+        let admitted = guard::admit(Statement::new("SELECT pg_backend_pid()"), Params::default(), WritePolicy::ReadOnly).unwrap();
         let pid = doomed.run(&admitted).await.unwrap().rows()[0][0].to_string();
         run(WritePolicy::ReadOnly, &format!("SELECT pg_terminate_backend({pid}, 5000)")).await.unwrap();
         doomed
@@ -692,7 +697,7 @@ mod tests {
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_session_whose_server_side_ended_is_lost() {
         let mut doomed = ended_on_the_server().await;
-        let lost = doomed.run(&guard::admit(Statement::new("SELECT 1"), WritePolicy::ReadOnly).unwrap()).await;
+        let lost = doomed.run(&guard::admit(Statement::new("SELECT 1"), Params::default(), WritePolicy::ReadOnly).unwrap()).await;
         assert!(lost.is_err());
         assert!(doomed.lost().is_some());
     }
@@ -725,6 +730,49 @@ mod tests {
         assert_eq!(shown, ["infinity", "-infinity", "NaN", "NULL", "7"]);
     }
 
+    async fn run_with(writes: WritePolicy, sql: &str, values: &[Option<&str>]) -> Result<ResultSet> {
+        let params = Params::new(values.iter().map(|value| value.map(str::to_owned)).collect());
+        session(writes).await.run(&guard::admit(Statement::new(sql), params, writes).unwrap()).await
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_value_is_read_by_the_server_as_the_type_it_gives_its_parameter() {
+        let result = run_with(WritePolicy::ReadOnly, "SELECT $1::int4 + 1, $2::date", &[Some("41"), Some("2024-01-01")]).await.unwrap();
+        assert_eq!(result.rows()[0].iter().map(Value::to_string).collect::<Vec<_>>(), ["42", "2024-01-01"]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_value_is_never_read_as_sql() {
+        let result = run_with(WritePolicy::ReadOnly, "SELECT $1", &[Some("1; DROP TABLE orders")]).await.unwrap();
+        assert_eq!(result.rows(), [[Value::Text("1; DROP TABLE orders".into())]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_missing_value_binds_null() {
+        let result = run_with(WritePolicy::ReadOnly, "SELECT $1::text IS NULL", &[None]).await.unwrap();
+        assert_eq!(result.rows(), [[Value::Bool(true)]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_value_its_type_cannot_read_fails_with_the_servers_words() {
+        let err = run_with(WritePolicy::ReadOnly, "SELECT $1::date", &[Some("soon")]).await.unwrap_err();
+        assert!(err.to_string().contains("invalid input syntax for type date"), "{err}");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_connection_that_allows_writes_binds_values_too() {
+        run(WritePolicy::Allowed, "DROP TABLE IF EXISTS orders_bound").await.unwrap();
+        run(WritePolicy::Allowed, "CREATE TABLE orders_bound (id int)").await.unwrap();
+        run_with(WritePolicy::Allowed, "INSERT INTO orders_bound VALUES ($1)", &[Some("41")]).await.unwrap();
+        let returned = run_with(WritePolicy::Allowed, "UPDATE orders_bound SET id = $1 RETURNING id", &[Some("42")]).await.unwrap();
+        assert_eq!(returned.rows(), [[Value::Int(42)]]);
+    }
+
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_result_without_rows_keeps_its_columns() {
@@ -754,10 +802,18 @@ mod tests {
         const SLEEP: &str = "SELECT pg_sleep(30)";
         let mut sleeper = session(WritePolicy::ReadOnly).await;
         let token = sleeper.cancel_token();
-        let running = tokio::spawn(async move { sleeper.run(&guard::admit(Statement::new(SLEEP), WritePolicy::ReadOnly).unwrap()).await });
+        let running = tokio::spawn(async move {
+            sleeper.run(&guard::admit(Statement::new(SLEEP), Params::default(), WritePolicy::ReadOnly).unwrap()).await
+        });
         let mut watcher = session(WritePolicy::ReadOnly).await;
         let is_sleeping = format!("SELECT 1 FROM pg_stat_activity WHERE query = '{SLEEP}' AND state = 'active'");
-        while watcher.run(&guard::admit(Statement::new(&is_sleeping), WritePolicy::ReadOnly).unwrap()).await.unwrap().rows().is_empty() {}
+        while watcher
+            .run(&guard::admit(Statement::new(&is_sleeping), Params::default(), WritePolicy::ReadOnly).unwrap())
+            .await
+            .unwrap()
+            .rows()
+            .is_empty()
+        {}
         token.cancel().await.unwrap();
         let err = running.await.unwrap().unwrap_err();
         assert!(err.to_string().contains("canceling statement due to user request"), "{err}");
@@ -768,10 +824,12 @@ mod tests {
     async fn a_session_dropped_mid_statement_ends_it_on_the_server() {
         const SLEEP: &str = "SELECT pg_sleep(600)";
         let mut sleeper = session(WritePolicy::ReadOnly).await;
-        let running = tokio::spawn(async move { sleeper.run(&guard::admit(Statement::new(SLEEP), WritePolicy::ReadOnly).unwrap()).await });
+        let running = tokio::spawn(async move {
+            sleeper.run(&guard::admit(Statement::new(SLEEP), Params::default(), WritePolicy::ReadOnly).unwrap()).await
+        });
         let mut watcher = session(WritePolicy::ReadOnly).await;
         let is_sleeping = format!("SELECT 1 FROM pg_stat_activity WHERE query = '{SLEEP}'");
-        let is_sleeping = guard::admit(Statement::new(&is_sleeping), WritePolicy::ReadOnly).unwrap();
+        let is_sleeping = guard::admit(Statement::new(&is_sleeping), Params::default(), WritePolicy::ReadOnly).unwrap();
         while watcher.run(&is_sleeping).await.unwrap().rows().is_empty() {}
         running.abort();
         let ended = async { while !watcher.run(&is_sleeping).await.unwrap().rows().is_empty() {} };

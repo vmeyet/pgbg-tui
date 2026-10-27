@@ -145,7 +145,7 @@ mod tests {
     use super::*;
     use crate::connection::WritePolicy;
     use crate::db::guard;
-    use crate::db::model::{Route, Statement};
+    use crate::db::model::{Params, Route, Statement};
     use crate::fixtures;
 
     async fn session_as(user: Option<&str>, writes: &str) -> Session {
@@ -161,7 +161,7 @@ mod tests {
     async fn as_owner(setup: &[String]) {
         let mut owner = session_as(None, "allowed").await;
         for sql in setup {
-            owner.run(&guard::admit(Statement::new(sql.clone()), WritePolicy::Allowed).unwrap()).await.unwrap();
+            owner.run(&guard::admit(Statement::new(sql.clone()), Params::default(), WritePolicy::Allowed).unwrap()).await.unwrap();
         }
     }
 
