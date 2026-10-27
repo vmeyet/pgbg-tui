@@ -1,6 +1,6 @@
 use super::report::Check;
 use crate::connection::{Connection, TimeoutChoice, Tls, TunnelSpec, WritePolicy};
-use crate::db::model::{LocalPort, Named, RoleFlag, RolePowers, RoleRights, ServerFacts};
+use crate::db::model::{LocalPort, Named, ReadOnlyGaps, RoleFlag, RolePowers, RoleRights, ServerFacts};
 use std::path::Path;
 
 const PRIVATE_CA: &str = "sslrootcert";
@@ -148,6 +148,35 @@ pub(super) fn role(writes: WritePolicy, rights: &RoleRights) -> Check {
     match writes {
         WritePolicy::Allowed => Check::ok("role", format!("{found}; this connection allows writes")),
         WritePolicy::ReadOnly => Check::warn("role", found, READ_ONLY_ROLE),
+    }
+}
+
+/// `"call `dblink(text)` and `dblink_exec(text,text)`"`, or nothing for none.
+fn listed(verb: &str, names: &[String]) -> Option<String> {
+    let quoted: Vec<String> = names.iter().map(|name| format!("`{name}`")).collect();
+    let joined = match quoted.as_slice() {
+        [] => return None,
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    };
+    Some(format!("{verb} {joined}"))
+}
+
+pub(super) fn beyond_read_only(writes: WritePolicy, gaps: &ReadOnlyGaps) -> Check {
+    let signals = gaps.signals_sessions.then(|| "cancel or end other sessions (`pg_signal_backend`)".to_owned());
+    let dblink = listed("call", &gaps.dblink_functions).map(|call| format!("{call}, which opens a session of its own that may write"));
+    let settings = listed("set", &gaps.granted_settings);
+    let ways: Vec<String> = [signals, dblink, settings].into_iter().flatten().collect();
+    let found = match ways.as_slice() {
+        [] => return Check::ok("beyond read only", "nothing: a read-only transaction holds the role"),
+        [one] => format!("it can {one}"),
+        [rest @ .., last] => format!("it can {}, and {last}", rest.join(", ")),
+    };
+    match writes {
+        WritePolicy::Allowed => Check::ok("beyond read only", format!("{found}; this connection allows writes")),
+        WritePolicy::ReadOnly => {
+            Check::warn("beyond read only", found, "revoke them from the role: a read-only transaction does not stop them")
+        }
     }
 }
 
@@ -305,5 +334,31 @@ mod tests {
         let powers = RolePowers { role: "nina".into(), flags: vec![RoleFlag::Superuser, RoleFlag::CreateRole], ..RolePowers::default() };
         let rights = RoleRights { roles: vec![powers] };
         assert_eq!(role(WritePolicy::ReadOnly, &rights).found, "not read only: `nina` is a superuser, creates roles");
+    }
+
+    #[test]
+    fn a_role_a_read_only_transaction_holds_whole_is_fine() {
+        assert_eq!(beyond_read_only(WritePolicy::ReadOnly, &ReadOnlyGaps::default()).verdict, Verdict::Ok);
+    }
+
+    fn gaps() -> ReadOnlyGaps {
+        ReadOnlyGaps {
+            signals_sessions: true,
+            dblink_functions: vec!["dblink_exec(text,text)".into()],
+            granted_settings: vec!["session_replication_role".into()],
+        }
+    }
+
+    #[test]
+    fn a_role_that_reaches_past_a_read_only_transaction_is_a_warning_naming_each_way() {
+        let check = beyond_read_only(WritePolicy::ReadOnly, &gaps());
+        let found = "it can cancel or end other sessions (`pg_signal_backend`), call `dblink_exec(text,text)`, which opens a \
+                     session of its own that may write, and set `session_replication_role`";
+        assert_eq!((check.verdict, check.found.as_str()), (Verdict::Warn, found));
+    }
+
+    #[test]
+    fn a_role_that_reaches_past_a_read_only_transaction_is_fine_where_writes_are_allowed() {
+        assert_eq!(beyond_read_only(WritePolicy::Allowed, &gaps()).verdict, Verdict::Ok);
     }
 }

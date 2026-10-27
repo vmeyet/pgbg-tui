@@ -38,6 +38,19 @@ impl fmt::Display for UnknownType {
 
 impl std::error::Error for UnknownType {}
 
+/// pgbg's own read-only transaction refused on a session where the user's `BEGIN` may have left one open: its
+/// `ROLLBACK` would end the user's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct InsideUserTransaction;
+
+impl fmt::Display for InsideUserTransaction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("a transaction you began may be open on this session: end it with COMMIT or ROLLBACK first")
+    }
+}
+
+impl std::error::Error for InsideUserTransaction {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

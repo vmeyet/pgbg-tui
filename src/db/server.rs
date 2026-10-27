@@ -1,10 +1,11 @@
 //! What the server says of a session: who it is, its version, its timeout, what its role can write; read in
 //! a read-only transaction, so asking writes nothing.
-use super::model::{RoleFlag, RolePowers, RoleRights, ServerFacts};
+use super::model::{ReadOnlyGaps, RoleFlag, RolePowers, RoleRights, ServerFacts};
 use super::{Isolation, Session, server_error};
 use crate::connection::StatementTimeout;
 use anyhow::{Context, Result};
-use tokio_postgres::Row;
+use tokio_postgres::types::FromSql;
+use tokio_postgres::{Row, Transaction};
 
 const SERVER_FACTS: &str = "SELECT current_user::text, current_setting('server_version'), setting::int8, reset_val::int8
     FROM pg_settings WHERE name = 'statement_timeout'";
@@ -51,6 +52,21 @@ SELECT role, power, object, total FROM (
 WHERE place <= 10
 ORDER BY role <> session_user, role, rank, object";
 
+/// Whether the login role, or a role it may become, can cancel or end other sessions.
+const SIGNALS_SESSIONS: &str = "SELECT pg_has_role(session_user, 'pg_signal_backend', 'MEMBER')";
+/// The `dblink` functions the login role, or a role it may become, may call.
+const DBLINK_FUNCTIONS: &str = "SELECT p.oid::regprocedure::text FROM pg_proc p
+    JOIN pg_depend d ON d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e'
+    JOIN pg_extension e ON e.oid = d.refobjid
+    WHERE e.extname = 'dblink' AND p.proname IN ('dblink', 'dblink_exec')
+    AND EXISTS (SELECT 1 FROM pg_roles r WHERE pg_has_role(session_user, r.oid, 'MEMBER') AND has_function_privilege(r.oid, p.oid, 'EXECUTE'))
+    ORDER BY 1";
+/// The settings granted with `GRANT SET ON PARAMETER`, PostgreSQL 15 on: only a superuser sets them otherwise.
+const GRANTED_SETTINGS: &str = "SELECT parname FROM pg_parameter_acl
+    WHERE EXISTS (SELECT 1 FROM pg_roles r WHERE pg_has_role(session_user, r.oid, 'MEMBER') AND has_parameter_privilege(r.oid, parname, 'SET'))
+    ORDER BY 1";
+const HAS_PARAMETER_ACL: &str = "SELECT current_setting('server_version_num')::int >= 150000";
+
 impl Session {
     /// Who the session is, the server's version, and the timeout in effect beside the one the server applied before pgbg's.
     pub(crate) async fn server_facts(&mut self) -> Result<ServerFacts> {
@@ -74,6 +90,38 @@ impl Session {
         })
         .await
     }
+}
+
+impl Session {
+    /// What the login role, and each role it may become, can do that a read-only transaction does not stop.
+    pub(crate) async fn read_only_gaps(&mut self) -> Result<ReadOnlyGaps> {
+        self.read_only(Isolation::EachStatement, async |transaction| {
+            Ok(ReadOnlyGaps {
+                signals_sessions: one_value(transaction, SIGNALS_SESSIONS).await?,
+                dblink_functions: texts(transaction, DBLINK_FUNCTIONS).await?,
+                granted_settings: granted_settings(transaction).await?,
+            })
+        })
+        .await
+    }
+}
+
+async fn one_value<T: for<'r> FromSql<'r>>(transaction: &Transaction<'_>, sql: &str) -> Result<T> {
+    Ok(transaction.query_one(sql, &[]).await.map_err(server_error)?.try_get(0)?)
+}
+
+async fn texts(transaction: &Transaction<'_>, sql: &str) -> Result<Vec<String>> {
+    let rows = transaction.query(sql, &[]).await.map_err(server_error)?;
+    rows.iter().map(|row| Ok(row.try_get(0)?)).collect()
+}
+
+/// None before PostgreSQL 15, which cannot grant a setting.
+async fn granted_settings(transaction: &Transaction<'_>) -> Result<Vec<String>> {
+    let has_parameter_acl: bool = one_value(transaction, HAS_PARAMETER_ACL).await?;
+    if !has_parameter_acl {
+        return Ok(vec![]);
+    }
+    texts(transaction, GRANTED_SETTINGS).await
 }
 
 /// One row of `ROLE_POWERS`: a power its role holds.
@@ -290,6 +338,41 @@ mod tests {
         as_owner(&[create_role("doctor_database_creator", "LOGIN"), grant.to_owned()]).await;
         let rights = rights_of("doctor_database_creator").await;
         assert_eq!(powers_of(&rights, "doctor_database_creator").flags, [RoleFlag::CreateSchema], "{rights:?}");
+    }
+
+    async fn gaps_of(role: &str) -> ReadOnlyGaps {
+        session_as(Some(role), "read-only").await.read_only_gaps().await.unwrap()
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_member_of_pg_signal_backend_can_signal_other_sessions() {
+        as_owner(&[create_role("doctor_signaller", "LOGIN"), "GRANT pg_signal_backend TO doctor_signaller".to_owned()]).await;
+        assert!(gaps_of("doctor_signaller").await.signals_sessions);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_role_that_may_call_dblink_names_its_functions() {
+        as_owner(&[create_role("doctor_linker", "LOGIN"), "CREATE EXTENSION IF NOT EXISTS dblink".to_owned()]).await;
+        let gaps = gaps_of("doctor_linker").await;
+        assert!(gaps.dblink_functions.iter().any(|function| function.starts_with("dblink_exec(")), "{gaps:?}");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_role_granted_a_superuser_setting_names_it() {
+        let grant = "GRANT SET ON PARAMETER session_replication_role TO doctor_replicator".to_owned();
+        as_owner(&[create_role("doctor_replicator", "LOGIN"), grant]).await;
+        assert_eq!(gaps_of("doctor_replicator").await.granted_settings, ["session_replication_role"]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_plain_role_can_neither_signal_sessions_nor_set_a_superuser_setting() {
+        as_owner(&[create_role("doctor_plain", "LOGIN")]).await;
+        let gaps = gaps_of("doctor_plain").await;
+        assert_eq!((gaps.signals_sessions, gaps.granted_settings.len()), (false, 0), "{gaps:?}");
     }
 
     #[tokio::test]

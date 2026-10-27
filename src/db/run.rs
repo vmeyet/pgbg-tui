@@ -1,7 +1,7 @@
 //! Running one statement alone and reading its first `ROW_CAP` rows; a read-only one is always rolled back.
 use super::guard::{Admitted, Mode, TransactionStep};
 use super::limits::ReadLimits;
-use super::model::{Column, Extent, Page, Params, ResultSet, Value};
+use super::model::{Column, Extent, InsideUserTransaction, Page, Params, ResultSet, Value};
 use super::{Isolation, Session, bind, decode, roll_back, server_error};
 use anyhow::{Context, Result};
 use futures_util::{StreamExt, TryStreamExt, future};
@@ -126,8 +126,11 @@ impl Session {
     }
 
     /// `read` inside `BEGIN READ ONLY` at `isolation`, always rolled back; the session is mid-statement meanwhile, so
-    /// one dropped then cuts its link.
+    /// one dropped then cuts its link. Refused inside a transaction of the user, which its `ROLLBACK` would end.
     pub(super) async fn read_only<T>(&mut self, isolation: Isolation, read: impl AsyncFnOnce(&Transaction<'_>) -> Result<T>) -> Result<T> {
+        if self.is_in_user_transaction().await? {
+            return Err(InsideUserTransaction.into());
+        }
         let was_mid_statement = std::mem::replace(&mut self.marks.is_mid_statement, true);
         let result = self.read_only_marked(isolation, read).await;
         self.marks.is_mid_statement = was_mid_statement;
@@ -398,6 +401,48 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_procedure_that_commits_has_the_session_ask_the_server_next() {
+        run(WritePolicy::Allowed, "DROP TABLE IF EXISTS orders_closed").await.unwrap();
+        run(WritePolicy::Allowed, "CREATE TABLE orders_closed (id int)").await.unwrap();
+        let procedure = "CREATE OR REPLACE PROCEDURE close_orders() LANGUAGE plpgsql AS $$ \
+                         BEGIN INSERT INTO orders_closed VALUES (1); COMMIT; INSERT INTO orders_closed VALUES (2); END $$";
+        run(WritePolicy::Allowed, procedure).await.unwrap();
+        let mut writer = session(WritePolicy::Allowed).await;
+        run_on(&mut writer, "CALL close_orders()").await;
+        assert_eq!(writer.marks.user_transaction, UserTransaction::Unsure);
+        run_on(&mut writer, "SELECT id FROM orders_closed").await;
+        assert_eq!(writer.marks.user_transaction, UserTransaction::None);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_read_of_pgbg_is_refused_inside_a_transaction_of_the_user() {
+        let mut writer = session(WritePolicy::Allowed).await;
+        run_on(&mut writer, "BEGIN").await;
+        let err = writer.read_only(Isolation::EachStatement, async |_| Ok(())).await.unwrap_err();
+        assert_eq!(err.downcast_ref(), Some(&InsideUserTransaction));
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_read_of_pgbg_unsure_of_the_users_transaction_asks_the_server_first() {
+        let mut writer = session(WritePolicy::Allowed).await;
+        run_on(&mut writer, "BEGIN").await;
+        writer.marks.user_transaction = UserTransaction::Unsure;
+        let err = writer.read_only(Isolation::EachStatement, async |_| Ok(())).await.unwrap_err();
+        assert_eq!(err.downcast_ref(), Some(&InsideUserTransaction));
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_read_of_pgbg_after_a_do_block_runs_once_the_server_says_no_transaction_is_open() {
+        let mut writer = session(WritePolicy::Allowed).await;
+        run_on(&mut writer, "DO $$ BEGIN PERFORM 1; END $$").await;
+        assert!(writer.read_only(Isolation::EachStatement, async |_| Ok(())).await.is_ok());
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_failed_ending_leaves_the_session_unsure() {
         let mut writer = session(WritePolicy::Allowed).await;
         run_on(&mut writer, "BEGIN").await;
@@ -508,6 +553,14 @@ mod tests {
         let result = run(WritePolicy::ReadOnly, "SELECT 1 AS id WHERE false").await.unwrap();
         assert_eq!(result.columns().len(), 1);
         assert_eq!(result.rows(), Vec::<Vec<Value>>::new());
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn an_explain_analyze_of_a_read_shows_the_plan_as_it_ran() {
+        let result = run(WritePolicy::ReadOnly, "EXPLAIN (ANALYZE, FORMAT TEXT) SELECT generate_series(1, 3)").await.unwrap();
+        let plan: Vec<String> = result.rows().iter().map(|row| row[0].to_string()).collect();
+        assert!(plan.iter().any(|line| line.contains("actual")), "{plan:?}");
     }
 
     #[tokio::test]
