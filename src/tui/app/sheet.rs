@@ -88,6 +88,8 @@ pub(in crate::tui) struct Sheet {
     pub(in crate::tui) header: Header,
     /// Whether the editor's text changed since it was opened or saved.
     pub(in crate::tui) is_dirty: bool,
+    /// Why the last page asked for failed, until the next run.
+    pub(in crate::tui) page_failure: Option<String>,
 }
 
 impl Sheet {
@@ -105,6 +107,7 @@ impl Sheet {
             query_error: None,
             header: Header::default(),
             is_dirty: false,
+            page_failure: None,
         }
     }
 
@@ -179,6 +182,7 @@ impl Sheet {
         self.run = Run::Running { run };
         self.last_run = Some(run);
         self.error_mark = None;
+        self.page_failure = None;
         self.sent = Some(Sent { start: Some(range.start), statement: statement.clone() });
         vec![Action::Run { connection: self.name().clone(), run, statement }]
     }
@@ -208,6 +212,10 @@ impl Sheet {
                 self.run = Run::Done { run, grid: Box::new(Grid::new(&result)), result, took, view, is_page_asked: false };
             }
             Incoming::Page { run, page } => self.push_page(run, page),
+            Incoming::PageFailed { run, error } => {
+                self.push_page(run, Page { rows: vec![], extent: Extent::Cut });
+                self.page_failure = Some(format!("the next page failed: {error}"));
+            }
             Incoming::Refused { why, .. } => self.run = Run::Failed(format!("not sent: {why}")),
             Incoming::Failed { error, position, .. } => {
                 self.error_mark = position.and_then(|position| self.editor_byte(position));
@@ -329,6 +337,15 @@ mod tests {
         app.apply(to_shop(Incoming::Page { run: RunId::FIRST, page: Page { rows: wide, extent: Extent::All } }));
         let Run::Done { grid, .. } = &app.sheet().run else { panic!("no result") };
         assert_eq!(grid.widths, [3]);
+    }
+
+    #[test]
+    fn a_failed_page_leaves_the_result_cut_and_says_why() {
+        let mut app = first_page();
+        app.apply(to_shop(Incoming::PageFailed { run: RunId::FIRST, error: "ERROR: division by zero".into() }));
+        let Run::Done { result, .. } = &app.sheet().run else { panic!("no result") };
+        assert_eq!(result.extent(), Extent::Cut);
+        assert_eq!(app.sheet().page_failure.as_deref(), Some("the next page failed: ERROR: division by zero"));
     }
 
     #[test]

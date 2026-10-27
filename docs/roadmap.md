@@ -49,7 +49,7 @@ The MR that ships a step ticks its box.
 
 ## 7. Big results
 
-- [ ] Portal pages fetched as the grid scrolls
+- [x] Portal pages fetched as the grid scrolls
 - [x] History per connection: `pgbg run` adds each statement, `pgbg history <connection>` lists them
 - [x] The TUI adds its statements to the history, `ctrl-r` searches it
 

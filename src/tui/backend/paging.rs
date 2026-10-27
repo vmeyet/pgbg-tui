@@ -1,0 +1,322 @@
+//! A result's portal held open across jobs: the session task serves its pages here until the portal closes.
+use super::{Job, Woken, cancel, ended, send};
+use crate::connection::ConnectionName;
+use crate::db::model::{CancelToken, Extent, Page};
+use crate::db::{Fetched, Pages};
+use crate::tui::app::{Answer, Incoming, RunId};
+use crate::tunnel::{Died, Tunnel};
+use std::pin::pin;
+use std::time::Duration;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::time::{Instant, sleep_until};
+
+/// How long a portal waits for the grid to ask for its next page before it is closed: its transaction holds a snapshot,
+/// which keeps the server from cleaning up the rows it can still see.
+pub(super) const PAGES_IDLE_LIMIT: Duration = Duration::from_mins(5);
+
+/// What serving the pages of `run` borrows from the session task while the portal stays open.
+pub(super) struct Paging<'a, 's> {
+    pub(super) pages: Pages<'s>,
+    pub(super) run: RunId,
+    pub(super) token: CancelToken,
+    pub(super) queue: &'a mut UnboundedReceiver<Job>,
+    pub(super) cancelled: &'a mut UnboundedReceiver<RunId>,
+    pub(super) tunnel: Option<&'a mut Tunnel>,
+    pub(super) connection: &'a ConnectionName,
+    pub(super) answers: &'a UnboundedSender<Answer>,
+    pub(super) idle_limit: Duration,
+}
+
+/// What woke the task while the portal was open.
+enum Held {
+    Queued(Option<Job>),
+    Cancelled(Option<RunId>),
+    Closed(String),
+    TunnelEnded(Died),
+    Idle,
+}
+
+/// How fetching a page ended.
+enum Fetch<'s> {
+    More(Page, Pages<'s>),
+    Last(Page),
+    /// The run's cancel stopped the fetch, so the portal is gone.
+    Cancelled,
+    /// The server failed the fetch in these words, so the portal is gone.
+    Failed(String),
+    /// The session is closing: the portal closed with the fetch.
+    Closing,
+}
+
+/// Where the pages of one run go.
+struct Outbox<'a> {
+    connection: &'a ConnectionName,
+    answers: &'a UnboundedSender<Answer>,
+    run: RunId,
+}
+
+impl Outbox<'_> {
+    fn send(&self, page: Page) {
+        self.say(Incoming::Page { run: self.run, page });
+    }
+
+    /// Says the server failed the next page, so the result is cut.
+    fn send_failure(&self, error: String) {
+        self.say(Incoming::PageFailed { run: self.run, error });
+    }
+
+    fn say(&self, incoming: Incoming) {
+        send(self.answers, Answer::Session { connection: self.connection.clone(), incoming });
+    }
+
+    /// Says the portal closed before its last page, so the result is cut.
+    fn send_cut(&self) {
+        self.send(Page { rows: vec![], extent: Extent::Cut });
+    }
+}
+
+/// Serves the pages of `paging.run` until its portal closes: on its last page, a cancel of the run, a new run, the idle
+/// limit, the session closing or its link or tunnel ending; a close before the last page sends an empty `Cut` page.
+/// Returns what woke the task that the session task still has to act on.
+pub(super) async fn serve_pages(paging: Paging<'_, '_>) -> Option<Woken> {
+    let Paging { mut pages, run, token, queue, cancelled, mut tunnel, connection, answers, idle_limit } = paging;
+    let outbox = Outbox { connection, answers, run };
+    let mut deadline = Instant::now() + idle_limit;
+    loop {
+        let held = tokio::select! {
+            queued = queue.recv() => Held::Queued(queued),
+            cancel_of = cancelled.recv() => Held::Cancelled(cancel_of),
+            why = pages.closed() => Held::Closed(why),
+            died = ended(tunnel.as_deref_mut()) => Held::TunnelEnded(died),
+            () = sleep_until(deadline) => Held::Idle,
+        };
+        let is_queue_closed = queue.is_closed();
+        match held {
+            Held::Queued(Some(Job::NextPage { run: of })) if of == run && !is_queue_closed => {
+                match next_page(pages, run, &token, cancelled).await {
+                    Fetch::More(page, rest) => {
+                        outbox.send(page);
+                        pages = rest;
+                        deadline = Instant::now() + idle_limit;
+                    }
+                    Fetch::Last(page) => {
+                        outbox.send(page);
+                        return None;
+                    }
+                    Fetch::Cancelled => {
+                        outbox.send_cut();
+                        return None;
+                    }
+                    Fetch::Failed(error) => {
+                        outbox.send_failure(error);
+                        return None;
+                    }
+                    Fetch::Closing => {
+                        outbox.send_cut();
+                        return Some(Woken::Queued(None));
+                    }
+                }
+            }
+            Held::Queued(Some(Job::NextPage { .. } | Job::Open)) if !is_queue_closed => {}
+            Held::Cancelled(Some(of)) if of != run => {}
+            Held::Closed(why) => return Some(gone(pages, &outbox, Woken::Closed(why))),
+            Held::TunnelEnded(died) => return Some(gone(pages, &outbox, Woken::TunnelEnded(died))),
+            held => {
+                close(pages).await;
+                outbox.send_cut();
+                return still_to_act_on(held, is_queue_closed);
+            }
+        }
+    }
+}
+
+/// The link or the tunnel ended, so there is no transaction left to roll back.
+fn gone(pages: Pages<'_>, outbox: &Outbox<'_>, woken: Woken) -> Woken {
+    drop(pages);
+    outbox.send_cut();
+    woken
+}
+
+/// A new run waits once the portal is closed, and a closed queue stops the task; a cancel or the idle limit only closed it.
+fn still_to_act_on(held: Held, is_queue_closed: bool) -> Option<Woken> {
+    match held {
+        Held::Queued(Some(job)) if !is_queue_closed => Some(Woken::Queued(Some(job))),
+        Held::Queued(_) => Some(Woken::Queued(None)),
+        Held::Cancelled(_) | Held::Closed(_) | Held::TunnelEnded(_) | Held::Idle => None,
+    }
+}
+
+/// Fetches the next page, asking the server to cancel it when its run's cancel comes or the session closes.
+async fn next_page<'s>(pages: Pages<'s>, run: RunId, token: &CancelToken, cancelled: &mut UnboundedReceiver<RunId>) -> Fetch<'s> {
+    let mut fetched = pin!(pages.next());
+    let (mut is_closing, mut is_cancelled) = (false, false);
+    let fetched = loop {
+        tokio::select! {
+            fetched = &mut fetched => break fetched,
+            cancel_of = cancelled.recv(), if !is_closing => match cancel_of {
+                Some(of) if of == run => {
+                    is_cancelled = true;
+                    cancel(token).await;
+                }
+                Some(_) => {}
+                None => {
+                    is_closing = true;
+                    cancel(token).await;
+                }
+            },
+        }
+    };
+    match fetched {
+        Ok(Fetched { rest: Some(rest), .. }) if is_closing => {
+            close(rest).await;
+            Fetch::Closing
+        }
+        _ if is_closing => Fetch::Closing,
+        Ok(Fetched { page, rest: Some(rest) }) => Fetch::More(page, rest),
+        Ok(Fetched { page, rest: None }) => Fetch::Last(page),
+        Err(_) if is_cancelled => Fetch::Cancelled,
+        Err(err) => Fetch::Failed(format!("{err:#}")),
+    }
+}
+
+/// Ends the portal's transaction; on a failure the session task finds the session lost.
+async fn close(pages: Pages<'_>) {
+    if let Err(err) = pages.close().await {
+        tracing::warn!("closing a result's portal failed: {err:#}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::Backend;
+    use super::*;
+    use crate::connection::WritePolicy;
+    use crate::db::model::{Route, Statement, Value};
+    use crate::db::{Session, guard};
+    use crate::fixtures;
+    use crate::query::Roots;
+    use std::path::PathBuf;
+    use tokio::sync::mpsc;
+
+    const SLOW_AFTER_THE_FIRST_PAGE: &str = "SELECT n, pg_sleep(CASE WHEN n > 500 THEN 30 ELSE 0 END) FROM generate_series(1, 1000) AS n";
+
+    fn shop() -> ConnectionName {
+        fixtures::test_database_as("shop").name().clone()
+    }
+
+    fn started(idle_limit: Duration) -> (Backend, UnboundedReceiver<Answer>) {
+        let (sender, answers) = mpsc::unbounded_channel();
+        let mut backend = Backend { idle_limit, ..Backend::new(Roots::default(), PathBuf::from("config.toml"), sender) };
+        backend.open(fixtures::test_database_as("shop"));
+        (backend, answers)
+    }
+
+    async fn next(answers: &mut UnboundedReceiver<Answer>) -> Incoming {
+        loop {
+            match answers.recv().await.unwrap() {
+                Answer::Session { incoming: Incoming::Opened, .. } => {}
+                Answer::Session { incoming, .. } => return incoming,
+                other => panic!("not a session's answer: {other:?}"),
+            }
+        }
+    }
+
+    fn run(backend: &Backend, run: RunId, sql: &str) {
+        backend.run(&shop(), run, Statement::new(sql));
+    }
+
+    fn ask_next_page(backend: &Backend) {
+        backend.next_page(&shop(), RunId::FIRST);
+    }
+
+    async fn on_a_side_session(sql: &str) -> Vec<Vec<Value>> {
+        let mut session = Session::open(&fixtures::test_database_as("shop"), Route::Direct).await.unwrap();
+        session.run(&guard::admit(Statement::new(sql), WritePolicy::ReadOnly).unwrap()).await.unwrap().rows().to_vec()
+    }
+
+    fn page_of(incoming: Incoming) -> Page {
+        let Incoming::Page { page, .. } = incoming else { panic!("not a page: {incoming:?}") };
+        page
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_big_result_comes_a_page_at_a_time_as_the_grid_asks() {
+        let (backend, mut answers) = started(PAGES_IDLE_LIMIT);
+        run(&backend, RunId::FIRST, "SELECT generate_series(1, 1200)");
+        next(&mut answers).await;
+        ask_next_page(&backend);
+        assert_eq!(page_of(next(&mut answers).await).extent, Extent::More);
+        ask_next_page(&backend);
+        let last = page_of(next(&mut answers).await);
+        assert_eq!((last.rows.len(), last.extent), (200, Extent::All));
+    }
+
+    /// Runs a result bigger than a page as the second run, after the first one read the session's backend pid.
+    async fn holding_a_portal(backend: &Backend, answers: &mut UnboundedReceiver<Answer>) -> Value {
+        run(backend, RunId::FIRST, "SELECT pg_backend_pid()");
+        let Incoming::Result { result, .. } = next(answers).await else { panic!("no pid") };
+        run(backend, RunId::FIRST.next(), "SELECT generate_series(1, 1200)");
+        next(answers).await;
+        result.rows()[0][0].clone()
+    }
+
+    async fn state_of(pid: &Value) -> Vec<Vec<Value>> {
+        on_a_side_session(&format!("SELECT state FROM pg_stat_activity WHERE pid = {pid}")).await
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_portal_left_idle_past_its_limit_is_closed_and_the_result_cut() {
+        let (backend, mut answers) = started(Duration::ZERO);
+        let pid = holding_a_portal(&backend, &mut answers).await;
+        assert_eq!(page_of(next(&mut answers).await), Page { rows: vec![], extent: Extent::Cut });
+        assert_eq!(state_of(&pid).await, [[Value::Text("idle".into())]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn closing_the_session_with_its_portal_open_cuts_the_result_and_ends_its_transaction() {
+        let (mut backend, mut answers) = started(PAGES_IDLE_LIMIT);
+        let pid = holding_a_portal(&backend, &mut answers).await;
+        backend.close(&shop());
+        assert_eq!(page_of(next(&mut answers).await), Page { rows: vec![], extent: Extent::Cut });
+        let is_held = |state: &Vec<Vec<Value>>| state.iter().flatten().any(|state| *state == Value::Text("idle in transaction".into()));
+        while is_held(&state_of(&pid).await) {}
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_cancel_in_the_middle_of_a_page_closes_the_portal_and_the_result_is_cut() {
+        let (backend, mut answers) = started(PAGES_IDLE_LIMIT);
+        run(&backend, RunId::FIRST, SLOW_AFTER_THE_FIRST_PAGE);
+        next(&mut answers).await;
+        ask_next_page(&backend);
+        let is_active = format!("SELECT 1 FROM pg_stat_activity WHERE query = '{SLOW_AFTER_THE_FIRST_PAGE}' AND state = 'active'");
+        while on_a_side_session(&is_active).await.is_empty() {}
+        backend.cancel(&shop(), RunId::FIRST);
+        assert_eq!(page_of(next(&mut answers).await), Page { rows: vec![], extent: Extent::Cut });
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_page_the_server_fails_says_why() {
+        let (backend, mut answers) = started(PAGES_IDLE_LIMIT);
+        run(&backend, RunId::FIRST, "SELECT 1 / (n - 600) FROM generate_series(1, 1000) AS n");
+        next(&mut answers).await;
+        ask_next_page(&backend);
+        let failed = next(&mut answers).await;
+        assert!(matches!(&failed, Incoming::PageFailed { error, .. } if error.contains("division by zero")), "{failed:?}");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_new_run_closes_the_open_portal_first() {
+        let (backend, mut answers) = started(PAGES_IDLE_LIMIT);
+        run(&backend, RunId::FIRST, "SELECT generate_series(1, 1200)");
+        next(&mut answers).await;
+        run(&backend, RunId::FIRST.next(), "SELECT 7");
+        assert_eq!(page_of(next(&mut answers).await).extent, Extent::Cut);
+        assert!(matches!(next(&mut answers).await, Incoming::Result { run, .. } if run == RunId::FIRST.next()));
+    }
+}

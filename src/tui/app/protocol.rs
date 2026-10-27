@@ -161,10 +161,14 @@ pub(in crate::tui) enum Incoming {
         took: Duration,
     },
     /// The next page of the run's result; an empty one that is `Cut` says its portal closed before the last page.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the session task serves the pages of a result in the next step"))]
     Page {
         run: RunId,
         page: Page,
+    },
+    /// The server failed the next page of the run's result, in its words; the result stays at the rows it has.
+    PageFailed {
+        run: RunId,
+        error: String,
     },
     /// The guard kept the statement from the server, and why.
     Refused {

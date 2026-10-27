@@ -2,13 +2,14 @@
 use super::app::{Action, Answer, Incoming, RunId, TunnelState};
 use crate::connection::{Connection, ConnectionName, WritePolicy};
 use crate::db::model::{CancelToken, Route, ServerError, Statement};
-use crate::db::{Session, guard};
+use crate::db::{Pages, Session, Started, guard};
 use crate::history::{Entry, History, Outcome, Store};
 use crate::query::{Query, Roots};
 use crate::tunnel::{Died, Tunnel};
 use chrono::Utc;
 use config::ConfigFile;
 use futures_util::future;
+use paging::{PAGES_IDLE_LIMIT, Paging, serve_pages};
 use queries::QueryFiles;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -21,6 +22,7 @@ use tokio::time::Instant;
 
 mod clipboard;
 mod config;
+mod paging;
 mod queries;
 
 /// How long closing a session waits for its task to finish a cancel before it aborts the task, so the terminal comes back soon.
@@ -38,6 +40,8 @@ pub(super) struct Backend {
     config: ConfigFile,
     /// Where each run is added and `ctrl-r` reads from; none keeps no history.
     history: Option<Store>,
+    /// How long a result's portal waits for its next page.
+    idle_limit: Duration,
 }
 
 /// The way to one session task: jobs and cancels in.
@@ -54,7 +58,6 @@ enum Job {
     Run(Queued),
     /// Fetch the next page of this run's result, while its portal is open.
     NextPage {
-        #[expect(dead_code, reason = "the session task serves the pages of a result in the next step")]
         run: RunId,
     },
     /// Open the session again, unless it is open.
@@ -73,7 +76,7 @@ impl Backend {
     pub(super) fn new(roots: Roots, config: PathBuf, answers: UnboundedSender<Answer>) -> Self {
         let queries = QueryFiles { roots, answers: answers.clone() };
         let config = ConfigFile { path: config, answers: answers.clone() };
-        Self { sessions: BTreeMap::new(), answers, queries, config, history: None }
+        Self { sessions: BTreeMap::new(), answers, queries, config, history: None, idle_limit: PAGES_IDLE_LIMIT }
     }
 
     /// The backend adding each run to `history`.
@@ -139,7 +142,10 @@ impl Backend {
             return;
         }
         let name = connection.name().clone();
-        _ = self.sessions.insert(name, SessionLink::start(connection, self.answers.clone(), self.history.clone()));
+        let (cancels, cancelled) = mpsc::unbounded_channel();
+        let (answers, history, idle_limit) = (self.answers.clone(), self.history.clone(), self.idle_limit);
+        let task = SessionTask { connection, tunnel: None, session: None, cancelled, answers, history, idle_limit };
+        _ = self.sessions.insert(name, SessionLink::start(task, cancels));
     }
 
     /// Queues `statement` on the session of `connection`; its answer comes back as an `Answer`.
@@ -174,12 +180,10 @@ impl Backend {
 }
 
 impl SessionLink {
-    /// Starts the task that opens a session on `connection` and runs each statement in turn.
-    fn start(connection: Connection, answers: UnboundedSender<Answer>, history: Option<Store>) -> Self {
+    /// Starts `task`, which opens its session and runs each statement in turn; its cancels come through `cancels`.
+    fn start(task: SessionTask, cancels: UnboundedSender<RunId>) -> Self {
         let (jobs, queue) = mpsc::unbounded_channel();
-        let (cancels, cancelled) = mpsc::unbounded_channel();
-        let task = tokio::spawn(SessionTask { connection, tunnel: None, session: None, cancelled, answers, history }.serve(queue));
-        Self { jobs, cancels, task }
+        Self { jobs, cancels, task: tokio::spawn(task.serve(queue)) }
     }
 
     /// Queues `job` behind the one running.
@@ -227,12 +231,14 @@ struct SessionTask {
     cancelled: UnboundedReceiver<RunId>,
     answers: UnboundedSender<Answer>,
     history: Option<Store>,
+    idle_limit: Duration,
 }
 
-/// A run's answer for the app, and what came of it for the history.
-struct Answered {
+/// A run's answer for the app, what came of it for the history, and its portal while more pages wait in it.
+struct Answered<'s> {
     incoming: Incoming,
     outcome: Outcome,
+    rest: Option<Pages<'s>>,
 }
 
 impl SessionTask {
@@ -240,10 +246,15 @@ impl SessionTask {
     /// once pgbg quits, a statement still queued is never sent.
     async fn serve(mut self, mut queue: UnboundedReceiver<Job>) {
         self.open_or_fail_queued(&mut queue).await;
+        let mut pending = None;
         loop {
-            match self.woken(&mut queue).await {
+            let woken = match pending.take() {
+                Some(woken) => woken,
+                None => self.woken(&mut queue).await,
+            };
+            match woken {
                 Woken::Queued(Some(_)) if queue.is_closed() => {}
-                Woken::Queued(Some(Job::Run(queued))) => self.run(queued).await,
+                Woken::Queued(Some(Job::Run(queued))) => pending = self.run(queued, &mut queue).await,
                 Woken::Queued(Some(Job::NextPage { .. })) => {}
                 Woken::Queued(Some(Job::Open)) if self.session.is_none() => self.open_or_fail_queued(&mut queue).await,
                 Woken::Queued(Some(Job::Open)) => {}
@@ -295,34 +306,50 @@ impl SessionTask {
         }
     }
 
-    async fn run(&mut self, queued: Queued) {
+    /// Runs `queued`, then serves the pages of its result while its portal is open; returns what woke the task meanwhile
+    /// that it still has to act on.
+    async fn run(&mut self, queued: Queued, queue: &mut UnboundedReceiver<Job>) -> Option<Woken> {
         let (statement, started_at, clock) = (queued.statement.as_str().to_owned(), Utc::now(), Instant::now());
         if self.session.is_none()
             && let Err(error) = self.open().await
         {
             self.send(Incoming::Failed { run: queued.run, error, position: None });
-            self.record(Entry {
-                statement,
-                connection: self.connection.name().clone(),
-                started_at,
-                took_ms: 0,
-                outcome: Outcome::LinkError,
-            });
-            return;
+            record(
+                self.history.as_ref(),
+                Entry { statement, connection: self.connection.name().clone(), started_at, took_ms: 0, outcome: Outcome::LinkError },
+            );
+            return None;
         }
-        let Some(session) = self.session.as_mut() else { return };
+        let session = self.session.as_mut()?;
         let run = queued.run;
         if was_cancelled(&mut self.cancelled, run) {
             self.send(Incoming::Failed { run, error: CANCELLED_BEFORE_SENT.to_owned(), position: None });
-            return;
+            return None;
         }
-        let Answered { incoming, outcome } = run_until_answered(session, self.connection.writes(), queued, &mut self.cancelled).await;
-        let took_ms = u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX);
-        self.record(Entry { statement, connection: self.connection.name().clone(), started_at, took_ms, outcome });
-        self.send(incoming);
-        if let Some(why) = self.session.as_ref().and_then(Session::lost) {
-            self.lose(why);
-        }
+        let woken = {
+            let token = session.cancel_token();
+            let Answered { incoming, outcome, rest } =
+                run_until_answered(session, self.connection.writes(), queued, &mut self.cancelled).await;
+            let took_ms = u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX);
+            record(self.history.as_ref(), Entry { statement, connection: self.connection.name().clone(), started_at, took_ms, outcome });
+            send(&self.answers, Answer::Session { connection: self.connection.name().clone(), incoming });
+            if let Some(pages) = rest {
+                let tunnel = self.tunnel.as_mut();
+                let (connection, answers, idle_limit) = (self.connection.name(), &self.answers, self.idle_limit);
+                serve_pages(Paging { pages, run, token, queue, cancelled: &mut self.cancelled, tunnel, connection, answers, idle_limit })
+                    .await
+            } else {
+                None
+            }
+        };
+        self.lose_if_lost(woken)
+    }
+
+    /// Closes a session that can run no more statements, and drops a pending close it already says.
+    fn lose_if_lost(&mut self, woken: Option<Woken>) -> Option<Woken> {
+        let Some(why) = self.session.as_ref().and_then(Session::lost) else { return woken };
+        self.lose(why);
+        woken.filter(|woken| !matches!(woken, Woken::Closed(_)))
     }
 
     /// The way to the connection: direct, or through its tunnel, started again unless it still runs;
@@ -368,13 +395,6 @@ impl SessionTask {
         }
     }
 
-    /// Adds `entry` to the history in the background: the next statement never waits on the disk.
-    fn record(&self, entry: Entry) {
-        if let Some(store) = &self.history {
-            drop(store.record(entry));
-        }
-    }
-
     fn lose(&mut self, why: String) {
         self.session = None;
         self.send(Incoming::Closed(why));
@@ -389,6 +409,13 @@ impl SessionTask {
 fn send(answers: &UnboundedSender<Answer>, answer: Answer) {
     if answers.send(answer).is_err() {
         tracing::warn!("the loop is gone: an answer is dropped");
+    }
+}
+
+/// Adds `entry` to the history in the background: the next statement never waits on the disk.
+fn record(history: Option<&Store>, entry: Entry) {
+    if let Some(store) = history {
+        drop(store.record(entry));
     }
 }
 
@@ -423,12 +450,12 @@ fn was_cancelled(cancelled: &mut UnboundedReceiver<RunId>, run: RunId) -> bool {
 
 /// Runs `queued`, asking the server to cancel it when its cancel comes or its session closes; a cancel for another
 /// run does nothing.
-async fn run_until_answered(
-    session: &mut Session,
+async fn run_until_answered<'s>(
+    session: &'s mut Session,
     writes: WritePolicy,
     queued: Queued,
     cancelled: &mut UnboundedReceiver<RunId>,
-) -> Answered {
+) -> Answered<'s> {
     let token = session.cancel_token();
     let run = queued.run;
     let mut answer = pin!(answer_to(session, writes, queued));
@@ -454,14 +481,19 @@ async fn cancel(token: &CancelToken) {
     }
 }
 
-async fn answer_to(session: &mut Session, writes: WritePolicy, queued: Queued) -> Answered {
+async fn answer_to(session: &mut Session, writes: WritePolicy, queued: Queued) -> Answered<'_> {
     let Queued { run, statement } = queued;
     let admitted = match guard::admit(statement, writes) {
         Ok(admitted) => admitted,
-        Err(refusal) => return Answered { incoming: Incoming::Refused { run, why: refusal.to_string() }, outcome: Outcome::Refused },
+        Err(refusal) => {
+            return Answered { incoming: Incoming::Refused { run, why: refusal.to_string() }, outcome: Outcome::Refused, rest: None };
+        }
     };
     let started = Instant::now();
-    let result = session.run(&admitted).await;
+    let (result, rest) = match session.start(&admitted).await {
+        Ok(Started { result, rest }) => (Ok(result), rest),
+        Err(err) => (Err(err), None),
+    };
     let outcome = Outcome::of(&result);
     let incoming = match result {
         Ok(result) => Incoming::Result { run, result, took: started.elapsed() },
@@ -470,7 +502,7 @@ async fn answer_to(session: &mut Session, writes: WritePolicy, queued: Queued) -
             Incoming::Failed { run, position, error: format!("{err:#}") }
         }
     };
-    Answered { incoming, outcome }
+    Answered { incoming, outcome, rest }
 }
 
 #[cfg(test)]

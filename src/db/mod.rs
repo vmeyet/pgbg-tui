@@ -19,12 +19,12 @@ mod decode;
 pub(crate) mod guard;
 pub(crate) mod model;
 mod open;
-#[cfg_attr(not(test), expect(dead_code, reason = "the TUI's session task pages through results in the next step"))]
 mod pages;
 mod schema;
 mod server;
 
 pub(crate) use open::{Attempt, open_once};
+pub(crate) use pages::{Fetched, Pages, Started};
 
 const NO_PARAMETERS: [&str; 0] = [];
 /// The rows pgbg keeps of a result; past it the result is cut, so a big table cannot fill the memory.
@@ -103,11 +103,7 @@ impl Session {
 
     /// Waits until the link to the server ends, and says why.
     pub(crate) async fn closed(&self) -> String {
-        let mut ended = self.ended.clone();
-        match ended.wait_for(Option::is_some).await {
-            Ok(reason) => reason.clone().unwrap_or_default(),
-            Err(_) => LINK_TASK_GONE.to_owned(),
-        }
+        why_ended(&self.ended).await
     }
 
     /// Why this session can run no more statements, when it cannot: its link is gone, or a rollback failed.
@@ -193,6 +189,15 @@ impl CancelToken {
             Tls::Off => self.token.cancel_query(NoTls).await,
         };
         sent.map_err(server_error)
+    }
+}
+
+/// Why the link `ended` watches ended, once it has.
+async fn why_ended(ended: &watch::Receiver<Option<String>>) -> String {
+    let mut ended = ended.clone();
+    match ended.wait_for(Option::is_some).await {
+        Ok(reason) => reason.clone().unwrap_or_default(),
+        Err(_) => LINK_TASK_GONE.to_owned(),
     }
 }
 

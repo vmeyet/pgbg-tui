@@ -107,6 +107,9 @@ fn status(app: &App, width: usize) -> Line<'static> {
         return Line::styled(truncate(&format!("✓ {} ", printable(note)), width), Style::default().fg(app.theme.muted));
     }
     let sheet = app.sheet();
+    if let Some(why) = &sheet.page_failure {
+        return failure(app, why, width);
+    }
     let muted = Style::default().fg(app.theme.muted);
     let text = match (&sheet.tunnel, &sheet.session) {
         (Some(TunnelState::Died(how)), _) => return failure(app, how, width),
@@ -348,6 +351,13 @@ mod tests {
         app.handle_key(KeyEvent::from(KeyCode::Char('c')));
         let footer = footer_of(&render(&app, 100, 8));
         assert!(footer.contains("c CSV  j JSON  m Markdown  esc cancel"), "{footer}");
+    }
+
+    #[test]
+    fn a_failed_page_says_why_in_the_status_line() {
+        let mut app = result_in_focus();
+        app.apply(to_shop(Incoming::PageFailed { run: RunId::FIRST, error: "ERROR: division by zero".into() }));
+        assert!(footer_of(&render(&app, 100, 8)).contains("✗ the next page failed: ERROR: division by zero"));
     }
 
     #[test]
