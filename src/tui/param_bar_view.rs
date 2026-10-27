@@ -12,31 +12,54 @@ use vtui::field::Field;
 const REQUIRED: &str = "required";
 const OPTIONAL: &str = "NULL";
 
-/// The bar in `area`: a name, then its value, else dimmed what it falls back to; the terminal's cursor in the field
-/// with the keys.
+/// Where the field with the keys stands in the bar's line, in columns: its name, the cursor, and past its value.
+struct Focused {
+    start: usize,
+    cursor: usize,
+    end: usize,
+}
+
+impl Focused {
+    /// The columns the line scrolls by in `width`, so the field shows from its name when it fits, and the cursor always.
+    fn scroll(&self, width: usize) -> usize {
+        let shows_field = self.end.saturating_sub(width).min(self.start);
+        let shows_cursor = (self.cursor + 1).saturating_sub(width);
+        shows_field.max(shows_cursor)
+    }
+}
+
+/// The bar in `area`: a name, then its value, else dimmed what it falls back to; scrolled sideways so the field with
+/// the keys shows, with the terminal's cursor in it.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
     let sheet = app.sheet();
-    let focused = if app.focus == Focus::Params { sheet.param_at() } else { None };
+    let focused_name = if app.focus == Focus::Params { sheet.param_at() } else { None };
     let mut spans = vec![];
-    let mut cursor = None;
+    let mut focused = None;
     for name in sheet.param_names() {
-        let is_focused = focused.as_ref() == Some(&name);
+        let is_focused = focused_name.as_ref() == Some(&name);
+        let start = Line::from(spans.clone()).width();
         spans.push(Span::styled(format!(" {name} "), Style::default().fg(app.theme.muted)));
         let field = sheet.bar.field(&name).filter(|field| !field.text().is_empty());
-        if is_focused {
-            cursor = Some(Line::from(spans.clone()).width() + field.map_or(0, before_cursor_width));
-        }
+        let cursor = Line::from(spans.clone()).width() + field.map_or(0, before_cursor_width);
         spans.push(match field {
             Some(field) => Span::styled(render::printable(field.text()).into_owned(), value_style(app, is_focused)),
             None => Span::styled(fallback_text(app, &name), Style::default().fg(app.theme.faded).add_modifier(Modifier::ITALIC)),
         });
         spans.push(Span::raw(" "));
+        if is_focused {
+            focused = Some(Focused { start, cursor, end: Line::from(spans.clone()).width() });
+        }
     }
-    f.render_widget(Paragraph::new(Line::from(spans)), area);
-    if let Some(column) = cursor {
-        let x = area.x.saturating_add(u16::try_from(column).unwrap_or(u16::MAX)).min(area.right().saturating_sub(1));
+    let scroll = focused.as_ref().map_or(0, |focused| focused.scroll(usize::from(area.width)));
+    f.render_widget(Paragraph::new(Line::from(spans)).scroll((0, to_cells(scroll))), area);
+    if let Some(focused) = focused {
+        let x = area.x.saturating_add(to_cells(focused.cursor - scroll)).min(area.right().saturating_sub(1));
         f.set_cursor_position(Position { x, y: area.y });
     }
+}
+
+fn to_cells(columns: usize) -> u16 {
+    u16::try_from(columns).unwrap_or(u16::MAX)
 }
 
 fn value_style(app: &App, is_focused: bool) -> Style {
@@ -67,7 +90,7 @@ mod tests {
     use super::*;
     use crossterm::event::{KeyCode, KeyEvent};
     use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
+    use ratatui::backend::{Backend as _, TestBackend};
     use ratatui::buffer::Buffer;
 
     const STATEMENT: &str = "-- param: since date = 2024-01-01\n-- param: note text optional\nSELECT * FROM orders\n\
@@ -95,5 +118,18 @@ mod tests {
         let mut bar = Buffer::empty(Rect::new(0, 0, 80, 1));
         (0..80).for_each(|x| bar[(x, 0)] = screen[(x, 1)].clone());
         insta::assert_snapshot!("param_bar_focused", styled::runs(&bar));
+    }
+
+    #[test]
+    fn the_bar_scrolls_sideways_so_the_field_with_the_keys_shows() {
+        let mut app = typed(STATEMENT);
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        "nina, who placed the orders of last week".chars().for_each(|c| drop(app.handle_key(KeyEvent::from(KeyCode::Char(c)))));
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        "late".chars().for_each(|c| drop(app.handle_key(KeyEvent::from(KeyCode::Char(c)))));
+        let mut terminal = render(&app, 60, 12);
+        assert_eq!(terminal.backend_mut().get_cursor_position().unwrap(), Position { x: 58, y: 1 });
+        insta::assert_snapshot!("param_bar_scrolled", terminal.backend());
     }
 }
