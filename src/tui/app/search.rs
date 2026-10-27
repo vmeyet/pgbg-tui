@@ -1,5 +1,5 @@
-//! A list narrowed as fzf does, for the `ctrl-p` finder and the `ctrl-o` picker: the line typed and what it matches,
-//! ranked again only when the line or the list changes.
+//! A list narrowed as fzf does, for the finders and the `ctrl-o` picker: the typed line and what it matches.
+//! Matches are ranked again only when the line or the list changes.
 use crate::act::{self, Act, Pane};
 use crate::connection::Connection;
 use crate::history::Entry;
@@ -8,7 +8,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use vtui::fuzzy;
 use vtui::palette::{Mode, Palette};
 
-/// The only mode of a search: what is typed is matched, never a command.
+/// The only mode of a search: typed text is matched, never read as a command.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(in crate::tui) struct PlainSearch;
 
@@ -45,7 +45,7 @@ impl Searched for Connection {
     }
 }
 
-/// The line typed, and what it matches, best first.
+/// The typed line, and what it matches, best first.
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::tui) struct Search<T> {
     pub(in crate::tui) palette: Palette<PlainSearch>,
@@ -58,12 +58,12 @@ pub(super) enum Searching<T> {
     Closed,
     Picked(T),
     Quit,
-    /// An action of the pane the search leaves to its owner, such as removing the highlighted connection.
+    /// An action of the pane that the search leaves to its owner, such as removing the highlighted connection.
     Unhandled(Search<T>, Act),
 }
 
 impl<T: Searched> Search<T> {
-    /// Every one of `all`, in its order, before anything is typed.
+    /// Every item of `all`, in its order, before anything is typed.
     pub(super) fn new(all: &[T]) -> Self {
         let mut search = Self { palette: Palette::default(), shown: vec![] };
         search.rank(all);
@@ -76,7 +76,7 @@ impl<T: Searched> Search<T> {
         self.palette.move_by(0, self.shown.len());
     }
 
-    /// Types `text` on the line as vtui cleans a paste, then ranks once.
+    /// Types `text` on the line, cleaned as vtui cleans a paste, then ranks once.
     pub(super) fn paste(&mut self, text: &str, all: &[T]) {
         self.palette.type_str(text);
         self.rank(all);
@@ -93,7 +93,7 @@ impl<T: Searched> Search<T> {
         &self.shown[first..self.shown.len().min(first + rows)]
     }
 
-    /// What `key` does where `pane` has the keys: its own keys move, pick, close and quit, the rest types over `all`.
+    /// What `key` does in `pane`: its own keys move, pick, close and quit; other keys type and search `all` again.
     pub(super) fn after(mut self, key: KeyEvent, pane: Pane, all: &[T]) -> Searching<T> {
         match act::act_for(key, pane) {
             Some(Act::Down) => self.palette.move_by(1, self.shown.len()),
@@ -115,7 +115,6 @@ impl<T: Searched> Search<T> {
         Searching::Typed(self)
     }
 
-    /// The highlighted match, when one matches.
     pub(super) fn selected(&self) -> Option<&T> {
         self.shown.get(self.palette.selected)
     }

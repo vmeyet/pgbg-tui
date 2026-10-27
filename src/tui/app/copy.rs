@@ -1,11 +1,11 @@
-//! `y`, `Y` and `c` on the grid: the cell, the row or the whole result to the clipboard, its values raw.
+//! `y`, `Y` and `c` on the grid: copy the cell, the row or the whole result to the clipboard, with raw values.
 use super::{Action, App, Overlay, Run};
 use crate::act::{self, Act, Pane};
 use crate::db::model::{ResultSet, Value};
 use crate::export::{self, Format};
 use crossterm::event::KeyEvent;
 
-/// What a copy's note adds when some of its cells pgbg cannot decode, which copy as `<unsupported>`.
+/// The words a copy's note adds when pgbg cannot decode some of its cells, which are copied as `<unsupported>`.
 fn undecodable<'v>(values: impl IntoIterator<Item = &'v Value>) -> String {
     match values.into_iter().filter(|value| matches!(value, Value::Unsupported)).count() {
         0 => String::new(),
@@ -65,7 +65,7 @@ impl App {
         self.copy_result(format)
     }
 
-    /// Hands a copy of the result to the backend, which builds its text off the loop: a clone is cheaper than the text.
+    /// Sends a clone of the result to the backend, which builds its text off the loop: the clone costs less than the text.
     fn copy_result(&self, format: Format) -> Vec<Action> {
         let Some(result) = self.shown_result() else { return vec![] };
         let cells = undecodable(result.rows().iter().flatten());
@@ -73,7 +73,7 @@ impl App {
         vec![Action::CopyResult { result: result.clone(), format, done }]
     }
 
-    /// Takes what a copy came to, for the status line until the next key.
+    /// Keeps the outcome of a copy, which the status line shows until the next key.
     pub(super) fn copied(&mut self, note: String) {
         self.note = Some(note);
     }

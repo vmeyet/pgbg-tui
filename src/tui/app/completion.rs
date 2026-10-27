@@ -7,7 +7,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use std::ops::Range;
 use vtui::toward::Toward;
 
-/// The candidates for the name before the cursor, and the one picked; none left once typing narrowed past them all.
+/// The candidates for the name before the cursor, and the one picked; empty once typing has ruled them all out.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::tui) struct Completions {
     /// The editor bytes the taken name replaces, up to the cursor.
@@ -25,15 +25,15 @@ impl Completions {
     }
 }
 
-/// What the cursor asks of completion, and the index that answers it.
+/// What completion is asked for at the cursor, and the index that answers it.
 pub(super) struct Asked<'a> {
     pub(super) ask: Ask,
     pub(super) index: &'a Index,
 }
 
 impl Sheet {
-    /// What the cursor asks, from the index once there is one, else from the keywords; none when the cursor is in a
-    /// string or a comment.
+    /// What completion is asked for at the cursor, answered from the index once there is one, or else from the
+    /// keywords; none when the cursor is in a string or a comment.
     pub(super) fn ask(&self) -> Option<Asked<'_>> {
         let (before, _, _) = self.editor.split();
         let ask = Ask::at(self.editor.text(), self.editor.lexed(), before.len())?;
@@ -58,9 +58,9 @@ impl App {
         actions
     }
 
-    /// Hands `key` to the open list: `↑↓` pick, `⏎` or `⇥` take, and do nothing on an empty list, so a half-typed name
-    /// never runs; `esc` closes; any other key goes to the editor, and a name key or a backspace opens the list again on
-    /// what it typed.
+    /// Hands `key` to the open list: `↑↓` pick, and `⏎` or `⇥` take the pick.
+    /// On an empty list `⏎` and `⇥` do nothing, so a half-typed name never runs.
+    /// `esc` closes; any other key goes to the editor, and a key that types a name or a backspace opens the list again.
     pub(super) fn completions_key(&mut self, completions: Completions, key: KeyEvent) -> Vec<Action> {
         match act::act_for(key, Pane::Completion) {
             Some(Act::Down) => self.overlay = Some(Overlay::Completion(completions.stepped(Toward::Next))),

@@ -1,4 +1,4 @@
-//! Saving the editor's text as a query, and the prompts on the footer line: the path of a new query, opening another
+//! Saving the editor's text as a query, and the questions on the footer line: the path of a new query, opening another
 //! query over unsaved text, and sending a write.
 use super::{Action, App, Overlay, WriteToSend};
 use crate::act::{self, Act, Pane};
@@ -13,7 +13,7 @@ const SAVE_FIRST: &str = "save the query with ^s before editing it in $EDITOR";
 /// A question on the footer line; while it is open it takes every key.
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::tui) enum Prompt {
-    /// The path a new query is saved at, as it is typed, and why the last one was refused.
+    /// The path to save a new query at, as typed so far, and why the last path was refused.
     SaveAs { path: Field, error: Option<String> },
     /// The query to open once the user agrees to drop the editor's unsaved text.
     OpenOverUnsaved(Query),
@@ -58,7 +58,7 @@ impl App {
         vec![Action::SaveQuery { connection: sheet.name().clone(), query, text: sheet.editor.text().to_owned() }]
     }
 
-    /// Hands the saved query to the user's editor; text not saved yet would be lost, so it asks for a save first.
+    /// Opens the saved query in the user's editor; unsaved text would be lost, so it asks for a save first.
     pub(super) fn edit_outside(&mut self) -> Vec<Action> {
         let sheet = self.sheet_mut();
         let Some(query) = sheet.opened.clone().filter(|_| !sheet.is_dirty) else {
@@ -68,7 +68,7 @@ impl App {
         vec![Action::EditOutside { connection: sheet.name().clone(), query }]
     }
 
-    /// Opens `query` in the editor on screen, after asking when it holds text not saved yet.
+    /// Opens `query` in the editor on screen, asking first when the editor holds unsaved text.
     pub(super) fn ask_open(&mut self, query: Query) -> Vec<Action> {
         if !self.sheet().is_dirty {
             return vec![self.open_query(query)];
@@ -77,7 +77,7 @@ impl App {
         vec![]
     }
 
-    /// The prompt after `key`, `None` once it closed, and what to do.
+    /// The prompt after `key`, `None` once it closes, and the actions to run.
     pub(super) fn prompt_after(&mut self, prompt: Prompt, key: KeyEvent) -> (Option<Prompt>, Vec<Action>) {
         match (act::act_for(key, prompt.pane()), prompt) {
             (Some(Act::Quit), _) => (None, self.quit()),
@@ -105,7 +105,8 @@ impl App {
         }
     }
 
-    /// `text` saved as `query` from the sheet of `connection`: its editor now stands for it, unsaved only if it changed since.
+    /// `text` was saved as `query` from the sheet of `connection`: its editor now stands for that query, and is
+    /// unsaved only if it changed since.
     pub(super) fn saved(&mut self, connection: &ConnectionName, query: Query, text: &str) {
         let Some(sheet) = self.sheet_of_mut(connection) else { return };
         sheet.query_error = None;

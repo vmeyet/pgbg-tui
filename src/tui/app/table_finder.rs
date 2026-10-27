@@ -1,4 +1,4 @@
-//! `ctrl-t`: every table of the schema of the sheet on screen, narrowed as fzf does, with the schema tab's actions.
+//! `ctrl-t`: every table in the schema of the sheet on screen, narrowed as fzf does, with the schema tab's actions.
 use super::schema_tab::PickedTable;
 use super::search::{Search, Searched, Searching};
 use super::{Action, App, Overlay};
@@ -37,7 +37,7 @@ impl App {
         self.sheet_mut().want_schema()
     }
 
-    /// Fills an open finder that waited for the schema, once it is read.
+    /// Fills an open finder that was waiting for the schema, once the schema is read.
     pub(super) fn fill_table_finder(&mut self) {
         let Some(Overlay::TableFinder(finder)) = &self.overlay else { return };
         let Some(catalog) = self.sheet().catalog().filter(|_| finder.all.is_empty()) else { return };

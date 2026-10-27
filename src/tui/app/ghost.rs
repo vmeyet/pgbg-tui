@@ -1,11 +1,11 @@
-//! The ghost: the rest of the best name for the word typed before the cursor, dimmed after it until the next key, and
-//! `→` to take it.
+//! The ghost: the rest of the best name for the word before the cursor, dimmed after the cursor until the next key.
+//! `→` takes it.
 use super::{Action, SessionState, Sheet};
 use crate::complete::{Ask, Index};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::ops::Range;
 
-/// The name the ghost offers, in what the editor shows and what it takes.
+/// The name the ghost offers: what the editor shows, and the bytes it replaces when taken.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::tui) struct Ghost {
     /// The editor bytes the taken name replaces, up to the cursor.
@@ -26,8 +26,8 @@ fn is_name_char(c: char) -> bool {
 }
 
 impl Sheet {
-    /// Offers the ghost of the word before the cursor when the cursor ends it, from the index once there is one, else from
-    /// the keywords; the first ask reads the schema.
+    /// Offers the ghost of the word before the cursor when the cursor is at its end, from the index once there is one,
+    /// or else from the keywords; the first ask reads the schema.
     pub(super) fn ask_ghost(&mut self) -> Vec<Action> {
         let actions = self.want_schema_while_open();
         let (_, under, _) = self.editor.split();
@@ -38,12 +38,12 @@ impl Sheet {
         actions
     }
 
-    /// Asks for the schema completion needs, only while the session is open: typing never opens one again.
+    /// Asks for the schema that completion needs, only while the session is open: typing never opens a session again.
     pub(super) fn want_schema_while_open(&mut self) -> Vec<Action> {
         if self.session == SessionState::Open { self.want_schema() } else { vec![] }
     }
 
-    /// Puts the ghost's name in place of what was typed of it.
+    /// Replaces the typed part of the ghost's name with the whole name.
     pub(super) fn take_ghost(&mut self, ghost: Ghost) {
         self.put_name(ghost.typed, &ghost.insert);
     }

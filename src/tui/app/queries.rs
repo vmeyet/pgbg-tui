@@ -1,4 +1,4 @@
-//! The saved queries in the app: the sidebar's tree and its cursor, the `ctrl-p` finder, and the query open in the editor.
+//! The saved queries in the app: the sidebar's tree and its cursor, the `ctrl-p` finder, and the query opened in the editor.
 use super::editor::Editor;
 use super::search::{Search, Searching};
 use super::{Action, App, Focus, Overlay};
@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 /// The `ctrl-p` finder over every saved query, by its path.
 pub(in crate::tui) type Finder = Search<Query>;
 
-/// Every saved query, the folders folded in the sidebar, and its cursor.
+/// Every saved query, the folders folded in the sidebar, and the sidebar's cursor.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(in crate::tui) struct Queries {
     pub(in crate::tui) all: Vec<Query>,
@@ -26,7 +26,7 @@ impl Queries {
 }
 
 impl App {
-    /// Takes the new list of queries, the sidebar's cursor kept on its row, else inside the list.
+    /// Takes the new list of queries, keeping the sidebar's cursor on its row, or else inside the list.
     pub(super) fn listed(&mut self, all: Vec<Query>) {
         let selected = self.queries.rows().into_iter().nth(self.queries.selected);
         self.queries.all = all;
@@ -39,7 +39,7 @@ impl App {
         }
     }
 
-    /// Opens the finder on every query, and lists them again in case a file came or went.
+    /// Opens the finder on every query, and lists them again in case a file was added or removed.
     pub(super) fn find(&mut self) -> Vec<Action> {
         self.overlay = Some(Overlay::Finder(Finder::new(&self.queries.all)));
         vec![Action::ListQueries]
@@ -61,7 +61,7 @@ impl App {
         vec![]
     }
 
-    /// The finder after `key`, `None` once it closed, and what to do: a picked query opens in the editor.
+    /// The finder after `key`, `None` once it closes, and the actions to run: a picked query opens in the editor.
     pub(super) fn finder_after(&mut self, finder: Finder, key: KeyEvent) -> (Option<Finder>, Vec<Action>) {
         match finder.after(key, Pane::Finder, &self.queries.all) {
             Searching::Typed(finder) | Searching::Unhandled(finder, _) => (Some(finder), vec![]),
@@ -76,7 +76,8 @@ impl App {
         Action::OpenQuery { connection: self.sheet().name().clone(), query }
     }
 
-    /// Puts the text of `query` in the editor of `connection`, which it now stands for; the keys go to it when it is on screen.
+    /// Puts the text of `query` in the editor of `connection`, which now stands for that query; the editor gets the
+    /// keys when it is on screen.
     pub(super) fn opened(&mut self, connection: &ConnectionName, query: Query, text: &str) {
         let is_on_screen = self.sheet().name() == connection;
         let Some(sheet) = self.sheet_of_mut(connection) else { return };

@@ -1,4 +1,4 @@
-//! What the app and the backend say to each other: the actions it asks for and the answers that come back.
+//! The messages between the app and the backend: the actions the app asks for, and the answers that come back.
 use super::Confirmed;
 use crate::complete::Index;
 use crate::config::ConnectionChange;
@@ -12,7 +12,7 @@ use crate::secret::{KeychainItem, Secret};
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Which run of a statement an answer or a cancel is about, so a late one never lands on the next run.
+/// Which run of a statement an answer or a cancel is about, so a late answer never lands on the next run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(in crate::tui) struct RunId(u64);
 
@@ -36,7 +36,8 @@ impl ConfigChangeId {
     }
 }
 
-/// Which of the sessions opened on a connection an answer comes from, so the words of one closed never reach the next.
+/// Which of the sessions opened on a connection an answer comes from, so answers from a closed session never reach
+/// the next one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::tui) struct SessionId(u64);
 
@@ -51,15 +52,15 @@ impl SessionId {
 /// What the app asks the runner to do.
 #[derive(Debug, PartialEq)]
 pub(in crate::tui) enum Action {
-    /// Open the session `session` on this connection; one already open stays as it is.
+    /// Open the session `session` on this connection; a session already open is kept as it is.
     Open { connection: Connection, session: SessionId },
-    /// Run this statement on the connection's session; a write only when `confirmed`.
+    /// Run this statement on the connection's session; a write runs only when `confirmed`.
     Run { connection: ConnectionName, run: RunId, statement: Statement, input: ParamInput, confirmed: Option<Confirmed> },
     /// Fetch the next page of this run's result, if its portal is still open on the session `session`.
     NextPage { connection: ConnectionName, session: SessionId, run: RunId },
-    /// Read the connection's schema on a second session along the route of `session`, once that one is open.
+    /// Read the connection's schema on a second session that takes the same route as `session`, once that one is open.
     ReadSchema { connection: ConnectionName, session: SessionId },
-    /// Cancel this run if the connection's session is still on it.
+    /// Cancel this run if the connection's session is still running it.
     Cancel { connection: ConnectionName, run: RunId },
     /// List every saved query.
     ListQueries,
@@ -69,20 +70,20 @@ pub(in crate::tui) enum Action {
     SaveQuery { connection: ConnectionName, query: Query, text: String },
     /// Write the text of the connection's editor as a new query at this path, never over another one.
     SaveNewQuery { connection: ConnectionName, path: QueryPath, text: String },
-    /// Lend the terminal to the user's editor on this query's file, then read it again into the connection's sheet; the
-    /// loop runs it, not the backend.
+    /// Lend the terminal to the user's editor on this query's file, then read the file again into the connection's sheet.
+    /// The loop runs it, not the backend.
     EditOutside { connection: ConnectionName, query: Query },
-    /// Close the connection's session and its tunnel; nothing when it has none.
+    /// Close the connection's session and its tunnel; does nothing when it has no session.
     Close(ConnectionName),
     /// Close the connection's session and open `session` on it as the config now says.
     Reopen { connection: Connection, session: SessionId },
-    /// Remove the connection from the config, with the keychain item no other connection names.
+    /// Remove the connection from the config, and its keychain item when no other connection names it.
     RemoveConnection { id: ConfigChangeId, connection: ConnectionName },
     /// Write a connection the form filled in.
     SaveConnection(SaveConnection),
     /// Read the history of the connection, for `ctrl-r`.
     ListHistory(ConnectionName),
-    /// Put `text` on the clipboard, then say `done`; the loop sends it to the terminal too, unless it is too big.
+    /// Put `text` on the clipboard, then report `done`; the loop also sends it to the terminal, unless it is too big.
     Copy { text: String, done: String },
     /// Build the text of `result` in `format` off the loop, then copy it as `Copy` does.
     CopyResult { result: ResultSet, format: Format, done: String },
@@ -95,7 +96,7 @@ pub(in crate::tui) struct SaveConnection {
     pub(in crate::tui) name: ConnectionName,
     pub(in crate::tui) saving: Saving,
     pub(in crate::tui) change: ConnectionChange,
-    /// Written to its keychain item once the config took the change, when one was typed.
+    /// The typed password, written to its keychain item once the config has taken the change.
     pub(in crate::tui) password: Option<KeychainPassword>,
 }
 
@@ -116,32 +117,32 @@ pub(in crate::tui) enum Saving {
 /// What the backend answers.
 #[derive(Debug, PartialEq)]
 pub(in crate::tui) enum Answer {
-    /// From the session `session` of `connection`, so an answer from one never lands on another.
+    /// From the session `session` of `connection`, so an answer from one session never lands on another.
     Session { connection: ConnectionName, session: SessionId, incoming: Incoming },
     /// About the saved queries: the list every connection shares, or a query read for one sheet.
     Queries(QueryAnswer),
-    /// About the change to the config `id` names.
+    /// About the change to the config that `id` names.
     Config { id: ConfigChangeId, answer: ConfigAnswer },
     /// The history of `connection`: each statement once, newest first.
     History { connection: ConnectionName, entries: Vec<Entry> },
-    /// What a copy to the clipboard came to, in a few words.
+    /// The outcome of a copy to the clipboard, in a few words.
     Copied(String),
-    /// The text of a result `CopyResult` asked for, to copy and then say `done`.
+    /// The text of a result that `CopyResult` asked for, to copy before reporting `done`.
     Exported { text: String, done: String },
 }
 
-/// What changing the config came to.
+/// The outcome of a change to the config.
 #[derive(Debug, PartialEq, Eq)]
 pub(in crate::tui) enum ConfigAnswer {
-    /// Its connections once changed, read back from the file, and what failed after the file took the change (the
-    /// keychain step of a save), for the status line.
+    /// The connections read back from the file after the change, and, for the status line, what failed after the
+    /// file took the change (the keychain step of a save).
     Changed { connections: Vec<Connection>, warning: Option<String> },
-    /// The change was refused or failed, in the error's words; the file is as it was, and the password typed for it
-    /// comes back to the form.
+    /// The change was refused or failed, with the error's message; the file did not change, and the typed password
+    /// goes back to the form.
     Failed { why: String, password: Option<Secret> },
 }
 
-/// What reading the saved queries came to.
+/// The outcome of reading or writing the saved queries.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::tui) enum QueryAnswer {
     /// Every saved query, sorted.
@@ -157,7 +158,7 @@ pub(in crate::tui) enum QueryAnswer {
         query: Query,
         error: String,
     },
-    /// `text` is now the file of `query`, for the sheet of `connection`, which saved it.
+    /// `text` is now saved in the file of `query`, for the sheet of `connection`, which saved it.
     Saved {
         connection: ConnectionName,
         query: Query,
@@ -174,14 +175,14 @@ pub(in crate::tui) enum QueryAnswer {
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::tui) enum Incoming {
     Opened,
-    /// The session could not open, in the error's words.
+    /// The session could not open, with the error's message.
     NotOpened(String),
     /// The open session was lost, and why; the next run opens a new one.
     Closed(String),
     Tunnel(TunnelState),
-    /// The schema a second session read, or why it could not.
+    /// The schema a second session read, or why it could not read it.
     Schema(Result<Arc<Catalog>, String>),
-    /// The completion index built from `catalog`, which a later read may have replaced.
+    /// The completion index built from `catalog`, which a later schema read may have replaced.
     Index {
         catalog: Arc<Catalog>,
         index: Arc<Index>,
@@ -191,26 +192,26 @@ pub(in crate::tui) enum Incoming {
         result: ResultSet,
         took: Duration,
     },
-    /// The next page of the run's result; an empty one that is `Cut` says its portal closed before the last page.
+    /// The next page of the run's result; an empty `Cut` page means its portal closed before the last page.
     Page {
         run: RunId,
         page: Page,
     },
-    /// The server failed the next page of the run's result, in its words; the result stays at the rows it has.
+    /// The server failed to send the next page of the run's result, with its message; the result keeps the rows it has.
     PageFailed {
         run: RunId,
         error: String,
     },
-    /// The guard kept the statement from the server, and why.
+    /// The guard stopped the statement before it reached the server, and why.
     Refused {
         run: RunId,
         why: String,
     },
-    /// The server, or the link to it, failed the statement; the server may say where in it.
+    /// The statement failed on the server or on the link to it; the server may say where in the statement.
     Failed {
         run: RunId,
         error: String,
-        /// A character count from 1 into the statement sent, as PostgreSQL counts.
+        /// A character position in the statement sent, counted from 1 as PostgreSQL counts.
         position: Option<usize>,
     },
 }
@@ -220,6 +221,6 @@ pub(in crate::tui) enum Incoming {
 pub(in crate::tui) enum TunnelState {
     Starting,
     Up(LocalPort),
-    /// It did not start, or it ended, and how.
+    /// It did not start, or it stopped, and how.
     Died(String),
 }

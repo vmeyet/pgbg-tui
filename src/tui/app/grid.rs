@@ -6,7 +6,7 @@ use chrono::Local;
 
 /// No column is drawn wider, so one long text never hides the others.
 const MAX_COLUMN_WIDTH: usize = 40;
-/// The rows a column's width is measured on: the first page, so a big result costs no more.
+/// How many rows a column's width is measured on, so measuring a big result costs no more than a small one.
 const WIDTH_SAMPLE_ROWS: usize = 500;
 /// The space drawn before each column.
 pub(in crate::tui) const GAP: &str = "  ";
@@ -21,12 +21,12 @@ pub(in crate::tui) struct Room {
 /// The moment and the local time zone the loop read for the frame.
 pub(in crate::tui) type Clock = format::Clock<Local>;
 
-/// The clock before the loop reads one: the app never reads it itself.
+/// The clock used until the loop reads the real one: the app never reads the clock itself.
 pub(in crate::tui) const fn clock_at_epoch() -> Clock {
     Clock { now: chrono::DateTime::UNIX_EPOCH, zone: Local }
 }
 
-/// How cells read: the mode a new result opens in, and the clock of the frame.
+/// How cells are shown: the format mode a new result opens in, and the clock of the frame.
 #[derive(Clone, Copy, Debug)]
 pub(in crate::tui) struct Reading {
     pub(in crate::tui) mode: Mode,
@@ -46,8 +46,8 @@ pub(super) enum Move {
     Right,
 }
 
-/// Where the grid's cursor stands in a result and how its columns read; the widths are measured on the first page, when
-/// the result arrives and when a format changes.
+/// The cursor and scroll position in a result, and how each column is shown.
+/// Widths are measured on the first page, when the result arrives and when a format changes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::tui) struct Grid {
     /// Each column's format, by index.
@@ -65,7 +65,7 @@ pub(in crate::tui) struct Grid {
 }
 
 impl Grid {
-    /// The grid on `result`, each column in its format of `formats`, its cursor on the first row.
+    /// The grid on `result` with each column in its format from `formats`, the cursor on the first row.
     pub(in crate::tui) fn new(result: &ResultSet, formats: Vec<Format>, clock: &Clock) -> Self {
         let widths = column_widths(result, &formats, clock);
         Self { formats, widths, row: 0, column: 0, top: 0, left: 0 }

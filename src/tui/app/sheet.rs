@@ -1,4 +1,4 @@
-//! One connection's sheet: its editor, the statement it ran and what came of it, and where its session stands.
+//! One connection's sheet: its editor, the last statement run and its outcome, and the state of its session.
 use super::editor::Editor;
 use super::ghost::Ghost;
 use super::grid::{Clock, Move, Reading, Room};
@@ -20,20 +20,20 @@ use std::time::Duration;
 pub(in crate::tui) const LOST_SESSION: &str = "session lost, ⏎ opens a new one";
 const CLOSED_WHILE_RUNNING: &str = "cancelled: its session was closed";
 const REOPENED_WHILE_RUNNING: &str = "cancelled: its session was reopened";
-/// The grid asks for the next page once its cursor is this close to the last row it has, so the page comes before the
-/// cursor gets there.
+/// The grid asks for the next page once its cursor is this close to its last row, so the page arrives before the cursor
+/// gets there.
 const NEAR_END_ROWS: usize = 100;
 
-/// The statement last sent, and the byte of the editor it starts at until the text changes.
+/// The statement last sent, and the editor byte where it starts, until the text changes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Sent {
     start: Option<usize>,
     statement: Statement,
-    /// The `$n` the server got for each `{{name}}`, which its error position counts in.
+    /// The `$n` the server got for each `{{name}}`, which the server's error position counts in.
     numbering: Numbering,
 }
 
-/// A statement to run, the editor's byte it starts at when it was cut from the editor, and the values of its parameters.
+/// A statement to run, the editor byte where it starts when it was cut from the editor, and the values of its parameters.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::tui) struct ToRun {
     statement: Statement,
@@ -41,7 +41,7 @@ pub(in crate::tui) struct ToRun {
     input: ParamInput,
 }
 
-/// Where the session stands, as the status line says it.
+/// The state of the session, as the status line shows it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::tui) enum SessionState {
     Opening,
@@ -51,7 +51,7 @@ pub(in crate::tui) enum SessionState {
     Closed,
 }
 
-/// The last statement run and what came of it.
+/// The last statement run and its outcome.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(in crate::tui) enum Run {
     #[default]
@@ -76,7 +76,7 @@ pub(in crate::tui) enum Run {
     Failed(String),
 }
 
-/// Where the sheet's schema stands: read once first needed, read again on demand.
+/// The state of the sheet's schema: read the first time it is needed, and again on demand.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(in crate::tui) enum SchemaState {
     #[default]
@@ -84,49 +84,50 @@ pub(in crate::tui) enum SchemaState {
     Reading,
     /// Shared with whatever builds on it, and never changed: a new read replaces it whole.
     Read(Arc<Catalog>),
-    /// The read failed, in its words; the session stays as it was.
+    /// The read failed, with its message; the session stays as it was.
     Failed(String),
 }
 
-/// How the result pane shows a result; `v` switches, and a new result starts on the grid, or on the chart its header asks
-/// for when that chart fits the result.
+/// How the result pane shows a result; `v` switches.
+/// A new result starts on the grid, or on the chart its header asks for when that chart fits the result.
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::tui) enum View {
     Grid,
-    /// The chart of the header's `-- chart:`, or the one `chart::infer` picks when `v` is pressed, or why `v` has none.
+    /// The chart of the header's `-- chart:`, or the one `chart::infer` picks when `v` is pressed, or why there is none.
     Chart(Result<Series, ChartError>),
 }
 
 /// One connection in the TUI: its editor text, its last run and its session's state, kept while another one is shown.
 #[derive(Debug)]
 pub(in crate::tui) struct Sheet {
-    /// The connection as the config said when its session last opened.
+    /// The connection as the config had it when its session last opened.
     pub(in crate::tui) connection: Connection,
     pub(in crate::tui) editor: Editor,
     pub(in crate::tui) session: SessionState,
-    /// The session whose words the sheet takes; another one's are dropped.
+    /// The session whose answers the sheet takes; answers from any other session are dropped.
     pub(in crate::tui) session_id: SessionId,
-    /// The connection's tunnel, once it has one and its task said where it stands.
+    /// The state of the connection's tunnel, once it has one and its task has reported.
     pub(in crate::tui) tunnel: Option<TunnelState>,
     pub(in crate::tui) run: Run,
     sent: Option<Sent>,
     last_run: Option<RunId>,
-    /// The editor's byte the server's last error points at, until the text changes.
+    /// The editor byte the server's last error points at, until the text changes.
     pub(in crate::tui) error_mark: Option<usize>,
-    /// The saved query the editor stands for, once one was opened in it.
+    /// The saved query the editor stands for, once one has been opened in it.
     pub(in crate::tui) opened: Option<Query>,
-    /// Why the last query asked for could not be opened, until one opens.
+    /// Why the last query asked for could not be opened, until a query opens.
     pub(in crate::tui) query_error: Option<String>,
-    /// The header of the editor's text: its `-- chart:` draws each result of the sheet, its `-- format:` reads it.
+    /// The header of the editor's text: its `-- chart:` sets how each result of the sheet is drawn, its `-- format:`
+    /// how its cells are shown.
     pub(in crate::tui) header: Header,
     /// Whether the editor's text changed since it was opened or saved.
     pub(in crate::tui) is_dirty: bool,
     /// Why the last page asked for failed, until the next run.
     pub(in crate::tui) page_failure: Option<String>,
-    /// What the result pane shows when it is no run's result but a table's columns, as its title says it.
+    /// The result pane's title when it shows a table's columns instead of a run's result.
     pub(in crate::tui) shown: Option<String>,
     pub(in crate::tui) schema: SchemaState,
-    /// The completion index of the catalog read, once the backend built it.
+    /// The completion index of the schema read, once the backend has built it.
     pub(in crate::tui) index: Option<Arc<Index>>,
     pub(in crate::tui) ghost: Option<Ghost>,
     pub(in crate::tui) bar: ParamBar,
@@ -171,8 +172,8 @@ impl Sheet {
         self.connection.name()
     }
 
-    /// Takes `connection` as it is now and waits for its new session `session_id`; the editor and the last run stay,
-    /// but a statement running on the old session fails with it.
+    /// Takes `connection` as it is now and waits for its new session `session_id`.
+    /// The editor and the last run stay, but a statement running on the old session fails with it.
     pub(super) fn reopen(&mut self, connection: Connection, session_id: SessionId) {
         self.connection = connection;
         self.session_id = session_id;
@@ -184,12 +185,13 @@ impl Sheet {
         self.index = None;
     }
 
-    /// Takes `connection` as it is now and leaves the session closed: picking the sheet opens it as it is then.
+    /// Takes `connection` as it is now and leaves the session closed: picking the sheet later opens it with the config
+    /// of that moment.
     pub(super) fn take_closed(&mut self, connection: Connection) {
         self.connection = connection;
     }
 
-    /// Forgets the session, which the backend closes; a statement running on it fails, the editor stays.
+    /// Forgets the session, which the backend closes; a statement running on it fails, and the editor stays.
     pub(super) fn close(&mut self) {
         self.session = SessionState::Closed;
         self.tunnel = None;
@@ -200,7 +202,7 @@ impl Sheet {
         }
     }
 
-    /// The schema last read, when one was.
+    /// The schema last read, if any.
     pub(in crate::tui) fn catalog(&self) -> Option<&Catalog> {
         match &self.schema {
             SchemaState::Read(catalog) => Some(catalog),
@@ -208,7 +210,7 @@ impl Sheet {
         }
     }
 
-    /// Asks for the schema the first time something needs it; nothing once asked.
+    /// Asks for the schema the first time something needs it; does nothing once asked.
     pub(super) fn want_schema(&mut self) -> Vec<Action> {
         if self.schema != SchemaState::NotRead {
             return vec![];
@@ -217,7 +219,7 @@ impl Sheet {
     }
 
     /// Asks for the schema again, unless a read is on its way, the session is closed, or the connection says
-    /// `schema = "off"`; a failed session opens again for it.
+    /// `schema = "off"`; a failed session opens again to read it.
     pub(super) fn read_schema_again(&mut self) -> Vec<Action> {
         let is_off = self.connection.schema() == SchemaReading::Off;
         let is_closed = self.session == SessionState::Closed;
@@ -231,7 +233,7 @@ impl Sheet {
         vec![Action::ReadSchema { connection: self.name().clone(), session: self.session_id }]
     }
 
-    /// Keeps `index` when the catalog it was built from is still the one read.
+    /// Keeps `index` when the catalog it was built from is still the latest one read.
     fn take_index(&mut self, catalog: &Arc<Catalog>, index: Arc<Index>) {
         let is_current = matches!(&self.schema, SchemaState::Read(read) if Arc::ptr_eq(read, catalog));
         if is_current {
@@ -239,21 +241,21 @@ impl Sheet {
         }
     }
 
-    /// Fails a read waiting on a session that did not open or was lost, so it can be asked again.
+    /// Fails a schema read that waits on a session that did not open or was lost, so it can be asked for again.
     fn fail_schema_read(&mut self, why: &str) {
         if self.schema == SchemaState::Reading {
             self.schema = SchemaState::Failed(why.to_owned());
         }
     }
 
-    /// Fails the running statement in `why`: the session it ran on is gone, and its answer with it.
+    /// Fails the running statement with `why`: the session it ran on is gone, and its answer with it.
     fn fail_running(&mut self, why: &str) {
         if self.is_running() {
             self.run = Run::Failed(why.to_owned());
         }
     }
 
-    /// Cuts the result at the rows it has, since the portal its pages came from closes with the session.
+    /// Stops the result at the rows it has, since the portal its pages came from closes with the session.
     fn stop_paging(&mut self) {
         if let Run::Done { result, is_page_asked, .. } = &mut self.run {
             result.cut();
@@ -261,7 +263,7 @@ impl Sheet {
         }
     }
 
-    /// Whether the result pane shows a chart, and so not the grid the cursor keys move.
+    /// Whether the result pane shows a chart instead of the grid that the cursor keys move.
     pub(super) fn is_chart_shown(&self) -> bool {
         matches!(self.run, Run::Done { view: View::Chart(_), .. })
     }
@@ -295,19 +297,20 @@ impl Sheet {
         self.running_run() == Some(run)
     }
 
-    /// Where the statement under the editor's cursor stands in the editor's text.
+    /// The byte range of the statement under the editor's cursor.
     fn range_under_cursor(&self) -> Option<Range<usize>> {
         let (before, _, _) = self.editor.split();
         guard::statement_at(self.editor.text(), self.editor.lexed(), before.len())
     }
 
-    /// The statement under the editor's cursor, and where it stands in the editor's text.
+    /// The statement under the editor's cursor, and its byte range in the editor's text.
     fn statement_under_cursor(&self) -> Option<(Range<usize>, Statement)> {
         let range = self.range_under_cursor()?;
         Some((range.clone(), Statement::new(&self.editor.text()[range])))
     }
 
-    /// The `{{name}}` of the statement under the cursor, each once; none when it has none or a `{{` it cannot read.
+    /// The `{{name}}` parameters of the statement under the cursor, each once; none when it has none or holds a `{{`
+    /// that cannot be read.
     pub(in crate::tui) fn param_names(&self) -> Vec<ParamName> {
         let names = self.range_under_cursor().map(|range| params::names(self.editor.lexed().tokens_in(range)));
         names.and_then(Result::ok).unwrap_or_default()
@@ -320,7 +323,7 @@ impl Sheet {
         names.into_iter().nth(self.bar.at.min(last))
     }
 
-    /// Moves the bar's keys to its next field, or the one before; false past either end.
+    /// Moves the keys to the bar's next or previous field; false past either end.
     pub(super) fn step_bar(&mut self, direction: Direction) -> bool {
         let count = self.param_names().len();
         self.bar.at = self.bar.at.min(count.saturating_sub(1));
@@ -341,7 +344,7 @@ impl Sheet {
         }
     }
 
-    /// The statement under the cursor with the values of the parameter bar, the editor's other statements left alone.
+    /// The statement under the cursor with the values of the parameter bar; the editor's other statements are left out.
     pub(super) fn editor_run(&self) -> Option<ToRun> {
         let (range, statement) = self.statement_under_cursor()?;
         let names = params::names(self.editor.lexed().tokens_in(range.clone())).unwrap_or_default();
@@ -349,8 +352,8 @@ impl Sheet {
         Some(ToRun { statement, start: Some(range.start), input })
     }
 
-    /// What the statement under the cursor writes, on a connection that allows writes; a read-only one refuses a write
-    /// without asking.
+    /// What the statement under the cursor writes, on a connection that allows writes; a read-only connection refuses
+    /// a write without asking.
     pub(super) fn write_under_cursor(&self) -> Option<Write> {
         if self.connection.writes() == WritePolicy::ReadOnly {
             return None;
@@ -359,13 +362,14 @@ impl Sheet {
         guard::write_in(self.editor.text(), self.editor.lexed().tokens_in(range))
     }
 
-    /// Runs `to_run`; a write the backend refuses unless `confirmed` says the user answered `y`.
+    /// Runs `to_run`; the backend refuses a write unless `confirmed` shows the user answered `y`.
     pub(super) fn run(&mut self, to_run: ToRun, confirmed: Option<Confirmed>) -> Vec<Action> {
         self.run_statement(to_run.statement, to_run.start, to_run.input, confirmed)
     }
 
-    /// Runs `statement` with `input` for its parameters; it starts at the editor's byte `start` when it was cut from
-    /// the editor. Nothing while another one runs.
+    /// Runs `statement` with `input` for its parameters; `start` is its first editor byte when it was cut from the
+    /// editor.
+    /// Does nothing while another statement runs.
     pub(super) fn run_statement(
         &mut self,
         statement: Statement,
@@ -382,8 +386,8 @@ impl Sheet {
         vec![Action::Run { connection: self.name().clone(), run, statement, input, confirmed }]
     }
 
-    /// Shows `result` in the result pane as if a run gave it, titled `title`; nothing while a statement runs, whose
-    /// answer it would drop.
+    /// Shows `result` in the result pane as if a run returned it, titled `title`.
+    /// Does nothing while a statement runs, since it would drop that statement's answer.
     pub(super) fn show(&mut self, title: String, result: ResultSet, reading: &Reading) {
         if self.is_running() {
             return;
@@ -394,7 +398,7 @@ impl Sheet {
         self.run = Run::Done { run, grid, result, took: Duration::ZERO, view: View::Grid, is_page_asked: false };
     }
 
-    /// A new run's id, the marks of the last one dropped.
+    /// A new run's id; the marks of the last run are dropped.
     fn next_run(&mut self) -> RunId {
         let run = self.last_run.map_or(RunId::FIRST, RunId::next);
         self.last_run = Some(run);
@@ -404,15 +408,15 @@ impl Sheet {
         run
     }
 
-    /// The editor's byte at character `position` of the statement the server got, counted from 1; the end of it when the
-    /// server points just past its last character.
+    /// The editor byte at character `position` of the statement the server got, counted from 1; the statement's end
+    /// when the server points just past its last character.
     fn editor_byte(&self, position: usize) -> Option<usize> {
         let sent = self.sent.as_ref()?;
         let offset = sent.numbering.template_byte(sent.statement.as_str(), position.checked_sub(1)?)?;
         Some(sent.start? + offset)
     }
 
-    /// Takes what the session said; a result opens in the formats its header and `reading` give it.
+    /// Takes an answer from the session; a result opens in the formats its header and `reading` give it.
     pub(super) fn apply(&mut self, incoming: Incoming, reading: &Reading) {
         let is_closed = self.session == SessionState::Closed;
         match incoming {
@@ -488,17 +492,17 @@ impl Sheet {
         }
     }
 
-    /// Whether the grid shows a column as the time from now, which reads differently as the clock moves.
+    /// Whether the grid shows a column as time from now, which changes as the clock moves.
     pub(in crate::tui) fn shows_relative_time(&self) -> bool {
         matches!(&self.run, Run::Done { grid, view: View::Grid, .. } if grid.formats.contains(&Format::Relative))
     }
 
-    /// Whether the result of `run` waits on its next page.
+    /// Whether the result of the run `of` waits on its next page.
     fn is_waiting_on_page(&self, of: RunId) -> bool {
         matches!(&self.run, Run::Done { run, result, .. } if *run == of && result.extent() == Extent::More)
     }
 
-    /// Adds `page` to the result, the grid's widths kept from the first page.
+    /// Adds `page` to the result, keeping the grid's widths from the first page.
     fn push_page(&mut self, page: Page) {
         if let Run::Done { result, is_page_asked, .. } = &mut self.run {
             result.push(page);
@@ -506,7 +510,7 @@ impl Sheet {
         }
     }
 
-    /// Forgets where the statement sent stands in the editor, once the text it was cut from changed.
+    /// Forgets the position of the statement sent in the editor, once the text it was cut from has changed.
     pub(super) fn forget_sent_place(&mut self) {
         if let Some(sent) = &mut self.sent {
             sent.start = None;
