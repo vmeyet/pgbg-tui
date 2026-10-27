@@ -130,6 +130,7 @@ Each entry says what changed, then where, then how to use it.
 
 ### Fixed
 
+- **A `before` or password command leaves nothing running**, in `config.toml`: a helper it started in the background is stopped once it ends.
 - **A password or a secret connection key inside a dollar-quoted string is kept out of the history and never sent to the AI**, as in `SELECT dblink_connect($$password=... host=...$$)` or `$q$sslpassword=...$q$`.
 - **A statement naming `sslpassword` or `oauth_client_secret` is kept out of the history and never sent to the AI**, as one holding a password is.
 - **A `url` with `sslpassword` or `oauth_client_secret` in it is refused**, in `config.toml`, `--url` and the TUI's connection form, as one with a password is, so `pgbg connections` never prints the secret.

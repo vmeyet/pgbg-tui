@@ -34,7 +34,7 @@ impl Asks {
     /// Asks the command of `settings` with `prompt` and kills the one asked before; the answer comes back as
     /// `Answer::Asked`.
     pub(super) fn ask(&mut self, ask: AskId, prompt: Prompt, settings: &AiSettings) {
-        let mut asking = Asking::start(settings, prompt.text());
+        let asking = Asking::start(settings, prompt.text());
         let answers = self.answers.clone();
         let task = tokio::spawn(async move {
             let answer = match asking.reply().await {
