@@ -138,7 +138,7 @@ mod tests {
     use super::super::app::{Fit, Incoming, RunId};
     use super::super::styled;
     use super::*;
-    use crate::db::model::{ColumnKind, ResultSet, TypeName};
+    use crate::db::model::{ColumnKind, JsonText, ResultSet, TypeName};
     use crate::fixtures::column;
     use crossterm::event::{KeyCode, KeyEvent};
     use ratatui::Terminal;
@@ -184,7 +184,7 @@ mod tests {
 
     #[test]
     fn json_is_indented_and_coloured() {
-        let items = Value::Json(serde_json::json!({"sku": "TEA-01", "count": 2, "gift": null}));
+        let items = Value::Json(JsonText::of(&serde_json::json!({"sku": "TEA-01", "count": 2, "gift": null})));
         let result = ResultSet::whole(vec![column("items", ColumnKind::Json)], vec![vec![items.clone()], vec![items]]);
         insta::assert_snapshot!("detail_json_styled", styled::runs(render(&detail_of(result), 40, 12).0.backend().buffer()));
     }

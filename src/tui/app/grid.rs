@@ -230,7 +230,7 @@ mod tests {
 
     #[test]
     fn a_long_cell_is_capped() {
-        let result = result(1).with_cell(0, 2, Value::Text("n".repeat(300)));
+        let result = result(1).with_cell(0, 2, Value::Text("n".repeat(300).into()));
         assert_eq!(Grid::raw(&result).widths[2], MAX_COLUMN_WIDTH);
     }
 

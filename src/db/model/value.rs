@@ -10,15 +10,15 @@ pub(crate) enum Value {
     Int(i64),
     Float(f64),
     /// Kept as its exact decimal text: `NUMERIC` holds more digits than any float.
-    Numeric(String),
-    Text(String),
-    Json(serde_json::Value),
+    Numeric(Box<str>),
+    Text(Box<str>),
+    Json(JsonText),
     Uuid(uuid::Uuid),
     Date(NaiveDate),
     Time(NaiveTime),
     Timestamp(NaiveDateTime),
     TimestampTz(DateTime<Utc>),
-    Bytes(Vec<u8>),
+    Bytes(Box<[u8]>),
     /// A date or timestamp of `infinity`.
     Infinity,
     /// A date or timestamp of `-infinity`.
@@ -38,7 +38,7 @@ impl fmt::Display for Value {
                 None => write!(f, "{value}"),
             },
             Self::Numeric(text) | Self::Text(text) => f.write_str(text),
-            Self::Json(value) => write!(f, "{value}"),
+            Self::Json(json) => f.write_str(&json.0),
             Self::Uuid(value) => write!(f, "{value}"),
             Self::Date(value) => write!(f, "{value}"),
             Self::Time(value) => write!(f, "{value}"),
@@ -64,9 +64,42 @@ impl Value {
     /// Like [`Value::prefix`], with JSON indented over several lines so a row's detail can show its shape.
     pub(crate) fn pretty_prefix(&self, chars: usize) -> String {
         match self {
-            Self::Json(json) => prefixed(chars, format_args!("{json:#}")),
+            Self::Json(json) => json.pretty_prefix(chars),
             other => other.prefix(chars),
         }
+    }
+}
+
+/// A JSON value kept as its compact text, keys in order: one string per cell instead of a tree of nodes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct JsonText(Box<str>);
+
+impl JsonText {
+    pub(crate) fn of(json: &serde_json::Value) -> Self {
+        Self(json.to_string().into_boxed_str())
+    }
+
+    /// The tree it was made from, read back from its text.
+    fn tree(&self) -> serde_json::Result<serde_json::Value> {
+        serde_json::from_str(&self.0)
+    }
+
+    /// The first `chars` characters of it indented over several lines, so a row's detail can show its shape.
+    fn pretty_prefix(&self, chars: usize) -> String {
+        match self.tree() {
+            Ok(tree) => prefixed(chars, format_args!("{tree:#}")),
+            Err(err) => {
+                tracing::warn!("a JSON cell did not read back, so it shows compact: {err}");
+                prefixed(chars, format_args!("{}", self.0))
+            }
+        }
+    }
+}
+
+/// As the tree it holds, not as a string of it, so a pretty printer indents it too.
+impl Serialize for JsonText {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.tree().map_err(serde::ser::Error::custom)?.serialize(serializer)
     }
 }
 
@@ -117,7 +150,7 @@ impl Serialize for Value {
                 Some(spelled) => serializer.serialize_str(spelled),
                 None => serializer.serialize_f64(*value),
             },
-            Self::Json(value) => value.serialize(serializer),
+            Self::Json(json) => json.serialize(serializer),
             other => serializer.collect_str(other),
         }
     }
@@ -128,19 +161,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_cell_holds_no_more_than_its_widest_inline_value_a_uuid() {
+        assert!(size_of::<Value>() <= 24, "{} bytes", size_of::<Value>());
+    }
+
+    #[test]
+    fn json_prints_compact_with_its_keys_in_order() {
+        let json = Value::Json(JsonText::of(&serde_json::json!({"paid": true, "id": 7})));
+        assert_eq!(json.to_string(), r#"{"id":7,"paid":true}"#);
+    }
+
+    #[test]
+    fn json_pretty_printed_is_indented_as_the_tree_it_holds() {
+        let tree = serde_json::json!({"id": 7, "tags": ["tea"]});
+        let pretty = serde_json::to_string_pretty(&Value::Json(JsonText::of(&tree))).unwrap();
+        assert_eq!(pretty, serde_json::to_string_pretty(&tree).unwrap());
+    }
+
+    #[test]
     fn a_prefix_stops_after_its_characters() {
         assert_eq!(Value::Text("Zoë Nakamura".into()).prefix(3), "Zoë");
-        assert_eq!(Value::Bytes(vec![0xde, 0xad, 0x01]).prefix(4), "\\xde");
+        assert_eq!(Value::Bytes([0xde, 0xad, 0x01].into()).prefix(4), "\\xde");
     }
 
     #[test]
     fn a_prefix_of_a_short_value_is_all_of_it() {
-        assert_eq!(Value::Json(serde_json::json!([1, 2])).prefix(40), "[1,2]");
+        assert_eq!(Value::Json(JsonText::of(&serde_json::json!([1, 2]))).prefix(40), "[1,2]");
     }
 
     #[test]
     fn a_pretty_prefix_indents_json_and_stops_after_its_characters() {
-        let json = Value::Json(serde_json::json!({"paid": true}));
+        let json = Value::Json(JsonText::of(&serde_json::json!({"paid": true})));
         assert_eq!(json.pretty_prefix(40), "{\n  \"paid\": true\n}");
         assert_eq!(json.pretty_prefix(3), "{\n ");
     }
@@ -152,7 +203,7 @@ mod tests {
 
     #[test]
     fn bytes_print_as_postgres_hex() {
-        assert_eq!(Value::Bytes(vec![0xde, 0xad, 0x01]).to_string(), "\\xdead01");
+        assert_eq!(Value::Bytes([0xde, 0xad, 0x01].into()).to_string(), "\\xdead01");
     }
 
     #[test]
@@ -176,7 +227,8 @@ mod tests {
 
     #[test]
     fn json_keeps_numbers_and_nulls_and_prints_the_rest_as_text() {
-        let row = [Value::Int(3), Value::Null, Value::Numeric("12.50".into()), Value::Json(serde_json::json!({"paid": true}))];
+        let row =
+            [Value::Int(3), Value::Null, Value::Numeric("12.50".into()), Value::Json(JsonText::of(&serde_json::json!({"paid": true})))];
         assert_eq!(serde_json::to_string(&row).unwrap(), r#"[3,null,"12.50",{"paid":true}]"#);
     }
 }

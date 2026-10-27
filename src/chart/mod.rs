@@ -172,7 +172,7 @@ mod tests {
     fn many_text_labels_still_draw_bars() {
         let customers = result(
             vec![column("customer", ColumnKind::Text), column("orders", ColumnKind::Int)],
-            rows(40, |i| vec![Value::Text(format!("c{i}")), Value::Int(1)]),
+            rows(40, |i| vec![Value::Text(format!("c{i}").into()), Value::Int(1)]),
         );
         assert_eq!(infer(&customers).unwrap().kind, ChartKind::Bar);
     }

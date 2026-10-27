@@ -289,7 +289,7 @@ mod tests {
 
     #[test]
     fn a_byte_string_reads_as_its_length() {
-        assert_eq!(read(&Value::Bytes(vec![0; 300]), Format::Bytes), "300 B");
+        assert_eq!(read(&Value::Bytes(vec![0; 300].into()), Format::Bytes), "300 B");
     }
 
     #[test]

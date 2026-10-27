@@ -90,7 +90,7 @@ fn index_row(index: &Index) -> Vec<Value> {
 }
 
 fn texts(cells: [&str; 4]) -> Vec<Value> {
-    cells.into_iter().map(|cell| Value::Text(cell.to_owned())).collect()
+    cells.into_iter().map(|cell| Value::Text(cell.into())).collect()
 }
 
 impl SchemaTab {
@@ -377,7 +377,7 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         let Run::Done { result, .. } = &app.sheet().run else { panic!("no result") };
         let names: Vec<&Value> = result.rows().iter().map(|row| &row[1]).collect();
-        let text = |name: &str| Value::Text(name.to_owned());
+        let text = |name: &str| Value::Text(name.into());
         assert_eq!(names, [&text("id"), &text("customer_id"), &text("total"), &text("orders_pkey")]);
         assert_eq!(result.rows()[2][3], text("default 0"));
     }
