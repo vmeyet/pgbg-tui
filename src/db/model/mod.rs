@@ -37,7 +37,6 @@ impl Statement {
 pub(crate) struct Params(Vec<Option<String>>);
 
 impl Params {
-    #[cfg_attr(not(test), expect(dead_code, reason = "`{{name}}` parameters fill it, the next step"))]
     pub(crate) fn new(values: Vec<Option<String>>) -> Self {
         Self(values)
     }

@@ -8,6 +8,10 @@ Each entry says what changed, then where, then how to use it.
 
 ### New
 
+- **Parameters** in `pgbg run`: write `{{name}}` in a statement, outside strings and comments, and give its value with `--param name=value`, or with `--params-file <file>`, one `name=value` a line, `-` for stdin, so a value need not sit in the shell's history.
+  A value is always bound, never put in the statement's text, and the server reads it as the type it gives the parameter: `WHERE day > {{since}}::date`.
+  One file may serve several queries: a name in it the statement lacks is left alone, while a `--param` for one is refused as a typo.
+  A name with no value, or a statement mixing its own `$1` with `{{name}}` stops the run before anything is sent; the history keeps `{{name}}`, never the value.
 - **Big results page in** in the TUI: a result comes 500 rows at a time, and the next page is fetched as the grid's cursor nears the last row, with no cap.
   The title says `first 1 500 rows · more…` while rows wait on the server, and `all 1 732 rows` once they all came; a result left 5 minutes without a page asked stops there, so its open transaction does not hold up the server, and a page the server fails says why in the status line.
   A connection that allows writes, and `pgbg run`, still keep the first 10 000 rows.

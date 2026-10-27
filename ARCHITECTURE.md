@@ -23,12 +23,12 @@ When a boundary or a flow changes, change this page in the same MR.
 | `db/pages.rs` | `Session::start`: a statement's first page of 500 rows, and on a read-only connection its portal kept open in `Pages`, in its `BEGIN READ ONLY` transaction, until `next` fetches the last page or `close` rolls it back; each read-only transaction has the server end it once left idle 6 minutes (`SET LOCAL idle_in_transaction_session_timeout`, unless the server's own is stricter), and the TUI closes the portal first: after 5 minutes, or a tenth before the server's stricter timeout |
 | `db/schema.rs` | `Session::read_schema`: every schema, table, column and index the role can read, from `pg_class`, `pg_attribute` and `pg_index` in one read-only transaction, a partition left to its parent, the first 20 000 tables by name (`LIMIT` in the SQL), with `current_schemas(false)`; `read_schema_along` reads it on a session of its own along a route, which the TUI gives it from the session it already has open |
 | `db/server.rs` | What the server says of a session (`ServerFacts`: user, version, the `statement_timeout` in effect and the server's own, from `pg_settings`) and what its role can write (`RoleRights`: for the login role, each role it may `SET ROLE` to and `PUBLIC`, the flags, `pg_write_all_data`, database `CREATE`, and the schemas, tables and sequences each may write, read from the ACLs so each grant names its role), read with `Session::read_only` like the schema |
-| `db/lex.rs` | The tokenizer: words and `;`, each with the bytes it spans, strings, comments, dollar quotes and quoted names hiding what they hold; the guard reads its tokens, and `{{name}}`, parameters and completion will (planned) |
+| `db/lex.rs` | The tokenizer: words, `;`, `{{name}}` and `$n`, each with the bytes it spans, strings, comments, dollar quotes and quoted names hiding what they hold; a `{{` that opens no name, or one glued to a word, is unreadable; the guard and parameters read its tokens, and completion will (planned) |
 | `db/guard.rs` | Classifies a statement before it is sent: read, write, or more than one statement; `admit` turns a statement and its `Params` into an `Admitted`, the only kind a session runs, refused when the count of values is not the count of its `$n`; `statement_at` finds the statement under the editor's cursor with the same tokenizer |
 | `db/bind.rs` | `AsText`, the one `ToSql` a value is bound through: any parameter type, sent as text for the server to read with that type's input, `None` as NULL |
 | `db/decode.rs` | Wire values to `Value`, by column type, a domain by its base type; a value it cannot decode is `Unsupported`, never an error |
 | `query/` | Saved queries: the `.pgbg/queries/` tree, the header (`-- name:`, `-- connection:`, `-- chart:`, and `-- param:`, `-- format:` (planned)), load, and save |
-| `query/params.rs` (planned) | Parameters: the `{{name}}` of a statement turned into `$n` and the `Params` each run binds; pure |
+| `query/params.rs` | Parameters, pure: the `{{name}}` of a statement turned into `$n`, and the values `Given` by name (`--param`, a `--params-file` line, the parameter bar (planned)) into the `Params` its run binds, then `admit`ted by the guard |
 | `complete/` (planned) | Completion, pure: the `Index` built once from a `Schema` (names lowercased and sorted, so a prefix is a binary search; names in the session's `current_schemas(false)` bare, the others as `schema.table`), the `Context` at the cursor from the tokens of the statement under it, never of the whole editor (a table after `FROM` or `JOIN`, a column of `orders` after `o.` when `FROM orders o`, a keyword at a statement's start), and the ranked candidates |
 | `ai/` (planned) | Asking a command for SQL, pure: the `Prompt` (instruction, statement, schema slice, tier) as the text on the command's stdin, and its answer read back as statements; the backend runs the command |
 | `format/` | Formats, pure: for each `ColumnKind`, the ways a cell can read (raw first), the step to the next one, and the text of one cell in one of them, the clock and the time zone passed in as a `Clock`; `number.rs` groups digits and reads sizes, `time.rs` reads timestamps local or relative |
@@ -106,7 +106,7 @@ Completing a name (planned):
 4. `ctrl-space` opens the list, where a fuzzy match joins the prefix ones: a prefix before a fuzzy match, a column of a table the statement names before any other, then shorter first; at most 50 are kept.
 5. A test holds the budget: 20 000 tables and 200 000 columns, one key, under a millisecond in a release build.
 
-Running a statement with parameters (planned):
+Running a statement with parameters (the header and the parameter bar planned):
 
 1. `query::params` reads the `{{name}}` of the statement under the cursor from `db::lex`'s tokens, never inside a string, a comment or a quoted name, and the header's `-- param: since date = 2024-01-01`, `-- param: owner text optional`.
    A statement holding both a `$n` of its own and a `{{name}}` is refused, and a `{{` the lexer cannot read as a name is too: a doubt never runs.
@@ -114,6 +114,7 @@ Running a statement with parameters (planned):
    The values typed stay on the sheet until pgbg quits and are never written to disk.
 3. Each name becomes `$1`, `$2` (the same name the same number), so the guard classifies what the server gets; `admit` takes the values with the statement and refuses an `Admitted` whose count of values is not its count of `$n`.
    A name left empty, with no default and not `optional`, stops the run before anything is sent; an `optional` one is bound as NULL.
+   A `--param` for a name the statement does not hold, or a name given twice, stops the run too; a params file may name more, so one file serves several queries.
 4. Both ways of running bind them: the read-only portal and the one a connection that allows writes uses.
    The statement is prepared with unknown types (id 0) where the header names none, so the server infers them; a header type is looked up first with `SELECT to_regtype($1)::oid`, the name itself bound, and a type the server does not know stops the run.
    Each value goes through one `ToSql` wrapper that accepts any type and encodes as text (`encode_format`): the server parses it with that type's own input, and a value it cannot read fails with its words.
@@ -168,7 +169,7 @@ Four layers, outermost first; only the last one is a guarantee.
 3. **Transaction**: one statement per round trip (the extended protocol refuses more), inside `BEGIN READ ONLY`, always rolled back; the server refuses writes even when the guard misses one.
 4. **Role**: a read-only database role. A read-only transaction still lets a function with side effects run (`pg_terminate_backend`, `dblink`); only the role stops those.
 
-A parameter is always bound, never put in the statement's text (planned): its value cannot change what the guard admitted.
+A parameter is always bound, never put in the statement's text: its value cannot change what the guard admitted.
 
 On a connection that allows writes, a statement runs as typed, except that one returning rows goes through a portal in its own committed transaction, unless the user's own `BEGIN` left one open (a `SAVEPOINT` probe tells).
 

@@ -1,9 +1,10 @@
 //! End-to-end runs of the `pgbg` binary against invented configs.
 #![cfg(test)]
 use rustix::process::{Pid, Signal, kill_process};
+use std::io::Write;
 use std::net::{Ipv4Addr, TcpStream};
 use std::path::Path;
-use std::process::{Child, Command, Output};
+use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 const SHOP: &str = r#"
@@ -115,6 +116,21 @@ fn run_adds_the_statement_to_the_history_of_its_connection() {
 }
 
 #[test]
+fn run_refuses_a_param_without_a_value_before_connecting() {
+    let output = pgbg(SHOP, &["run", "local", "SELECT * FROM orders WHERE day > {{since}}"]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("`{{since}}` has no value"), "{}", stderr(&output));
+}
+
+#[test]
+fn run_keeps_a_param_in_the_history_never_its_value() {
+    let dir = tempfile::tempdir().unwrap();
+    pgbg_in(dir.path(), SHOP, &["run", "local", "DELETE FROM orders WHERE owner = {{owner}}", "--param", "owner=nina"]);
+    let history = stdout(&pgbg_in(dir.path(), SHOP, &["history", "local", "--json"]));
+    assert!(history.contains("{{owner}}") && !history.contains("nina"), "{history}");
+}
+
+#[test]
 fn history_of_a_connection_never_run_prints_nothing() {
     let output = pgbg(SHOP, &["history", "local"]);
     assert!(output.status.success(), "{}", stderr(&output));
@@ -174,6 +190,41 @@ fn run_json_prints_the_columns_and_rows() {
     assert_eq!(json["columns"][1]["name"], "customer");
     assert_eq!(json["rows"][0], serde_json::json!([7, "nina"]));
     assert_eq!(json["is_cut"], false);
+}
+
+/// `pgbg run` on the test database with `stdin` piped in, and the first value of its JSON result.
+fn first_value_on_the_test_database(args: &[&str], stdin: &str) -> serde_json::Value {
+    let dir = tempfile::tempdir().unwrap();
+    let url = std::env::var("PGBG_TEST_DATABASE_URL").unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, format!("[connections.shop]\ntier = \"local\"\nurl = \"{url}\"\n")).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_pgbg"))
+        .args(["run", "shop", "--json"])
+        .args(args)
+        .env("PGBG_CONFIG", &path)
+        .env("PGBG_LOG", "off")
+        .env("PGBG_DATA_DIR", dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(stdin.as_bytes()).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["rows"][0][0].clone()
+}
+
+#[test]
+#[ignore = "needs PGBG_TEST_DATABASE_URL"]
+fn run_binds_a_param_given_on_the_command_line() {
+    assert_eq!(first_value_on_the_test_database(&["SELECT {{total}}::int4 + 1", "--param", "total=41"], ""), 42);
+}
+
+#[test]
+#[ignore = "needs PGBG_TEST_DATABASE_URL"]
+fn run_binds_a_param_read_from_stdin() {
+    assert_eq!(first_value_on_the_test_database(&["SELECT {{owner}} || '!'", "--params-file", "-"], "owner=nina\n"), "nina!");
 }
 
 #[test]

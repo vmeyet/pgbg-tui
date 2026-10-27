@@ -1,6 +1,8 @@
 //! The command line `pgbg` parses, with the help text each flag shows.
 use crate::connection::{ConnectionName, StatementTimeout, Tier, Tls, WritePolicy};
+use crate::query::params::Assignment;
 use clap::{Args, Parser, Subcommand};
+use std::path::PathBuf;
 
 /// The command line: global flags, then one subcommand.
 #[derive(Parser, Debug)]
@@ -33,8 +35,14 @@ pub enum Command {
     Run {
         /// The connection's name in `config.toml`.
         connection: ConnectionName,
-        /// One SQL statement.
+        /// One SQL statement; each `{{name}}` in it is bound to the value given for it, never spliced into the text.
         sql: String,
+        /// The value of `{{name}}`, as `name=value`; may be given once per name.
+        #[arg(long = "param", value_name = "NAME=VALUE")]
+        params: Vec<Assignment>,
+        /// A file of `name=value` lines, or `-` for stdin, so a value need not sit in the shell's history.
+        #[arg(long, value_name = "FILE")]
+        params_file: Option<PathBuf>,
     },
     /// Checks a connection: its config, TLS, tunnel, login, timeout, and whether its role can write; exits 1 when a check fails.
     Doctor {
@@ -218,6 +226,13 @@ mod tests {
     fn connection_edit_needs_something_to_change() {
         assert!(parse(&["connection", "edit", "prod"]).is_err());
         assert!(parse(&["connection", "edit", "prod", "--writes", "read-only"]).is_ok());
+    }
+
+    #[test]
+    fn run_takes_each_param_as_a_name_and_a_value() {
+        let run = parse(&["run", "shop", "SELECT {{day}}", "--param", "day=2024-01-01", "--params-file", "-"]).unwrap();
+        assert!(matches!(run.command, Some(Command::Run { params, params_file: Some(_), .. }) if params.len() == 1));
+        assert!(parse(&["run", "shop", "SELECT {{day}}", "--param", "day"]).is_err());
     }
 
     #[test]
