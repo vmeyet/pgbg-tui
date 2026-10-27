@@ -1,0 +1,14 @@
+---
+source: src/tui/detail_view.rs
+expression: "render(&app, 40, 10).0.backend()"
+---
+"                                        "
+"    ╭ Row 2 of 4 ──────────────────╮    "
+"    │ total                        │    "
+"    │   1499.00                    │    "
+"    │                              │    "
+"    │ customer                     │    "
+"    │   NULL                       │    "
+"    │ j/k scroll · esc closes      │    "
+"    ╰──────────────────────────────╯    "
+"                                        "

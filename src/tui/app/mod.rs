@@ -5,6 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use vtui::help::Help;
 use vtui::theme::Theme;
 
+pub(super) use detail::Detail;
 pub(super) use form::{Form, PasswordFrom, Slot};
 pub(super) use grid::Grid;
 use grid::Move;
@@ -18,6 +19,7 @@ pub(super) use save::Prompt;
 pub(super) use search::{ROWS_SHOWN, Search};
 pub(super) use sheet::{Run, SessionState, Sheet, View};
 
+mod detail;
 mod editor;
 pub(super) mod form;
 mod grid;
@@ -59,6 +61,8 @@ pub(super) struct Fit {
     pub(super) grid_rows: usize,
     /// Whether the sidebar of queries was drawn, which a narrow terminal or no query at all leaves out.
     pub(super) has_sidebar: bool,
+    /// How far the row's detail scrolls before its last line is at the bottom.
+    pub(super) detail_last_scroll: usize,
 }
 
 /// What lies over the panes and takes every key while it is open.
@@ -76,6 +80,8 @@ pub(super) enum Overlay {
     Recall(Recall),
     /// A question on the footer line: the path of a new query, or whether to open one over unsaved text.
     Prompt(Prompt),
+    /// The grid's row, one column a line.
+    Detail(Detail),
 }
 
 /// The help after `key`: `?` lists every key, `j`/`k` scroll, any other key closes it.
@@ -210,6 +216,7 @@ impl App {
                 self.overlay = prompt.map(Overlay::Prompt);
                 actions
             }
+            Overlay::Detail(detail) => self.detail_key(detail, key),
         }
     }
 
@@ -238,6 +245,7 @@ impl App {
             Act::Save => return self.save(),
             Act::EditOutside => return self.edit_outside(),
             Act::History => return self.recall(),
+            Act::Detail => self.open_detail(),
             Act::Close | Act::Delete | Act::CloseSession | Act::Add | Act::Edit => {}
         }
         vec![]
@@ -263,6 +271,9 @@ impl App {
         }
         if !self.is_drawn(self.focus) {
             self.focus = Focus::Editor;
+        }
+        if let Some(Overlay::Detail(detail)) = &mut self.overlay {
+            detail.scroll = detail.scroll.min(fit.detail_last_scroll);
         }
     }
 

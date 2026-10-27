@@ -1,8 +1,12 @@
-//! SQL colours from the tree-sitter grammar, built on first use so startup never pays for it.
+//! SQL colours from the tree-sitter grammar, built on first use so startup never pays for it, and JSON colours by hand.
 use std::cell::RefCell;
 use std::ops::Range;
 use std::sync::OnceLock;
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
+
+pub(crate) use json::highlight_json_line;
+
+mod json;
 
 /// What a piece of SQL is, as far as colour goes; the theme gives every token a colour.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

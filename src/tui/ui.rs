@@ -1,6 +1,8 @@
 //! Drawing: the frame in the tier's colour, the panes inside it, and the key hints under them.
 use super::app::{App, Fit, Overlay, SessionState, TunnelState};
-use super::{editor_view, finder_view, form_view, help_view, history_view, picker_view, prompt_view, result_view, sidebar_view, theme};
+use super::{
+    detail_view, editor_view, finder_view, form_view, help_view, history_view, picker_view, prompt_view, result_view, sidebar_view, theme,
+};
 use crate::act::{self, Hint};
 use crate::render::printable;
 use ratatui::Frame;
@@ -39,8 +41,9 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> Fit {
     picker_view::draw(f, app);
     history_view::draw(f, app);
     form_view::draw(f, app);
+    let detail_last_scroll = detail_view::draw(f, app);
     help_view::draw(f, app);
-    Fit { grid_rows, has_sidebar }
+    Fit { grid_rows, has_sidebar, detail_last_scroll }
 }
 
 /// The outer frame and its `● name · tier` pill in the tier's colour, so the tier reads without its colour; returns
