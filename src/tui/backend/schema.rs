@@ -6,16 +6,17 @@ use crate::connection::Connection;
 use crate::db::model::{Catalog, Route};
 use crate::db::read_schema_along;
 use crate::tui::app::Incoming;
+use futures_util::FutureExt;
 use std::sync::Arc;
-use tokio::sync::mpsc::UnboundedReceiver;
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 
 /// What reads the schema each time it is asked, along the route the session task says its open session takes.
 #[derive(Debug)]
 pub(super) struct SchemaReader {
     pub(super) connection: Connection,
     pub(super) answers: SessionAnswers,
-    pub(super) asks: UnboundedReceiver<()>,
+    /// Shared with the session link, which wakes the reader at each ask.
+    pub(super) asks: Arc<Notify>,
     pub(super) route: watch::Receiver<Option<Route>>,
 }
 
@@ -23,9 +24,10 @@ impl SchemaReader {
     /// Reads the schema at each ask once the session is open, the asks that came meanwhile served by the same read; a
     /// failed read is answered in its words, and the session stays as it is. Never ends: the session task drops it.
     pub(super) async fn serve(mut self) {
-        while self.asks.recv().await.is_some() {
+        loop {
+            self.asks.notified().await;
             let Some(route) = self.open_route().await else { break };
-            while self.asks.try_recv().is_ok() {}
+            self.drop_asks_served_by_this_read();
             let read = answer(&self.connection, read_schema_along(&self.connection, route).await);
             let catalog = read.as_ref().ok().map(Arc::clone);
             self.answers.say(Incoming::Schema(read));
@@ -34,6 +36,11 @@ impl SchemaReader {
             }
         }
         std::future::pending::<()>().await;
+    }
+
+    /// Forgets an ask that came while the session opened: the read about to start serves it.
+    fn drop_asks_served_by_this_read(&self) {
+        self.asks.notified().now_or_never();
     }
 
     /// Builds the completion index of `catalog` on a blocking thread, and says it.

@@ -105,9 +105,9 @@ A performance step measures before and after, and the MR gives the numbers.
 - [x] `App` and `Form` keep their fields private; the views read them through methods, and `App::paste` is one `match` on the overlay
 - [ ] Newtypes where the rules want them: `Column.type_name` as `TypeName`, the column name and the parameter values; the form's `(Slot, String)` alias becomes a named struct, and stops sharing the `Refusal` name with `db::guard`
 - [x] `db/mod.rs` split under 800 lines along a concern
-- [ ] `tui/backend/session.rs` split under 800 lines along a concern
+- [x] `tui/backend/session.rs` split under 800 lines along a concern
 - [ ] `Act::ALL` as a plain array; the `after` chain and its `const fn` loops go
-- [ ] The session task: an explicit state in place of the pending `Option<Woken>`, a `Notify` for schema asks, `Cancels.latest` private, no silent `self.session.as_mut()?`
+- [x] The session task: an explicit state in place of the pending `Option<Woken>`, a `Notify` for schema asks, `Cancels.latest` private, no silent `self.session.as_mut()?`
 - [ ] A write statement knows whether the user's transaction is open without the `SAVEPOINT` probe's two round trips
 - [ ] `db::guard` lets `EXPLAIN ANALYZE` of a read through; `pgbg doctor` warns when the role can call what a read-only transaction does not stop (`pg_signal_backend`, `dblink`, `set_config`)
 - [x] Performance: one `pg_settings` query reads both timeouts when a session opens

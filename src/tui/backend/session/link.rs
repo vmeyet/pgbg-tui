@@ -9,9 +9,10 @@ use crate::signal::STOP_WAIT;
 use crate::tui::app::{Answer, Incoming, RunId, SessionId};
 use crate::tui::backend::schema::SchemaReader;
 use crate::tui::backend::send;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::{self, UnboundedSender};
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 use tokio::task::JoinHandle;
 
 /// Where the answers of one session go, each tagged with its connection and its `SessionId`.
@@ -34,7 +35,8 @@ pub(in crate::tui::backend) struct SessionLink {
     pub(in crate::tui::backend) session: SessionId,
     jobs: UnboundedSender<Job>,
     cancels: UnboundedSender<RunId>,
-    schema_asks: UnboundedSender<()>,
+    /// Shared with the schema reader, which it wakes at each ask.
+    schema_asks: Arc<Notify>,
     /// What the task has on the server and no cancel reached yet, shared with the task; an abort cancels it first.
     pub(in crate::tui::backend) running: watch::Receiver<Option<CancelToken>>,
     task: JoinHandle<()>,
@@ -72,11 +74,12 @@ impl SessionLink {
     ) -> Self {
         let (jobs, queue) = mpsc::unbounded_channel();
         let (cancels, cancelled) = mpsc::unbounded_channel();
-        let (schema_asks, asks) = mpsc::unbounded_channel();
+        let schema_asks = Arc::new(Notify::new());
         let (on_server, running) = watch::channel(None);
         let (route, open_route) = watch::channel(None);
         let session = answers.session;
-        let reader = SchemaReader { connection: connection.clone(), answers: answers.clone(), asks, route: open_route };
+        let reader =
+            SchemaReader { connection: connection.clone(), answers: answers.clone(), asks: Arc::clone(&schema_asks), route: open_route };
         let (cancelled, on_server) = (Cancels::new(cancelled), OnServer::new(on_server));
         let task = SessionTask { connection, tunnel: None, session: None, route, cancelled, on_server, answers, history, idle_limit };
         Self { session, jobs, cancels, schema_asks, running, task: tokio::spawn(task.serve(queue, reader)) }
@@ -92,9 +95,7 @@ impl SessionLink {
     /// Reads the schema on a second session along the route of this one, opening this one first unless it is open.
     pub(in crate::tui::backend) fn read_schema(&self) {
         self.send(Job::Open);
-        if self.schema_asks.send(()).is_err() {
-            tracing::warn!("the session task is gone: the schema is not read");
-        }
+        self.schema_asks.notify_one();
     }
 
     /// Cancels `run` if the session is on it, or keeps it from the server if it has not started; a later run is never touched.
