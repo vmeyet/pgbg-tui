@@ -97,6 +97,7 @@ pub(in crate::tui) mod tests {
     use super::super::{Answer, Fit, Incoming, QueryAnswer, Room, Run, RunId, View};
     use super::*;
     use crate::chart::Series;
+    use crate::format::Format;
     use crate::query::{QueryPath, Source};
     use crossterm::event::{KeyCode, KeyModifiers};
     use std::time::Duration;
@@ -289,6 +290,14 @@ pub(in crate::tui) mod tests {
         app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result: orders(), took: Duration::from_millis(38) }));
         let Run::Done { view, .. } = &app.sheet().run else { panic!("no result") };
         assert_eq!(view, &View::Grid);
+    }
+
+    #[test]
+    fn a_format_header_opens_the_result_of_the_query_in_its_formats() {
+        let (mut app, _) = opened_and_run("-- format: total=bytes\nSELECT id, total, customer FROM orders");
+        app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result: orders(), took: Duration::from_millis(38) }));
+        let Run::Done { grid, .. } = &app.sheet().run else { panic!("no result") };
+        assert_eq!(grid.formats, [Format::Raw, Format::Bytes, Format::Raw]);
     }
 
     #[test]

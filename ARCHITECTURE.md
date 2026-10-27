@@ -27,7 +27,7 @@ When a boundary or a flow changes, change this page in the same MR.
 | `db/guard.rs` | Classifies a statement before it is sent: read, write, or more than one statement; `admit` turns a statement and its `Params` into an `Admitted`, the only kind a session runs, refused when the count of values is not the count of its `$n`; `statement_at` finds the statement under the editor's cursor with the same tokenizer |
 | `db/bind.rs` | `AsText`, the one `ToSql` a value is bound through: any parameter type, sent as text for the server to read with that type's input, `None` as NULL |
 | `db/decode.rs` | Wire values to `Value`, by column type, a domain by its base type; a value it cannot decode is `Unsupported`, never an error |
-| `query/` | Saved queries: the `.pgbg/queries/` tree, the header (`-- name:`, `-- connection:`, `-- chart:`, and `-- param:`, `-- format:` (planned)), load, and save |
+| `query/` | Saved queries: the `.pgbg/queries/` tree, the header (`-- name:`, `-- connection:`, `-- chart:`, `-- format:`, and `-- param:` (planned)), load, and save |
 | `query/params.rs` | Parameters, pure: the `{{name}}` of a statement turned into `$n`, and the values `Given` by name (`--param`, a `--params-file` line, the parameter bar (planned)) into the `Params` its run binds, then `admit`ted by the guard |
 | `complete/` (planned) | Completion, pure: the `Index` built once from a `Schema` (names lowercased and sorted, so a prefix is a binary search; names in the session's `current_schemas(false)` bare, the others as `schema.table`), the `Context` at the cursor from the tokens of the statement under it, never of the whole editor (a table after `FROM` or `JOIN`, a column of `orders` after `o.` when `FROM orders o`, a keyword at a statement's start), and the ranked candidates |
 | `ai/` (planned) | Asking a command for SQL, pure: the `Prompt` (instruction, statement, schema slice, tier) as the text on the command's stdin, and its answer read back as statements; the backend runs the command |
@@ -41,7 +41,7 @@ When a boundary or a flow changes, change this page in the same MR.
 | `tui/app/` | `App`, the pure state machine: keys in, `Action`s out, `Answer`s applied to the sheet of the connection that gave them, a saved query read to the sheet that asked for it, a config answer to the form that sent its `ConfigChangeId` (else to the status line); `protocol.rs` holds what the app and the backend say to each other, `sheet.rs` one connection's state, `search.rs` the fzf-narrowed list the finder and the picker share; one `Overlay` at most (help, finder, picker, connection form, row detail, the copy format question, the completion list and the `ctrl-t` table finder (planned)) takes the keys; the sidebar shows the queries or the schema (planned), and the parameter bar sits above the editor (planned) |
 | `tui/backend/` | `Backend::dispatch` hands each `Action` over without waiting, to one part per concern: sessions (`session.rs`: one per connection opened, a task owns each one, runs its statements in turn, takes cancels by `RunId` while a statement runs, serves the pages of a result while its portal is open (`paging.rs`), reads the schema beside its statements (`schema.rs`), and says when the session is lost), queries, the config (one change at a time, answered in the order asked, through `config/` on a blocking thread, then read back; a typed password goes to the keychain only once the config took the change, and moves back to the form when it did not; once it did, the connections are read back whatever the keychain says, and a keychain step that failed is a warning in the status line), history (each run added on a blocking thread once answered, best effort and logged; read for `ctrl-r` the same way), and the clipboard (a whole result's text built on a blocking thread and handed back to the app as `Answer::Exported`; `pbcopy` in a task, while the loop sends the terminal's OSC 52 through vtui for a copy of 100 KB at most, so a copy reaches one or the other inside tmux or over ssh) |
 | `tui/ui.rs`, `tui/*_view.rs` | Drawing: layout in `ui.rs`, one view module per pane or modal |
-| `tui/grid_view/` | The results grid: only the visible rows and columns are drawn, the cursor's cell lit, each cell through its column's format (planned) |
+| `tui/grid_view/` | The results grid: only the visible rows and columns are drawn, the cursor's cell lit, each cell through its column's format and the clock the loop read for the frame |
 | `tui/chart_view/` | Draws a `Series` with ratatui's `BarChart` (bars across, so text labels stay readable) and `Chart` (braille line), one file per kind; a legend in vtui's user colours |
 | `tui/theme.rs` | pgbg's `Theme`: vtui's palette, read through `Deref`, with the tier colours and a production colour of its own (`danger` leaning to magenta), so a production frame never reads as an error drawn in `danger`; the SQL token colours are vtui's `Syntax` |
 | `vtui` (git dependency) | Shared with the sibling TUIs: the terminal in raw mode (`Screen`), the palette (`Theme`) and its code colours (`Syntax`), the input box (`Field`) and its cleaned paste, the `ctrl-k` palette and its `Pick` rows, the `?` overlay, fzf-style matching |
@@ -134,11 +134,13 @@ Asking a command for SQL (planned):
 5. The idle ghost, when `[ai] ghost = true`, asks for the rest of the statement after 1 s without a key, the local completion's ghost first; any key kills that command, and its answer shows only while the text is the one it was asked for.
 6. The log says which program ran, how long, how it exited and how many bytes went each way; never the prompt, the instruction or the answer.
 
-Formatting a cell (planned):
+Formatting a cell:
 
 1. A result opens with every column in the format the header's `-- format:` names, else the config's `[display] format` (`raw` or `readable`), else raw.
 2. `f` on a column steps through its kind's formats, `F` sets every column raw or readable; the sheet keeps the choice by column index with the result, and the grid widths are measured again on the first page.
-3. The loop passes the clock and the local time zone to the drawing, so `format/` stays pure; a relative time redraws each minute while one is shown.
+3. The loop reads the clock and the local time zone before each frame and hands them to the app as a `Clock`, so the app and `format/` stay pure; a relative time redraws each minute while one is shown.
+   A header format a column's kind does not allow is left out, and a header name matches a column whatever its case.
+   The row's detail shows values raw and whole.
 4. Formats are for reading only: `pgbg run`, `--json` and a copy give raw values.
 
 Charting a result:
@@ -212,7 +214,7 @@ On a connection that allows writes, a statement runs as typed, except that one r
 - Listing walks the folders on a blocking thread, keeps only plain files, and never follows a link, so nothing outside the root is listed.
 - Opening reads the file through `tokio::fs`, again only when it is a plain file whose real path stays inside its root, and only up to 1 MiB; a bigger one is too big for the editor.
 - A query path is drawn with its control characters and text-reversing marks escaped.
-- An optional header of `--` lines sets the name, the default connection, the chart, and the parameters and formats (planned); a file without a header is still a query.
+- An optional header of `--` lines sets the name, the default connection, the chart, the formats, and the parameters (planned); a file without a header is still a query.
 - The header is read again whenever the editor's text changes; a line it cannot read is a warning in the editor's title, never a failure.
 - `-- connection:` only suggests: the editor's title names it, in red when it is a production connection, and a statement always runs on the session on screen.
 - The file is the source of truth: pgbg reads it when it is opened and writes it back when it is saved, nothing else.

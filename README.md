@@ -28,6 +28,7 @@ A connection with a tunnel needs `sslmode=require`, or `tls = "off"` on purpose,
 For ssh, keep `ControlPath=none`, so the forward dies with pgbg instead of living on in a shared connection, and `ExitOnForwardFailure=yes`, so ssh stops when it cannot take the port.
 An optional `before` command, such as one that wakes the bastion, runs once before each tunnel starts, so it must be safe to run twice.
 Each session gets a statement timeout from its tier: none on local, a minute on staging, 30 seconds on production; `statement_timeout = "2min"` on a connection sets its own, and a stricter one the server sets is kept.
+`[display]` with `format = "readable"` opens every result in the TUI readable, as `F` does; the default is `raw`.
 `pgbg connection add|edit|remove` and `pgbg password set <connection>` write this file for you and keep your comments.
 
 ## Check a connection
@@ -60,6 +61,7 @@ ORDER BY 1;
 ```
 
 In the TUI, `ctrl-p` finds a query by a few letters of its path and opens it in the editor.
+`-- format: created_at=relative size=bytes` opens those columns readable; the formats are `raw`, `local`, `relative`, `grouped`, `bytes` and `short`.
 Queries of your own, for every project, go under `pgbg/queries/` in your config folder.
 
 ## License

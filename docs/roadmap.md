@@ -93,8 +93,8 @@ The MR that ships a step ticks its box.
 ## 14. Formats
 
 - [x] `format/`: each column kind's formats (timestamps local or relative, numbers grouped or as a size, UUID short, bytes as a size), pure, the clock passed in
-- [ ] The grid draws its visible cells through them: `f` cycles the column under the cursor, `F` sets every column raw or readable
-- [ ] `-- format: created_at=relative size=bytes` in the header, and a default in `config.toml`; raw when neither says
+- [x] The grid draws its visible cells through them: `f` cycles the column under the cursor, `F` sets every column raw or readable
+- [x] `-- format: created_at=relative size=bytes` in the header, and a default in `config.toml`; raw when neither says
 
 ## 15. Asking a command for SQL
 

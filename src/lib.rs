@@ -9,7 +9,6 @@ mod db;
 mod export;
 #[cfg(test)]
 mod fixtures;
-#[cfg_attr(not(test), expect(dead_code, reason = "the grid draws its cells through formats in the next step"))]
 mod format;
 mod groups;
 mod history;

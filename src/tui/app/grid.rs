@@ -1,6 +1,8 @@
-//! The results grid's state: the cursor's cell, the first row and column in view, and each column's width.
+//! The results grid's state: the cursor's cell, the first row and column in view, and each column's format and width.
 use crate::db::model::ResultSet;
+use crate::format::{self, Format, Mode};
 use crate::render;
+use chrono::Local;
 
 /// No column is drawn wider, so one long text never hides the others.
 const MAX_COLUMN_WIDTH: usize = 40;
@@ -16,6 +18,21 @@ pub(in crate::tui) struct Room {
     pub(in crate::tui) columns: usize,
 }
 
+/// The moment and the local time zone the loop read for the frame.
+pub(in crate::tui) type Clock = format::Clock<Local>;
+
+/// The clock before the loop reads one: the app never reads it itself.
+pub(in crate::tui) const fn clock_at_epoch() -> Clock {
+    Clock { now: chrono::DateTime::UNIX_EPOCH, zone: Local }
+}
+
+/// How cells read: the mode a new result opens in, and the clock of the frame.
+#[derive(Clone, Copy, Debug)]
+pub(in crate::tui) struct Reading {
+    pub(in crate::tui) mode: Mode,
+    pub(in crate::tui) clock: Clock,
+}
+
 /// A move of the grid's cursor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Move {
@@ -29,9 +46,12 @@ pub(super) enum Move {
     Right,
 }
 
-/// Where the grid's cursor stands in a result; the widths are measured once, when the result arrives.
+/// Where the grid's cursor stands in a result and how its columns read; the widths are measured on the first page, when
+/// the result arrives and when a format changes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::tui) struct Grid {
+    /// Each column's format, by index.
+    pub(in crate::tui) formats: Vec<Format>,
     /// Each column's width in terminal columns: its header or its widest sampled cell, capped.
     pub(in crate::tui) widths: Vec<usize>,
     /// The cursor's row.
@@ -45,10 +65,35 @@ pub(in crate::tui) struct Grid {
 }
 
 impl Grid {
-    /// The grid on `result`, its cursor on the first row.
-    pub(in crate::tui) fn new(result: &ResultSet) -> Self {
-        let widths = (0..result.columns().len()).map(|c| column_width(result, c)).collect();
-        Self { widths, row: 0, column: 0, top: 0, left: 0 }
+    /// The grid on `result`, each column in its format of `formats`, its cursor on the first row.
+    pub(in crate::tui) fn new(result: &ResultSet, formats: Vec<Format>, clock: &Clock) -> Self {
+        let widths = column_widths(result, &formats, clock);
+        Self { formats, widths, row: 0, column: 0, top: 0, left: 0 }
+    }
+
+    /// The grid on `result`, every column raw.
+    #[cfg(test)]
+    pub(in crate::tui) fn raw(result: &ResultSet) -> Self {
+        Self::new(result, vec![Format::Raw; result.columns().len()], &clock_at_epoch())
+    }
+
+    /// Puts the cursor's column in the next format its kind allows.
+    pub(super) fn step_format(&mut self, result: &ResultSet, clock: &Clock) {
+        let Some(column) = result.columns().get(self.column) else { return };
+        let mut formats = self.formats.clone();
+        formats[self.column] = formats[self.column].next(&column.kind);
+        self.set_formats(formats, result, clock);
+    }
+
+    /// Puts every column raw, or each in its readable format when all are raw already.
+    pub(super) fn switch_every_format(&mut self, result: &ResultSet, clock: &Clock) {
+        let mode = if self.formats.iter().all(|&format| format == Format::Raw) { Mode::Readable } else { Mode::Raw };
+        self.set_formats(format::opening(result.columns(), &[], mode), result, clock);
+    }
+
+    fn set_formats(&mut self, formats: Vec<Format>, result: &ResultSet, clock: &Clock) {
+        self.widths = column_widths(result, &formats, clock);
+        self.formats = formats;
     }
 
     /// Moves the cursor by `step` in `result`, keeping its cell in the `room` the grid has.
@@ -97,10 +142,14 @@ impl Grid {
     }
 }
 
-fn column_width(result: &ResultSet, column: usize) -> usize {
+fn column_widths(result: &ResultSet, formats: &[Format], clock: &Clock) -> Vec<usize> {
+    formats.iter().enumerate().map(|(column, &format)| column_width(result, column, format, clock)).collect()
+}
+
+fn column_width(result: &ResultSet, column: usize, format: Format, clock: &Clock) -> usize {
     let header = render::width(&render::printable(&result.columns()[column].name));
     let cells = result.rows().iter().take(WIDTH_SAMPLE_ROWS).filter_map(|row| row.get(column));
-    let widest_cell = cells.map(|value| render::width(&render::cell_text(value, MAX_COLUMN_WIDTH))).max().unwrap_or(0);
+    let widest_cell = cells.map(|value| render::width(&format::cell(value, format, clock, MAX_COLUMN_WIDTH))).max().unwrap_or(0);
     header.max(widest_cell).min(MAX_COLUMN_WIDTH)
 }
 
@@ -124,7 +173,7 @@ mod tests {
 
     fn stepped_in(rows: usize, steps: &[Move], room: Room) -> Grid {
         let result = result(rows);
-        let mut grid = Grid::new(&result);
+        let mut grid = Grid::raw(&result);
         for &step in steps {
             grid.step(step, &result, room);
         }
@@ -134,13 +183,45 @@ mod tests {
     #[test]
     fn a_column_is_as_wide_as_its_header_or_its_widest_cell() {
         let result = result(1).with_cell(0, 2, Value::Text("Zoë Nakamura".into()));
-        assert_eq!(Grid::new(&result).widths, [2, 5, 12]);
+        assert_eq!(Grid::raw(&result).widths, [2, 5, 12]);
+    }
+
+    fn stepped_format(result: &ResultSet, steps: usize) -> Grid {
+        let mut grid = Grid::raw(result);
+        (0..steps).for_each(|_| grid.step_format(result, &clock_at_epoch()));
+        grid
+    }
+
+    #[test]
+    fn a_format_step_moves_the_cursors_column_to_its_next_format_and_measures_it_again() {
+        let result = result(1).with_cell(0, 0, Value::Int(1_048_576));
+        let grid = stepped_format(&result, 2);
+        assert_eq!((grid.formats[0], grid.widths[0]), (Format::Bytes, "1.0 MiB".len()));
+    }
+
+    #[test]
+    fn switching_every_format_puts_raw_columns_readable_then_raw_again() {
+        let result = result(1);
+        let clock = clock_at_epoch();
+        let mut grid = Grid::raw(&result);
+        grid.switch_every_format(&result, &clock);
+        assert_eq!(grid.formats, [Format::Grouped; 3]);
+        grid.switch_every_format(&result, &clock);
+        assert_eq!(grid.formats, [Format::Raw; 3]);
+    }
+
+    #[test]
+    fn switching_every_format_puts_a_grid_with_one_readable_column_raw() {
+        let result = result(1);
+        let mut grid = stepped_format(&result, 1);
+        grid.switch_every_format(&result, &clock_at_epoch());
+        assert_eq!(grid.formats, [Format::Raw; 3]);
     }
 
     #[test]
     fn a_long_cell_is_capped() {
         let result = result(1).with_cell(0, 2, Value::Text("n".repeat(300)));
-        assert_eq!(Grid::new(&result).widths[2], MAX_COLUMN_WIDTH);
+        assert_eq!(Grid::raw(&result).widths[2], MAX_COLUMN_WIDTH);
     }
 
     #[test]

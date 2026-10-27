@@ -1,6 +1,7 @@
-//! The header of a saved query: its leading `--` lines, `-- name:`, `-- connection:` and `-- chart:`.
+//! The header of a saved query: its leading `--` lines, `-- name:`, `-- connection:`, `-- chart:` and `-- format:`.
 use crate::chart::ChartSpec;
 use crate::connection::ConnectionName;
+use crate::format::{self, ColumnFormat};
 use crate::render;
 
 /// What the header says. A query may come from a repository nobody checked, so a line it cannot read is a warning,
@@ -11,6 +12,8 @@ pub(crate) struct Header {
     /// The connection the query was written for; only a suggestion, the query runs on the session on screen.
     pub(crate) connection: Option<ConnectionName>,
     pub(crate) chart: Option<ChartSpec>,
+    /// The format each column it names opens in.
+    pub(crate) formats: Vec<ColumnFormat>,
     pub(crate) warnings: Vec<String>,
 }
 
@@ -31,6 +34,10 @@ impl Header {
             "chart" => match value.parse() {
                 Ok(chart) => Self { chart: Some(chart), ..self },
                 Err(err) => self.warned(&format!("chart: {err}")),
+            },
+            "format" => match format::parse_column_formats(value) {
+                Ok(formats) => Self { formats, ..self },
+                Err(err) => self.warned(&format!("format: {err}")),
             },
             unknown => self.warned(&format!("unknown header key `{unknown}`")),
         }
@@ -54,6 +61,7 @@ fn key_line(comment: &str) -> Option<(&str, &str)> {
 mod tests {
     use super::*;
     use crate::chart::ChartKind;
+    use crate::format::Format;
 
     #[test]
     fn a_header_sets_the_name_the_connection_and_the_chart() {
@@ -62,6 +70,19 @@ mod tests {
         assert_eq!(header.connection.map(|name| name.to_string()).as_deref(), Some("shop"));
         assert_eq!(header.chart.map(|chart| chart.kind), Some(ChartKind::Bar));
         assert_eq!(header.warnings, Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_header_names_the_format_of_its_columns() {
+        let header = Header::parse("-- format: created_at=relative size=bytes\nSELECT 1");
+        let formats: Vec<(&str, Format)> = header.formats.iter().map(|named| (named.column.as_str(), named.format)).collect();
+        assert_eq!(formats, [("created_at", Format::Relative), ("size", Format::Bytes)]);
+    }
+
+    #[test]
+    fn a_format_header_that_does_not_parse_is_a_warning() {
+        let header = Header::parse("-- format: created_at=pretty\nSELECT 1");
+        assert_eq!((header.formats, header.warnings.len()), (vec![], 1));
     }
 
     #[test]
