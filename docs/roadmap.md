@@ -115,16 +115,20 @@ A performance step measures before and after, and the MR gives the numbers.
 - [x] Performance: a result's cells cost less memory (`Box<str>` text, or rows stored by column), measured on 10 000 rows of 50 columns
 - [x] Performance: a statement inside a transaction the user began reads its rows through a portal too, so the server sends nothing past the cap
 
-## 16. Asking a command for SQL
+## 16. Confirm a write
+
+- [ ] A statement the guard classifies as a write asks before it is sent, on every tier: the footer says its verb and target (`DELETE from orders?`), `y` sends it, any other key cancels and nothing is sent; only a connection that allows writes ever gets that far, a read-only one still refuses it
+
+## 17. Asking a command for SQL
 
 Needs step 12: the lexer, the statement under the cursor and the schema's index.
 
-- [ ] `ai/`: the prompt built from the instruction, the statement under the cursor (string literals masked, parameters as `{{name}}`), the schema slice and the tier, capped at 16 KiB, and refused for a statement holding a password; the answer read back as SQL statements with its literals put back; pure, tested
-- [ ] `[ai] command` in `config.toml`, `ai = "on"` or `"off"` on a connection (off on production and on writes allowed unless it says on); the command run from an empty temp folder with a cleared environment (`PATH`, `HOME`, `LANG`, `TERM`, `[ai] env`, never a password variable), in its own process group through a `groups.rs` helper that writes stdin and reads stdout at once, cut at 64 KiB, 60 s at most, `Esc` kills it; tested with a fake command
-- [ ] `ctrl-g` asks: an instruction on the footer line, then the answer shown as a diff of the statement under the cursor, a write said so in the failure colour; `tab` takes it through the editor's paste, `esc` drops it, `⏎` does nothing; nothing runs by itself
+- [ ] `ai/`: the prompt built from the instruction, the statement under the cursor (every string and number literal masked, comments stripped, parameters as `{{name}}`), the schema slice (names and types) and the tier, capped at 16 KiB, and refused for a statement holding a password; the answer read back as SQL statements with its literals put back; pure, tested
+- [ ] `[ai] command` in `config.toml`, `ai = "on"` or `"off"` on a connection (on unless it says off, whatever its tier); the command run from an empty temp folder with a cleared environment (`PATH`, `HOME`, `LANG`, `TERM`, `[ai] env`, never a password variable), in its own process group through a `groups.rs` helper that writes stdin and reads stdout at once, cut at 64 KiB, 60 s at most, `Esc` kills it; tested with a fake command
+- [ ] `ctrl-g` asks: an instruction on the footer line, then the answer shown as a diff of the statement under the cursor, a write said so in the failure colour and confirmed as step 16 says when it runs; `tab` takes it through the editor's paste, `esc` drops it, `⏎` does nothing; nothing runs by itself
 - [ ] The idle ghost, off by default (`[ai] ghost = true`): after 1 s without a key, the rest of the statement asked for and dimmed after the cursor, the local ghost first; a key kills the command
 
 ## Later
 
-- Writes on connections that allow them, with a preview and a typed confirmation
+- A preview of what a write would change, before its confirmation
 - More chart kinds: a new `ChartKind` variant and one file in `chart/` and `tui/chart_view/`
