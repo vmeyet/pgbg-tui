@@ -1,7 +1,8 @@
 //! A result shown a page at a time: its portal stays open between pages, in its `BEGIN READ ONLY` transaction.
 use super::guard::{Admitted, Mode};
 use super::model::{Column, Extent, Page, ResultSet};
-use super::{FetchSize, Isolation, Marks, Session, begin_read_only, bind_portal, columns, fetch_page, roll_back, why_ended};
+use super::run::{FetchSize, begin_read_only, bind_portal, columns, fetch_page};
+use super::{Isolation, Marks, Session, roll_back, why_ended};
 use anyhow::Result;
 use std::time::Duration;
 use tokio::sync::watch;
@@ -111,8 +112,9 @@ async fn bind(transaction: &Transaction<'_>, admitted: &Admitted) -> Result<Boun
 mod tests {
     use super::*;
     use crate::connection::WritePolicy;
+    use crate::db::guard;
     use crate::db::model::{Params, Route, Statement, Value};
-    use crate::db::{ROW_CAP, guard};
+    use crate::db::run::ROW_CAP;
     use crate::fixtures;
 
     async fn session(extra: &str) -> Session {
@@ -136,7 +138,7 @@ mod tests {
     async fn a_read_only_result_starts_with_its_first_page_and_keeps_its_portal_open() {
         let mut session = session("").await;
         let Started { result, rest } = session.start(&read_only(&numbers_up_to(1200))).await.unwrap();
-        assert_eq!((result.rows().len(), result.extent()), (PAGE_ROWS.0 as usize, Extent::More));
+        assert_eq!((result.rows().len(), result.extent()), (PAGE_ROWS.rows() as usize, Extent::More));
         assert!(rest.is_some());
     }
 
