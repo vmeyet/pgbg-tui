@@ -157,8 +157,12 @@ impl App {
         vec![]
     }
 
-    /// Takes text the terminal pasted: the editor or the finder gets it whole, so its line ends run nothing.
+    /// Takes text the terminal pasted: the editor, the finder or the form gets it whole, so its line ends run nothing.
     pub(super) fn paste(&mut self, text: &str) -> Vec<Action> {
+        if let Some(Overlay::Form(form)) = self.overlay.as_mut() {
+            form.paste(text);
+            return vec![];
+        }
         if let Some(Overlay::Finder(finder)) = self.overlay.as_mut() {
             finder.paste(text, &self.queries.all);
             return vec![];
