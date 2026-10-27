@@ -44,6 +44,7 @@ zeroize = "1.8"
 
 [dev-dependencies]
 insta = "1"
+strum = { version = "0.28", features = ["derive"] }
 tokio = { version = "1", features = ["test-util"] }
 
 [profile.release]
