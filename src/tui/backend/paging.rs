@@ -1,11 +1,10 @@
 //! A result's portal held open across jobs: the session task serves its pages here until the portal closes.
-use super::session::{Cancels, Job, Next, OnServer, SessionAnswers, Woken, ended, warn_if_still_running};
+use super::session::{Cancels, Job, Mailbox, Next, OnServer, SessionAnswers, Woken, ended, warn_if_still_running};
 use crate::db::model::{CancelToken, Extent, Page};
 use crate::db::{Fetched, Pages};
 use crate::tui::app::{Incoming, RunId};
 use crate::tunnel::{Died, Tunnel};
 use std::time::Duration;
-use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{Instant, sleep_until};
 
 /// How long a portal waits for the grid to ask for its next page before it is closed: its transaction holds a snapshot,
@@ -17,11 +16,8 @@ pub(super) struct Paging<'a, 's> {
     pub(super) pages: Pages<'s>,
     pub(super) run: RunId,
     pub(super) token: CancelToken,
-    pub(super) queue: &'a mut UnboundedReceiver<Job>,
-    pub(super) cancelled: &'a mut Cancels,
-    pub(super) on_server: &'a OnServer,
+    pub(super) mailbox: &'a mut Mailbox,
     pub(super) tunnel: Option<&'a mut Tunnel>,
-    pub(super) answers: &'a SessionAnswers,
     pub(super) idle_limit: Duration,
 }
 
@@ -81,7 +77,8 @@ fn idle_limit_before_the_server(idle_limit: Duration, on_server: Duration) -> Du
 /// limit, the session closing or its link or tunnel ending; a close before the last page sends an empty `Cut` page.
 /// Returns what the session task does next.
 pub(super) async fn serve_pages(paging: Paging<'_, '_>) -> Next {
-    let Paging { mut pages, run, token, queue, cancelled, on_server, mut tunnel, answers, idle_limit } = paging;
+    let Paging { mut pages, run, token, mailbox, mut tunnel, idle_limit } = paging;
+    let Mailbox { queue, cancelled, on_server, answers } = mailbox;
     let outbox = Outbox { answers, run };
     let idle_limit = idle_limit_before_the_server(idle_limit, pages.idle_limit_on_server());
     let mut deadline = Instant::now() + idle_limit;
@@ -188,7 +185,7 @@ mod tests {
     use crate::query::params::ParamInput;
     use crate::tui::app::{Answer, SessionId};
     use std::path::PathBuf;
-    use tokio::sync::mpsc;
+    use tokio::sync::mpsc::{self, UnboundedReceiver};
 
     const SLOW_AFTER_THE_FIRST_PAGE: &str = "SELECT n, pg_sleep(CASE WHEN n > 500 THEN 30 ELSE 0 END) FROM generate_series(1, 1000) AS n";
 
