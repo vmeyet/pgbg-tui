@@ -12,7 +12,7 @@ use tokio::time::timeout;
 use tokio_postgres::config::SslMode;
 use tokio_postgres::error::{ErrorPosition, SqlState};
 use tokio_postgres::tls::MakeTlsConnect;
-use tokio_postgres::{Client, Config, NoTls, Portal, RowStream, Socket, Statement as Prepared, Transaction};
+use tokio_postgres::{Client, Config, IsolationLevel, NoTls, Portal, RowStream, Socket, Statement as Prepared, Transaction};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
 mod bind;
@@ -114,6 +114,13 @@ impl ReadLimits {
     }
 }
 
+/// What a read-only transaction sees: each statement the database as it is then, or all of them one snapshot.
+#[derive(Clone, Copy, Debug)]
+enum Isolation {
+    EachStatement,
+    OneSnapshot,
+}
+
 /// What the session's own statements left behind them.
 #[derive(Debug, Default)]
 struct Marks {
@@ -199,7 +206,7 @@ impl Session {
     }
 
     async fn run_read_only(&mut self, admitted: &Admitted) -> Result<ResultSet> {
-        self.read_only(async |transaction| {
+        self.read_only(Isolation::EachStatement, async |transaction| {
             let statement = bind::prepare(transaction, admitted).await?;
             let portal = bind_portal(transaction, &statement, &admitted.params).await?;
             Ok(ResultSet::new(columns(&statement), fetch_capped(transaction, &portal).await?))
@@ -207,9 +214,17 @@ impl Session {
         .await
     }
 
-    /// `read` inside `BEGIN READ ONLY`, always rolled back.
-    async fn read_only<T>(&mut self, read: impl AsyncFnOnce(&Transaction<'_>) -> Result<T>) -> Result<T> {
-        let transaction = begin_read_only(&mut self.client, &self.limits).await?;
+    /// `read` inside `BEGIN READ ONLY` at `isolation`, always rolled back; the session is mid-statement meanwhile, so
+    /// one dropped then cuts its link.
+    async fn read_only<T>(&mut self, isolation: Isolation, read: impl AsyncFnOnce(&Transaction<'_>) -> Result<T>) -> Result<T> {
+        let was_mid_statement = std::mem::replace(&mut self.marks.is_mid_statement, true);
+        let result = self.read_only_marked(isolation, read).await;
+        self.marks.is_mid_statement = was_mid_statement;
+        result
+    }
+
+    async fn read_only_marked<T>(&mut self, isolation: Isolation, read: impl AsyncFnOnce(&Transaction<'_>) -> Result<T>) -> Result<T> {
+        let transaction = begin_read_only(&mut self.client, &self.limits, isolation).await?;
         let result = read(&transaction).await;
         roll_back(transaction, &mut self.marks).await?;
         result
@@ -313,8 +328,12 @@ async fn idle_timeout(client: &Client) -> Result<IdleTimeout> {
 }
 
 /// `BEGIN READ ONLY`, then the transaction's own limits.
-async fn begin_read_only<'c>(client: &'c mut Client, limits: &ReadLimits) -> Result<Transaction<'c>> {
-    let transaction = client.build_transaction().read_only(true).start().await.map_err(server_error)?;
+async fn begin_read_only<'c>(client: &'c mut Client, limits: &ReadLimits, isolation: Isolation) -> Result<Transaction<'c>> {
+    let level = match isolation {
+        Isolation::EachStatement => IsolationLevel::ReadCommitted,
+        Isolation::OneSnapshot => IsolationLevel::RepeatableRead,
+    };
+    let transaction = client.build_transaction().read_only(true).isolation_level(level).start().await.map_err(server_error)?;
     transaction.batch_execute(&limits.sql()).await.map_err(server_error).context("setting the transaction's limits")?;
     Ok(transaction)
 }
@@ -396,6 +415,18 @@ mod tests {
     use std::net::Ipv4Addr;
     use std::time::Duration;
     use url::Url;
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_read_on_one_snapshot_runs_in_repeatable_read() {
+        let mut session = session(WritePolicy::ReadOnly).await;
+        let isolation = session
+            .read_only(Isolation::OneSnapshot, async |transaction| {
+                Ok(transaction.query_one("SHOW transaction_isolation", &[]).await?.get::<_, String>(0))
+            })
+            .await;
+        assert_eq!(isolation.unwrap(), "repeatable read");
+    }
 
     async fn session(writes: WritePolicy) -> Session {
         let writes = if writes == WritePolicy::Allowed { "allowed" } else { "read-only" };

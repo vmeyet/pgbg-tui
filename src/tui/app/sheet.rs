@@ -190,7 +190,7 @@ impl Sheet {
     }
 
     /// Asks for the schema again, unless a read is on its way, the session is closed, or the connection says
-    /// `schema = "off"`.
+    /// `schema = "off"`; a failed session opens again for it.
     pub(super) fn read_schema_again(&mut self) -> Vec<Action> {
         let is_off = self.connection.schema() == SchemaReading::Off;
         let is_closed = self.session == SessionState::Closed;
@@ -198,7 +198,17 @@ impl Sheet {
             return vec![];
         }
         self.schema = SchemaState::Reading;
+        if matches!(self.session, SessionState::Failed(_)) {
+            self.session = SessionState::Opening;
+        }
         vec![Action::ReadSchema { connection: self.name().clone(), session: self.session_id }]
+    }
+
+    /// Fails a read waiting on a session that did not open or was lost, so it can be asked again.
+    fn fail_schema_read(&mut self, why: &str) {
+        if self.schema == SchemaState::Reading {
+            self.schema = SchemaState::Failed(why.to_owned());
+        }
     }
 
     /// Fails the running statement in `why`: the session it ran on is gone, and its answer with it.
@@ -282,8 +292,14 @@ impl Sheet {
         match incoming {
             Incoming::Opened | Incoming::NotOpened(_) | Incoming::Closed(_) | Incoming::Tunnel(_) | Incoming::Schema(_) if is_closed => {}
             Incoming::Opened => self.session = SessionState::Open,
-            Incoming::NotOpened(err) => self.session = SessionState::Failed(err),
-            Incoming::Closed(why) => self.session = SessionState::Failed(format!("{LOST_SESSION}: {why}")),
+            Incoming::NotOpened(err) => {
+                self.fail_schema_read(&err);
+                self.session = SessionState::Failed(err);
+            }
+            Incoming::Closed(why) => {
+                self.fail_schema_read(&why);
+                self.session = SessionState::Failed(format!("{LOST_SESSION}: {why}"));
+            }
             Incoming::Tunnel(state) => self.tunnel = Some(state),
             Incoming::Schema(read) => self.schema = read.map_or_else(SchemaState::Failed, SchemaState::Read),
             Incoming::Result { run, .. } | Incoming::Refused { run, .. } | Incoming::Failed { run, .. }
@@ -554,6 +570,30 @@ mod tests {
         let connection = app.sheet().connection.clone();
         app.sheet_mut().reopen(connection, SessionId::FIRST.next());
         assert_eq!(app.sheet_mut().want_schema(), [Action::ReadSchema { connection: shop(), session: SessionId::FIRST.next() }]);
+    }
+
+    #[test]
+    fn a_session_that_does_not_open_fails_the_schema_waiting_on_it() {
+        let mut app = app();
+        app.sheet_mut().want_schema();
+        app.apply(to_shop(Incoming::NotOpened("password authentication failed for user \"nina\"".to_owned())));
+        assert_eq!(app.sheet().schema, SchemaState::Failed("password authentication failed for user \"nina\"".to_owned()));
+    }
+
+    #[test]
+    fn a_session_lost_while_its_schema_is_read_fails_the_read_so_it_can_be_asked_again() {
+        let mut app = app();
+        app.sheet_mut().want_schema();
+        app.apply(to_shop(Incoming::Closed("terminating connection".to_owned())));
+        assert_eq!(app.sheet_mut().read_schema_again(), read_schema());
+    }
+
+    #[test]
+    fn asking_for_the_schema_on_a_failed_session_opens_it_again() {
+        let mut app = app();
+        app.apply(to_shop(Incoming::NotOpened("connection refused".to_owned())));
+        app.sheet_mut().want_schema();
+        assert_eq!(app.sheet().session, SessionState::Opening);
     }
 
     #[test]

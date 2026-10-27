@@ -8,12 +8,13 @@ pub(crate) struct Schema {
     pub(crate) schemas: Vec<SchemaNode>,
 }
 
-/// The schema as one read gave it: the schemas the session's search path names, whose tables a statement names bare,
-/// and whether the read kept only the first tables by name.
+/// The schema as one read gave it: the schemas the search path of the session that read it names, whose tables a
+/// statement names bare, and whether the read kept only the first tables by name.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Catalog {
     pub(crate) schema: Schema,
-    /// `current_schemas(false)`: the schemas of the search path that exist, in its order.
+    /// `current_schemas(false)` on the session that read it: the schemas of its search path that exist, in its order.
+    /// It logs in as the statement session does, so the two share a search path unless a statement changed it.
     pub(crate) search_path: Vec<String>,
     pub(crate) is_cut: bool,
 }
