@@ -1,4 +1,5 @@
 //! What the app and the backend say to each other: the actions it asks for and the answers that come back.
+use crate::complete::Index;
 use crate::config::ConnectionChange;
 use crate::connection::{Connection, ConnectionName};
 use crate::db::model::{Catalog, LocalPort, Page, ResultSet, Statement};
@@ -178,6 +179,11 @@ pub(in crate::tui) enum Incoming {
     Tunnel(TunnelState),
     /// The schema a second session read, or why it could not.
     Schema(Result<Arc<Catalog>, String>),
+    /// The completion index built from `catalog`, which a later read may have replaced.
+    Index {
+        catalog: Arc<Catalog>,
+        index: Arc<Index>,
+    },
     Result {
         run: RunId,
         result: ResultSet,

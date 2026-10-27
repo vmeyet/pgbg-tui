@@ -2,9 +2,10 @@
 use super::keyword::{is_keyword, keywords};
 use crate::db::model::{Catalog, SchemaNode, Table};
 use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
 
 /// The tables, columns and keywords completion offers, built once per catalog and never changed.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Index {
     /// Bare in a schema of the search path that is the first to hold that name, else `schema.table`.
     pub(super) tables: Vec<Name>,
@@ -18,7 +19,7 @@ pub(crate) struct Index {
 }
 
 /// A name as the catalog writes it, its lowercase key for the search, and its text quoted when it needs quotes.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub(super) struct Name {
     pub(super) key: String,
     pub(super) text: String,
@@ -52,9 +53,11 @@ impl Index {
     }
 }
 
-impl Default for Index {
-    fn default() -> Self {
-        Self::new(&Catalog::default())
+impl Index {
+    /// The index of no catalog, the keywords alone, for a sheet whose schema is not read.
+    pub(crate) fn of_keywords() -> &'static Self {
+        static KEYWORDS_ONLY: LazyLock<Index> = LazyLock::new(|| Index::new(&Catalog::default()));
+        &KEYWORDS_ONLY
     }
 }
 

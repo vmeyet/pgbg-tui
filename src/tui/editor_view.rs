@@ -24,9 +24,10 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
     let scroll = row.saturating_sub(usize::from(inside.height.saturating_sub(1)));
     let mark = Style::default().fg(app.theme.danger).add_modifier(Modifier::REVERSED);
     let window = Window { first: scroll, rows: usize::from(inside.height) };
+    let ghost = sheet.ghost.as_ref().map(|ghost| Ghost { at: before.len(), rest: &ghost.rest });
     let text = coloured(
         sheet.editor.text(),
-        Paint { colours: sheet.editor.colours(), mark: sheet.error_mark, mark_style: mark, theme: &app.theme },
+        Paint { colours: sheet.editor.colours(), mark: sheet.error_mark, mark_style: mark, ghost, theme: &app.theme },
         window,
     );
     f.render_widget(Paragraph::new(text), inside);
@@ -50,13 +51,21 @@ struct Window {
     rows: usize,
 }
 
-/// How the text is painted: its colours per line, and the character at byte `mark` in `mark_style` on top.
+/// How the text is painted: its colours per line, the character at byte `mark` in `mark_style` on top, and the ghost.
 #[derive(Clone, Copy)]
 struct Paint<'a> {
     colours: &'a [Spans],
     mark: Option<usize>,
     mark_style: Style,
+    ghost: Option<Ghost<'a>>,
     theme: &'a Theme,
+}
+
+/// The rest of a name, drawn faded at byte `at` of the text, where the cursor is.
+#[derive(Clone, Copy)]
+struct Ghost<'a> {
+    at: usize,
+    rest: &'a str,
 }
 
 /// The lines of `text` in `window`, each token in its colour, the mark on top; a mark on a line's end draws a space there.
@@ -68,7 +77,11 @@ fn coloured<'a>(text: &'a str, paint: Paint<'_>, window: Window) -> Text<'a> {
             let marked =
                 paint.mark.and_then(|at| at.checked_sub(line_start)).filter(|&at| at <= line.len()).map(|at| marked_range(line, at));
             let spans = paint.colours.get(index).map_or(&[][..], Vec::as_slice);
-            lines.push(coloured_line(line, spans, marked, paint));
+            let ghost = paint
+                .ghost
+                .and_then(|ghost| Some(Ghost { at: ghost.at.checked_sub(line_start)?, ..ghost }))
+                .filter(|ghost| ghost.at <= line.len());
+            lines.push(coloured_line(line, spans, Cuts { mark: marked, ghost }, paint));
         }
         line_start += line.len() + 1;
     }
@@ -80,19 +93,35 @@ fn marked_range(line: &str, at: usize) -> Range<usize> {
     at..at + line[at..].chars().next().map_or(0, char::len_utf8)
 }
 
-/// The line as runs of one style each, in one pass over its spans, then the mark cut in on top.
-fn coloured_line<'a>(line: &'a str, spans: &[Painted], mark: Option<Range<usize>>, paint: Paint<'_>) -> Line<'a> {
+/// What is cut into one line: the mark, and the ghost, by bytes of that line.
+struct Cuts<'a> {
+    mark: Option<Range<usize>>,
+    ghost: Option<Ghost<'a>>,
+}
+
+/// The line as runs of one style each, in one pass over its spans, then the mark cut in on top and the ghost in after the
+/// cursor.
+fn coloured_line<'a>(line: &'a str, spans: &[Painted], cuts: Cuts<'_>, paint: Paint<'_>) -> Line<'a> {
     let runs = token_runs(line, spans, paint.theme);
-    let mut pieces: Vec<Span<'a>> = match &mark {
-        Some(mark) => runs
-            .into_iter()
-            .flat_map(|run| cut_by_mark(&run, mark, paint.mark_style))
-            .filter(|run| !run.bytes.is_empty())
-            .map(|run| run.span(line))
-            .collect(),
-        None => runs.into_iter().map(|run| run.span(line)).collect(),
+    let runs = match &cuts.mark {
+        Some(mark) => runs.iter().flat_map(|run| cut_by_mark(run, mark, paint.mark_style)).collect(),
+        None => runs,
     };
-    if mark.is_some_and(|range| range.is_empty()) {
+    let runs: Vec<Run> = match cuts.ghost {
+        Some(ghost) => runs.iter().flat_map(|run| cut_by_mark(run, &(ghost.at..ghost.at), run.style)).collect(),
+        None => runs,
+    };
+    let runs = runs.into_iter().filter(|run| !run.bytes.is_empty());
+    let mut pieces: Vec<Span<'a>> = runs.map(|run| run.span(line)).collect();
+    if let Some(ghost) = cuts.ghost {
+        let at = pieces.iter().scan(0, |end, piece| {
+            *end += piece.content.len();
+            Some(*end)
+        });
+        let index = at.take_while(|&end| end <= ghost.at).count();
+        pieces.insert(index, Span::styled(ghost.rest.to_owned(), Style::default().fg(paint.theme.faded)));
+    }
+    if cuts.mark.is_some_and(|range| range.is_empty()) {
         pieces.push(Span::styled(" ", paint.mark_style));
     }
     Line::from(pieces)
@@ -200,14 +229,14 @@ mod tests {
         let style = Style::default().add_modifier(Modifier::REVERSED);
         let shown = |span: &Span<'_>| if span.style == style { format!("[{}]", span.content) } else { span.content.to_string() };
         let theme = Theme::default();
-        let text = coloured(text, Paint { colours: &[], mark: Some(mark), mark_style: style, theme: &theme }, EVERY_LINE);
+        let text = coloured(text, Paint { colours: &[], mark: Some(mark), mark_style: style, ghost: None, theme: &theme }, EVERY_LINE);
         text.lines.iter().map(|line| line.spans.iter().map(shown).collect()).collect()
     }
 
     fn painted(text: &str, mark: Option<usize>) -> String {
         let mark_style = Style::default().fg(Theme::default().danger).add_modifier(Modifier::REVERSED);
         let (colours, theme) = (syntax::highlight(text), Theme::default());
-        let text = coloured(text, Paint { colours: &colours, mark, mark_style, theme: &theme }, EVERY_LINE);
+        let text = coloured(text, Paint { colours: &colours, mark, mark_style, ghost: None, theme: &theme }, EVERY_LINE);
         let piece = |span: &Span<'_>| format!("{:?}/{:?} {:?}", span.style.fg, span.style.add_modifier, span.content);
         text.lines.iter().map(|line| line.spans.iter().map(piece).collect::<Vec<_>>().join("\n")).collect::<Vec<_>>().join("\n---\n")
     }
@@ -221,6 +250,21 @@ mod tests {
     fn a_mark_at_the_end_of_a_line_or_the_text_draws_a_space() {
         assert_eq!(marked_text("SELECT\nFROM", 6), ["SELECT[ ]", "FROM"]);
         assert_eq!(marked_text("SELECT", 6), ["SELECT[ ]"]);
+    }
+
+    fn ghosted(text: &str, at: usize, rest: &str) -> Vec<String> {
+        let theme = Theme::default();
+        let ghost = Some(Ghost { at, rest });
+        let shown =
+            |span: &Span<'_>| if span.style.fg == Some(theme.faded) { format!("<{}>", span.content) } else { span.content.to_string() };
+        let text = coloured(text, Paint { colours: &[], mark: None, mark_style: Style::default(), ghost, theme: &theme }, EVERY_LINE);
+        text.lines.iter().map(|line| line.spans.iter().map(shown).collect()).collect()
+    }
+
+    #[test]
+    fn the_ghost_draws_faded_at_the_cursor_on_its_line_only() {
+        assert_eq!(ghosted("SELECT *\nFROM cu\nLIMIT 1", 16, "stomers"), ["SELECT *", "FROM cu<stomers>", "LIMIT 1"]);
+        assert_eq!(ghosted("SELECT o. FROM orders o", 9, "id"), ["SELECT o.<id> FROM orders o"]);
     }
 
     #[test]

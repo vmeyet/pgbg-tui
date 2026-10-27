@@ -1,8 +1,10 @@
 //! One connection's sheet: its editor, the statement it ran and what came of it, and where its session stands.
 use super::editor::Editor;
+use super::ghost::Ghost;
 use super::grid::{Clock, Move, Reading, Room};
 use super::{Action, Grid, Incoming, RunId, SessionId, TunnelState};
 use crate::chart::{self, ChartError, Series};
+use crate::complete::Index;
 use crate::connection::{Connection, ConnectionName, SchemaReading};
 use crate::db::guard;
 use crate::db::model::{Catalog, Extent, Page, ResultSet, Statement};
@@ -108,6 +110,9 @@ pub(in crate::tui) struct Sheet {
     /// Why the last page asked for failed, until the next run.
     pub(in crate::tui) page_failure: Option<String>,
     pub(in crate::tui) schema: SchemaState,
+    /// The completion index of the catalog read, once the backend built it.
+    pub(in crate::tui) index: Option<Arc<Index>>,
+    pub(in crate::tui) ghost: Option<Ghost>,
 }
 
 impl Sheet {
@@ -128,6 +133,8 @@ impl Sheet {
             is_dirty: false,
             page_failure: None,
             schema: SchemaState::NotRead,
+            index: None,
+            ghost: None,
         }
     }
 
@@ -155,6 +162,7 @@ impl Sheet {
         self.stop_paging();
         self.fail_running(REOPENED_WHILE_RUNNING);
         self.schema = SchemaState::NotRead;
+        self.index = None;
     }
 
     /// Takes `connection` as it is now and leaves the session closed: picking the sheet opens it as it is then.
@@ -202,6 +210,14 @@ impl Sheet {
             self.session = SessionState::Opening;
         }
         vec![Action::ReadSchema { connection: self.name().clone(), session: self.session_id }]
+    }
+
+    /// Keeps `index` when the catalog it was built from is still the one read.
+    fn take_index(&mut self, catalog: &Arc<Catalog>, index: Arc<Index>) {
+        let is_current = matches!(&self.schema, SchemaState::Read(read) if Arc::ptr_eq(read, catalog));
+        if is_current {
+            self.index = Some(index);
+        }
     }
 
     /// Fails a read waiting on a session that did not open or was lost, so it can be asked again.
@@ -290,7 +306,13 @@ impl Sheet {
     pub(super) fn apply(&mut self, incoming: Incoming, reading: &Reading) {
         let is_closed = self.session == SessionState::Closed;
         match incoming {
-            Incoming::Opened | Incoming::NotOpened(_) | Incoming::Closed(_) | Incoming::Tunnel(_) | Incoming::Schema(_) if is_closed => {}
+            Incoming::Opened
+            | Incoming::NotOpened(_)
+            | Incoming::Closed(_)
+            | Incoming::Tunnel(_)
+            | Incoming::Schema(_)
+            | Incoming::Index { .. }
+                if is_closed => {}
             Incoming::Opened => self.session = SessionState::Open,
             Incoming::NotOpened(err) => {
                 self.fail_schema_read(&err);
@@ -301,7 +323,11 @@ impl Sheet {
                 self.session = SessionState::Failed(format!("{LOST_SESSION}: {why}"));
             }
             Incoming::Tunnel(state) => self.tunnel = Some(state),
-            Incoming::Schema(read) => self.schema = read.map_or_else(SchemaState::Failed, SchemaState::Read),
+            Incoming::Schema(read) => {
+                self.schema = read.map_or_else(SchemaState::Failed, SchemaState::Read);
+                self.index = None;
+            }
+            Incoming::Index { catalog, index } => self.take_index(&catalog, index),
             Incoming::Result { run, .. } | Incoming::Refused { run, .. } | Incoming::Failed { run, .. }
                 if !self.is_answer_to_running(run) => {}
             Incoming::Result { run, result, took } => {

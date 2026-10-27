@@ -99,12 +99,12 @@ Reading the schema:
    The catalog query keeps the first 20 000 tables in name order (`LIMIT` in the SQL), and the status line says when it is cut.
 2. The sheet keeps the `Catalog` behind an `Arc`, shared and never changed; a new read replaces it whole, and a sheet opened again on a changed connection reads it again when next needed.
 
-Completing a name (planned):
+Completing a name:
 
-1. The backend builds the `complete::Index` from the sheet's `Catalog` on a blocking thread, and the sheet keeps it beside it behind an `Arc`.
-2. Only a key that types an identifier character or `.` asks for candidates; the context comes from the tokens of the statement under the cursor alone.
-3. The ghost is prefix only, a binary search in the index: the rest of the first candidate shows dimmed after the cursor, and `→` at the end of the word takes it, quoted when its name needs it.
-4. `ctrl-space` opens the list, where a fuzzy match joins the prefix ones: a prefix before a fuzzy match, a column of a table the statement names before any other, then shorter first; at most 50 are kept.
+1. Once the schema reader answers `Incoming::Schema`, it builds the `complete::Index` from that `Catalog` on a blocking thread and answers `Incoming::Index` with both; the sheet keeps the index behind an `Arc` while the catalog it was built from is still the one read.
+2. Only a key that types an identifier character or `.` asks for candidates, and only when the cursor ends the word; the first ask reads the schema, and until the index comes the keywords alone complete; the context comes from the tokens of the statement under the cursor alone.
+3. The ghost is prefix only, a binary search in the index: the rest of the first candidate shows dimmed after the cursor, and `→` at the end of the word takes it, quoted when its name needs it; any other key drops it.
+4. `ctrl-space` opens the list (planned), where a fuzzy match joins the prefix ones: a prefix before a fuzzy match, a column of a table the statement names before any other, then shorter first; at most 50 are kept.
 5. A test holds the budget: 20 000 tables and 200 000 columns, one key, under a millisecond in a release build.
 
 Running a statement with parameters (the parameter bar planned):

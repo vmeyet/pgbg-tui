@@ -3,7 +3,7 @@ mod act;
 mod chart;
 pub mod cli;
 pub mod commands;
-#[cfg_attr(not(test), expect(dead_code, unused_imports, reason = "the editor's ghost and list take it up, the next steps"))]
+#[cfg_attr(not(test), expect(dead_code, reason = "the completion list takes the rest, the next step"))]
 mod complete;
 mod config;
 mod connection;
