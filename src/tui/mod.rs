@@ -2,6 +2,7 @@
 mod app;
 mod backend;
 mod chart_view;
+mod detail_view;
 mod editor_view;
 mod finder_view;
 mod form_view;

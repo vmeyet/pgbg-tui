@@ -32,6 +32,7 @@ pub(crate) enum Act {
     Save,
     EditOutside,
     History,
+    Detail,
 }
 
 #[cfg(test)]
@@ -68,7 +69,8 @@ impl Act {
             Self::Edit => Some(Self::Save),
             Self::Save => Some(Self::EditOutside),
             Self::EditOutside => Some(Self::History),
-            Self::History => None,
+            Self::History => Some(Self::Detail),
+            Self::Detail => None,
         }
     }
 
@@ -113,6 +115,8 @@ pub(crate) enum Pane {
     Form,
     /// A question on the footer line, as the path of a new query: while open it takes every key.
     Prompt,
+    /// The detail of the grid's row over the screen, a popup like the finder.
+    Detail,
 }
 
 /// Keys as the help or the footer writes them, and what they do in a few words.
@@ -177,6 +181,9 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Bottom, Pane::Result, &[key(KeyCode::Char('G'))]),
     row(Act::Left, Pane::Result, &[key(KeyCode::Char('h')), key(KeyCode::Left)]).help("h l", "column left, right").footer("h/l", "columns"),
     row(Act::Right, Pane::Result, &[key(KeyCode::Char('l')), key(KeyCode::Right)]),
+    row(Act::Detail, Pane::Result, &[key(KeyCode::Enter), key(KeyCode::Char(' '))])
+        .help("⏎ space", "the row under the cursor, one column a line")
+        .footer("⏎", "row"),
     row(Act::Chart, Pane::Result, &[key(KeyCode::Char('v'))]).help("v", "the result as a grid or a chart").footer("v", "chart"),
     row(Act::Help, Pane::Result, &[key(KeyCode::Char('?'))]).help("?", "these keys; again for every key"),
     row(Act::Down, Pane::Queries, &[key(KeyCode::Char('j')), key(KeyCode::Down)]).help("j k", "next, previous query").footer("j/k", "move"),
@@ -208,6 +215,10 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Open, Pane::Prompt, &[key(KeyCode::Enter)]).help("⏎", "save, or open over the unsaved text").footer("⏎", "ok"),
     row(Act::Close, Pane::Prompt, &[key(KeyCode::Esc)]).help("esc", "keep editing").footer("esc", "cancel"),
     row(Act::Quit, Pane::Prompt, &[control('c')]).help("^c", "quit"),
+    row(Act::Down, Pane::Detail, &[key(KeyCode::Char('j')), key(KeyCode::Down)]).help("j k", "scroll down, up").footer("j/k", "scroll"),
+    row(Act::Up, Pane::Detail, &[key(KeyCode::Char('k')), key(KeyCode::Up)]),
+    row(Act::Close, Pane::Detail, &[key(KeyCode::Esc)]).help("esc", "back to the grid").footer("esc", "closes"),
+    row(Act::Quit, Pane::Detail, &[control('c')]).help("^c", "quit"),
     row(Act::EditOutside, Pane::Editor, &[control('e')]).help("^e", "edit the saved query in $EDITOR"),
     row(Act::Save, Pane::Anywhere, &[control('s')]).help("^s", "save the query, naming a new one").footer("^s", "save"),
     row(Act::History, Pane::Anywhere, &[control('r')]).help("^r", "search the statements run on this connection"),
@@ -223,7 +234,8 @@ fn is_the_key(own: &KeyEvent, pressed: KeyEvent) -> bool {
 }
 
 fn works_in(row: &Row, pane: Pane) -> bool {
-    row.pane == pane || (row.pane == Pane::Anywhere && !matches!(pane, Pane::Finder | Pane::Picker | Pane::Form | Pane::Prompt))
+    row.pane == pane
+        || (row.pane == Pane::Anywhere && !matches!(pane, Pane::Finder | Pane::Picker | Pane::Form | Pane::Prompt | Pane::Detail))
 }
 
 /// What `key` does while `pane` has the keys; `None` leaves it to the pane, as text for the editor.
@@ -272,6 +284,7 @@ pub(crate) fn sections(pane: Pane, every_key: bool) -> Vec<Section> {
         (Pane::Picker, "picker"),
         (Pane::Form, "form"),
         (Pane::Prompt, "prompt"),
+        (Pane::Detail, "row"),
         (Pane::Anywhere, "anywhere"),
     ];
     let shown = panes.into_iter().filter(|&(listed, _)| every_key || listed == pane || listed == Pane::Anywhere);
@@ -320,7 +333,7 @@ mod tests {
 
     #[test]
     fn no_key_does_two_actions_in_one_pane() {
-        for pane in [Pane::Editor, Pane::Result, Pane::Queries, Pane::Finder, Pane::Picker, Pane::Form, Pane::Prompt] {
+        for pane in [Pane::Editor, Pane::Result, Pane::Queries, Pane::Finder, Pane::Picker, Pane::Form, Pane::Prompt, Pane::Detail] {
             let keys: Vec<&KeyEvent> = ROWS.iter().filter(|row| works_in(row, pane)).flat_map(|row| row.keys).collect();
             for (at, key) in keys.iter().enumerate() {
                 assert!(!keys[at + 1..].contains(key), "{key:?} in {pane:?}");
@@ -357,6 +370,6 @@ mod tests {
     fn the_first_help_lists_the_focused_pane_and_what_works_anywhere() {
         let titles: Vec<&str> = sections(Pane::Result, false).iter().map(|section| section.title).collect();
         assert_eq!(titles, ["result", "anywhere"]);
-        assert_eq!(sections(Pane::Result, true).len(), 8);
+        assert_eq!(sections(Pane::Result, true).len(), 9);
     }
 }

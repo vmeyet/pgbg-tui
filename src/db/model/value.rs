@@ -58,11 +58,23 @@ impl fmt::Display for Value {
 impl Value {
     /// The first `chars` characters it prints, formatting no further: a 10 MB JSON value costs no more than a short one.
     pub(crate) fn prefix(&self, chars: usize) -> String {
-        let mut prefix = Prefix { text: String::new(), room: chars };
-        // The only error is `Prefix` running out of room, which is the point.
-        _ = fmt::write(&mut prefix, format_args!("{self}"));
-        prefix.text
+        prefixed(chars, format_args!("{self}"))
     }
+
+    /// Like [`Value::prefix`], with JSON indented over several lines so a row's detail can show its shape.
+    pub(crate) fn pretty_prefix(&self, chars: usize) -> String {
+        match self {
+            Self::Json(json) => prefixed(chars, format_args!("{json:#}")),
+            other => other.prefix(chars),
+        }
+    }
+}
+
+fn prefixed(chars: usize, formatted: fmt::Arguments<'_>) -> String {
+    let mut prefix = Prefix { text: String::new(), room: chars };
+    // The only error is `Prefix` running out of room, which is the point.
+    _ = fmt::write(&mut prefix, formatted);
+    prefix.text
 }
 
 /// A `fmt::Write` that keeps `room` characters, then fails so the formatting stops.
@@ -124,6 +136,18 @@ mod tests {
     #[test]
     fn a_prefix_of_a_short_value_is_all_of_it() {
         assert_eq!(Value::Json(serde_json::json!([1, 2])).prefix(40), "[1,2]");
+    }
+
+    #[test]
+    fn a_pretty_prefix_indents_json_and_stops_after_its_characters() {
+        let json = Value::Json(serde_json::json!({"paid": true}));
+        assert_eq!(json.pretty_prefix(40), "{\n  \"paid\": true\n}");
+        assert_eq!(json.pretty_prefix(3), "{\n ");
+    }
+
+    #[test]
+    fn a_pretty_prefix_of_text_is_its_prefix() {
+        assert_eq!(Value::Text("nina\nnoel".into()).pretty_prefix(40), "nina\nnoel");
     }
 
     #[test]

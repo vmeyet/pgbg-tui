@@ -108,7 +108,7 @@ pub(in crate::tui) mod tests {
     pub(in crate::tui) fn with_queries() -> App {
         let mut app = app();
         app.apply(Answer::Queries(QueryAnswer::All(vec![query("customers.sql"), query("orders/daily.sql"), query("orders/weekly.sql")])));
-        app.fit(Fit { grid_rows: 10, has_sidebar: true });
+        app.fit(Fit { grid_rows: 10, has_sidebar: true, ..Fit::default() });
         app
     }
 
@@ -216,7 +216,7 @@ pub(in crate::tui) mod tests {
     #[test]
     fn tab_skips_a_sidebar_that_is_not_drawn() {
         let mut app = with_queries();
-        app.fit(Fit { grid_rows: 10, has_sidebar: false });
+        app.fit(Fit { grid_rows: 10, has_sidebar: false, ..Fit::default() });
         to_sidebar(&mut app);
         assert_eq!(app.focus, Focus::Editor);
     }
@@ -225,7 +225,7 @@ pub(in crate::tui) mod tests {
     fn a_sidebar_no_longer_drawn_gives_the_keys_to_the_editor() {
         let mut app = with_queries();
         to_sidebar(&mut app);
-        app.fit(Fit { grid_rows: 10, has_sidebar: false });
+        app.fit(Fit { grid_rows: 10, has_sidebar: false, ..Fit::default() });
         assert_eq!(app.focus, Focus::Editor);
     }
 
