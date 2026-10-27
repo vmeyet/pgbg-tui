@@ -1,6 +1,7 @@
 //! A result, a row or a cell as text to paste elsewhere: CSV, JSON or Markdown, every value raw and whole.
 use crate::db::model::{Column, ResultSet, Value};
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
+use std::collections::BTreeSet;
 
 /// The text a whole result is copied as.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,7 +62,8 @@ fn csv_quoted(text: &str) -> String {
     if needs_quotes { format!("\"{}\"", text.replace('"', "\"\"")) } else { text.to_owned() }
 }
 
-/// An array of one object per row, the columns in their order, each value as `pgbg run --json` gives it.
+/// An array of one object per row, the columns in their order, each value as `pgbg run --json` gives it; a name two
+/// columns share takes a suffix the second time (`count`, `count_2`), so no value is lost.
 fn json(result: &ResultSet) -> String {
     // Writing to a `String` fails only on a map key that is not a string, and every key here is a column name.
     serde_json::to_string_pretty(&Rows(result)).unwrap_or_default() + "\n"
@@ -71,24 +73,41 @@ struct Rows<'a>(&'a ResultSet);
 
 impl Serialize for Rows<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let keys = unique_names(self.0.columns());
         let mut rows = serializer.serialize_seq(Some(self.0.rows().len()))?;
         for values in self.0.rows() {
-            rows.serialize_element(&RowObject { columns: self.0.columns(), values })?;
+            rows.serialize_element(&RowObject { keys: &keys, values })?;
         }
         rows.end()
     }
 }
 
+/// Each column's name, `_2`, `_3` and on added to one already taken.
+fn unique_names(columns: &[Column]) -> Vec<String> {
+    let mut taken = BTreeSet::new();
+    let mut names = vec![];
+    for column in columns {
+        let name = (1..=columns.len() + 1).map(|nth| nth_name(&column.name, nth)).find(|name| !taken.contains(name)).unwrap_or_default();
+        taken.insert(name.clone());
+        names.push(name);
+    }
+    names
+}
+
+fn nth_name(name: &str, nth: usize) -> String {
+    if nth == 1 { name.to_owned() } else { format!("{name}_{nth}") }
+}
+
 struct RowObject<'a> {
-    columns: &'a [Column],
+    keys: &'a [String],
     values: &'a [Value],
 }
 
 impl Serialize for RowObject<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut object = serializer.serialize_map(Some(self.columns.len()))?;
-        for (column, value) in self.columns.iter().zip(self.values) {
-            object.serialize_entry(&column.name, value)?;
+        let mut object = serializer.serialize_map(Some(self.keys.len()))?;
+        for (key, value) in self.keys.iter().zip(self.values) {
+            object.serialize_entry(key, value)?;
         }
         object.end()
     }
@@ -148,6 +167,15 @@ mod tests {
     #[test]
     fn json_keeps_the_columns_in_their_order() {
         assert!(result(&orders(), Format::Json).starts_with("[\n  {\n    \"id\": 7,\n    \"total\": \"12.50\","));
+    }
+
+    #[test]
+    fn json_gives_a_name_two_columns_share_a_suffix_so_no_value_is_lost() {
+        let int = |name: &str| crate::fixtures::column(name, crate::db::model::ColumnKind::Int);
+        let counts =
+            ResultSet::whole(vec![int("count"), int("count"), int("count_2")], vec![vec![Value::Int(1), Value::Int(2), Value::Int(3)]]);
+        let copied: serde_json::Value = serde_json::from_str(&result(&counts, Format::Json)).unwrap();
+        assert_eq!(copied[0], serde_json::json!({"count": 1, "count_2": 2, "count_2_2": 3}));
     }
 
     #[test]

@@ -43,7 +43,8 @@ pub(in crate::tui) enum Run {
     Done {
         result: ResultSet,
         took: Duration,
-        grid: Grid,
+        /// Boxed, so the other states of a run stay small.
+        grid: Box<Grid>,
         view: View,
     },
     Failed(String),
@@ -197,7 +198,7 @@ impl Sheet {
             Incoming::Result { result, took, .. } => {
                 let header_chart = self.header.chart.as_ref().and_then(|spec| Series::from_result(&result, spec).ok());
                 let view = header_chart.map_or(View::Grid, |series| View::Chart(Ok(series)));
-                self.run = Run::Done { grid: Grid::new(&result), result, took, view };
+                self.run = Run::Done { grid: Box::new(Grid::new(&result)), result, took, view };
             }
             Incoming::Refused { why, .. } => self.run = Run::Failed(format!("not sent: {why}")),
             Incoming::Failed { error, position, .. } => {

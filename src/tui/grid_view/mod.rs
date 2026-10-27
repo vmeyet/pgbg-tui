@@ -1,5 +1,6 @@
-//! The results grid: the header, then only the rows and columns in view, numbers right-aligned, `▶` on the cursor's row.
-use super::app::Grid;
+//! The results grid: the header, then only the rows and columns in view, numbers right-aligned, `▶` on the cursor's row
+//! and its cell lit.
+use super::app::{GAP, Grid, Room};
 use crate::db::model::{Column, ColumnKind, ResultSet, Value};
 use crate::render;
 use ratatui::Frame;
@@ -10,8 +11,6 @@ use ratatui::widgets::Paragraph;
 use vtui::text::truncate;
 use vtui::theme::Theme;
 
-/// The space before each column, the first one too: the cursor's mark sits in front of it.
-const GAP: &str = "  ";
 const CURSOR: &str = "▶";
 const NO_CURSOR: &str = " ";
 
@@ -47,22 +46,24 @@ fn in_view(widths: &[usize], first: usize, room: usize) -> Vec<Shown> {
     shown
 }
 
-/// The grid in `area`; returns the rows it had room for under its header.
-pub(super) fn draw(f: &mut Frame<'_>, view: GridView<'_>, area: Rect) -> usize {
+/// The grid in `area`; returns the room it had under its header and beside the cursor's mark.
+pub(super) fn draw(f: &mut Frame<'_>, view: GridView<'_>, area: Rect) -> Room {
     let room = usize::from(area.width).saturating_sub(CURSOR.chars().count());
-    let shown = in_view(&view.grid.widths, view.grid.column, room);
+    let shown = in_view(&view.grid.widths, view.grid.left, room);
     let body_rows = usize::from(area.height).saturating_sub(1);
     let rows = view.result.rows().iter().enumerate().skip(view.grid.top).take(body_rows);
     let lines: Vec<Line<'_>> =
         std::iter::once(header(view, &shown)).chain(rows.map(|(index, row)| row_line(view, &shown, index, row))).collect();
     f.render_widget(Paragraph::new(lines), area);
-    body_rows
+    Room { rows: body_rows, columns: room }
 }
 
 fn header<'a>(view: GridView<'a>, shown: &[Shown]) -> Line<'a> {
     let style = Style::default().add_modifier(Modifier::BOLD);
+    let cursor_style = style.fg(cursor_colour(view));
     let cells = shown.iter().map(|column| {
         let name = &view.result.columns()[column.index];
+        let style = if column.index == view.grid.column { cursor_style } else { style };
         (aligned(&render::printable(&name.name), name, column.width), style)
     });
     line(Span::raw(NO_CURSOR), cells.collect())
@@ -71,11 +72,16 @@ fn header<'a>(view: GridView<'a>, shown: &[Shown]) -> Line<'a> {
 fn row_line<'a>(view: GridView<'a>, shown: &[Shown], index: usize, row: &[Value]) -> Line<'a> {
     let is_current = index == view.grid.row;
     let cells = shown.iter().map(|column| {
-        (aligned(&cell(&row[column.index], column.width), &view.result.columns()[column.index], column.width), Style::default())
+        let is_cursor = is_current && column.index == view.grid.column;
+        let style = if is_cursor { Style::default().add_modifier(Modifier::REVERSED) } else { Style::default() };
+        (aligned(&cell(&row[column.index], column.width), &view.result.columns()[column.index], column.width), style)
     });
-    let colour = if view.focused { view.theme.accent } else { view.theme.faded };
-    let marker = Span::styled(if is_current { CURSOR } else { NO_CURSOR }, Style::default().fg(colour));
+    let marker = Span::styled(if is_current { CURSOR } else { NO_CURSOR }, Style::default().fg(cursor_colour(view)));
     line(marker, cells.collect())
+}
+
+fn cursor_colour(view: GridView<'_>) -> ratatui::style::Color {
+    if view.focused { view.theme.accent } else { view.theme.faded }
 }
 
 fn line(marker: Span<'static>, cells: Vec<(String, Style)>) -> Line<'static> {
@@ -102,6 +108,7 @@ fn aligned(text: &str, column: &Column, width: usize) -> String {
 mod tests {
     use super::super::app::Grid;
     use super::super::app::tests::orders;
+    use super::super::styled;
     use super::*;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -133,8 +140,16 @@ mod tests {
     fn a_scrolled_grid_starts_at_its_first_column_in_view() {
         let result = orders();
         let mut grid = Grid::new(&result);
-        grid.column = 1;
+        (grid.column, grid.left) = (1, 1);
         insta::assert_snapshot!("scrolled_right", render(&result, &grid, 40, 3).backend());
+    }
+
+    #[test]
+    fn the_cursors_cell_is_lit_and_its_header_coloured() {
+        let result = orders();
+        let mut grid = Grid::new(&result);
+        (grid.row, grid.column) = (1, 1);
+        insta::assert_snapshot!("cursor_styled", styled::runs(render(&result, &grid, 30, 3).backend().buffer()));
     }
 
     #[test]

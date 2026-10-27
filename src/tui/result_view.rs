@@ -1,5 +1,5 @@
 //! The result pane: its row count and time in the title, the grid or the chart inside, or what the statement came to.
-use super::app::{App, Focus, Run, View};
+use super::app::{App, Focus, Room, Run, View};
 use super::chart_view;
 use super::grid_view::{self, GridView};
 use super::theme;
@@ -11,8 +11,8 @@ use ratatui::text::{Line, Text};
 use ratatui::widgets::{Paragraph, Wrap};
 use vtui::pane;
 
-/// The pane in `area` for the last statement run; returns the grid rows it had room for.
-pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) -> usize {
+/// The pane in `area` for the last statement run; returns the room its grid had.
+pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) -> Room {
     let focused = app.focus == Focus::Result;
     let run = &app.sheet().run;
     let block = pane::framed(&app.theme, &title(run), focused);
@@ -24,7 +24,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) -> usize {
         }
         Run::Done { view: View::Chart(chart), .. } => {
             chart_view::draw(f, chart, &app.theme, inside);
-            return 0;
+            return Room::default();
         }
         Run::Idle => Text::styled("⏎ runs the statement under the cursor", Style::default().fg(app.theme.faded)),
         Run::Running { .. } => Text::styled("running… esc cancels it", Style::default().fg(app.theme.muted)),
@@ -32,7 +32,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) -> usize {
         Run::Failed(err) => printable_lines(err).style(Style::default().fg(theme::failure(&app.theme))),
     };
     f.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }), inside);
-    0
+    Room::default()
 }
 
 /// Each line of `text` escaped on its own, so its line breaks still break lines.

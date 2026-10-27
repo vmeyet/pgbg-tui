@@ -3,26 +3,45 @@ use super::{Action, App, Overlay, Run};
 use crate::act::{self, Act, Pane};
 use crossterm::event::KeyEvent;
 
-/// The open detail of the grid's row: how many lines it is scrolled down.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// The open detail of the grid's row, and where it is scrolled to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::tui) struct Detail {
-    pub(in crate::tui) scroll: usize,
+    pub(in crate::tui) scroll: DetailScroll,
+}
+
+/// Where the detail starts: at a column until a frame drew it, then at a line, which `j`/`k` move.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::tui) enum DetailScroll {
+    /// The first line of the column at this index.
+    ToColumn(usize),
+    Lines(usize),
+}
+
+/// Where the detail just drawn started, and how far it scrolls before its last line is at the bottom.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::tui) struct DetailFit {
+    pub(in crate::tui) first_line: usize,
+    pub(in crate::tui) last_scroll: usize,
 }
 
 impl App {
-    /// Opens the detail of the grid's row, when the result has one.
+    /// Opens the detail of the grid's row at the cursor's column, when the result has a row.
     pub(super) fn open_detail(&mut self) {
-        let has_row = matches!(&self.sheet().run, Run::Done { result, grid, .. } if grid.row < result.rows().len());
-        if has_row {
-            self.overlay = Some(Overlay::Detail(Detail::default()));
+        let Run::Done { result, grid, .. } = &self.sheet().run else { return };
+        if grid.row < result.rows().len() {
+            self.overlay = Some(Overlay::Detail(Detail { scroll: DetailScroll::ToColumn(grid.column) }));
         }
     }
 
     /// The detail after `key`: it scrolls within what the frame drew, `esc` closes it.
     pub(super) fn detail_key(&mut self, detail: Detail, key: KeyEvent) -> Vec<Action> {
+        let line = match detail.scroll {
+            DetailScroll::Lines(line) => line,
+            DetailScroll::ToColumn(_) => self.fit.detail.first_line,
+        };
         let scroll = match act::act_for(key, Pane::Detail) {
-            Some(Act::Down) => (detail.scroll + 1).min(self.fit.detail_last_scroll),
-            Some(Act::Up) => detail.scroll.saturating_sub(1),
+            Some(Act::Down) => DetailScroll::Lines((line + 1).min(self.fit.detail.last_scroll)),
+            Some(Act::Up) => DetailScroll::Lines(line.saturating_sub(1)),
             Some(Act::Quit) => return self.quit(),
             Some(Act::Close) => return vec![],
             _ => detail.scroll,
@@ -56,14 +75,14 @@ mod tests {
     fn enter_on_the_grid_opens_the_detail_of_its_row() {
         let mut app = on_the_result();
         assert_eq!(press(&mut app, KeyCode::Enter), []);
-        assert_eq!(app.overlay, Some(Overlay::Detail(Detail::default())));
+        assert_eq!(app.overlay, Some(Overlay::Detail(Detail { scroll: DetailScroll::ToColumn(0) })));
     }
 
     #[test]
     fn space_opens_it_too() {
         let mut app = on_the_result();
         press(&mut app, KeyCode::Char(' '));
-        assert_eq!(app.overlay, Some(Overlay::Detail(Detail::default())));
+        assert_eq!(app.overlay, Some(Overlay::Detail(Detail { scroll: DetailScroll::ToColumn(0) })));
     }
 
     #[test]
@@ -80,11 +99,28 @@ mod tests {
     #[test]
     fn j_scrolls_down_no_further_than_the_frame_drew() {
         let mut app = on_the_result();
-        app.fit(Fit { detail_last_scroll: 2, ..Fit::default() });
+        app.fit(Fit { detail: DetailFit { first_line: 0, last_scroll: 2 }, ..Fit::default() });
         press(&mut app, KeyCode::Enter);
         (0..4).for_each(|_| _ = press(&mut app, KeyCode::Char('j')));
         press(&mut app, KeyCode::Char('k'));
-        assert_eq!(app.overlay, Some(Overlay::Detail(Detail { scroll: 1 })));
+        assert_eq!(app.overlay, Some(Overlay::Detail(Detail { scroll: DetailScroll::Lines(1) })));
+    }
+
+    #[test]
+    fn the_detail_opens_at_the_cursors_column() {
+        let mut app = on_the_result();
+        press(&mut app, KeyCode::Char('l'));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.overlay, Some(Overlay::Detail(Detail { scroll: DetailScroll::ToColumn(1) })));
+    }
+
+    #[test]
+    fn once_drawn_the_detail_scrolls_from_the_line_the_frame_started_at() {
+        let mut app = on_the_result();
+        press(&mut app, KeyCode::Enter);
+        app.fit(Fit { detail: DetailFit { first_line: 3, last_scroll: 5 }, ..Fit::default() });
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.overlay, Some(Overlay::Detail(Detail { scroll: DetailScroll::Lines(4) })));
     }
 
     #[test]

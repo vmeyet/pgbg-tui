@@ -1,4 +1,4 @@
-//! The results grid's state: the current row, the first row and column in view, and each column's width.
+//! The results grid's state: the cursor's cell, the first row and column in view, and each column's width.
 use crate::db::model::ResultSet;
 use crate::render;
 
@@ -6,6 +6,15 @@ use crate::render;
 const MAX_COLUMN_WIDTH: usize = 40;
 /// The rows a column's width is measured on: the first page, so a big result costs no more.
 const WIDTH_SAMPLE_ROWS: usize = 500;
+/// The space drawn before each column.
+pub(in crate::tui) const GAP: &str = "  ";
+
+/// What the frame just drawn had room for in the grid: the rows under its header and the terminal columns for cells.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::tui) struct Room {
+    pub(in crate::tui) rows: usize,
+    pub(in crate::tui) columns: usize,
+}
 
 /// A move of the grid's cursor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,24 +34,27 @@ pub(super) enum Move {
 pub(in crate::tui) struct Grid {
     /// Each column's width in terminal columns: its header or its widest sampled cell, capped.
     pub(in crate::tui) widths: Vec<usize>,
+    /// The cursor's row.
     pub(in crate::tui) row: usize,
+    /// The cursor's column.
+    pub(in crate::tui) column: usize,
     /// The first row in view.
     pub(in crate::tui) top: usize,
     /// The first column in view.
-    pub(in crate::tui) column: usize,
+    pub(in crate::tui) left: usize,
 }
 
 impl Grid {
     /// The grid on `result`, its cursor on the first row.
     pub(in crate::tui) fn new(result: &ResultSet) -> Self {
         let widths = (0..result.columns().len()).map(|c| column_width(result, c)).collect();
-        Self { widths, row: 0, top: 0, column: 0 }
+        Self { widths, row: 0, column: 0, top: 0, left: 0 }
     }
 
-    /// Moves the cursor by `step` in `result`, keeping it among the `visible` rows in view.
-    pub(super) fn step(&mut self, step: Move, result: &ResultSet, visible: usize) {
+    /// Moves the cursor by `step` in `result`, keeping its cell in the `room` the grid has.
+    pub(super) fn step(&mut self, step: Move, result: &ResultSet, room: Room) {
         let last_row = result.rows().len().saturating_sub(1);
-        let page = visible.max(1);
+        let page = room.rows.max(1);
         match step {
             Move::Down => self.row = (self.row + 1).min(last_row),
             Move::Up => self.row = self.row.saturating_sub(1),
@@ -53,11 +65,16 @@ impl Grid {
             Move::Left => self.column = self.column.saturating_sub(1),
             Move::Right => self.column = (self.column + 1).min(self.widths.len().saturating_sub(1)),
         }
-        self.keep_in_view(visible);
+        self.keep_in_view(room);
     }
 
-    /// Scrolls the least so the cursor's row is among the `visible` rows in view.
-    pub(super) fn keep_in_view(&mut self, visible: usize) {
+    /// Scrolls the least so the cursor's cell is in view: its row among the rows, its column whole when it fits.
+    pub(super) fn keep_in_view(&mut self, room: Room) {
+        self.keep_row_in_view(room.rows);
+        self.keep_column_in_view(room.columns);
+    }
+
+    fn keep_row_in_view(&mut self, visible: usize) {
         let visible = visible.max(1);
         if self.row < self.top {
             self.top = self.row;
@@ -65,6 +82,18 @@ impl Grid {
         if self.row >= self.top + visible {
             self.top = self.row + 1 - visible;
         }
+    }
+
+    fn keep_column_in_view(&mut self, columns: usize) {
+        self.left = self.left.min(self.column);
+        while self.left < self.column && self.drawn_through_cursor() > columns {
+            self.left += 1;
+        }
+    }
+
+    /// The terminal columns from the first column in view through the cursor's, each after its gap.
+    fn drawn_through_cursor(&self) -> usize {
+        self.widths[self.left..=self.column].iter().map(|width| GAP.len() + width).sum()
     }
 }
 
@@ -90,10 +119,14 @@ mod tests {
     }
 
     fn stepped(rows: usize, steps: &[Move], visible: usize) -> Grid {
+        stepped_in(rows, steps, Room { rows: visible, columns: 80 })
+    }
+
+    fn stepped_in(rows: usize, steps: &[Move], room: Room) -> Grid {
         let result = result(rows);
         let mut grid = Grid::new(&result);
         for &step in steps {
-            grid.step(step, &result, visible);
+            grid.step(step, &result, room);
         }
         grid
     }
@@ -129,9 +162,27 @@ mod tests {
     }
 
     #[test]
-    fn right_and_left_scroll_one_column_and_stop_at_the_ends() {
+    fn right_and_left_move_the_cursor_one_column_and_stop_at_the_ends() {
         assert_eq!(stepped(1, &[Move::Right, Move::Right, Move::Right], 5).column, 2);
         assert_eq!(stepped(1, &[Move::Right, Move::Left, Move::Left], 5).column, 0);
+    }
+
+    #[test]
+    fn the_view_stays_while_the_cursor_moves_among_the_columns_in_it() {
+        assert_eq!(stepped(1, &[Move::Right, Move::Right], 5).left, 0);
+    }
+
+    #[test]
+    fn the_view_scrolls_the_least_once_the_cursor_leaves_it() {
+        let narrow = Room { rows: 5, columns: 18 };
+        let grid = stepped_in(1, &[Move::Right, Move::Right], narrow);
+        assert_eq!((grid.column, grid.left), (2, 1));
+        assert_eq!(stepped_in(1, &[Move::Right, Move::Right, Move::Left, Move::Left], narrow).left, 0);
+    }
+
+    #[test]
+    fn a_column_wider_than_the_grid_is_first_in_view() {
+        assert_eq!(stepped_in(1, &[Move::Right, Move::Right], Room { rows: 5, columns: 3 }).left, 2);
     }
 
     #[test]

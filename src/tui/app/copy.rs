@@ -19,7 +19,7 @@ impl App {
         result.rows().get(grid.row).map(|values| (grid.row + 1, values.as_slice()))
     }
 
-    /// Copies the value of the first column in view on the cursor's row.
+    /// Copies the value of the cell under the cursor.
     pub(super) fn copy_cell(&self) -> Vec<Action> {
         let Run::Done { result, grid, .. } = &self.sheet().run else { return vec![] };
         let Some(value) = result.rows().get(grid.row).and_then(|values| values.get(grid.column)) else { return vec![] };
@@ -93,7 +93,7 @@ mod tests {
     }
 
     #[test]
-    fn y_copies_the_first_column_in_view_on_the_cursors_row() {
+    fn y_copies_the_cell_under_the_cursor() {
         let mut app = on_the_result();
         press(&mut app, 'j');
         press(&mut app, 'l');
