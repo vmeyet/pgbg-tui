@@ -1,5 +1,5 @@
 //! The only module that sees `tokio_postgres`: connect, run one statement, decode its rows, cancel it.
-use crate::connection::{Connection, StatementTimeout, Target, TimeoutChoice, Tls};
+use crate::connection::{Connection, StatementTimeout, Target, TimeoutChoice, Tls, WritePolicy};
 use anyhow::{Context, Result, anyhow};
 use futures_util::{StreamExt, TryStreamExt, future};
 use guard::{Admitted, Mode};
@@ -19,6 +19,8 @@ mod decode;
 pub(crate) mod guard;
 pub(crate) mod model;
 mod open;
+#[cfg_attr(not(test), expect(dead_code, reason = "the TUI's session task pages through results in the next step"))]
+mod pages;
 mod schema;
 mod server;
 
@@ -35,6 +37,11 @@ const SERVER_CLOSED: &str = "the server closed the link";
 const LINK_TASK_GONE: &str = "the link's task is gone";
 /// The server's `statement_timeout` in milliseconds, whatever unit it was set in.
 const SERVER_STATEMENT_TIMEOUT: &str = "SELECT setting::bigint FROM pg_settings WHERE name = 'statement_timeout'";
+const SERVER_IDLE_IN_TRANSACTION_TIMEOUT: &str =
+    "SELECT setting::bigint FROM pg_settings WHERE name = 'idle_in_transaction_session_timeout'";
+/// The server ends a read-only session whose transaction stays idle this long, should pgbg not close a portal waiting for
+/// its next page itself, after 5 minutes.
+const IDLE_IN_TRANSACTION_BACKSTOP: Duration = Duration::from_mins(6);
 const PROBE_SAVEPOINT: &str = "SAVEPOINT pgbg_probe";
 const RELEASE_PROBE: &str = "RELEASE SAVEPOINT pgbg_probe";
 const ROLLBACK_FAILED: &str = "a rollback failed, so the server may still hold its transaction";
@@ -44,13 +51,19 @@ const ROLLBACK_FAILED: &str = "a rollback failed, so the server may still hold i
 pub(crate) struct Session {
     client: Client,
     tls: Tls,
-    /// A `ROLLBACK` failed, so the server may still hold the transaction open.
-    has_failed_rollback: bool,
     /// Why the link ended, set by the task that drives it.
     ended: watch::Receiver<Option<String>>,
     link: AbortHandle,
-    /// A `run` began and has not returned: a session dropped then cuts its link, so the server stops the statement
-    /// instead of the link finishing it.
+    marks: Marks,
+}
+
+/// What the session's own statements left behind them.
+#[derive(Debug, Default)]
+struct Marks {
+    /// A `ROLLBACK` failed, so the server may still hold the transaction open.
+    has_failed_rollback: bool,
+    /// A statement or a page is on the server: a session dropped then cuts its link, so the server stops it instead of
+    /// the link finishing it.
     is_mid_statement: bool,
 }
 
@@ -70,7 +83,8 @@ impl Session {
         stop_statements_when_client_gone(&client).await;
         let timeout = statement_timeout_in_effect(&client, connection.statement_timeout()).await?;
         set_statement_timeout(&client, timeout).await?;
-        Ok(Self { client, tls, has_failed_rollback: false, ended, link, is_mid_statement: false })
+        end_idle_transactions(&client, connection.writes()).await?;
+        Ok(Self { client, tls, ended, link, marks: Marks::default() })
     }
 
     /// Waits until the link to the server ends, and says why.
@@ -87,7 +101,7 @@ impl Session {
         let ended = self.ended.borrow().clone();
         let is_link_gone = self.client.is_closed();
         let lost = ended.or_else(|| is_link_gone.then(|| SERVER_CLOSED.to_owned()));
-        lost.or_else(|| self.has_failed_rollback.then(|| ROLLBACK_FAILED.to_owned()))
+        lost.or_else(|| self.marks.has_failed_rollback.then(|| ROLLBACK_FAILED.to_owned()))
     }
 
     /// What cancels the statement this session is running, usable while `run` waits.
@@ -98,12 +112,12 @@ impl Session {
     /// Runs `admitted` alone and returns its first `ROW_CAP` rows; a read-only one is always rolled back.
     pub(crate) async fn run(&mut self, admitted: &Admitted) -> Result<ResultSet> {
         let sql = admitted.statement.as_str();
-        self.is_mid_statement = true;
+        self.marks.is_mid_statement = true;
         let result = match admitted.mode {
             Mode::Writes => self.run_writes(sql).await,
             Mode::ReadOnly => self.run_read_only(sql).await,
         };
-        self.is_mid_statement = false;
+        self.marks.is_mid_statement = false;
         result
     }
 
@@ -143,16 +157,14 @@ impl Session {
     async fn read_only<T>(&mut self, read: impl AsyncFnOnce(&Transaction<'_>) -> Result<T>) -> Result<T> {
         let transaction = self.client.build_transaction().read_only(true).start().await.map_err(server_error)?;
         let result = read(&transaction).await;
-        let rolled_back = transaction.rollback().await;
-        self.has_failed_rollback = rolled_back.is_err();
-        rolled_back.map_err(server_error)?;
+        roll_back(transaction, &mut self.marks).await?;
         result
     }
 }
 
 impl Drop for Session {
     fn drop(&mut self) {
-        if self.is_mid_statement {
+        if self.marks.is_mid_statement {
             self.link.abort();
         }
     }
@@ -168,6 +180,13 @@ impl CancelToken {
         };
         sent.map_err(server_error)
     }
+}
+
+/// Rolls `transaction` back, and marks the session when that failed.
+async fn roll_back(transaction: Transaction<'_>, marks: &mut Marks) -> Result<()> {
+    let rolled_back = transaction.rollback().await;
+    marks.has_failed_rollback = rolled_back.is_err();
+    rolled_back.map_err(server_error)
 }
 
 /// The driver's config for `target` along `route`; `sslmode` is left out, since `Tls` decides it.
@@ -223,10 +242,32 @@ async fn stop_statements_when_client_gone(client: &Client) {
 /// The timeout a session runs with: the one the connection chose, else the stricter of its tier's and the one the
 /// server applies already (a role's or a database's default, or the URL's `options`).
 async fn statement_timeout_in_effect(client: &Client, choice: TimeoutChoice) -> Result<StatementTimeout> {
-    let row = client.query_one(SERVER_STATEMENT_TIMEOUT, &[]).await.map_err(server_error)?;
+    let server = server_millis(client, SERVER_STATEMENT_TIMEOUT).await.context("reading the server's statement timeout")?;
+    Ok(choice.in_effect(StatementTimeout::from_millis(server)))
+}
+
+/// A server setting in milliseconds, read by `sql`.
+async fn server_millis(client: &Client, sql: &str) -> Result<u64> {
+    let row = client.query_one(sql, &[]).await.map_err(server_error)?;
     let ms: i64 = row.try_get(0).map_err(server_error)?;
-    let server = StatementTimeout::from_millis(u64::try_from(ms).context("the server's statement timeout is negative")?);
-    Ok(choice.in_effect(server))
+    u64::try_from(ms).context("the setting is negative")
+}
+
+/// On a read-only connection the only transaction left open is a portal waiting for its next page, so the server may
+/// end one idle past the backstop; a `BEGIN` the user ran where writes are allowed waits as long as the user wants.
+/// A stricter timeout the server applies already stays.
+async fn end_idle_transactions(client: &Client, writes: WritePolicy) -> Result<()> {
+    if writes == WritePolicy::Allowed {
+        return Ok(());
+    }
+    let server = server_millis(client, SERVER_IDLE_IN_TRANSACTION_TIMEOUT).await.context("reading the server's idle timeout")?;
+    let backstop = IDLE_IN_TRANSACTION_BACKSTOP.as_millis() as u64;
+    let is_stricter_on_server = server != 0 && server <= backstop;
+    if is_stricter_on_server {
+        return Ok(());
+    }
+    let sql = format!("SET idle_in_transaction_session_timeout = {backstop}");
+    client.batch_execute(&sql).await.map_err(server_error).context("setting the idle transaction timeout")
 }
 
 /// Not best effort: a production session never runs without its timeout.
@@ -513,6 +554,35 @@ mod tests {
     async fn a_timeout_the_connection_chose_wins_over_the_server() {
         let shown = shown_timeout_with_a_server_default("staging", "statement_timeout = \"90s\"").await;
         assert_eq!(shown, [[Value::Text("90s".into())]]);
+    }
+
+    async fn shown_idle_timeout(url: String, extra: &str) -> Vec<Vec<Value>> {
+        let connection = fixtures::connection(&format!("tier = \"local\"\nurl = \"{url}\"\n{extra}"));
+        on(Session::open(&connection, Route::Direct).await.unwrap(), "SHOW idle_in_transaction_session_timeout")
+            .await
+            .unwrap()
+            .rows()
+            .to_vec()
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_read_only_session_has_the_server_end_a_transaction_left_idle_six_minutes() {
+        assert_eq!(shown_idle_timeout(fixtures::test_database_url(), "").await, [[Value::Text("6min".into())]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_session_that_allows_writes_leaves_an_idle_transaction_to_the_user() {
+        assert_eq!(shown_idle_timeout(fixtures::test_database_url(), "writes = \"allowed\"\n").await, [[Value::Text("0".into())]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_stricter_idle_timeout_on_the_server_wins_over_the_backstop() {
+        let mut url = Url::parse(&fixtures::test_database_url()).unwrap();
+        url.query_pairs_mut().append_pair("options", "-cidle_in_transaction_session_timeout=1min");
+        assert_eq!(shown_idle_timeout(url.to_string(), "").await, [[Value::Text("1min".into())]]);
     }
 
     #[tokio::test]
