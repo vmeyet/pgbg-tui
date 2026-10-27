@@ -5,6 +5,7 @@ use std::io::Write;
 use std::net::{Ipv4Addr, TcpStream};
 use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 const SHOP: &str = r#"
@@ -328,6 +329,9 @@ while True:
     links.append(server.accept())
 ";
 const RUN: &[&str] = &["run", "shop", "SELECT 1"];
+/// Held for the whole of every test that starts a tunnel or a proxy, as the crate's own tests hold theirs: another
+/// test's could take the port a stopped tunnel left, which would then still answer.
+static TUNNEL_PORTS: Mutex<()> = Mutex::new(());
 const TUNNEL_WAIT: Duration = Duration::from_secs(10);
 
 fn answers(port: u16) -> bool {
@@ -370,6 +374,7 @@ fn waiting_on_a_tunnel(dir: &Path, args: &[&str]) -> (Child, u16) {
 
 /// Whether the tunnel of pgbg with `args` that `signal` stopped went with it, and pgbg said which signal it was.
 fn a_tunnel_goes_when_pgbg_is_stopped_by(args: &[&str], signal: Signal) {
+    let _ports = TUNNEL_PORTS.lock().unwrap_or_else(PoisonError::into_inner);
     let dir = tempfile::tempdir().unwrap();
     let (mut pgbg, port) = waiting_on_a_tunnel(dir.path(), args);
     kill_process(Pid::from_child(&pgbg), signal).unwrap();
@@ -471,6 +476,7 @@ fn hiding_hang_ups(dir: &Path, database: &url::Url) -> (Child, url::Url) {
 #[test]
 #[ignore = "needs PGBG_TEST_DATABASE_URL"]
 fn ctrl_c_on_pgbg_run_cancels_its_write_even_where_the_server_cannot_see_pgbg_go() {
+    let _ports = TUNNEL_PORTS.lock().unwrap_or_else(PoisonError::into_inner);
     let database = url::Url::parse(&std::env::var("PGBG_TEST_DATABASE_URL").unwrap()).unwrap();
     let dir = tempfile::tempdir().unwrap();
     let direct = writable("shop", database.as_str());

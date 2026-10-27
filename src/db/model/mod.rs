@@ -65,6 +65,10 @@ impl Params {
         self.values.len()
     }
 
+    pub(crate) fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
     pub(crate) fn values(&self) -> &[Option<String>] {
         &self.values
     }
