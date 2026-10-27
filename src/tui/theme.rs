@@ -1,20 +1,22 @@
 //! pgbg's colours on top of vtui's palette: the tiers, so a production connection never looks like a local one, and
-//! the production colour, so a production frame never reads as an error drawn in `danger`.
-//! vtui's tokens read through `Deref`, so a view writes `theme.danger` and `theme.production` alike.
+//! the production colour, so a production frame never looks like an error drawn in `danger`.
+//! vtui's tokens are reached through `Deref`, so a view writes `theme.danger` and `theme.production` the same way.
 use crate::connection::Tier;
 use ratatui::style::Color;
 use std::ops::Deref;
 use vtui::theme::mix;
 
-/// Where production leans from `danger`, so it stays red enough to warn and reads apart from an error.
+/// The colour production is mixed toward from `danger`, so it stays red enough to warn but looks different from an
+/// error.
 const MAGENTA: u32 = 0xff00ff;
-/// How far production leans toward [`MAGENTA`].
+/// How much of [`MAGENTA`] production mixes in.
 const PRODUCTION_PCT: u32 = 45;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::tui) struct Theme {
     ui: vtui::theme::Theme,
-    /// The frame and the dot of a production connection. A palette of ANSI names cannot mix, so it takes magenta.
+    /// The frame and dot colour of a production connection.
+    /// A palette of ANSI names cannot mix colours, so it uses magenta.
     pub(in crate::tui) production: Color,
 }
 
@@ -33,12 +35,12 @@ impl Default for Theme {
 }
 
 impl Theme {
-    /// A palette that does not know its ground takes the terminal's; one with an RGB ground keeps its own.
+    /// A palette that does not know its background takes the terminal's; one with an RGB background keeps its own.
     pub(super) fn with_ground(self, ground: u32) -> Self {
         Self::over(self.ui.with_ground(ground))
     }
 
-    /// Local green, staging amber, production in its own colour.
+    /// Local is green, staging is amber, and production has its own colour.
     pub(super) fn tier(&self, tier: Tier) -> Color {
         match tier {
             Tier::Local => self.success,

@@ -17,7 +17,7 @@ const EDITOR_SHARE_PCT: u16 = 40;
 const SIDEBAR_COLUMNS: u16 = 30;
 /// The status takes at most half the footer, so the hints keep the other half.
 const STATUS_SHARE_OF_ROW: u16 = 2;
-/// A terminal narrower than this leaves the sidebar out, so the editor and the grid keep their room.
+/// A terminal narrower than this hides the sidebar, so the editor and the grid keep their room.
 const SIDEBAR_MIN_SCREEN_COLUMNS: u16 = 80;
 const CUT_SCHEMA: &str = "first 20 000 tables";
 
@@ -55,7 +55,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> Fit {
     Fit { grid, has_sidebar, detail }
 }
 
-/// The outer frame and its `● name · tier` pill in the tier's colour, so the tier reads without its colour; returns
+/// The outer frame and its `● name · tier` label in the tier's colour, so the tier is clear even without colour; returns
 /// the area inside it.
 fn framed(f: &mut Frame<'_>, app: &App) -> Rect {
     let sheet = app.sheet();
@@ -68,7 +68,8 @@ fn framed(f: &mut Frame<'_>, app: &App) -> Rect {
     inside
 }
 
-/// The areas of `area`, with the sidebar when `has_sidebar`, and the parameter bar a line above the editor when `has_params`.
+/// The areas of `area`, with the sidebar when `has_sidebar`, and the parameter bar one line above the editor when
+/// `has_params`.
 fn layout(area: Rect, has_sidebar: bool, has_params: bool) -> Areas {
     let [panes, footer] = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
     let sidebar_columns = if has_sidebar { SIDEBAR_COLUMNS } else { 0 };
@@ -79,8 +80,8 @@ fn layout(area: Rect, has_sidebar: bool, has_params: bool) -> Areas {
     Areas { sidebar: has_sidebar.then_some(sidebar), params: has_params.then_some(params), editor, result, footer }
 }
 
-/// The session's state on the right, as wide as it needs up to half the row, and the keys that fit on the left; an open
-/// prompt takes the whole row.
+/// The session's state on the right, as wide as it needs up to half the row, and the keys that fit on the left.
+/// An open prompt takes the whole row.
 fn footer(f: &mut Frame<'_>, app: &App, area: Rect) {
     if let Some(Overlay::Prompt(prompt)) = app.overlay() {
         return prompt_view::draw(f, app, prompt, area);
@@ -114,8 +115,8 @@ fn hint_text(hint: Hint) -> [String; 2] {
     [format!(" {} ", hint.keys), format!("{} ", hint.does)]
 }
 
-/// One chain: the tunnel then the session, `⇄ :49213 · connected`, or the one reason they are down, in `width` columns;
-/// a change to the config that just failed says why first.
+/// The tunnel then the session as one line, `⇄ :49213 · connected`, or the one reason they are down, in `width`
+/// columns; a change to the config that just failed shows why first.
 fn status(app: &App, width: usize) -> Line<'static> {
     if let Some(why) = app.config_failure() {
         return failure(app, why, width);
@@ -190,7 +191,7 @@ mod tests {
 
     const STATEMENT: &str = "SELECT id, customer, total\nFROM orders\nWHERE customer = {{owner}} AND total > 10 -- recent\nLIMIT 50;\n";
     const KEYS_TYPED: u32 = 200;
-    /// A release build takes 0.15 ms; a debug build, which CI runs, 6.5 ms.
+    /// The step takes 0.15 ms in a release build and 6.5 ms in a debug build, which CI runs.
     const KEY_AND_FRAME_BUDGET: Duration = if cfg!(debug_assertions) { Duration::from_millis(20) } else { Duration::from_millis(1) };
 
     /// How long one key and the frame after it take at the end of a 1 000-line editor.

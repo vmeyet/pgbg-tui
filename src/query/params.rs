@@ -8,9 +8,9 @@ use std::fmt;
 use std::ops::Range;
 use std::str::FromStr;
 
-/// Says nothing of the text itself, which may be a value typed in the wrong place.
+/// The message never quotes the text, which may be a value typed in the wrong place.
 const NO_EQUAL_SIGN: &str = "a value is given as `name=value`, and this has no `=`";
-/// Says nothing of the line either: what a mistyped line holds before its `=` may be a secret.
+/// The message never quotes the line: what a mistyped line holds before its `=` may be a secret.
 const NO_ASSIGNMENT_LINE: &str = "a line is `name=value`, the name a letter or `_`, then letters, digits or `_`";
 
 /// The name in a `{{name}}`: a letter or `_`, then letters, digits or `_`.
@@ -38,7 +38,7 @@ pub(crate) struct ParamSpec {
 pub(crate) enum Fallback {
     /// Nothing: the run stops.
     Required,
-    /// `= 2024-01-01`.
+    /// The value after `=`, as in `= 2024-01-01`.
     Default(ParamValue),
     /// `optional`: NULL.
     Optional,
@@ -124,8 +124,8 @@ pub(crate) fn names(tokens: &[Placed]) -> Result<Vec<ParamName>, ParamError> {
     Ok(distinct(&named_in(tokens)?))
 }
 
-/// `template` with each `{{name}}` replaced by `$n`, the same name the same number, and the value given for each,
-/// else what `specs` says it falls back to; each `$n` of the type `specs` names.
+/// `template` with each `{{name}}` replaced by `$n`, one number per name, and the values to bind.
+/// Each value is the one given for its name, else its fallback in `specs`; each `$n` takes the type `specs` names.
 pub(crate) fn fill(template: &Statement, given: &Given, specs: &[ParamSpec]) -> Result<Filled, ParamError> {
     let text = template.as_str();
     let placed = named_params(text)?;
@@ -254,7 +254,7 @@ impl Numbered {
     }
 }
 
-/// The byte character `nth` of `text` starts at, from 0; its length just past the last one.
+/// Where character `nth` of `text` starts, in bytes, counting from 0; the length of `text` just past the last one.
 fn byte_of_char(text: &str, nth: usize) -> Option<usize> {
     text.char_indices().map(|(at, _)| at).chain(std::iter::once(text.len())).nth(nth)
 }

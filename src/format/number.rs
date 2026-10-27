@@ -1,10 +1,10 @@
-//! Numbers with their thousands apart, and numbers of bytes as a size.
+//! Numbers grouped by thousands, and numbers of bytes as a size.
 
 /// The binary units a size reads in, each 1024 times the one before.
 const BINARY_UNITS: [&str; 7] = ["B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
 const BYTES_IN_KIBIBYTE: f64 = 1024.0;
 
-/// `digits`, a run of ASCII digits, with its thousands apart: `1 732`, `120 000`.
+/// `digits`, a run of ASCII digits, grouped by thousands: `1 732`, `120 000`.
 pub(crate) fn grouped_digits(digits: &str) -> String {
     let first = digits.len() % 3;
     let groups = std::iter::once(&digits[..first]).chain((first..digits.len()).step_by(3).map(|at| &digits[at..at + 3]));
@@ -16,7 +16,7 @@ pub(super) fn grouped_int(int: i64) -> String {
     format!("{sign}{}", grouped_digits(&int.unsigned_abs().to_string()))
 }
 
-/// A decimal's text with the thousands of its whole part apart, or `None` when it is not a plain decimal (`NaN`, `Infinity`).
+/// A decimal's text with its whole part grouped by thousands, or `None` when it is not a plain decimal (`NaN`, `Infinity`).
 pub(super) fn grouped_decimal(text: &str) -> Option<String> {
     let (sign, unsigned) = text.strip_prefix('-').map_or(("", text), |unsigned| ("-", unsigned));
     let (whole, fraction) = unsigned.find('.').map_or((unsigned, ""), |at| unsigned.split_at(at));

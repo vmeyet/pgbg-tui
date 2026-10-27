@@ -22,8 +22,9 @@ mod tests {
     const WORDS: [&str; 10] = ["orders", "customers", "invoices", "payments", "refunds", "carts", "items", "stocks", "shipments", "notes"];
     const COLUMN_WORDS: [&str; 10] =
         ["id", "created_at", "updated_at", "customer_id", "status", "total", "currency", "note", "code", "count"];
-    /// A release build takes 0.2 ms at worst (`SELECT c|`, 40 000 columns to weigh); a debug build, which CI runs, ten times that.
-    const BUDGET: Duration = if cfg!(debug_assertions) { Duration::from_millis(20) } else { Duration::from_millis(1) };
+    /// A release build takes 0.27 ms at worst (`SELECT c|`, 40 000 columns to weigh), CI about four times that: ten times slower fails.
+    /// Only a release build is timed: debug codegen of the ranking swings with the machine, and CI runs these tests in release too.
+    const BUDGET: Duration = Duration::from_micros(2_500);
 
     fn large_catalog() -> Catalog {
         let column = |name: String| SchemaColumn { name, type_name: TypeName::new("integer"), is_nullable: false, default: None };
@@ -66,7 +67,7 @@ mod tests {
         let index = Index::new(&large_catalog());
         for marked in KEYS {
             let took = ghost_took(&index, marked);
-            assert!(took < BUDGET, "{marked} took {took:?}");
+            assert!(cfg!(debug_assertions) || took < BUDGET, "{marked} took {took:?}");
         }
     }
 
@@ -75,7 +76,7 @@ mod tests {
         let index = Index::new(&large_catalog());
         for marked in KEYS {
             let took = list_took(&index, marked);
-            assert!(took < BUDGET, "{marked} took {took:?}");
+            assert!(cfg!(debug_assertions) || took < BUDGET, "{marked} took {took:?}");
         }
     }
 }

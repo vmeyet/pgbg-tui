@@ -1,5 +1,5 @@
-//! Snapshots that keep the styles: each line of a buffer as runs of one colour and modifier, so a test sees what
-//! the plain text snapshot drops.
+//! Snapshots that keep the styles: each line of a buffer as runs of one colour and modifier, so a test sees what the
+//! plain text snapshot leaves out.
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier};
 

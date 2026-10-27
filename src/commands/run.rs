@@ -12,12 +12,12 @@ use std::io::IsTerminal;
 use std::path::Path;
 use std::time::Instant;
 
-/// Reads `--file` or `--params-file` from stdin.
+/// The path that makes `--file` or `--params-file` read stdin.
 const STDIN: &str = "-";
 
 /// Runs one statement on the connection named `connection`, its `{{name}}` bound to the values of `assignments` and of
 /// the `name=value` lines of `params_file`, adds it to the connection's history, and prints its result: a plain table,
-/// or JSON with `json`. A write is sent once `yes` or the terminal says so.
+/// or JSON with `json`. A write is sent only after `yes` or a yes on the terminal.
 pub async fn run(
     connection: &ConnectionName,
     statement: &StatementArgs,
@@ -71,8 +71,8 @@ async fn record(entry: Entry) {
     }
 }
 
-/// The values of `assignments` and of `file`'s lines, a name given twice refused; the file may name more than the
-/// statement holds.
+/// The values of `assignments` and of `file`'s lines; a name given twice is refused, and the file may name more
+/// parameters than the statement holds.
 async fn given(assignments: &[Assignment], file: Option<&Path>) -> Result<Given> {
     let from_file = match file {
         Some(path) => params::assignments(&read_text(path, "the parameters").await?).map_err(|err| anyhow!("{}: {err}", path.display()))?,
@@ -90,7 +90,7 @@ async fn read_text(path: &Path, what: &str) -> Result<String> {
     tokio::fs::read_to_string(path).await.with_context(|| format!("reading {}", path.display()))
 }
 
-/// `sql` with `given` bound, cleared for `connection`; a write only once `yes` or the terminal says so.
+/// Clears `sql`, with `given` bound, for `connection`; a write only after `yes` or a yes on the terminal.
 async fn admit(connection: &Connection, sql: &str, given: &Given, yes: bool) -> Result<Admitted> {
     let header = Header::parse(sql);
     for warning in &header.warnings {
@@ -103,7 +103,7 @@ async fn admit(connection: &Connection, sql: &str, given: &Given, yes: bool) -> 
     }
 }
 
-/// Whether the user answers `y` to `write` on the terminal; no when stdin is not one.
+/// Whether the user answers `y` to `write` on the terminal; false when stdin is not a terminal.
 async fn is_confirmed_at_the_terminal(write: &Write) -> Result<bool> {
     if !std::io::stdin().is_terminal() {
         return Ok(false);

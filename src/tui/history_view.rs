@@ -10,7 +10,7 @@ use vtui::palette::view::{self, Pick, Popup};
 
 const WHEN_FORMAT: &str = "%m-%d %H:%M";
 
-/// A statement on one line, beside when it ran and what came of it.
+/// A statement on one line, next to when it ran and its outcome.
 fn pick<'a>(app: &App, label: &'a str, detail: &'a str) -> Pick<'a> {
     Pick { icon: "↺", colour: app.theme().accent, label, detail: view::faded(app.theme(), detail) }
 }

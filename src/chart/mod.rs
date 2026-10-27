@@ -1,4 +1,5 @@
-//! What to chart and the points to draw, from a result: pure, drawing lives in `tui/chart_view/`.
+//! What to chart from a result, and the points to draw.
+//! Pure: the drawing lives in `tui/chart_view/`.
 pub(crate) use series::{ChartError, Series, YColumn};
 pub(crate) use spec::ChartSpec;
 
@@ -52,7 +53,8 @@ pub(crate) struct ChartColumns {
 ///
 /// x is the first text, date, time or timestamp column, else the first numeric column when it holds integers in ascending order
 /// (`year`, `generate_series`); y is every other numeric column.
-/// The kind is bar when x is text or there are at most 12 rows, line otherwise: a line reads a trend, bars compare a few values.
+/// The kind is bar when x is text or there are at most `FEW_POINTS` rows, line otherwise.
+/// A line reads a trend; bars compare a few values.
 pub(crate) fn infer(result: &ResultSet) -> Option<ChartColumns> {
     let x = default_x(result)?;
     let y = default_y(result.columns(), x);

@@ -1,5 +1,6 @@
-//! The clipboard of the machine pgbg runs on, through `pbcopy`: the loop also sends the terminal's OSC 52, which inside
-//! tmux or from a phone may not reach a clipboard, so each copy tries both.
+//! The clipboard of the machine pgbg runs on, through `pbcopy`.
+//! The loop also sends the terminal's OSC 52, which may not reach a clipboard inside tmux or from a phone, so each copy
+//! tries both.
 use super::super::app::Answer;
 use super::send;
 use crate::db::model::ResultSet;
@@ -10,7 +11,8 @@ use tokio::io::AsyncWriteExt as _;
 use tokio::process::Command;
 use tokio::sync::mpsc::UnboundedSender;
 
-/// The most the loop writes to the terminal as OSC 52: past it the write would hold the loop, and many terminals drop it.
+/// The largest text the loop writes to the terminal as OSC 52: a bigger write would block the loop, and many terminals
+/// drop it.
 const TERMINAL_LIMIT_BYTES: usize = 100 * 1024;
 
 /// Which clipboards a copy reached.
@@ -20,19 +22,19 @@ struct Clipboards {
     is_in_terminal: bool,
 }
 
-/// Whether the loop sends `text` to the terminal's clipboard too.
+/// Whether the loop also sends `text` to the terminal's clipboard.
 pub(in crate::tui) fn reaches_the_terminal(text: &str) -> bool {
     text.len() <= TERMINAL_LIMIT_BYTES
 }
 
-/// Builds the text of `result` in `format` on a blocking thread; it comes back as `Answer::Exported`, to be copied.
+/// Builds the text of `result` in `format` on a blocking thread; the text comes back as `Answer::Exported`, to be copied.
 pub(super) fn export(result: ResultSet, format: Format, done: String, answers: UnboundedSender<Answer>) {
     tokio::task::spawn_blocking(move || {
         send(&answers, Answer::Exported { text: export::result(&result, format), done });
     });
 }
 
-/// Hands `text` to `pbcopy` off the loop; `done` comes back as `Answer::Copied`, saying when only one clipboard had it.
+/// Hands `text` to `pbcopy` off the loop; `done` comes back as `Answer::Copied`, noting when only one clipboard got it.
 pub(super) fn copy(text: String, done: String, answers: UnboundedSender<Answer>) {
     tokio::spawn(async move {
         let is_in_pbcopy = match pbcopy(&text).await {

@@ -43,12 +43,12 @@ use vtui::screen::Screen;
 
 /// How long the editor's text stays still before its colours are rebuilt, so typing never waits on them.
 const RECOLOUR_DELAY: Duration = Duration::from_millis(40);
-/// How often the screen is drawn again while a column reads as the time from now, so it stays true to the minute.
+/// How often the screen is drawn again while a column shows time from now, so it stays right to the minute.
 const RELATIVE_TIME_REDRAW: Duration = Duration::from_secs(60);
 
-/// Runs the TUI on `first` until the user quits, with `connections` to switch to and the `config` file they come from,
-/// each result opening in `format`, giving the terminal back on the way out; a signal while its sessions stop drops them
-/// at once, as a command does.
+/// Runs the TUI on `first` until the user quits, with `connections` to switch to, read from the `config` file, and each
+/// result opening in `format`; it gives the terminal back on the way out.
+/// A signal while the sessions stop drops them at once, as a command does.
 pub(crate) async fn run(connections: Vec<Connection>, first: Connection, config: PathBuf, format: Mode) -> Result<()> {
     let mut signals = Signals::listen()?;
     let theme = vtui::ground::ask().map_or_else(Theme::default, |ground| Theme::default().with_ground(ground));
@@ -66,7 +66,7 @@ pub(crate) async fn run(connections: Vec<Connection>, first: Connection, config:
     outcome.and(stopped.map_err(Into::into))
 }
 
-/// The terminal the loop draws on, and the screen that lends it to another program.
+/// The terminal the loop draws on, and the screen that can lend it to another program.
 struct Screens<'a> {
     terminal: &'a mut DefaultTerminal,
     screen: &'a Screen,
@@ -82,7 +82,8 @@ impl Screens<'_> {
     }
 }
 
-/// Once the editor exits: the read of the query it wrote, for the sheet that asked, or the answer saying why it could not run.
+/// What follows the user's editor exiting: a read of the query it wrote, for the sheet that asked, or an answer saying
+/// why the editor could not run.
 fn after_editing(edit: Edit, edited: Result<()>) -> Result<Action, Answer> {
     let Edit { connection, query } = edit;
     match edited {
@@ -91,7 +92,7 @@ fn after_editing(edit: Edit, edited: Result<()>) -> Result<Action, Answer> {
     }
 }
 
-/// A query the user's editor had, for the sheet that asked for it.
+/// A query opened in the user's editor, for the sheet that asked for it.
 struct Edit {
     connection: ConnectionName,
     query: Query,
@@ -140,7 +141,8 @@ async fn event_loop(
                 backend.dispatch(action);
                 continue;
             };
-            // The key stream's reader thread would steal the editor's keys: it stops with the stream, and a new one starts after.
+            // The key stream's reader thread would steal the keys of the user's editor: it stops with the stream, and a
+            // new one starts afterwards.
             drop(events);
             let edited = screens.edit_outside(&query, backend);
             events = EventStream::new();

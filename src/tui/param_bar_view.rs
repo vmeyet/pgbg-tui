@@ -12,7 +12,7 @@ use vtui::field::Field;
 const REQUIRED: &str = "required";
 const OPTIONAL: &str = "NULL";
 
-/// Where the field with the keys stands in the bar's line, in columns: its name, the cursor, and past its value.
+/// The position of the field with the keys in the bar's line, in columns: its name, the cursor, and the end of its value.
 struct Focused {
     start: usize,
     cursor: usize,
@@ -20,7 +20,8 @@ struct Focused {
 }
 
 impl Focused {
-    /// The columns the line scrolls by in `width`, so the field shows from its name when it fits, and the cursor always.
+    /// How many columns the line scrolls by in `width`, so the field shows from its name when it fits, and the cursor
+    /// always shows.
     fn scroll(&self, width: usize) -> usize {
         let shows_field = self.end.saturating_sub(width).min(self.start);
         let shows_cursor = (self.cursor + 1).saturating_sub(width);
@@ -28,8 +29,8 @@ impl Focused {
     }
 }
 
-/// The bar in `area`: a name, then its value, else dimmed what it falls back to; scrolled sideways so the field with
-/// the keys shows, with the terminal's cursor in it.
+/// The bar in `area`: each name, then its value, or else its fallback dimmed.
+/// It scrolls sideways so the field with the keys shows, with the terminal's cursor in it.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
     let sheet = app.sheet();
     let focused_name = if app.focus() == Focus::Params { sheet.param_at() } else { None };

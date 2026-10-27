@@ -1,5 +1,5 @@
-//! One session task per connection opened: it owns the session and its tunnel, runs each statement in turn, takes
-//! cancels by `RunId`, and stops a statement as every stop does.
+//! One session task per opened connection: it owns the session and its tunnel, runs each statement in turn, takes
+//! cancels by `RunId`, and stops a statement the same way every stop in pgbg does.
 use super::paging::{Paging, serve_pages};
 use super::schema::SchemaReader;
 use crate::connection::Connection;
@@ -33,15 +33,15 @@ pub(super) enum Woken {
 
 /// What the session task does next.
 pub(super) enum Next {
-    /// Waits for a job, the session's close or the tunnel's end.
+    /// Wait for a job, the session's close or the tunnel's end.
     Wait,
-    /// Acts on what woke it while it served the pages of a run.
+    /// Act on what woke the task while it served the pages of a run.
     Act(Woken),
-    /// Stops: pgbg quits.
+    /// Stop, because pgbg quits.
     Stop,
 }
 
-/// A run's history entry before it is answered: what was sent, and when.
+/// A run's history entry before its answer comes: what was sent, and when.
 struct RunStart {
     statement: String,
     started_at: DateTime<Utc>,
@@ -54,11 +54,12 @@ impl RunStart {
     }
 }
 
-/// The task that owns the session and its tunnel: it opens them, runs each statement in turn, and says when they are lost.
+/// The task that owns the session and its tunnel: it opens them, runs each statement in turn, and reports when they are
+/// lost.
 struct SessionTask {
     connection: Connection,
     tunnel: Option<Tunnel>,
-    /// The open session, between runs: a run takes it out while it holds it.
+    /// The open session between runs; a run takes it out while it uses it.
     session: Option<Session>,
     /// The route of the open session, for the schema reader; none while it is not open.
     route: watch::Sender<Option<Route>>,
@@ -67,8 +68,8 @@ struct SessionTask {
     idle_limit: Duration,
 }
 
-/// What the session task hears from the app and says to it: jobs and cancels in, answers out, and the statement on the
-/// server a cancel reaches.
+/// The task's channels with the app: jobs and cancels come in, answers go out, plus the statement on the server that a
+/// cancel reaches.
 pub(super) struct Mailbox {
     pub(super) queue: UnboundedReceiver<Job>,
     pub(super) cancelled: Cancels,
@@ -88,8 +89,8 @@ impl Mailbox {
 }
 
 impl SessionTask {
-    /// Opens the session at once, and again before a statement when the last try failed or the session was lost;
-    /// once pgbg quits, a statement still queued is never sent.
+    /// Opens the session at once, and again before a statement when the last try failed or the session was lost.
+    /// Once pgbg quits, a statement still queued is never sent.
     async fn serve(mut self, reader: SchemaReader) {
         tokio::select! {
             () = self.serve_jobs() => {}
@@ -134,7 +135,8 @@ impl SessionTask {
         }
     }
 
-    /// Opens a session, tells the schema reader its route and says how it went; the error, when it did not open.
+    /// Opens a session, gives the schema reader its route and reports the outcome; returns the error when it did not
+    /// open.
     async fn open(&mut self) -> Result<Session, String> {
         let opened = self.connect().await;
         let route = opened.as_ref().ok().map(|_| self.tunnel.as_ref().map_or(Route::Direct, Tunnel::route));
@@ -154,8 +156,8 @@ impl SessionTask {
         }
     }
 
-    /// Opens the session along the tunnel kept, or one started again, as `pgbg run` does; the tunnel stays for the
-    /// next try when the login fails, and its state goes out as it changes.
+    /// Opens the session through the kept tunnel, or a restarted one, as `pgbg run` does.
+    /// The tunnel stays for the next try when the login fails, and its state is sent each time it changes.
     async fn connect(&mut self) -> Result<Session, String> {
         let answers = &self.mailbox.answers;
         let on_tunnel = |step| answers.say(Incoming::Tunnel(tunnel_state(step)));
@@ -175,7 +177,8 @@ impl SessionTask {
         }
     }
 
-    /// Opens the session; when it does not open, every statement sent meanwhile fails with it, so a later open never sends one.
+    /// Opens the session; when it does not open, every statement sent meanwhile fails with it, so a later open never
+    /// sends one.
     async fn open_or_fail_queued(&mut self) {
         match self.open().await {
             Ok(session) => self.session = Some(session),
@@ -183,7 +186,7 @@ impl SessionTask {
         }
     }
 
-    /// Runs `queued` on the open session, or one opened for it; says what the task does next.
+    /// Runs `queued` on the open session, or on one opened for it; returns what the task does next.
     async fn run(&mut self, queued: Queued) -> Next {
         let start = RunStart::of(&queued);
         let mut session = match self.take_or_open().await {
@@ -216,8 +219,8 @@ impl SessionTask {
         serve_pages(Paging { pages, run, token, mailbox, tunnel, idle_limit }).await
     }
 
-    /// Keeps `session` for the next run, or closes it when it can run no more statements, dropping a pending close
-    /// it then already says.
+    /// Keeps `session` for the next run, or closes it when it can run no more statements.
+    /// Closing it already reports the loss, so a pending `Closed` wake is then dropped.
     fn keep_unless_lost(&mut self, session: Session, next: Next) -> Next {
         let Some(why) = session.lost() else {
             self.session = Some(session);
@@ -231,7 +234,7 @@ impl SessionTask {
         }
     }
 
-    /// Closes the session a dead tunnel carried; the next statement starts both again.
+    /// Closes the session that a dead tunnel carried; the next statement starts both again.
     fn lose_tunnel(&mut self, died: &Died) {
         self.tunnel = None;
         self.send(Incoming::Tunnel(TunnelState::Died(died.to_string())));
@@ -257,7 +260,7 @@ impl SessionTask {
         self.send(Incoming::Closed(why));
     }
 
-    /// Adds the run `start` began to the history in the background: the next statement never waits on the disk.
+    /// Records the run that `start` began in the history, in the background: the next statement never waits on the disk.
     fn record(&self, start: RunStart, took: Duration, outcome: Outcome) {
         let Some(store) = self.history.as_ref() else { return };
         let RunStart { statement, started_at, .. } = start;
@@ -277,7 +280,7 @@ fn tunnel_state(step: TunnelStep) -> TunnelState {
     }
 }
 
-/// Why `session` ended, once it has; never, when there is none.
+/// Why `session` ended, once it has; never resolves when there is no session.
 async fn closed(session: Option<&Session>) -> String {
     match session {
         Some(session) => session.closed().await,
@@ -285,7 +288,7 @@ async fn closed(session: Option<&Session>) -> String {
     }
 }
 
-/// How `tunnel` ended, once it has; never, when there is none.
+/// How `tunnel` ended, once it has; never resolves when there is no tunnel.
 pub(super) async fn ended(tunnel: Option<&mut Tunnel>) -> Died {
     match tunnel {
         Some(tunnel) => tunnel.ended().await,
@@ -305,6 +308,7 @@ mod tests {
     use crate::fixtures;
     use crate::query::Roots;
     use crate::query::params::ParamInput;
+    use crate::tui::app::Confirmed;
     use crate::tui::app::{Answer, RunId, SessionId};
     use std::path::PathBuf;
     use tokio::sync::mpsc;
@@ -335,7 +339,7 @@ mod tests {
         (backend, answers)
     }
 
-    /// An empty table `name` in the test database, made again from scratch.
+    /// An empty table `name` in the test database, created again from scratch.
     async fn empty_table(name: &str) -> String {
         on_a_side_session_writing(&format!("DROP TABLE IF EXISTS {name}")).await;
         on_a_side_session_writing(&format!("CREATE TABLE {name} (n int)")).await;
@@ -362,7 +366,13 @@ mod tests {
         let table = empty_table("pgbg_sent_while_failing_to_open").await;
         let (backend, mut answers) =
             started_on(fixtures::tunnelled_after("pgbg-test-fails-once", &fails_the_first_time, WritePolicy::Allowed));
-        backend.run(&shop(), RunId::FIRST, Statement::new(format!("INSERT INTO {table} VALUES (1)")), ParamInput::default());
+        backend.run(
+            &shop(),
+            RunId::FIRST,
+            Statement::new(format!("INSERT INTO {table} VALUES (1)")),
+            ParamInput::default(),
+            Some(Confirmed::FOR_TESTS),
+        );
         answers_until(&mut answers, |answer| is_answer_to(RunId::FIRST, answer)).await;
         let rows = on_a_side_session(&format!("SELECT n FROM {table}")).await;
         assert_eq!(rows.len(), 0, "{rows:?}");
@@ -374,7 +384,13 @@ mod tests {
         let _ports = fixtures::TUNNEL_PORTS.lock().await;
         let table = empty_table("pgbg_queued_at_stop").await;
         let (backend, _answers) = started_on(fixtures::tunnelled_after("pgbg-test-slow-start", "sleep 1", WritePolicy::Allowed));
-        backend.run(&shop(), RunId::FIRST, Statement::new(format!("INSERT INTO {table} VALUES (1)")), ParamInput::default());
+        backend.run(
+            &shop(),
+            RunId::FIRST,
+            Statement::new(format!("INSERT INTO {table} VALUES (1)")),
+            ParamInput::default(),
+            Some(Confirmed::FOR_TESTS),
+        );
         backend.stop().await;
         let rows = on_a_side_session(&format!("SELECT n FROM {table}")).await;
         assert_eq!(rows.len(), 0, "{rows:?}");
@@ -435,7 +451,7 @@ mod tests {
         );
         let name = shop.name().clone();
         let (backend, mut answers) = started_on(shop);
-        backend.run(&name, RunId::FIRST, Statement::new("SELECT 1"), ParamInput::default());
+        backend.run(&name, RunId::FIRST, Statement::new("SELECT 1"), ParamInput::default(), None);
         let seen = answers_until(&mut answers, |answer| is_answer_to(RunId::FIRST, answer)).await;
         let failed = Incoming::Failed { run: RunId::FIRST, error: TUNNEL_NOT_STARTED.to_owned(), position: None };
         assert_eq!(seen.last(), Some(&failed));
@@ -468,7 +484,7 @@ mod tests {
         answers_until(&mut answers, |answer| *answer == Incoming::Opened).await;
         kill_tunnel_marked(marker).await;
         answers_until(&mut answers, is_tunnel_death).await;
-        backend.run(&shop(), RunId::FIRST, Statement::new("SELECT 1"), ParamInput::default());
+        backend.run(&shop(), RunId::FIRST, Statement::new("SELECT 1"), ParamInput::default(), None);
         let seen = answers_until(&mut answers, |answer| matches!(answer, Incoming::Result { .. })).await;
         let seen: Vec<Incoming> = seen.into_iter().filter(|answer| !matches!(answer, Incoming::Closed(_))).collect();
         assert_eq!(seen[0], Incoming::Tunnel(TunnelState::Starting));
@@ -486,7 +502,7 @@ mod tests {
     }
 
     async fn answer_to(backend: &Backend, answers: &mut UnboundedReceiver<Answer>, run: RunId, sql: &str) -> Incoming {
-        backend.run(&shop(), run, Statement::new(sql), ParamInput::default());
+        backend.run(&shop(), run, Statement::new(sql), ParamInput::default(), Some(Confirmed::FOR_TESTS));
         next_answer(answers).await
     }
 
@@ -513,7 +529,7 @@ mod tests {
         let (mut backend, mut answers) = started();
         let copy = fixtures::test_database_as("shop-copy");
         backend.open(copy.clone(), SessionId::FIRST);
-        backend.run(copy.name(), RunId::FIRST, Statement::new("SELECT 1"), ParamInput::default());
+        backend.run(copy.name(), RunId::FIRST, Statement::new("SELECT 1"), ParamInput::default(), None);
         let connection = loop {
             if let Answer::Session { connection, incoming: Incoming::Result { .. }, .. } = answers.recv().await.unwrap() {
                 break connection;
@@ -557,7 +573,7 @@ mod tests {
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_cancel_that_comes_before_its_run_keeps_it_from_the_server() {
         let (backend, mut answers) = started();
-        backend.run(&shop(), RunId::FIRST, Statement::new(SLEEP), ParamInput::default());
+        backend.run(&shop(), RunId::FIRST, Statement::new(SLEEP), ParamInput::default(), None);
         backend.cancel(&shop(), RunId::FIRST);
         let answer = next_answer(&mut answers).await;
         assert_eq!(answer, Incoming::Failed { run: RunId::FIRST, error: CANCELLED_BEFORE_SENT.to_owned(), position: None });
@@ -583,7 +599,7 @@ mod tests {
     async fn stopping_a_session_ends_its_running_statement_on_the_server() {
         const SLEEP_AT_STOP: &str = "SELECT pg_sleep(31)";
         let (backend, _answers) = started();
-        backend.run(&shop(), RunId::FIRST, Statement::new(SLEEP_AT_STOP), ParamInput::default());
+        backend.run(&shop(), RunId::FIRST, Statement::new(SLEEP_AT_STOP), ParamInput::default(), None);
         until_active(SLEEP_AT_STOP).await;
         backend.stop().await;
         let is_active = format!("SELECT 1 FROM pg_stat_activity WHERE query = '{SLEEP_AT_STOP}' AND state = 'active'");
@@ -594,7 +610,7 @@ mod tests {
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_statement_running_when_its_session_stops_fails_with_it() {
         let (backend, mut answers) = started();
-        backend.run(&shop(), RunId::FIRST, Statement::new(SLEEP), ParamInput::default());
+        backend.run(&shop(), RunId::FIRST, Statement::new(SLEEP), ParamInput::default(), None);
         until_sleeping().await;
         backend.stop().await;
         let failed = Incoming::Failed { run: RunId::FIRST, error: STOPPED_WITH_ITS_SESSION.to_owned(), position: None };
@@ -607,7 +623,7 @@ mod tests {
         let table = empty_table("pgbg_write_at_close").await;
         let (mut backend, mut answers) = started_on(fixtures::test_database("local", "writes = \"allowed\"\n"));
         let insert = format!("INSERT INTO {table} SELECT 1 FROM pg_sleep(32)");
-        backend.run(&shop(), RunId::FIRST, Statement::new(&insert), ParamInput::default());
+        backend.run(&shop(), RunId::FIRST, Statement::new(&insert), ParamInput::default(), Some(Confirmed::FOR_TESTS));
         until_active(&insert).await;
         backend.close(&shop());
         next_answer(&mut answers).await;
@@ -624,7 +640,13 @@ mod tests {
         let (backend, mut answers) = started_on(fixtures::tunnelled_slowly("pgbg-test-slow-write", WritePolicy::Allowed));
         answers_until(&mut answers, |answer| *answer == Incoming::Opened).await;
         let mut running = backend.sessions[&shop()].running.clone();
-        backend.run(&shop(), RunId::FIRST, Statement::new(format!("UPDATE {table} SET n = 2")), ParamInput::default());
+        backend.run(
+            &shop(),
+            RunId::FIRST,
+            Statement::new(format!("UPDATE {table} SET n = 2")),
+            ParamInput::default(),
+            Some(Confirmed::FOR_TESTS),
+        );
         running.wait_for(Option::is_some).await.unwrap();
         backend.stop().await;
         let rows = on_a_side_session(&format!("SELECT n FROM {table}")).await;
@@ -635,7 +657,7 @@ mod tests {
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn the_schema_is_read_while_a_statement_runs() {
         let (backend, mut answers) = started();
-        backend.run(&shop(), RunId::FIRST, Statement::new(SLEEP), ParamInput::default());
+        backend.run(&shop(), RunId::FIRST, Statement::new(SLEEP), ParamInput::default(), None);
         until_sleeping().await;
         let _reading = fixtures::reading_the_catalog().await;
         backend.read_schema(&shop(), SessionId::FIRST);
@@ -669,7 +691,7 @@ mod tests {
         assert!(matches!(seen.last(), Some(Incoming::Schema(Ok(_)))) && tunnels_started == 1, "{seen:?}");
     }
 
-    /// `shop` on the test database, its password from a shell line that `$1` names a file for.
+    /// `shop` on the test database, its password from the shell line `line`, which gets `file` as `$1`.
     fn with_password_command(line: &str, file: &std::path::Path) -> Connection {
         let command = format!("password = {{ command = [\"sh\", \"-c\", {line:?}, \"sh\", {:?}] }}\n", file.display().to_string());
         fixtures::test_database("local", &command)
@@ -705,7 +727,7 @@ mod tests {
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_run_cancelled_then_stopped_is_answered_as_failed() {
         let (backend, mut answers) = started();
-        backend.run(&shop(), RunId::FIRST, Statement::new(SLEEP), ParamInput::default());
+        backend.run(&shop(), RunId::FIRST, Statement::new(SLEEP), ParamInput::default(), None);
         until_sleeping().await;
         backend.cancel(&shop(), RunId::FIRST);
         backend.stop().await;
