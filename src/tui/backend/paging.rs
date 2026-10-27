@@ -185,6 +185,7 @@ mod tests {
     use crate::db::{Session, guard};
     use crate::fixtures;
     use crate::query::Roots;
+    use crate::query::params::ParamInput;
     use crate::tui::app::{Answer, SessionId};
     use std::path::PathBuf;
     use tokio::sync::mpsc;
@@ -223,7 +224,7 @@ mod tests {
     }
 
     fn run(backend: &Backend, run: RunId, sql: &str) {
-        backend.run(&shop(), run, Statement::new(sql));
+        backend.run(&shop(), run, Statement::new(sql), ParamInput::default());
     }
 
     fn ask_next_page(backend: &Backend) {

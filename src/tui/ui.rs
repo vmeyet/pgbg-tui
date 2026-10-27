@@ -1,7 +1,8 @@
 //! Drawing: the frame in the tier's colour, the panes inside it, and the key hints under them.
 use super::app::{App, Fit, Overlay, SessionState, SidebarTab, TunnelState};
 use super::{
-    detail_view, editor_view, finder_view, form_view, help_view, history_view, picker_view, prompt_view, result_view, sidebar_view,
+    detail_view, editor_view, finder_view, form_view, help_view, history_view, param_bar_view, picker_view, prompt_view, result_view,
+    sidebar_view,
 };
 use crate::act::{self, Hint, Pane};
 use crate::render::printable;
@@ -23,6 +24,7 @@ const CUT_SCHEMA: &str = "first 20 000 tables";
 /// Where each part of the screen goes.
 struct Areas {
     sidebar: Option<Rect>,
+    params: Option<Rect>,
     editor: Rect,
     result: Rect,
     footer: Rect,
@@ -31,9 +33,13 @@ struct Areas {
 /// The whole screen for `app`; returns what it had room for.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> Fit {
     let has_sidebar = f.area().width >= SIDEBAR_MIN_SCREEN_COLUMNS;
-    let areas = layout(framed(f, app), has_sidebar);
+    let has_params = !app.sheet().param_names().is_empty();
+    let areas = layout(framed(f, app), has_sidebar, has_params);
     if let Some(sidebar) = areas.sidebar {
         sidebar_view::draw(f, app, sidebar);
+    }
+    if let Some(params) = areas.params {
+        param_bar_view::draw(f, app, params);
     }
     editor_view::draw(f, app, areas.editor);
     let grid = result_view::draw(f, app, areas.result);
@@ -60,12 +66,15 @@ fn framed(f: &mut Frame<'_>, app: &App) -> Rect {
     inside
 }
 
-fn layout(area: Rect, has_sidebar: bool) -> Areas {
+/// The areas of `area`, with the sidebar when `has_sidebar`, and the parameter bar a line above the editor when `has_params`.
+fn layout(area: Rect, has_sidebar: bool, has_params: bool) -> Areas {
     let [panes, footer] = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
     let sidebar_columns = if has_sidebar { SIDEBAR_COLUMNS } else { 0 };
     let [sidebar, panes] = Layout::horizontal([Constraint::Length(sidebar_columns), Constraint::Fill(1)]).areas(panes);
-    let [editor, result] = Layout::vertical([Constraint::Percentage(EDITOR_SHARE_PCT), Constraint::Fill(1)]).areas(panes);
-    Areas { sidebar: has_sidebar.then_some(sidebar), editor, result, footer }
+    let [top, result] = Layout::vertical([Constraint::Percentage(EDITOR_SHARE_PCT), Constraint::Fill(1)]).areas(panes);
+    let bar_rows = u16::from(has_params);
+    let [params, editor] = Layout::vertical([Constraint::Length(bar_rows), Constraint::Fill(1)]).areas(top);
+    Areas { sidebar: has_sidebar.then_some(sidebar), params: has_params.then_some(params), editor, result, footer }
 }
 
 /// The session's state on the right, as wide as it needs up to half the row, and the keys that fit on the left; an open

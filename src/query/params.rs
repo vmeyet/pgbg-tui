@@ -45,11 +45,18 @@ pub(crate) enum Fallback {
 }
 
 /// The values given for a run, by name.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Given {
     values: BTreeMap<ParamName, String>,
     /// The names a params file gave: one file may serve several statements, so a name this one lacks is no typo.
     from_file: BTreeSet<ParamName>,
+}
+
+/// What fills a statement's parameters: the values given for them, and what its header says of each.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ParamInput {
+    pub(crate) given: Given,
+    pub(crate) specs: Vec<ParamSpec>,
 }
 
 /// A statement as the server gets it, each `{{name}}` replaced by its `$n`, and the values bound to them.
@@ -76,9 +83,9 @@ pub(crate) enum ParamError {
 }
 
 impl Given {
-    /// No values: a statement without parameters runs with them, one with parameters is refused.
-    pub(crate) fn none() -> Self {
-        Self::default()
+    /// The values typed in the parameter bar, one per name.
+    pub(crate) fn typed(values: BTreeMap<ParamName, String>) -> Self {
+        Self { values, from_file: BTreeSet::new() }
     }
 
     /// The values of `flags` and of a params file's `file`, refused when one name comes twice.
@@ -99,6 +106,11 @@ impl Given {
 pub(crate) fn assignments(text: &str) -> Result<Vec<Assignment>, String> {
     let lines = text.lines().enumerate().filter(|(_, line)| !line.trim().is_empty());
     lines.map(|(at, line)| line.parse().map_err(|_quotes_the_line: String| format!("line {}: {NO_ASSIGNMENT_LINE}", at + 1))).collect()
+}
+
+/// The names of `statement`'s `{{name}}`, each once, in the order they first come.
+pub(crate) fn names(statement: &Statement) -> Result<Vec<ParamName>, ParamError> {
+    Ok(distinct(&named_params(statement.as_str())?))
 }
 
 /// `template` with each `{{name}}` replaced by `$n`, the same name the same number, and the value given for each,
@@ -288,6 +300,12 @@ mod tests {
     fn the_same_name_gets_the_same_number() {
         let (sql, values) = filled("SELECT {{day}}, {{owner}}, {{day}}", &["day=1", "owner=nina"]).unwrap();
         assert_eq!((sql.as_str(), values.len()), ("SELECT $1, $2, $1", 2));
+    }
+
+    #[test]
+    fn names_come_once_each_in_the_order_they_first_come() {
+        let names = names(&Statement::new("SELECT {{owner}}, {{since}}, {{owner}}")).unwrap();
+        assert_eq!(names, [name("owner"), name("since")]);
     }
 
     #[test]

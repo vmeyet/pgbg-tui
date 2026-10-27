@@ -222,11 +222,10 @@ fn on_screen(name: &ConnectionName) -> Note {
 
 #[cfg(test)]
 pub(in crate::tui) mod tests {
-    use super::super::tests::orders;
+    use super::super::tests::{first_run, orders};
     use super::super::{Answer, ConfigAnswer, Incoming, QueryAnswer, Run, RunId, SessionId, SessionState};
     use super::*;
     use crate::connection::WritePolicy;
-    use crate::db::model::Statement;
     use crate::fixtures::named;
     use crate::tui::theme::Theme;
     use crossterm::event::KeyModifiers;
@@ -367,7 +366,7 @@ pub(in crate::tui) mod tests {
         switch_to(&mut app, "prod");
         press(&mut app, "SELECT 1");
         let run = key(&mut app, KeyCode::Enter);
-        assert_eq!(run, [Action::Run { connection: name("prod"), run: RunId::FIRST, statement: Statement::new("SELECT 1") }]);
+        assert_eq!(run, [first_run(&name("prod"), "SELECT 1")]);
     }
 
     #[test]

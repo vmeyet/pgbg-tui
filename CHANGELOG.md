@@ -8,6 +8,8 @@ Each entry says what changed, then where, then how to use it.
 
 ### New
 
+- **The parameter bar** in the TUI: when the statement under the cursor holds a `{{name}}`, a line above the editor shows a field for each, an empty one with what it runs with: its `-- param:` default, `NULL` when `optional`, or `required`.
+  Press `⇥` from the editor to reach it, `⇥` and `⇧⇥` to move between fields, `⏎` to run, `esc` to go back to the editor; the values stay on the sheet until you quit, and are never written to disk.
 - **Completion** in the TUI's editor: as you type a name, the rest of the best table, column or keyword shows faded after the cursor, and `→` takes it.
   It knows what the cursor wants from the statement under it: a table after `FROM` or `JOIN`, a column of `orders` after `o.` when the statement reads `FROM orders o`, else a column of the tables it names first.
   Tables in the search path come bare, the others with their schema, and a name that needs quotes goes in quoted; nothing shows inside a string or a comment.
@@ -112,6 +114,7 @@ Each entry says what changed, then where, then how to use it.
 
 - **A string reads the same to pgbg's guard and to the server**: every read-only transaction sets `standard_conforming_strings = on`, and a connection that allows writes sets it for its session, so a server set otherwise cannot hide part of a statement inside what pgbg took for a string.
 - **A character outside ASCII, a no-break space included, is part of a word**, as PostgreSQL reads it, where pgbg took some for blanks.
+- **`⇧⇥`** now moves back a field in the connection form on terminals that report it with `shift` held, as most do.
 - **A tunnel whose command died is never taken as up**, even when another process answers on its port: pgbg says how it died instead.
 - **A second `ctrl-c`, `kill` or hang-up stops the TUI at once** while its sessions stop, as it does under `pgbg run`; it waited up to 3 seconds.
 - **Copying a big result no longer freezes the TUI**: its text is built off the screen's loop, and a copy over 100 KB skips the terminal's clipboard, which the status line says (`through pbcopy only`).
