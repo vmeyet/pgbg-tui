@@ -126,7 +126,7 @@ Needs step 12: the lexer, the statement under the cursor and the schema's index.
 - [x] `ai/`: the prompt built from the instruction, the statement under the cursor (every string and number literal masked, comments stripped, parameters as `{{name}}`), the schema slice (names and types) and the tier, capped at 16 KiB, and refused for a statement holding a password; the answer read back as SQL statements with its literals put back; pure, tested
 - [x] `[ai] command` in `config.toml`, `ai = "on"` or `"off"` on a connection (on unless it says off, whatever its tier); the command run from an empty temp folder with a cleared environment (`PATH`, `HOME`, `LANG`, `TERM`, `[ai] env`, never a password variable), in its own process group through a `groups.rs` helper that writes stdin and reads stdout at once, cut at 64 KiB, 60 s at most, `Esc` kills it; tested with a fake command
 - [x] `ctrl-g` asks: an instruction on the footer line, then the answer shown as a diff of the statement under the cursor, a write said so in the failure colour and confirmed as step 16 says when it runs; `tab` takes it through the editor's paste, `esc` drops it, `⏎` does nothing; nothing runs by itself
-- [ ] The idle ghost, off by default (`[ai] ghost = true`): after 1 s without a key, the rest of the statement asked for and dimmed after the cursor, the local ghost first; a key kills the command
+- [x] The idle ghost, off by default (`[ai] ghost = true`): after 1 s without a key, the rest of the statement asked for and dimmed after the cursor, the local ghost first; a key kills the command
 
 ## 18. Engineering pass
 

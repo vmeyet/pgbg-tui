@@ -46,6 +46,8 @@ use vtui::screen::Screen;
 
 /// How long the editor's text stays still before its colours are rebuilt, so typing never waits on them.
 const RECOLOUR_DELAY: Duration = Duration::from_millis(40);
+/// How long the editor sits without a key before the idle ghost asks the `[ai] command`.
+const IDLE_GHOST_DELAY: Duration = Duration::from_secs(1);
 /// How often the screen is drawn again while a column shows time from now, so it stays right to the minute.
 const RELATIVE_TIME_REDRAW: Duration = Duration::from_secs(60);
 
@@ -132,6 +134,7 @@ async fn event_loop(
                 app.recolour();
                 vec![]
             }
+            () = sleep(IDLE_GHOST_DELAY), if app.wants_idle_ghost() => app.ask_idle_ghost(),
             () = sleep(RELATIVE_TIME_REDRAW), if app.sheet().shows_relative_time() => vec![],
             stopped = signals.next() => {
                 for action in app.quit() {

@@ -1,0 +1,25 @@
+---
+source: src/tui/editor_view.rs
+expression: "styled::runs(terminal.backend().buffer())"
+---
+Indexed(238)/NONE "╭"
+Cyan/BOLD " Editor "
+Indexed(238)/NONE "─"
+Indexed(245)/NONE " READ ONLY "
+Indexed(238)/NONE "──────────────────────╮"
+---
+Indexed(238)/NONE "│"
+Reset/NONE " "
+Magenta/NONE "SELECT"
+Reset/NONE " "
+Indexed(246)/NONE "*"
+Reset/NONE " "
+Magenta/NONE "FROM"
+Reset/NONE " orders "
+Magenta/NONE "WHERE"
+Reset/NONE " "
+Indexed(240)/NONE "total > 10"
+Reset/NONE "    "
+Indexed(238)/NONE "│"
+---
+Indexed(238)/NONE "╰──────────────────────────────────────────╯"

@@ -208,7 +208,7 @@ In the TUI, a bar above the editor shows one field per parameter.
 | `^t` | Find a table of the schema. |
 | `^r` | Search the history of this connection. |
 | `[` `]` | In the sidebar: switch between queries and schema. |
-| `→` | Take the faded rest of the name (completion). |
+| `→` | Take the faded rest after the cursor: completion, or the idle ghost. |
 | `^space` | List the names that fit at the cursor. |
 | `v` | Show the result as a chart, or as a grid again. |
 | `f` `F` | Next format for this column; every column raw or readable. |

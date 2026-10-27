@@ -8,6 +8,9 @@ Each entry says what changed, then where, then how to use it.
 
 ### New
 
+- **The idle ghost** in the TUI's editor: after a second without a key, your `[ai] command` is asked for the rest of the statement under the cursor, and its next line shows faded after the cursor.
+  It waits while completion shows a name, and any key stops the command; `→` takes it, and it never runs by itself.
+  Turn it on with `ghost = true` in the `[ai]` table of `config.toml`; a connection with `ai = "off"` never asks.
 - **`ctrl-g` asks your `[ai] command` for SQL**, in the TUI's editor: type what you want on the footer line and press `⏎`; the statement under the cursor and the tables it needs go along, its values masked unless `[ai] literals = "sent"`.
   The answer shows as a diff of the statement under the cursor, each write in it named in red, and a last line says how many lines did not fit.
   Press `⇥` to put it in the editor, `esc` to drop it; it never runs by itself, and a write still asks before it is sent.

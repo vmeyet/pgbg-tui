@@ -22,10 +22,12 @@ pub(super) struct AiTable {
     timeout: Option<u64>,
     #[serde(default)]
     literals: LiteralPolicy,
+    #[serde(default)]
+    ghost: bool,
 }
 
-/// How to ask: the program and its arguments, never run through a shell, the variables it gets, how long it has, and
-/// whether the statement's literals reach it.
+/// How to ask: the program and its arguments, never run through a shell, the variables it gets, how long it has,
+/// whether the statement's literals reach it, and whether the editor asks it on its own once idle.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AiSettings {
     pub(crate) command: Vec<String>,
@@ -33,6 +35,8 @@ pub(crate) struct AiSettings {
     pub(crate) env: Vec<String>,
     pub(crate) timeout: Duration,
     pub(crate) literals: LiteralPolicy,
+    /// Whether a second without a key asks for the rest of the statement under the cursor: off unless `ghost = true`.
+    pub(crate) ghost: bool,
 }
 
 /// The `[ai]` table checked, with a warning for each variable it lists that a password names.
@@ -44,7 +48,7 @@ pub(super) struct ReadAi {
 
 /// The settings `table` gives, given `connections`, whose password variables never reach the command.
 pub(super) fn read(table: AiTable, connections: &[Connection]) -> Result<ReadAi> {
-    let AiTable { command, env, timeout, literals } = table;
+    let AiTable { command, env, timeout, literals, ghost } = table;
     let Some(command) = command else { return Ok(ReadAi { settings: None, warnings: vec![] }) };
     if command.first().is_none_or(String::is_empty) {
         bail!("`[ai] command` names no program: give it as a list, such as [\"llm\", \"-m\", \"local\"]");
@@ -57,7 +61,7 @@ pub(super) fn read(table: AiTable, connections: &[Connection]) -> Result<ReadAi>
     let arguments = command_arguments(connections);
     let warnings = env.iter().filter_map(|name| warning(name, &passwords, &arguments)).collect();
     let env = passed_variables(env, &passwords);
-    Ok(ReadAi { settings: Some(AiSettings { command, env, timeout, literals }), warnings })
+    Ok(ReadAi { settings: Some(AiSettings { command, env, timeout, literals, ghost }), warnings })
 }
 
 impl AiSettings {
@@ -150,6 +154,7 @@ mod tests {
             env: ["PATH", "HOME", "LANG", "TERM", "OPENAI_API_KEY"].map(str::to_owned).to_vec(),
             timeout: Duration::from_secs(60),
             literals: LiteralPolicy::Masked,
+            ghost: false,
         };
         assert_eq!((read.settings, read.warnings.len()), (Some(expected), 0));
     }
@@ -158,6 +163,11 @@ mod tests {
     fn the_timeout_and_the_literals_may_be_set() {
         let read = settings("command = [\"llm\"]\ntimeout = 20\nliterals = \"sent\"", &[]).unwrap().settings.unwrap();
         assert_eq!((read.timeout, read.literals), (Duration::from_secs(20), LiteralPolicy::Sent));
+    }
+
+    #[test]
+    fn the_idle_ghost_may_be_turned_on() {
+        assert!(settings("command = [\"llm\"]\nghost = true", &[]).unwrap().settings.unwrap().ghost);
     }
 
     #[test]

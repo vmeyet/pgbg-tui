@@ -41,6 +41,7 @@ pub(super) mod form;
 mod ghost;
 mod grid;
 pub(super) mod history;
+pub(super) mod idle_ghost;
 mod keys;
 mod param_bar;
 pub(super) mod picker;
