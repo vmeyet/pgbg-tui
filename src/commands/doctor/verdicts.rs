@@ -153,7 +153,7 @@ pub(super) fn role(writes: WritePolicy, rights: &RoleRights) -> Check {
     }
 }
 
-/// `"call `dblink(text)` and `dblink_exec(text,text)`"`, or nothing for none.
+/// `"call `dblink` and `dblink_exec`"`, or nothing for none.
 fn listed(verb: &str, names: &[String]) -> Option<String> {
     let quoted: Vec<String> = names.iter().map(|name| format!("`{name}`")).collect();
     let joined = match quoted.as_slice() {
@@ -347,7 +347,7 @@ mod tests {
     fn gaps() -> ReadOnlyGaps {
         ReadOnlyGaps {
             signals_sessions: true,
-            dblink_functions: vec!["dblink_exec(text,text)".into()],
+            dblink_functions: vec!["dblink_exec".into()],
             granted_settings: vec!["session_replication_role".into()],
         }
     }
@@ -355,8 +355,8 @@ mod tests {
     #[test]
     fn a_role_that_reaches_past_a_read_only_transaction_is_a_warning_naming_each_way() {
         let check = beyond_read_only(WritePolicy::ReadOnly, &gaps());
-        let found = "it can cancel or end other sessions (`pg_signal_backend`), call `dblink_exec(text,text)`, which opens a \
-                     session of its own that may write, and set `session_replication_role`";
+        let found = "it can cancel or end other sessions (`pg_signal_backend`), call `dblink_exec`, which opens a session of its own \
+                     that may write, and set `session_replication_role`";
         assert_eq!((check.verdict, check.found.as_str()), (Verdict::Warn, found));
     }
 

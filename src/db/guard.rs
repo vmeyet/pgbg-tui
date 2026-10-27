@@ -41,6 +41,9 @@ const LOCK_OPENERS: [&str; 2] = ["FOR", "KEY"];
 /// The writes a confirmation names with the table or object they write to.
 const TARGETED: [&str; 12] =
     ["DELETE", "INSERT", "UPDATE", "MERGE", "INTO", "TRUNCATE", "DROP", "ALTER", "CREATE", "COPY", "VACUUM", "ANALYZE"];
+/// The statements that end, open or step through a transaction or a cursor: on a connection that allows writes they
+/// change nothing by themselves, so they run without asking.
+const UNASKED: [&str; 11] = ["BEGIN", "START", "COMMIT", "END", "ROLLBACK", "ABORT", "SAVEPOINT", "RELEASE", "FETCH", "CLOSE", "MOVE"];
 /// The words between such a write and its target: `DELETE FROM`, `DROP TABLE IF EXISTS`, `CREATE UNIQUE INDEX ON`.
 const BEFORE_TARGET: &str =
     "FROM INTO ONLY TABLE VIEW MATERIALIZED INDEX SEQUENCE SCHEMA FUNCTION TYPE IF EXISTS NOT CONCURRENTLY UNIQUE ON";
@@ -67,12 +70,19 @@ impl Admitted {
 /// A statement that is not a read, as a confirmation names it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Write {
-    /// The word that makes it a write, and the name it writes to when the guard can read one.
+    /// Each write the statement holds, in the order it says them, and whether it says `CASCADE`.
     Statement {
-        verb: String,
-        target: Option<String>,
+        changes: Vec<Change>,
+        cascades: bool,
     },
     Several,
+}
+
+/// One write of a statement: the word that makes it one, and the names it writes to when the guard can read them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Change {
+    verb: String,
+    targets: Vec<String>,
 }
 
 /// Where a statement stops being a read: at one of its words, counted among its words only, or at a second statement.
@@ -81,11 +91,11 @@ enum NotRead {
     Several,
 }
 
-/// What the statement of `tokens`, read out of `sql`, writes; `None` for a read.
+/// What the statement of `tokens`, read out of `sql`, writes; `None` for a read and for a statement in `UNASKED`.
 pub(crate) fn write_in(sql: &str, tokens: &[Placed]) -> Option<Write> {
     let upper = upper_case_words(sql, tokens);
     let words: Vec<&str> = upper.iter().map(String::as_str).collect();
-    not_read(tokens, &words).map(|found| named(sql, tokens, &words, &found))
+    not_read(tokens, &words).and_then(|found| named(sql, tokens, &words, &found))
 }
 
 /// What a statement does to a transaction the user began, read from its first words; the server's answer to it
@@ -123,20 +133,22 @@ pub(crate) enum Refusal {
     },
 }
 
-/// `statement` with `params` bound to its `$n`, cleared for a connection of policy `writes`, or why it is not.
+/// `statement` with `params` bound to its `$n`, cleared for a connection of policy `writes`, or why it is not; more than one
+/// statement is refused whatever the policy, since the extended protocol runs one at a time.
 pub(crate) fn admit(statement: Statement, params: Params, writes: WritePolicy) -> Result<Admitted, Refusal> {
     let tokens = lex::tokens(statement.as_str());
     let upper = upper_case_words(statement.as_str(), &tokens);
     let words: Vec<&str> = upper.iter().map(String::as_str).collect();
     let found = not_read(&tokens, &words);
     let (mode, transaction_step) = match (writes, &found) {
+        (_, Some(NotRead::Several)) => return Err(Refusal::Multiple),
         (WritePolicy::Allowed, _) => (Mode::Writes, transaction_step(&words)),
-        (WritePolicy::ReadOnly, Some(found)) => return Err(refusal(&words, found)),
+        (WritePolicy::ReadOnly, Some(NotRead::Word(at))) => return Err(Refusal::Write(words[*at].to_owned())),
         (WritePolicy::ReadOnly, None) => (Mode::ReadOnly, TransactionStep::Keeps),
     };
     check_params(&tokens, &params)?;
     let is_query = words.first().is_some_and(|first| QUERIES.contains(first)) && found.is_none();
-    let write = found.map(|found| named(statement.as_str(), &tokens, &words, &found));
+    let write = found.and_then(|found| named(statement.as_str(), &tokens, &words, &found));
     Ok(Admitted { statement, params, mode, transaction_step, is_query, write })
 }
 
@@ -197,22 +209,38 @@ fn not_read(tokens: &[Placed], words: &[&str]) -> Option<NotRead> {
     first_write_word(&words[start..]).map(|at| NotRead::Word(start + at))
 }
 
-fn refusal(words: &[&str], found: &NotRead) -> Refusal {
-    match found {
-        NotRead::Word(at) => Refusal::Write(words[*at].to_owned()),
-        NotRead::Several => Refusal::Multiple,
+/// `found` as a confirmation names it: each write of the statement from `found` on, and what it writes to; `None` for a
+/// statement in `UNASKED`.
+fn named(sql: &str, tokens: &[Placed], words: &[&str], found: &NotRead) -> Option<Write> {
+    let &NotRead::Word(first) = found else { return Some(Write::Several) };
+    if first == 0 && UNASKED.contains(&words[0]) {
+        return None;
     }
+    let changes = change_starts(words, first).into_iter().map(|at| change(sql, tokens, words, at)).collect();
+    Some(Write::Statement { changes, cascades: words.contains(&"CASCADE") })
 }
 
-/// `found` as a confirmation names it: the word that makes the statement a write, and what it writes to.
-fn named(sql: &str, tokens: &[Placed], words: &[&str], found: &NotRead) -> Write {
-    let &NotRead::Word(at) = found else { return Write::Several };
+/// Where each write of `words` starts, from `first` on: a write word that is no part of another write, as the `INTO` of
+/// `INSERT INTO` or the `UPDATE` of `ON CONFLICT DO UPDATE` and of a `MERGE`'s `THEN UPDATE` are. Only a read holds
+/// several, in its `WITH`: in a statement led by its own verb, a later one is part of it, as the `INSERT` of
+/// `CREATE TRIGGER ... AFTER INSERT`.
+fn change_starts(words: &[&str], first: usize) -> Vec<usize> {
+    if !READS.contains(&words[0]) {
+        return vec![first];
+    }
+    let is_part_of_another = |at: usize| matches!((words[at - 1], words[at]), ("INSERT" | "MERGE", "INTO") | ("THEN" | "DO", _));
+    let later = (first + 1..words.len()).filter(|&at| is_write_word(words, at) && !is_part_of_another(at));
+    std::iter::once(first).chain(later).collect()
+}
+
+/// The write that starts at the word counted `at`: a row lock alone, else its verb and the names it writes to.
+fn change(sql: &str, tokens: &[Placed], words: &[&str], at: usize) -> Change {
     let verb = words[at];
     if let Some(&opener) = at.checked_sub(1).map(|before| &words[before]).filter(|before| LOCK_OPENERS.contains(before)) {
-        return Write::Statement { verb: format!("{opener} {verb}"), target: None };
+        return Change { verb: format!("{opener} {verb}"), targets: vec![] };
     }
     let verb_token = TARGETED.contains(&verb).then(|| word_token(tokens, at)).flatten();
-    Write::Statement { verb: verb.to_owned(), target: verb_token.and_then(|index| target_in(sql, &tokens[index + 1..])) }
+    Change { verb: verb.to_owned(), targets: verb_token.map(|index| targets_in(sql, &tokens[index + 1..])).unwrap_or_default() }
 }
 
 /// Where the word counted `at` among the words of `tokens` stands among all of them.
@@ -220,19 +248,32 @@ fn word_token(tokens: &[Placed], at: usize) -> Option<usize> {
     tokens.iter().enumerate().filter(|(_, placed)| placed.token == Token::Word).nth(at).map(|(index, _)| index)
 }
 
-/// The name `tokens` start with once past `BEFORE_TARGET`: words, quoted names and the `.` between them, with no space.
-fn target_in(sql: &str, tokens: &[Placed]) -> Option<String> {
+/// The names `tokens` start with once past `BEFORE_TARGET`, a `,` between each: `TRUNCATE orders, customers`.
+fn targets_in(sql: &str, tokens: &[Placed]) -> Vec<String> {
     let is_before_target = |placed: &Placed| {
         placed.word(sql).is_some_and(|word| BEFORE_TARGET.split_whitespace().any(|known| known.eq_ignore_ascii_case(word)))
     };
-    let name = &tokens[tokens.iter().position(|placed| !is_before_target(placed))?..];
+    let Some(start) = tokens.iter().position(|placed| !is_before_target(placed)) else { return vec![] };
+    let mut targets = vec![];
+    let mut rest = &tokens[start..];
+    while let Some(length) = name_length(sql, rest) {
+        targets.push(sql[rest[0].range.start..rest[length - 1].range.end].to_owned());
+        match rest.get(length) {
+            Some(comma) if &sql[comma.range.clone()] == "," => rest = &rest[length + 1..],
+            _ => break,
+        }
+    }
+    targets
+}
+
+/// How many tokens the name `tokens` start with spans: words, quoted names and the `.` between them, with no space.
+fn name_length(sql: &str, tokens: &[Placed]) -> Option<usize> {
     let is_part = |placed: &Placed| placed.token == Token::Word || matches!(sql[placed.range.clone()].chars().next(), Some('"' | '.'));
-    if !is_part(&name[0]) {
+    if !is_part(tokens.first()?) {
         return None;
     }
     let is_glued = |pair: &[Placed]| pair[0].range.end == pair[1].range.start && is_part(&pair[1]);
-    let last = name.windows(2).take_while(|pair| is_glued(pair)).count();
-    Some(sql[name[0].range.start..name[last].range.end].to_owned())
+    Some(1 + tokens.windows(2).take_while(|pair| is_glued(pair)).count())
 }
 
 /// Where the statement the cursor at byte `at` of `sql` stands in begins and ends, its `;` and the
@@ -290,8 +331,12 @@ fn explained(words: &[&str]) -> Result<usize, usize> {
 }
 
 fn first_write_word(words: &[&str]) -> Option<usize> {
-    let lock = words.windows(2).position(|pair| LOCKS.contains(&[pair[0], pair[1]])).map(|at| at + 1);
-    words.iter().position(|word| WRITES.contains(word)).or(lock)
+    (0..words.len()).find(|&at| is_write_word(words, at))
+}
+
+/// Whether the word counted `at` makes its statement a write: one of `WRITES`, or the end of a row lock.
+fn is_write_word(words: &[&str], at: usize) -> bool {
+    WRITES.contains(&words[at]) || at.checked_sub(1).is_some_and(|before| LOCKS.contains(&[words[before], words[at]]))
 }
 
 impl fmt::Display for Refusal {
@@ -313,13 +358,25 @@ impl fmt::Display for Refusal {
 
 impl fmt::Display for Write {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self::Statement { verb, target } = self else { return f.write_str("more than one statement") };
-        let Some(target) = target else { return f.write_str(verb) };
+        let Self::Statement { changes, cascades } = self else { return f.write_str("more than one statement") };
+        let changes: Vec<String> = changes.iter().map(ToString::to_string).collect();
+        f.write_str(&changes.join(" and "))?;
+        if *cascades { f.write_str(" CASCADE") } else { Ok(()) }
+    }
+}
+
+impl fmt::Display for Change {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { verb, targets } = self;
+        if targets.is_empty() {
+            return f.write_str(verb);
+        }
+        let targets = targets.join(", ");
         match verb.as_str() {
-            "DELETE" => write!(f, "DELETE from {target}"),
-            "INSERT" | "MERGE" => write!(f, "{verb} into {target}"),
-            "INTO" => write!(f, "SELECT into {target}"),
-            _ => write!(f, "{verb} {target}"),
+            "DELETE" => write!(f, "DELETE from {targets}"),
+            "INSERT" | "MERGE" => write!(f, "{verb} into {targets}"),
+            "INTO" => write!(f, "SELECT into {targets}"),
+            _ => write!(f, "{verb} {targets}"),
         }
     }
 }
@@ -529,9 +586,15 @@ mod tests {
     }
 
     #[test]
-    fn a_connection_that_allows_writes_runs_anything_as_is() {
-        let admitted = admit(Statement::new("DELETE FROM orders; DELETE FROM customers"), Params::default(), WritePolicy::Allowed);
+    fn a_connection_that_allows_writes_runs_a_write_as_is() {
+        let admitted = admit(Statement::new("DELETE FROM orders"), Params::default(), WritePolicy::Allowed);
         assert_eq!(admitted.map(|admitted| admitted.mode), Ok(Mode::Writes));
+    }
+
+    #[test]
+    fn more_than_one_statement_is_refused_even_where_writes_are_allowed() {
+        let admitted = admit(Statement::new("DELETE FROM orders; DELETE FROM customers"), Params::default(), WritePolicy::Allowed);
+        assert_eq!(admitted.map(|admitted| admitted.mode), Err(Refusal::Multiple));
     }
 
     fn admitted_with(sql: &str, values: usize, writes: WritePolicy) -> Result<Mode, Refusal> {
@@ -596,8 +659,52 @@ mod tests {
     }
 
     #[test]
+    fn every_write_of_a_statement_is_named() {
+        let sql = "WITH moved AS (INSERT INTO archived_orders SELECT * FROM orders RETURNING id) DELETE FROM orders WHERE id IN (SELECT id FROM moved)";
+        assert_eq!(write(sql).as_deref(), Some("INSERT into archived_orders and DELETE from orders"));
+    }
+
+    #[test]
+    fn a_statement_led_by_its_own_verb_names_no_later_write() {
+        assert_eq!(write("CREATE TRIGGER audit AFTER INSERT ON orders EXECUTE FUNCTION audit()").as_deref(), Some("CREATE TRIGGER"));
+    }
+
+    #[test]
+    fn the_parts_of_an_upsert_or_a_merge_are_no_writes_of_their_own() {
+        let upsert = "INSERT INTO orders VALUES (1) ON CONFLICT (id) DO UPDATE SET total = 0";
+        assert_eq!(write(upsert).as_deref(), Some("INSERT into orders"));
+        let merge =
+            "MERGE INTO orders USING customers ON true WHEN MATCHED THEN UPDATE SET total = 0 WHEN NOT MATCHED THEN INSERT VALUES (1)";
+        assert_eq!(write(merge).as_deref(), Some("MERGE into orders"));
+    }
+
+    #[test]
+    fn every_table_a_write_lists_is_named() {
+        assert_eq!(write("TRUNCATE orders, shop.customers").as_deref(), Some("TRUNCATE orders, shop.customers"));
+        assert_eq!(write("DROP TABLE IF EXISTS orders, customers").as_deref(), Some("DROP orders, customers"));
+    }
+
+    #[test]
+    fn a_write_that_cascades_says_so() {
+        assert_eq!(write("DROP SCHEMA shop CASCADE").as_deref(), Some("DROP shop CASCADE"));
+        assert_eq!(write("truncate orders cascade").as_deref(), Some("TRUNCATE orders CASCADE"));
+    }
+
+    #[test]
+    fn transaction_control_and_cursor_statements_are_not_asked_for() {
+        for sql in
+            ["BEGIN", "START TRANSACTION", "COMMIT", "END", "ROLLBACK TO SAVEPOINT before_orders", "ABORT", "SAVEPOINT before_orders"]
+        {
+            assert_eq!(write(sql), None, "{sql}");
+        }
+        for sql in ["RELEASE SAVEPOINT before_orders", "FETCH 10 FROM recent", "CLOSE recent", "MOVE NEXT IN recent"] {
+            assert_eq!(write(sql), None, "{sql}");
+        }
+    }
+
+    #[test]
     fn a_write_without_a_table_names_its_verb_alone() {
-        assert_eq!(write("BEGIN").as_deref(), Some("BEGIN"));
+        assert_eq!(write("DISCARD ALL").as_deref(), Some("DISCARD"));
         assert_eq!(write("SET search_path = shop").as_deref(), Some("SET"));
         assert_eq!(write("SELECT * FROM orders FOR UPDATE NOWAIT").as_deref(), Some("FOR UPDATE"));
         assert_eq!(write("SELECT * FROM orders FOR KEY SHARE").as_deref(), Some("KEY SHARE"));
