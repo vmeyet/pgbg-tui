@@ -26,6 +26,7 @@ mod copy;
 mod detail;
 mod editor;
 pub(super) mod form;
+mod ghost;
 mod grid;
 pub(super) mod history;
 pub(super) mod picker;
@@ -195,7 +196,7 @@ impl App {
             return self.act(act);
         }
         if self.focus == Focus::Editor {
-            self.sheet_mut().edit(key);
+            return self.sheet_mut().edit(key);
         }
         vec![]
     }
@@ -272,7 +273,7 @@ impl App {
         match act {
             Act::Run => return self.sheet_mut().run_editor(),
             Act::Cancel => return self.sheet_mut().cancel(),
-            Act::NewLine => self.sheet_mut().edit(KeyEvent::from(KeyCode::Enter)),
+            Act::NewLine => return self.sheet_mut().edit(KeyEvent::from(KeyCode::Enter)),
             Act::SwitchPane => self.focus = self.next_pane(),
             Act::Help => self.overlay = Some(Overlay::Help(Help::default())),
             Act::Quit => return self.quit(),

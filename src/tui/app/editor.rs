@@ -1,8 +1,10 @@
 //! The SQL editor: its text, the editing keys and pastes that change it, and the syntax colours that follow it.
-use super::Sheet;
+use super::ghost::{is_name_key, is_take};
+use super::{Action, Sheet};
 use crate::query::Header;
 use crate::syntax::{self, Spans};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use std::ops::Range;
 use vtui::field::Field;
 
 /// Whether an edit changed the text, or only moved the cursor.
@@ -64,6 +66,15 @@ impl Editor {
         self.change(|field| field.paste(text))
     }
 
+    /// Puts `insert` in place of the bytes `typed`, which end at the cursor.
+    pub(super) fn replace_typed(&mut self, typed: Range<usize>, insert: &str) -> Edited {
+        let typed_chars = self.field.text()[typed].chars().count();
+        self.change(|field| {
+            (0..typed_chars).for_each(|_| field.backspace());
+            field.insert_str(insert);
+        })
+    }
+
     fn change(&mut self, edit: impl FnOnce(&mut Field)) -> Edited {
         let revision = self.field.revision();
         edit(&mut self.field);
@@ -96,11 +107,19 @@ fn apply(field: &mut Field, key: KeyEvent) {
 }
 
 impl Sheet {
-    /// Applies `key` to the editor.
-    pub(super) fn edit(&mut self, key: KeyEvent) {
-        if self.editor.edit(key) == Edited::Text {
-            self.text_changed();
+    /// Applies `key` to the editor: `→` takes the ghost when one shows, and a name key asks for the next one.
+    pub(super) fn edit(&mut self, key: KeyEvent) -> Vec<Action> {
+        if let Some(ghost) = self.ghost.take()
+            && is_take(key)
+        {
+            self.take_ghost(ghost);
+            return vec![];
         }
+        if self.editor.edit(key) != Edited::Text {
+            return vec![];
+        }
+        self.text_changed();
+        if is_name_key(key) { self.ask_ghost() } else { vec![] }
     }
 
     /// Pastes `text` into the editor as one change: a line end in it never runs a statement.
@@ -110,9 +129,10 @@ impl Sheet {
         }
     }
 
-    /// Reads the header of the new text, and drops the error mark and the place of the statement sent, which
+    /// Reads the header of the new text, and drops the ghost, the error mark and the place of the statement sent, which
     /// pointed into the old text; the colours follow on their own.
     pub(super) fn text_changed(&mut self) {
+        self.ghost = None;
         self.header = Header::parse(self.editor.text());
         self.is_dirty = true;
         self.error_mark = None;

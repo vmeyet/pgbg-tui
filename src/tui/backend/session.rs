@@ -814,6 +814,18 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn the_completion_index_of_a_schema_read_follows_it() {
+        let (backend, mut answers) = started();
+        backend.read_schema(&shop(), SessionId::FIRST);
+        let seen = answers_until(&mut answers, |answer| matches!(answer, Incoming::Index { .. })).await;
+        let read = seen.iter().find_map(|answer| if let Incoming::Schema(Ok(catalog)) = answer { Some(catalog) } else { None });
+        let is_built_from_it =
+            matches!((read, seen.last()), (Some(read), Some(Incoming::Index { catalog, .. })) if std::sync::Arc::ptr_eq(read, catalog));
+        assert!(is_built_from_it, "{seen:?}");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn the_schema_is_read_through_the_tunnel_of_the_session() {
         let _ports = fixtures::TUNNEL_PORTS.lock().await;
         let marker = "pgbg-test-schema-through-the-tunnel";
