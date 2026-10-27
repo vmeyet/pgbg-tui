@@ -9,7 +9,7 @@ pub(crate) struct CancelToken {
     pub(in crate::db) tls: Tls,
 }
 
-/// The backend's key stays out: it is all a cancel request needs.
+/// Leaves out the backend's key: it is all a cancel request needs.
 impl fmt::Debug for CancelToken {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CancelToken").field("tls", &self.tls).finish_non_exhaustive()

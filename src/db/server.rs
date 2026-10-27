@@ -1,5 +1,5 @@
-//! What the server says of a session: who it is, its version, its timeout, what its role can write; read in
-//! a read-only transaction, so asking writes nothing.
+//! What the server says about a session: its role, the server version, its timeout and what its role can write.
+//! Each is read in a read-only transaction, so asking writes nothing.
 use super::model::{ReadOnlyGaps, RoleFlag, RolePowers, RoleRights, ServerFacts};
 use super::{Isolation, Session, server_error};
 use crate::connection::StatementTimeout;
@@ -54,8 +54,8 @@ ORDER BY role <> session_user, role, rank, object";
 
 /// Whether the login role, or a role it may become, can cancel or end other sessions.
 const SIGNALS_SESSIONS: &str = "SELECT pg_has_role(session_user, 'pg_signal_backend', 'MEMBER')";
-/// The `dblink` functions that send SQL of the caller's to a session of their own, which a read-only transaction does
-/// not hold, that the login role, or a role it may become, may call.
+/// The `dblink` functions the login role, or a role it may become, may call.
+/// Each sends the caller's SQL to a session of its own, which a read-only transaction does not cover.
 const DBLINK_FUNCTIONS: &str = "SELECT DISTINCT p.proname::text FROM pg_proc p
     JOIN pg_depend d ON d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e'
     JOIN pg_extension e ON e.oid = d.refobjid
@@ -69,7 +69,7 @@ const GRANTED_SETTINGS: &str = "SELECT parname FROM pg_parameter_acl
 const HAS_PARAMETER_ACL: &str = "SELECT current_setting('server_version_num')::int >= 150000";
 
 impl Session {
-    /// Who the session is, the server's version, and the timeout in effect beside the one the server applied before pgbg's.
+    /// The session's role, the server version, the timeout in effect, and the one the server applied before pgbg's.
     pub(crate) async fn server_facts(&mut self) -> Result<ServerFacts> {
         self.read_only(Isolation::EachStatement, async |transaction| {
             let row = transaction.query_one(SERVER_FACTS, &[]).await.map_err(server_error)?;
@@ -116,7 +116,7 @@ async fn texts(transaction: &Transaction<'_>, sql: &str) -> Result<Vec<String>> 
     rows.iter().map(|row| Ok(row.try_get(0)?)).collect()
 }
 
-/// None before PostgreSQL 15, which cannot grant a setting.
+/// Empty before PostgreSQL 15, which cannot grant a setting.
 async fn granted_settings(transaction: &Transaction<'_>) -> Result<Vec<String>> {
     let has_parameter_acl: bool = one_value(transaction, HAS_PARAMETER_ACL).await?;
     if !has_parameter_acl {

@@ -9,13 +9,13 @@ use std::pin::pin;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, IsolationLevel, Portal, RowStream, Statement as Prepared, Transaction};
 
-/// The rows pgbg keeps of a result; past it the result is cut, so a big table cannot fill the memory.
+/// The most rows pgbg keeps of a result; past it the result is cut, so a big table cannot fill the memory.
 pub(super) const ROW_CAP: usize = 10_000;
 const PROBE_SAVEPOINT: &str = "SAVEPOINT pgbg_probe";
 const RELEASE_PROBE: &str = "RELEASE SAVEPOINT pgbg_probe";
-/// The start of the name of a cursor a result inside the user's transaction is read through.
+/// The name prefix of the cursor that reads a result inside the user's transaction.
 const CURSOR: &str = "pgbg_result";
-/// The cursors open on the session whose name could be one pgbg picks.
+/// The cursors open on the session with a name pgbg could pick, so it picks another.
 const CURSORS_TAKEN: &str = r"SELECT name FROM pg_cursors WHERE name LIKE 'pgbg\_result\_%'";
 
 /// How many rows one fetch from a portal asks for: never 0, which the protocol reads as every row.
@@ -36,30 +36,30 @@ impl FetchSize {
 /// One row past the cap, so a result that has more says it is cut.
 const CAPPED_FETCH: FetchSize = FetchSize::new(ROW_CAP as i32 + 1);
 
-/// Whether a transaction the user began is open on the session; a write that returns rows outside one commits its
-/// own, and inside one must never end it.
+/// Whether a transaction the user began is open on the session.
+/// Outside one, a write that returns rows commits a transaction of its own; inside one, it must never end the user's.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum UserTransaction {
     #[default]
     None,
     Open,
-    /// A statement that opens or ends one failed, or never got its answer: the server knows.
+    /// A statement that opens or ends one failed, or got no answer: only the server knows.
     Unsure,
 }
 
 /// How a connection that allows writes runs a statement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WritePath {
-    /// Unchanged, every row it returns read.
+    /// Sent as it is, and every row it returns is read.
     AsIs,
     /// Through a portal in a transaction of its own, committed once its first `ROW_CAP` rows are read.
     OwnTransaction,
-    /// Inside the user's transaction, through a cursor its first `ROW_CAP` rows are read from.
+    /// Inside the user's transaction, through a cursor that reads its first `ROW_CAP` rows.
     UsersCursor,
 }
 
 impl UserTransaction {
-    /// The transaction once the server ran a statement taking `step`, or refused it.
+    /// The state once the server has run, or refused, a statement that takes `step`.
     fn after(self, step: TransactionStep, has_run: bool) -> Self {
         match (step, has_run) {
             (TransactionStep::Keeps, _) => self,
@@ -102,8 +102,8 @@ impl Session {
         result
     }
 
-    /// Only a statement that returns rows and leaves the user's transaction as it is leaves the as-is path; a `CALL`
-    /// may commit, which it cannot inside a transaction of pgbg.
+    /// Only a statement that returns rows and keeps the user's transaction as it is leaves the as-is path.
+    /// A `CALL` stays on it: it may commit, which it cannot do inside a transaction pgbg opened.
     async fn write_path(&mut self, statement: &Prepared, admitted: &Admitted) -> Result<WritePath> {
         let returns_rows = !statement.columns().is_empty();
         if !returns_rows || admitted.transaction_step != TransactionStep::Keeps {
@@ -123,8 +123,8 @@ impl Session {
         Ok(ResultSet::new(columns(statement), first))
     }
 
-    /// A cursor of SQL, since the driver binds a portal only in a transaction handle of its own, whose start or drop
-    /// would roll the user's back.
+    /// Reads through an SQL cursor: the driver binds a portal only inside a transaction handle of its own, whose start
+    /// or drop would roll the user's transaction back.
     async fn fetch_through_cursor(&self, statement: &Prepared, admitted: &Admitted) -> Result<ResultSet> {
         let cursor = free_cursor_name(&self.cursors_taken().await?);
         let declare = format!("DECLARE {cursor} NO SCROLL CURSOR FOR {}", admitted.statement.as_str());
@@ -137,7 +137,7 @@ impl Session {
         Ok(ResultSet::new(columns(statement), first))
     }
 
-    /// Asked before each `DECLARE`, since a name the user holds already would fail it and abort the user's transaction.
+    /// Asked before each `DECLARE`: a name the user already holds would fail it and abort the user's transaction.
     async fn cursors_taken(&self) -> Result<Vec<String>> {
         let rows = self.client.query(CURSORS_TAKEN, &[]).await.map_err(server_error)?;
         rows.iter().map(|row| row.try_get(0).map_err(server_error)).collect()
@@ -156,7 +156,8 @@ impl Session {
         }
     }
 
-    /// Only inside a transaction does a savepoint take, or fail for the transaction having failed.
+    /// Whether a transaction is open, by a savepoint: it succeeds only inside one, and fails as "in failed transaction"
+    /// only inside one too.
     async fn probe_user_transaction(&self) -> Result<bool> {
         match self.client.batch_execute(PROBE_SAVEPOINT).await {
             Ok(()) => self.client.batch_execute(RELEASE_PROBE).await.map(|()| true).map_err(server_error),
@@ -175,8 +176,8 @@ impl Session {
         .await
     }
 
-    /// `read` inside `BEGIN READ ONLY` at `isolation`, always rolled back; the session is mid-statement meanwhile, so
-    /// one dropped then cuts its link. Refused inside a transaction of the user, which its `ROLLBACK` would end.
+    /// Runs `read` inside `BEGIN READ ONLY` at `isolation`, always rolled back; the session is mid-statement meanwhile,
+    /// so dropping it then cuts its link. Refused inside the user's transaction, which its `ROLLBACK` would end.
     pub(super) async fn read_only<T>(&mut self, isolation: Isolation, read: impl AsyncFnOnce(&Transaction<'_>) -> Result<T>) -> Result<T> {
         if self.is_in_user_transaction().await? {
             return Err(InsideUserTransaction.into());
@@ -204,7 +205,7 @@ fn free_cursor_name(taken: &[String]) -> String {
     format!("{CURSOR}_{n}")
 }
 
-/// `BEGIN READ ONLY`, then the transaction's own limits.
+/// Opens a `BEGIN READ ONLY` transaction and sets its own limits.
 pub(super) async fn begin_read_only<'c>(client: &'c mut Client, limits: &ReadLimits, isolation: Isolation) -> Result<Transaction<'c>> {
     let level = match isolation {
         Isolation::EachStatement => IsolationLevel::ReadCommitted,

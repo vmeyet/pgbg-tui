@@ -36,8 +36,8 @@ impl Statement {
     }
 }
 
-/// A type's name: as a statement's header names it (`date`, `timestamp with time zone`, `shop.status`), the server
-/// looks it up, the name bound, never put in SQL; as a result's column has it, the server's own (`int4`, `inet`).
+/// A type's name. In a statement's header (`date`, `timestamp with time zone`, `shop.status`), the server looks it
+/// up from a bound value, never from text put in SQL. In a result's column, it is the server's own name (`int4`, `inet`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
 pub(crate) struct TypeName(String);
@@ -77,7 +77,7 @@ pub(crate) struct Params {
 }
 
 impl Params {
-    /// `values`, each `$n` of the type at its place in `types`.
+    /// `values`, each `$n` typed by the entry at its place in `types`.
     pub(crate) fn new(values: Vec<Option<ParamValue>>, types: Vec<Option<TypeName>>) -> Self {
         Self { values, types }
     }

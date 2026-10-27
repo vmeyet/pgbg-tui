@@ -19,7 +19,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const STOP_WHEN_CLIENT_GONE: &str = "SET client_connection_check_interval = '1s'";
 
 impl Session {
-    /// Logs in to `connection` along `route`, reading its password just for that.
+    /// Logs in to `connection` along `route`; the password is read for this login only.
     pub(crate) async fn open(connection: &Connection, route: Route) -> Result<Self> {
         let mut config = driver_config(connection.target(), route)?;
         if let Some(source) = connection.password() {
@@ -85,7 +85,7 @@ where
     Ok(Connected { client, ended, link: link.abort_handle() })
 }
 
-/// Best effort: a server older than PostgreSQL 14, or not on Linux, cannot check.
+/// Best effort: a server older than PostgreSQL 14, or not on Linux, cannot check whether the client is gone.
 async fn stop_statements_when_client_gone(client: &Client) {
     if let Err(err) = client.batch_execute(STOP_WHEN_CLIENT_GONE).await {
         tracing::warn!("the server will not stop a statement when pgbg is gone: {err}");

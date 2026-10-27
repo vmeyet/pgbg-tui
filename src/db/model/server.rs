@@ -62,6 +62,6 @@ pub(crate) struct ReadOnlyGaps {
     /// The `dblink` functions it may call, each named once whatever its overloads: each opens a session of its own that
     /// may write.
     pub(crate) dblink_functions: Vec<String>,
-    /// The settings only a superuser could set, granted it with `GRANT SET ON PARAMETER`.
+    /// The settings only a superuser could set, granted to it with `GRANT SET ON PARAMETER`.
     pub(crate) granted_settings: Vec<String>,
 }

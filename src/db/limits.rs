@@ -11,8 +11,8 @@ const SERVER_TIMEOUTS: &str = "SELECT
     max(setting) FILTER (WHERE name = 'statement_timeout'),
     max(setting) FILTER (WHERE name = 'idle_in_transaction_session_timeout')
     FROM pg_settings WHERE name IN ('statement_timeout', 'idle_in_transaction_session_timeout')";
-/// The server ends the session of a read-only transaction left idle this long, should pgbg not close a portal waiting for
-/// its next page itself, after 5 minutes.
+/// How long a read-only transaction may stay idle before the server ends its session.
+/// It is a backstop: pgbg itself closes a portal waiting for its next page after 5 minutes.
 const IDLE_IN_TRANSACTION_BACKSTOP: Duration = Duration::from_mins(6);
 /// The guard and the parameters read a backslash in a string as itself; the server must read it the same way.
 const STANDARD_STRINGS: &str = "standard_conforming_strings = on";
@@ -61,7 +61,7 @@ pub(super) struct ServerTimeouts {
     pub(super) idle: IdleTimeout,
 }
 
-/// Both timeouts of the server in one round trip, as the simple query protocol sends a statement and its rows at once.
+/// Reads both server timeouts in one round trip: the simple query protocol sends a statement and gets its rows at once.
 pub(super) async fn read_server_timeouts(client: &Client) -> Result<ServerTimeouts> {
     let messages = client.simple_query(SERVER_TIMEOUTS).await.map_err(server_error)?;
     let row = messages.iter().find_map(only_row).context("the server gave no row of settings")?;
@@ -90,9 +90,9 @@ fn idle_timeout(server_ms: u64) -> IdleTimeout {
     if is_stricter_on_server { IdleTimeout::Server(Duration::from_millis(server_ms)) } else { IdleTimeout::Backstop }
 }
 
-/// Only where writes are allowed, whose own `BEGIN` and statements run outside pgbg's transactions; behind a
-/// transaction pooler it holds only on the server link it reached. Not best effort: a production session never runs
-/// without its timeout.
+/// Sets how strings are read and the statement timeout for the whole session, only where writes are allowed: there
+/// the user's own `BEGIN` and statements run outside pgbg's transactions. Behind a transaction pooler it holds only on
+/// the server link it reached. Not best effort: a production session never runs without its timeout.
 pub(super) async fn set_session_limits(client: &Client, timeout: StatementTimeout) -> Result<()> {
     let sql = format!("SET {STANDARD_STRINGS}; SET statement_timeout = {}", timeout.as_millis());
     client.batch_execute(&sql).await.map_err(server_error).context("setting the session's limits")

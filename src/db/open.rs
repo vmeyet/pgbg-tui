@@ -41,8 +41,8 @@ pub(crate) async fn open_once(connection: &Connection) -> anyhow::Result<Attempt
     }
 }
 
-/// Opens a session on `connection`, through `tunnel` while it runs, else through a tunnel started again, telling
-/// `on_tunnel` as that one starts and once it is up.
+/// Opens a session on `connection` through `tunnel` while it runs, else through a new tunnel; `on_tunnel` hears when
+/// that new tunnel starts and when it is up.
 pub(crate) async fn open_along(
     connection: &Connection,
     tunnel: Option<Tunnel>,

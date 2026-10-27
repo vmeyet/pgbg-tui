@@ -12,7 +12,7 @@ use tokio_postgres::{GenericClient, Statement as Prepared};
 const TYPE_ID: &str = "SELECT to_regtype($1)::oid";
 
 /// One value in text, whatever the type of its parameter: the server parses it with that type's input, and a value it
-/// cannot read fails with its words; `None` is NULL.
+/// cannot read fails with the server's error; `None` is NULL.
 #[derive(Debug)]
 pub(super) struct AsText<'p>(Option<&'p str>);
 
@@ -44,7 +44,7 @@ pub(super) fn borrowed<'v>(values: &'v [AsText<'_>]) -> Vec<&'v (dyn ToSql + Syn
     values.iter().map(|value| value as &(dyn ToSql + Sync)).collect()
 }
 
-/// `admitted` prepared, each `$n` of the type its header names, the others of no type (id 0) for the server to infer.
+/// Prepares `admitted`: each `$n` its header types gets that type, the others no type (id 0) for the server to infer.
 pub(super) async fn prepare(client: &impl GenericClient, admitted: &Admitted) -> Result<Prepared> {
     let mut types = Vec::with_capacity(admitted.params.types().len());
     for type_name in admitted.params.types() {

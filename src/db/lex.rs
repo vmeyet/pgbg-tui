@@ -1,5 +1,5 @@
-//! The tokens of SQL text, each with its place, and what kind of text a byte falls in: the guard, the parameters and
-//! completion read them.
+//! Splits SQL text into tokens, each with its bytes, and says what kind of text a byte falls in.
+//! The guard, the parameters and completion all read SQL through it.
 use std::ops::Range;
 
 /// One token of SQL text and the bytes it spans.
@@ -9,17 +9,17 @@ pub(crate) struct Placed {
     pub(crate) token: Token,
 }
 
-/// What the tokenizer tells apart: comments and whitespace drop out, and string literals and quoted identifiers hide
-/// what they hold.
+/// The kinds of token: comments and whitespace are dropped, and what string literals and quoted names hold stays
+/// hidden.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Token {
-    /// A word: its text is the bytes it spans, compared without regard to ASCII case as PostgreSQL does.
+    /// A word; like PostgreSQL, pgbg compares words without regard to ASCII case.
     Word,
     /// A `;`.
     End,
     /// `{{name}}`, holding the name.
     Param(String),
-    /// A `{{` that opens no `{{name}}`, or one glued to a word, which would read as part of it once replaced by `$n`.
+    /// A `{{` that opens no `{{name}}`, or a `{{name}}` glued to a word, which would join that word once replaced by `$n`.
     Unreadable,
     /// `$1`, `$2`: a parameter the statement numbers itself.
     Numbered(u32),
@@ -70,7 +70,7 @@ enum Kind {
 }
 
 impl Placed {
-    /// The text of the word this token is, out of the `sql` it was read from.
+    /// The text of this token when it is a word, taken from the `sql` it was read from.
     pub(crate) fn word<'a>(&self, sql: &'a str) -> Option<&'a str> {
         (self.token == Token::Word).then(|| &sql[self.range.clone()])
     }
@@ -96,7 +96,6 @@ impl Lexed {
         lexed
     }
 
-    /// Every token, in order.
     pub(crate) fn tokens(&self) -> &[Placed] {
         &self.tokens
     }
@@ -116,12 +115,11 @@ impl Lexed {
     }
 }
 
-/// Every token of `sql`, in order.
 pub(crate) fn tokens(sql: &str) -> Vec<Placed> {
     Lexed::of(sql).tokens
 }
 
-/// The lexemes of `sql`; a helper's `None` says its literal or comment runs to the end unclosed.
+/// The lexemes of `sql`; a helper returns `None` when its literal or comment is never closed.
 fn lexemes(sql: &str) -> Vec<Lexeme> {
     let mut lexemes = vec![];
     let mut rest = sql;
@@ -161,7 +159,7 @@ impl Lexeme {
     }
 }
 
-/// What PostgreSQL parts tokens with; any other character outside ASCII, a no-break space included, is part of a word.
+/// Whether PostgreSQL splits tokens at `c`; any other character outside ASCII, a no-break space included, is part of a word.
 pub(crate) fn is_blank(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0c' | '\x0b')
 }
@@ -219,7 +217,7 @@ fn after_block_comment(body: &str) -> Option<&str> {
     Some(rest)
 }
 
-/// After a literal opened by `quote`, where a doubled quote stands for itself.
+/// The text after a literal opened by `quote`, where a doubled quote stands for itself.
 fn after_quoted(body: &str, quote: char) -> Option<&str> {
     let mut rest = body;
     while let Some(at) = rest.find(quote) {
@@ -232,7 +230,7 @@ fn after_quoted(body: &str, quote: char) -> Option<&str> {
     None
 }
 
-/// After an `E'...'` literal, where a backslash also escapes the next character.
+/// The text after an `E'...'` literal, where a backslash also escapes the next character.
 fn after_escape_string(body: &str) -> Option<&str> {
     let mut chars = body.char_indices();
     while let Some((at, c)) = chars.next() {
@@ -260,7 +258,7 @@ fn dollar(rest: &str) -> (Kind, Option<&str>) {
     (Kind::Token(Token::Other), after_dollar(rest))
 }
 
-/// After a `$tag$...$tag$` literal; a `$` that opens none is skipped alone.
+/// The text after a `$tag$...$tag$` literal; a `$` that opens none is skipped alone.
 fn after_dollar(rest: &str) -> Option<&str> {
     let tag_end = rest[1..].find(|c: char| !(is_word_start(c) || c.is_ascii_digit())).map(|at| at + 1);
     match tag_end {
