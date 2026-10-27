@@ -738,7 +738,7 @@ mod tests {
     #[test]
     fn an_edit_cannot_take_out_a_statement_timeout_the_config_has() {
         let timed = named("local", "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\nstatement_timeout = \"5s\"\n");
-        let mut app = App::new(vec![timed.clone()], &timed, vtui::theme::Theme::default());
+        let mut app = App::new(vec![timed.clone()], &timed, crate::tui::theme::Theme::default());
         ctrl(&mut app, 'o');
         ctrl(&mut app, 'e');
         to(&mut app, Slot::StatementTimeout);
@@ -761,7 +761,7 @@ mod tests {
     fn a_new_password_for_the_keychain_item_the_config_names_is_sent_for_that_item() {
         let keyed =
             named("local", "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\npassword = { keychain = \"pgbg/local\" }\n");
-        let mut app = App::new(vec![keyed.clone()], &keyed, vtui::theme::Theme::default());
+        let mut app = App::new(vec![keyed.clone()], &keyed, crate::tui::theme::Theme::default());
         ctrl(&mut app, 'o');
         ctrl(&mut app, 'e');
         for _ in 0..4 {

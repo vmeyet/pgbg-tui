@@ -1,7 +1,7 @@
 //! Drawing: the frame in the tier's colour, the panes inside it, and the key hints under them.
 use super::app::{App, Fit, Overlay, SessionState, TunnelState};
 use super::{
-    detail_view, editor_view, finder_view, form_view, help_view, history_view, picker_view, prompt_view, result_view, sidebar_view, theme,
+    detail_view, editor_view, finder_view, form_view, help_view, history_view, picker_view, prompt_view, result_view, sidebar_view,
 };
 use crate::act::{self, Hint, Pane};
 use crate::render::printable;
@@ -51,7 +51,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> Fit {
 fn framed(f: &mut Frame<'_>, app: &App) -> Rect {
     let sheet = app.sheet();
     let tier = sheet.connection.tier();
-    let colour = theme::tier(&app.theme, tier);
+    let colour = app.theme.tier(tier);
     let pill = Span::styled(format!(" ● {} · {tier} ", sheet.name()), Style::default().fg(colour).add_modifier(Modifier::BOLD));
     let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(colour)).title(pill);
     let inside = block.inner(f.area());
@@ -140,7 +140,7 @@ fn session_text(session: &SessionState) -> &'static str {
 /// The first line of `err` after a `✗`, cut to `width`.
 fn failure(app: &App, err: &str, width: usize) -> Line<'static> {
     let first_line = err.lines().next().unwrap_or_default();
-    Line::styled(truncate(&format!("✗ {} ", printable(first_line)), width), Style::default().fg(theme::failure(&app.theme)))
+    Line::styled(truncate(&format!("✗ {} ", printable(first_line)), width), Style::default().fg(app.theme.danger))
 }
 
 #[cfg(test)]
@@ -151,11 +151,11 @@ mod tests {
     use super::super::styled;
     use super::*;
     use crate::db::model::{Extent, LocalPort, Page, ResultSet};
+    use crate::tui::theme::Theme;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use std::time::Duration;
-    use vtui::theme::Theme;
 
     fn render(app: &App, width: u16, height: u16) -> Terminal<TestBackend> {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -393,7 +393,7 @@ mod tests {
     #[test]
     fn the_frame_takes_the_colour_of_the_tier() {
         let theme = Theme::default();
-        for (tier, colour) in [("local", theme.success), ("staging", theme.warn), ("production", theme.danger)] {
+        for (tier, colour) in [("local", theme.success), ("staging", theme.warn), ("production", theme.production)] {
             let app = app_on(&connection(tier, "read-only"));
             let terminal = render(&app, 40, 6);
             assert_eq!(terminal.backend().buffer()[(0, 0)].fg, colour, "{tier}");

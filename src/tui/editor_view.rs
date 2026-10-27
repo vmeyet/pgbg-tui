@@ -1,6 +1,5 @@
 //! The SQL editor pane: the text in its syntax colours, the cursor kept in view, the server's error position, and whether the connection takes writes.
 use super::app::{App, Focus};
-use super::theme;
 use crate::connection::{ConnectionName, Tier, WritePolicy};
 use crate::syntax::{Painted, Spans};
 use ratatui::Frame;
@@ -23,7 +22,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
     let row = before.matches('\n').count();
     let column = Line::from(before.rsplit('\n').next().unwrap_or_default()).width();
     let scroll = row.saturating_sub(usize::from(inside.height.saturating_sub(1)));
-    let mark = Style::default().fg(theme::failure(&app.theme)).add_modifier(Modifier::REVERSED);
+    let mark = Style::default().fg(app.theme.danger).add_modifier(Modifier::REVERSED);
     let window = Window { first: scroll, rows: usize::from(inside.height) };
     let text = coloured(
         sheet.editor.text(),
@@ -173,10 +172,10 @@ fn header_notes(app: &App) -> Line<'static> {
     Line::from(suggestion.into_iter().chain(warning).collect::<Vec<_>>())
 }
 
-/// Why the last query asked for could not be opened, in the failure colour.
+/// Why the last query asked for could not be opened, in `danger`.
 fn open_error(app: &App) -> Span<'static> {
     let error = app.sheet().query_error.as_ref().map(|error| format!(" ✗ {error} "));
-    Span::styled(error.unwrap_or_default(), Style::default().fg(theme::failure(&app.theme)))
+    Span::styled(error.unwrap_or_default(), Style::default().fg(app.theme.danger))
 }
 
 fn badge(app: &App) -> Span<'static> {

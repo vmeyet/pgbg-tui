@@ -1,6 +1,5 @@
 //! The connection form over the screen: one line per key, the one with the cursor marked, each refusal under its line.
 use super::app::{App, Form, Overlay, PasswordFrom, Saving, Slot};
-use super::theme;
 use crate::connection::{Tls, WritePolicy};
 use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
@@ -24,7 +23,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) {
     let mut lines: Vec<Line<'static>> = form.slots().into_iter().flat_map(|slot| slot_lines(app, form, slot, room)).collect();
     lines.push(Line::default());
     lines.extend(form.is_saving().then(|| Line::styled("saving…", Style::default().fg(app.theme.muted))));
-    lines.extend(form.failure.as_ref().map(|why| Line::styled(format!("✗ {why}"), Style::default().fg(theme::failure(&app.theme)))));
+    lines.extend(form.failure.as_ref().map(|why| Line::styled(format!("✗ {why}"), Style::default().fg(app.theme.danger))));
     lines.push(Line::styled(FOOTER, Style::default().fg(app.theme.faded)));
     let area = centred(f.area(), width, lines.len() as u16 + 2);
     let inside = block.inner(area);
@@ -59,7 +58,7 @@ fn slot_lines(app: &App, form: &Form, slot: Slot, room: usize) -> Vec<Line<'stat
     let label_style = if is_here { Style::default().add_modifier(Modifier::BOLD) } else { Style::default().fg(app.theme.muted) };
     let label = Span::styled(format!("{:<LABEL_WIDTH$}", label(form, slot)), label_style);
     let line = Line::from(vec![mark, label, Span::raw(value(form, slot, room))]);
-    let refusal = form.error(slot).map(|why| Line::styled(format!("  ✗ {why}"), Style::default().fg(theme::failure(&app.theme))));
+    let refusal = form.error(slot).map(|why| Line::styled(format!("  ✗ {why}"), Style::default().fg(app.theme.danger)));
     std::iter::once(line).chain(refusal).collect()
 }
 

@@ -1,9 +1,9 @@
 //! The pure state machine: keys in, actions out, incoming answers applied. No clock, no I/O.
+use super::theme::Theme;
 use crate::act::{self, Act, Pane};
 use crate::connection::Connection;
 use crossterm::event::{KeyCode, KeyEvent};
 use vtui::help::Help;
-use vtui::theme::Theme;
 
 pub(super) use detail::{Detail, DetailFit, DetailScroll, DrawnDetail, DrawnRow};
 pub(super) use form::{Form, PasswordFrom, Slot};

@@ -31,10 +31,10 @@ use futures_util::StreamExt;
 use ratatui::DefaultTerminal;
 use std::path::PathBuf;
 use std::time::Duration;
+use theme::Theme;
 use tokio::sync::mpsc::{self, UnboundedReceiver};
 use tokio::time::sleep;
 use vtui::screen::Screen;
-use vtui::theme::Theme;
 
 /// How long the editor's text stays still before its colours are rebuilt, so typing never waits on them.
 const RECOLOUR_DELAY: Duration = Duration::from_millis(40);

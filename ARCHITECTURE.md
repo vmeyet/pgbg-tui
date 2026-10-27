@@ -41,7 +41,7 @@ When a boundary or a flow changes, change this page in the same MR.
 | `tui/ui.rs`, `tui/*_view.rs` | Drawing: layout in `ui.rs`, one view module per pane or modal |
 | `tui/grid_view/` | The results grid: only the visible rows and columns are drawn, the cursor's cell lit, each cell through its column's format (planned) |
 | `tui/chart_view/` | Draws a `Series` with ratatui's `BarChart` (bars across, so text labels stay readable) and `Chart` (braille line), one file per kind; a legend in vtui's user colours |
-| `tui/theme.rs` | The tier colours and the failure colour (never the production red) on top of vtui's palette; the SQL token colours are vtui's `Syntax` |
+| `tui/theme.rs` | pgbg's `Theme`: vtui's palette, read through `Deref`, with the tier colours and a production colour of its own (`danger` leaning to magenta), so a production frame never reads as an error drawn in `danger`; the SQL token colours are vtui's `Syntax` |
 | `vtui` (git dependency) | Shared with the sibling TUIs: the terminal in raw mode (`Screen`), the palette (`Theme`) and its code colours (`Syntax`), the input box (`Field`) and its cleaned paste, the `ctrl-k` palette and its `Pick` rows, the `?` overlay, fzf-style matching |
 | `log.rs` | The log file; never a secret, never a row |
 | `signal.rs` | The signals that stop pgbg (`SIGINT`, `SIGTERM`, `SIGHUP`) and the exit code each gives |

@@ -1,7 +1,6 @@
 //! The connection picker over the screen: each connection's dot in its tier's colour, where it goes, whether it
 //! takes writes, and whether its session is open. vtui draws the popup around it.
 use super::app::{App, Note, Overlay, Search, SessionState};
-use super::theme;
 use crate::connection::{Connection, WritePolicy};
 use ratatui::Frame;
 use ratatui::style::{Modifier, Style};
@@ -33,7 +32,7 @@ fn note_line(app: &App, note: &Note, room: usize) -> Line<'static> {
     let (text, style) = match note {
         Note::ConfirmRemove(name) => (
             format!("  remove `{name}`? y removes it, any other key keeps it"),
-            Style::default().fg(theme::failure(&app.theme)).add_modifier(Modifier::BOLD),
+            Style::default().fg(app.theme.danger).add_modifier(Modifier::BOLD),
         ),
         Note::Said(said) => (format!("  {said}"), Style::default().fg(app.theme.muted)),
     };
@@ -57,7 +56,7 @@ fn pick<'a>(app: &App, connection: &Connection, name: &'a str, room: usize) -> P
     let place_room = room.saturating_sub(Span::raw(name).width() + GAP_WIDTH + badges.width());
     let mut detail = Line::styled(truncate(&place, place_room), Style::default().fg(app.theme.muted));
     detail.spans.extend(badges.spans);
-    Pick { icon: "●", colour: theme::tier(&app.theme, connection.tier()), label: name, detail }
+    Pick { icon: "●", colour: app.theme.tier(connection.tier()), label: name, detail }
 }
 
 /// Whether the connection takes writes, then the state of its session.
@@ -80,7 +79,7 @@ fn session_state(app: &App, connection: &Connection) -> (&'static str, Style) {
     match sheet.session {
         SessionState::Opening => ("  opening…", Style::default().fg(app.theme.muted)),
         SessionState::Open => ("  open", Style::default().fg(app.theme.success)),
-        SessionState::Failed(_) => ("  failed", Style::default().fg(theme::failure(&app.theme))),
+        SessionState::Failed(_) => ("  failed", Style::default().fg(app.theme.danger)),
         SessionState::Closed => ("  closed", Style::default().fg(app.theme.muted)),
     }
 }
@@ -91,10 +90,10 @@ mod tests {
     use super::super::app::{Answer, App, Incoming, SessionId};
     use super::super::ui;
     use crate::fixtures::named;
+    use crate::tui::theme::Theme;
     use crossterm::event::{KeyCode, KeyEvent};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
-    use vtui::theme::Theme;
 
     fn drawn(app: &App, width: u16) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
