@@ -20,8 +20,9 @@ fn help_after(help: Help, key: KeyEvent, pane: Pane) -> Option<Help> {
 impl App {
     /// Takes one key; returns what the runner should do about it.
     pub(in crate::tui) fn handle_key(&mut self, key: KeyEvent) -> Vec<Action> {
+        let dropped = self.drop_idle_ask();
         let actions = self.take_key(key);
-        self.and_the_schema_shown(actions)
+        self.and_the_schema_shown(dropped.into_iter().chain(actions).collect())
     }
 
     fn take_key(&mut self, key: KeyEvent) -> Vec<Action> {
@@ -49,6 +50,7 @@ impl App {
 
     /// Takes text the terminal pasted: the editor, the finder or the form gets it whole, so a line end in it runs nothing.
     pub(in crate::tui) fn paste(&mut self, text: &str) -> Vec<Action> {
+        let dropped = self.drop_idle_ask();
         match &mut self.overlay {
             Some(Overlay::Form(form)) => form.paste(text),
             Some(Overlay::Finder(finder)) => finder.paste(text, &self.queries.all),
@@ -61,7 +63,7 @@ impl App {
             Some(Overlay::Help(_) | Overlay::Picker(_) | Overlay::Prompt(_) | Overlay::Detail(_) | Overlay::CopyAs) => {}
             None => self.paste_in_focus(text),
         }
-        vec![]
+        dropped.into_iter().collect()
     }
 
     fn paste_in_focus(&mut self, text: &str) {

@@ -4,6 +4,7 @@ use super::{Action, SessionState, Sheet};
 use crate::complete::{Ask, Index};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::ops::Range;
+use vtui::field::Field;
 
 /// The name the ghost offers: what the editor shows, and the bytes it replaces when taken.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -13,6 +14,16 @@ pub(in crate::tui) struct Ghost {
     insert: String,
     /// What shows after the cursor.
     pub(in crate::tui) rest: String,
+}
+
+impl Ghost {
+    /// The first line of `rest`, cleaned as a paste is, offered at the cursor `at`; none when nothing printable is left.
+    pub(super) fn at_cursor(at: usize, rest: &str) -> Option<Self> {
+        let mut cleaned = Field::default();
+        cleaned.paste(rest);
+        let line = cleaned.text().lines().next().filter(|line| !line.trim().is_empty())?;
+        Some(Self { typed: at..at, insert: line.to_owned(), rest: line.to_owned() })
+    }
 }
 
 /// Whether `key` types a character of a name, or the `.` before one.

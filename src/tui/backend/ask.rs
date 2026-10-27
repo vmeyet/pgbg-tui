@@ -70,6 +70,7 @@ mod tests {
             env: vec!["PATH".to_owned()],
             timeout: Duration::from_secs(60),
             literals: LiteralPolicy::Masked,
+            ghost: false,
         };
         let (sender, answers) = mpsc::unbounded_channel();
         (Asks::new(sender), settings, answers)

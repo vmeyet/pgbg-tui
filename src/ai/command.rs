@@ -192,6 +192,7 @@ mod tests {
             env: vec!["PATH".to_owned(), "HOME".to_owned()],
             timeout: Duration::from_secs(60),
             literals: LiteralPolicy::Masked,
+            ghost: false,
         }
     }
 

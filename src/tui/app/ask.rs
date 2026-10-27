@@ -2,6 +2,7 @@
 //! and its answer, which `tab` puts in the editor; nothing of it ever runs by itself.
 use super::diff::{self, DiffLine};
 use super::editor::{Edited, Revision};
+use super::idle_ghost::IdleAsk;
 use super::save::typed_into;
 use super::{Action, App, AskFailure, AskId, Overlay, Sheet};
 use crate::act::{self, Act, Pane};
@@ -47,16 +48,22 @@ pub(super) struct Asks {
     /// None when `[ai]` names no command, so asking is off.
     settings: Option<AiSettings>,
     next: AskId,
+    /// Where the idle ghost's ask stands.
+    pub(super) idle: IdleAsk,
     /// Why the last ask shows no answer; the status line says it until the next key.
     pub(super) failure: Option<AskFailure>,
 }
 
 impl Asks {
     pub(super) fn new(settings: Option<AiSettings>) -> Self {
-        Self { settings, next: AskId::FIRST, failure: None }
+        Self { settings, next: AskId::FIRST, idle: IdleAsk::default(), failure: None }
     }
 
-    fn take_id(&mut self) -> AskId {
+    pub(super) fn settings(&self) -> Option<&AiSettings> {
+        self.settings.as_ref()
+    }
+
+    pub(super) fn take_id(&mut self) -> AskId {
         let id = self.next;
         self.next = id.next();
         id
@@ -120,7 +127,7 @@ impl App {
             return vec![];
         };
         let settings = settings.without_passwords_of(&self.connections);
-        match self.sheet().prompt(&instruction, settings.literals) {
+        match self.sheet().prompt(&Instruction::new(instruction.text()), settings.literals) {
             Err(not_sent) => {
                 self.asks.failure = Some(AskFailure::NotSent(not_sent));
                 vec![]
@@ -136,6 +143,9 @@ impl App {
     /// Shows the answer to `ask` while the footer still waits on it; a late answer is dropped, and so is one whose
     /// editor changed meanwhile.
     pub(super) fn asked(&mut self, ask: AskId, answer: Result<Vec<Statement>, AskFailure>) {
+        if self.asks.idle.is_waiting_on(ask) {
+            return self.show_idle_ghost(answer);
+        }
         let Some(Overlay::Ask(AskStep::Waiting { ask: waiting, revision })) = self.overlay else { return };
         if waiting != ask {
             return;
@@ -174,18 +184,11 @@ impl App {
 
 impl Sheet {
     /// The prompt for `instruction` about the statement under the cursor, with the schema read so far.
-    fn prompt(&self, instruction: &Field, literals: LiteralPolicy) -> Result<Prompt, NotSent> {
-        let instruction = Instruction::new(instruction.text());
+    pub(super) fn prompt(&self, instruction: &Instruction, literals: LiteralPolicy) -> Result<Prompt, NotSent> {
         let statement = self.range_under_cursor().map(|range| Statement::new(&self.editor.text()[range]));
         let unread = Catalog::default();
         let catalog = self.catalog().unwrap_or(&unread);
-        ai::prompt(&ai::PromptInput {
-            instruction: &instruction,
-            statement: statement.as_ref(),
-            catalog,
-            tier: self.connection.tier(),
-            literals,
-        })
+        ai::prompt(&ai::PromptInput { instruction, statement: statement.as_ref(), catalog, tier: self.connection.tier(), literals })
     }
 
     /// `statements` against the statement under the cursor, which they would replace, unless the editor is no longer
@@ -237,9 +240,9 @@ pub(in crate::tui) mod tests {
         text.chars().for_each(|c| drop(press(app, KeyCode::Char(c))));
     }
 
-    fn ai_settings() -> AiSettings {
+    pub(in crate::tui) fn ai_settings() -> AiSettings {
         let env = ["PATH", "SHOP_PGPASSWORD"].map(str::to_owned).to_vec();
-        AiSettings { command: vec!["llm".to_owned()], env, timeout: Duration::from_secs(60), literals: LiteralPolicy::Masked }
+        AiSettings { command: vec!["llm".to_owned()], env, timeout: Duration::from_secs(60), literals: LiteralPolicy::Masked, ghost: false }
     }
 
     /// The app on `shop` with an `[ai] command`, its schema read, `text` in the editor.

@@ -171,7 +171,7 @@ pub(crate) const ROWS: &[Row] = &[
     )
     .help("⌥⏎ ⇧⏎", "break the line")
     .footer("⌥⏎", "new line"),
-    row(Act::TakeGhost, Pane::Editor, &[key(KeyCode::Right)]).help("→", "take the faded rest of the name"),
+    row(Act::TakeGhost, Pane::Editor, &[key(KeyCode::Right)]).help("→", "take the faded rest after the cursor"),
     row(Act::Complete, Pane::Editor, &[control(' ')]).help("^space", "list the names that fit here"),
     row(Act::Ask, Pane::Editor, &[control('g')]).help("^g", "ask the [ai] command for SQL"),
     row(Act::Run, Pane::Params, &[key(KeyCode::Enter)]).help("⏎", "run the statement with these values").footer("⏎", "run"),

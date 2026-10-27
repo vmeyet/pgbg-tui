@@ -242,6 +242,8 @@ fn badge(app: &App) -> Span<'static> {
 #[cfg(test)]
 mod tests {
     use super::super::app::fixtures::{typed, with_focus};
+    use super::super::app::idle_ghost::tests::ghosted as idle_ghosted;
+    use super::super::styled;
     use super::*;
     use crate::syntax;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -298,6 +300,15 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(30, 5)).unwrap();
         terminal.draw(|f| draw(f, &app, f.area())).unwrap();
         assert!(!terminal.backend().to_string().contains("select"), "{}", terminal.backend());
+    }
+
+    #[test]
+    fn the_idle_ghost_draws_faded_after_the_cursor() {
+        let mut app = idle_ghosted("SELECT * FROM orders WHERE ", "SELECT * FROM orders WHERE total > 10");
+        app.recolour();
+        let mut terminal = Terminal::new(TestBackend::new(44, 3)).unwrap();
+        terminal.draw(|f| draw(f, &app, f.area())).unwrap();
+        insta::assert_snapshot!("idle_ghost", styled::runs(terminal.backend().buffer()));
     }
 
     #[test]
