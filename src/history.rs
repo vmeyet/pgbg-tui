@@ -37,7 +37,8 @@ pub(crate) enum Outcome {
         /// More rows were left on the server than came back with the first answer: cut, or waiting for the grid.
         is_cut: bool,
     },
-    /// pgbg kept it from the server: its guard, or parameters it could not fill or type.
+    /// pgbg kept it from the server (its guard, or parameters it could not fill or type), or the server refused the write
+    /// of a statement read as a read, after what came before that write ran.
     Refused,
     ServerError,
     /// The tunnel, the link or the login failed before the server answered.

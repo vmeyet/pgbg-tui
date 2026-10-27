@@ -125,6 +125,8 @@ pub(in crate::tui) struct Sheet {
     pub(in crate::tui) index: Option<Arc<Index>>,
     pub(in crate::tui) ghost: Option<Ghost>,
     pub(in crate::tui) bar: ParamBar,
+    /// The statement that tried to write while the sheet was off screen or under an overlay, asked about once it shows.
+    tried_to_write: Option<ToRun>,
 }
 
 impl Sheet {
@@ -149,6 +151,7 @@ impl Sheet {
             index: None,
             ghost: None,
             bar: ParamBar::default(),
+            tried_to_write: None,
         }
     }
 
@@ -329,6 +332,7 @@ impl Sheet {
             return vec![];
         }
         let run = self.next_run();
+        self.tried_to_write = None;
         self.run = Run::Running { run };
         self.sent = Some(Sent { start, numbering: params::numbering(&statement), statement: statement.clone(), input: input.clone() });
         vec![Action::Run { connection: self.name().clone(), run, statement, input, confirmed }]
@@ -365,10 +369,11 @@ impl Sheet {
     }
 
     /// Takes an answer from the session; a result opens in the formats its header and `reading` give it.
-    /// Gives the statement the server found a write in, to ask about before it runs again.
-    pub(super) fn apply(&mut self, incoming: Incoming, reading: &Reading) -> Option<ToRun> {
+    /// A statement the server found a write in waits in [`Sheet::take_tried_to_write`] to be asked about.
+    pub(super) fn apply(&mut self, incoming: Incoming, reading: &Reading) {
         if let Incoming::Failed { run, failure: Failure::TriedToWrite } = incoming {
-            return self.tried_to_write(run);
+            self.tried_to_write = self.tried_to_write(run);
+            return;
         }
         let is_closed = self.session == SessionState::Closed;
         match incoming {
@@ -412,11 +417,15 @@ impl Sheet {
                 self.run = Run::Failed(failure.to_string());
             }
         }
-        None
     }
 
-    /// Takes the answer that the run `run` tried to write and ran nothing; gives the statement sent, when `run` is the
-    /// one running.
+    /// The statement that tried to write and waits to be asked about, once.
+    pub(super) fn take_tried_to_write(&mut self) -> Option<ToRun> {
+        self.tried_to_write.take()
+    }
+
+    /// Takes the answer that the run `run` tried to write and the server refused the write; gives the statement sent,
+    /// when `run` is the one running.
     fn tried_to_write(&mut self, run: RunId) -> Option<ToRun> {
         if !self.is_answer_to_running(run) {
             return None;

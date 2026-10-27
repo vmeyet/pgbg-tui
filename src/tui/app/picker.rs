@@ -271,7 +271,7 @@ pub(in crate::tui) mod tests {
         picker(app).search.shown.iter().map(|c| c.name().to_string()).collect()
     }
 
-    fn switch_to(app: &mut App, typed: &str) -> Vec<Action> {
+    pub(in crate::tui) fn switch_to(app: &mut App, typed: &str) -> Vec<Action> {
         ctrl(app, 'o');
         press(app, typed);
         key(app, KeyCode::Enter)

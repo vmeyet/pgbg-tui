@@ -62,7 +62,7 @@ Running a statement:
 2. `db::guard` classifies it; a write on a read-only connection comes back as `Incoming::Refused` in an `Answer` and never reaches the server.
    A write on a connection that allows writes asks before `App` returns its `Action::Run`: the footer names its verb and target (`DELETE from orders?`), `y` sends it, any other key drops it unsent, on every tier.
    `pgbg run` asks `y/N` on the terminal, and refuses a write when stdin is no terminal unless `--yes` says yes ahead.
-   A read there runs with writes refused (`Mode::ReadThenAsk`); when the server refuses a write in it (SQLSTATE `25006`, a function that writes), its transaction is undone, the session answers `Incoming::TriedToWrite`, and the footer asks `this statement tried to write, and may run twice: run it?` when its sheet is on screen with no overlay open; `y` sends it again with a `Confirmed`, which runs it as a write.
+   A read there runs with writes refused (`Mode::ReadThenAsk`); when the server refuses a write in it (SQLSTATE `25006`, a function that writes), its transaction is undone, the session answers `Incoming::TriedToWrite`, and the footer asks `this statement tried to write, and may run twice: run it?` once its sheet is on screen with no overlay open, the sheet keeping the question until then; `y` sends it again with a `Confirmed`, which runs it as a write.
    Inside the user's own transaction a read runs as a write does, unchecked: their `COMMIT` or `ROLLBACK` decides what stays.
    `pgbg run` asks the same on the terminal, then runs it again on the same session; `--yes` runs it as a write at once.
    A table preview (`p`, `^r`) is always a read: `name.rs` quotes a table name the guard would read as a write.

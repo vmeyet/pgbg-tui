@@ -53,14 +53,15 @@ impl fmt::Display for InsideUserTransaction {
 
 impl std::error::Error for InsideUserTransaction {}
 
-/// A statement the guard read as a read tried to write, as a function that writes does, and the server refused it:
-/// nothing of it ran, and it runs again only once the user confirms it.
+/// A statement the guard read as a read tried to write, as a function that writes does, and the server refused the
+/// write: what the statement did before it, which a read-only transaction cannot stop (a call to another server, a
+/// sleep), already ran once; it runs again, as a write, only once the user confirms it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TriedToWrite;
 
 impl fmt::Display for TriedToWrite {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("this statement tried to write, so nothing ran: it runs only once you confirm it")
+        f.write_str("this statement tried to write; what it did before may have run: confirm to run it again as a write")
     }
 }
 
