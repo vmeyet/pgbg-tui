@@ -78,7 +78,7 @@ The MR that ships a step ticks its box.
 
 ## 12. Completion
 
-- [ ] `db/lex.rs`: the guard's tokenizer on its own, shared by the guard, completion and parameters
+- [x] `db/lex.rs`: the guard's tokenizer on its own, shared by the guard, completion and parameters
 - [ ] `complete/`, replacing `Schema::complete`: what the cursor wants (a table, a column of a table or alias, a keyword) from the statement under it, names in the search path bare; a prefix search in the index, asked only after an identifier character or `.`; a test holds it under a millisecond on 200 000 columns
 - [ ] Ghost in the editor: the rest of the best candidate, dimmed after the cursor, prefix only, taken with `→` at the end of the word
 - [ ] `ctrl-space` lists the candidates, prefix then fuzzy, in a popup at the cursor: `↑↓` to pick, `⏎` or `⇥` to take, `esc` to close
