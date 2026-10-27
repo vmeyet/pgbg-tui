@@ -1,7 +1,7 @@
 //! Parameters: the `{{name}}` of a statement turned into `$1`, `$2`, and the values given by name bound in that order.
 use crate::connection::WritePolicy;
 use crate::db::guard::{self, Admitted};
-use crate::db::lex::{self, Token};
+use crate::db::lex::{self, Placed, Token};
 use crate::db::model::{ParamValue, Params, Statement, TypeName};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -119,9 +119,9 @@ pub(crate) fn assignments(text: &str) -> Result<Vec<Assignment>, String> {
     lines.map(|(at, line)| line.parse().map_err(|_quotes_the_line: String| format!("line {}: {NO_ASSIGNMENT_LINE}", at + 1))).collect()
 }
 
-/// The names of `statement`'s `{{name}}`, each once, in the order they first come.
-pub(crate) fn names(statement: &Statement) -> Result<Vec<ParamName>, ParamError> {
-    Ok(distinct(&named_params(statement.as_str())?))
+/// The names of the `{{name}}` among a statement's `tokens`, each once, in the order they first come.
+pub(crate) fn names(tokens: &[Placed]) -> Result<Vec<ParamName>, ParamError> {
+    Ok(distinct(&named_in(tokens)?))
 }
 
 /// `template` with each `{{name}}` replaced by `$n`, the same name the same number, and the value given for each,
@@ -156,21 +156,24 @@ struct NamedParam {
 }
 
 fn named_params(text: &str) -> Result<Vec<NamedParam>, ParamError> {
-    let tokens = lex::tokens(text);
+    named_in(&lex::tokens(text))
+}
+
+fn named_in(tokens: &[Placed]) -> Result<Vec<NamedParam>, ParamError> {
     if tokens.iter().any(|placed| placed.token == Token::Unreadable) {
         return Err(ParamError::Unreadable);
     }
     let is_numbered = tokens.iter().any(|placed| matches!(placed.token, Token::Numbered(_)));
-    let named: Vec<NamedParam> = tokens.into_iter().filter_map(named_param).collect();
+    let named: Vec<NamedParam> = tokens.iter().filter_map(named_param).collect();
     if is_numbered && !named.is_empty() {
         return Err(ParamError::Mixed);
     }
     Ok(named)
 }
 
-fn named_param(placed: lex::Placed) -> Option<NamedParam> {
-    match placed.token {
-        Token::Param(name) => Some(NamedParam { name: ParamName(name), range: placed.range }),
+fn named_param(placed: &Placed) -> Option<NamedParam> {
+    match &placed.token {
+        Token::Param(name) => Some(NamedParam { name: ParamName(name.clone()), range: placed.range.clone() }),
         _ => None,
     }
 }
@@ -362,7 +365,7 @@ mod tests {
 
     #[test]
     fn names_come_once_each_in_the_order_they_first_come() {
-        let names = names(&Statement::new("SELECT {{owner}}, {{since}}, {{owner}}")).unwrap();
+        let names = names(&lex::tokens("SELECT {{owner}}, {{since}}, {{owner}}")).unwrap();
         assert_eq!(names, [name("owner"), name("since")]);
     }
 

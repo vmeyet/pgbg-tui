@@ -1,6 +1,7 @@
 //! The SQL editor: its text, the editing keys and pastes that change it, and the syntax colours that follow it.
 use super::ghost::is_name_key;
 use super::{Action, Sheet};
+use crate::db::lex::Lexed;
 use crate::query::Header;
 use crate::syntax::{self, Spans};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -14,10 +15,12 @@ pub(super) enum Edited {
     Cursor,
 }
 
-/// The editor's text and its colours; the colours are rebuilt by `recolour` once the text changed.
+/// The editor's text, its tokens and its colours; the tokens follow each change, the colours are rebuilt by `recolour`
+/// once the text changed.
 #[derive(Debug, Default)]
 pub(in crate::tui) struct Editor {
     field: Field,
+    lexed: Lexed,
     colours: Vec<Spans>,
     has_stale_colours: bool,
 }
@@ -25,11 +28,16 @@ pub(in crate::tui) struct Editor {
 impl Editor {
     /// An editor on `text`, left for the loop to colour, so opening a big query never waits on tree-sitter.
     pub(super) fn new(text: &str) -> Self {
-        Self { field: Field::new(text), colours: vec![], has_stale_colours: true }
+        Self { field: Field::new(text), lexed: Lexed::of(text), colours: vec![], has_stale_colours: true }
     }
 
     pub(in crate::tui) fn text(&self) -> &str {
         self.field.text()
+    }
+
+    /// The text as the guard, completion and the parameters read it, as of the last change.
+    pub(in crate::tui) fn lexed(&self) -> &Lexed {
+        &self.lexed
     }
 
     /// The text before the cursor, the character under it, and the rest.
@@ -79,7 +87,10 @@ impl Editor {
         let revision = self.field.revision();
         edit(&mut self.field);
         let edited = if self.field.revision() == revision { Edited::Cursor } else { Edited::Text };
-        self.has_stale_colours |= edited == Edited::Text;
+        if edited == Edited::Text {
+            self.lexed = Lexed::of(self.field.text());
+            self.has_stale_colours = true;
+        }
         edited
     }
 }

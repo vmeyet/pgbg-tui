@@ -180,12 +180,38 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use std::sync::Arc;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     fn render(app: &App, width: u16, height: u16) -> Terminal<TestBackend> {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|f| _ = draw(f, app)).unwrap();
         terminal
+    }
+
+    const STATEMENT: &str = "SELECT id, customer, total\nFROM orders\nWHERE customer = {{owner}} AND total > 10 -- recent\nLIMIT 50;\n";
+    const KEYS_TYPED: u32 = 200;
+    /// A release build takes 0.15 ms; a debug build, which CI runs, 6.5 ms.
+    const KEY_AND_FRAME_BUDGET: Duration = if cfg!(debug_assertions) { Duration::from_millis(20) } else { Duration::from_millis(1) };
+
+    /// How long one key and the frame after it take at the end of a 1 000-line editor.
+    fn key_and_frame_took() -> Duration {
+        let mut app = app();
+        app.paste(&STATEMENT.repeat(250));
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        let started = Instant::now();
+        for _ in 0..KEYS_TYPED {
+            app.handle_key(KeyEvent::from(KeyCode::Char('x')));
+            let mut fit = Fit::default();
+            terminal.draw(|f| fit = draw(f, &app)).unwrap();
+            app.fit(fit);
+        }
+        started.elapsed() / KEYS_TYPED
+    }
+
+    #[test]
+    fn one_key_and_its_frame_on_a_thousand_line_editor_stay_within_the_budget() {
+        let took = key_and_frame_took();
+        assert!(took < KEY_AND_FRAME_BUDGET, "took {took:?}");
     }
 
     #[test]

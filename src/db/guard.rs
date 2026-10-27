@@ -1,6 +1,6 @@
 //! Classifies a statement before it is sent: a read, a write, or more than one statement.
 //! A best effort that spares a round trip; the read-only transaction and role are what hold.
-use super::lex::{self, Placed, Token};
+use super::lex::{self, Lexed, Placed, Token};
 use super::model::{Params, Statement};
 use crate::connection::WritePolicy;
 use std::fmt;
@@ -84,18 +84,24 @@ pub(crate) enum Refusal {
 
 /// `statement` with `params` bound to its `$n`, cleared for a connection of policy `writes`, or why it is not.
 pub(crate) fn admit(statement: Statement, params: Params, writes: WritePolicy) -> Result<Admitted, Refusal> {
-    let tokens = tokens(statement.as_str());
+    let tokens = lex::tokens(statement.as_str());
+    let upper = upper_case_words(statement.as_str(), &tokens);
+    let words: Vec<&str> = upper.iter().map(String::as_str).collect();
     let (mode, transaction_step) = match writes {
-        WritePolicy::Allowed => (Mode::Writes, transaction_step(&tokens)),
-        WritePolicy::ReadOnly => check_read(&tokens).map(|()| (Mode::ReadOnly, TransactionStep::Keeps))?,
+        WritePolicy::Allowed => (Mode::Writes, transaction_step(&words)),
+        WritePolicy::ReadOnly => check_read(&tokens, &words).map(|()| (Mode::ReadOnly, TransactionStep::Keeps))?,
     };
     check_params(&tokens, &params)?;
     Ok(Admitted { statement, params, mode, transaction_step })
 }
 
-fn transaction_step(tokens: &[Token]) -> TransactionStep {
-    let words: Vec<&str> = tokens.iter().filter_map(Token::word).collect();
-    match words.as_slice() {
+/// The words of `tokens` out of `sql`, in upper case as the guard's lists write them; PostgreSQL folds ASCII only.
+fn upper_case_words(sql: &str, tokens: &[Placed]) -> Vec<String> {
+    tokens.iter().filter_map(|placed| placed.word(sql)).map(str::to_ascii_uppercase).collect()
+}
+
+fn transaction_step(words: &[&str]) -> TransactionStep {
+    match words {
         ["BEGIN" | "START", ..] => TransactionStep::Opens,
         ["CALL" | "DO", ..] => TransactionStep::Unsure,
         ["PREPARE", "TRANSACTION", ..] => TransactionStep::Ends,
@@ -118,25 +124,24 @@ fn step_after_an_ending(rest: &[&str]) -> TransactionStep {
 
 /// Only when values came: a statement without any may number `$n` of its own (`CREATE FUNCTION ... RETURN $1 + 1`),
 /// and the server judges those.
-fn check_params(tokens: &[Token], params: &Params) -> Result<(), Refusal> {
+fn check_params(tokens: &[Placed], params: &Params) -> Result<(), Refusal> {
     if params.is_empty() {
         return Ok(());
     }
-    let numbered = tokens.iter().filter_map(|token| if let Token::Numbered(n) = token { Some(*n) } else { None });
+    let numbered = tokens.iter().filter_map(|placed| if let Token::Numbered(n) = placed.token { Some(n) } else { None });
     let expected = numbered.max().map_or(0, |highest| usize::try_from(highest).unwrap_or(usize::MAX));
     if expected == params.len() { Ok(()) } else { Err(Refusal::Params { expected, given: params.len() }) }
 }
 
-fn check_read(tokens: &[Token]) -> Result<(), Refusal> {
+fn check_read(tokens: &[Placed], words: &[&str]) -> Result<(), Refusal> {
     if holds_more_than_one_statement(tokens) {
         return Err(Refusal::Multiple);
     }
-    let words: Vec<&str> = tokens.iter().filter_map(Token::word).collect();
     let Some(&first) = words.first() else { return Ok(()) };
     if !READS.contains(&first) {
         return Err(Refusal::Write(first.to_owned()));
     }
-    let statement = if first == "EXPLAIN" { explained(&words[1..])? } else { &words };
+    let statement = if first == "EXPLAIN" { explained(&words[1..])? } else { words };
     match first_write_word(statement) {
         Some(word) => Err(Refusal::Write(word.to_owned())),
         None => Ok(()),
@@ -146,8 +151,8 @@ fn check_read(tokens: &[Token]) -> Result<(), Refusal> {
 /// Where the statement the cursor at byte `at` of `sql` stands in begins and ends, its `;` and the
 /// whitespace around it left out; `None` when `sql` holds no statement. A cursor right after a `;`, or on blank text after
 /// it, stands in the statement before it.
-pub(crate) fn statement_at(sql: &str, at: usize) -> Option<Range<usize>> {
-    let pieces = pieces(&lex::tokens(sql), sql.len());
+pub(crate) fn statement_at(sql: &str, lexed: &Lexed, at: usize) -> Option<Range<usize>> {
+    let pieces = pieces(lexed.tokens(), sql.len());
     let holding = pieces.iter().position(|piece| at <= piece.range.end + 1).unwrap_or(pieces.len() - 1);
     let statement = pieces[..=holding].iter().rev().find(|piece| piece.has_tokens)?;
     Some(trimmed(sql, statement.range.clone()))
@@ -182,9 +187,9 @@ fn trimmed(sql: &str, range: Range<usize>) -> Range<usize> {
     start..end
 }
 
-fn holds_more_than_one_statement(tokens: &[Token]) -> bool {
-    let mut after_first_end = tokens.iter().skip_while(|token| **token != Token::End).skip(1);
-    after_first_end.any(|token| *token != Token::End)
+fn holds_more_than_one_statement(tokens: &[Placed]) -> bool {
+    let mut after_first_end = tokens.iter().skip_while(|placed| placed.token != Token::End).skip(1);
+    after_first_end.any(|placed| placed.token != Token::End)
 }
 
 /// The words of the statement `EXPLAIN` explains, past its options; with `ANALYZE` it runs, so it must be a read.
@@ -200,10 +205,6 @@ fn explained<'a, 'w>(words: &'a [&'w str]) -> Result<&'a [&'w str], Refusal> {
 fn first_write_word<'a>(words: &[&'a str]) -> Option<&'a str> {
     let locks = words.windows(2).find(|pair| LOCKS.contains(&[pair[0], pair[1]])).map(|pair| pair[1]);
     words.iter().copied().find(|word| WRITES.contains(word)).or(locks)
-}
-
-fn tokens(sql: &str) -> Vec<Token> {
-    lex::tokens(sql).into_iter().map(|placed| placed.token).collect()
 }
 
 impl fmt::Display for Refusal {
@@ -376,7 +377,7 @@ mod tests {
 
     fn statement_under(marked: &str) -> Option<String> {
         let (sql, at) = (marked.replace('|', ""), marked.find('|').unwrap());
-        statement_at(&sql, at).map(|range| sql[range].to_owned())
+        statement_at(&sql, &Lexed::of(&sql), at).map(|range| sql[range].to_owned())
     }
 
     #[test]
