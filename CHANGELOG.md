@@ -97,6 +97,7 @@ Each entry says what changed, then where, then how to use it.
 
 ### Fixed
 
+- **A tunnel whose command died is never taken as up**, even when another process answers on its port: pgbg says how it died instead.
 - **A second `ctrl-c`, `kill` or hang-up stops the TUI at once** while its sessions stop, as it does under `pgbg run`; it waited up to 3 seconds.
 - **Copying a big result no longer freezes the TUI**: its text is built off the screen's loop, and a copy over 100 KB skips the terminal's clipboard, which the status line says (`through pbcopy only`).
 - **A copy as JSON keeps every column under its own name**: a name two columns share takes a suffix no other column has, so `count, count, count_2` gives `count`, `count_3` and `count_2`.

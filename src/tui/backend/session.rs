@@ -525,6 +525,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_statement_sent_while_the_session_fails_to_open_never_reaches_the_server() {
+        let _ports = fixtures::TUNNEL_PORTS.lock().await;
         let flags = tempfile::tempdir().unwrap();
         let started_once = flags.path().join("started");
         let fails_the_first_time = format!("[ -e {0:?} ] || {{ touch {0:?}; sleep 3; exit 1; }}", started_once.display().to_string());
@@ -540,6 +541,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_statement_still_queued_when_the_backend_stops_never_reaches_the_server() {
+        let _ports = fixtures::TUNNEL_PORTS.lock().await;
         let table = empty_table("pgbg_queued_at_stop").await;
         let (backend, _answers) = started_on(fixtures::tunnelled_after("pgbg-test-slow-start", "sleep 1", WritePolicy::Allowed));
         backend.run(&shop(), RunId::FIRST, Statement::new(format!("INSERT INTO {table} VALUES (1)")));
@@ -567,6 +569,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "starts a tunnel"]
     async fn a_tunnel_that_does_not_start_says_why_and_the_session_does_not_open() {
+        let _ports = fixtures::TUNNEL_PORTS.lock().await;
         let (_backend, mut answers) = started_on(fixtures::connection(
             "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\ntls = \"off\"\n\
              tunnel = { command = [\"sh\", \"-c\", \"echo 'bastion.example.com: no route' >&2; exit 255\", \"{port}\"] }\n",
@@ -580,6 +583,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "starts a tunnel"]
     async fn opening_again_a_connection_that_failed_tries_again() {
+        let _ports = fixtures::TUNNEL_PORTS.lock().await;
         let shop = fixtures::connection(
             "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\ntls = \"off\"\n\
              tunnel = { command = [\"sh\", \"-c\", \"exit 255\", \"{port}\"] }\n",
@@ -594,6 +598,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "starts a tunnel"]
     async fn a_statement_sent_while_the_tunnel_fails_to_start_fails_with_it() {
+        let _ports = fixtures::TUNNEL_PORTS.lock().await;
         let shop = fixtures::connection(
             "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\ntls = \"off\"\n\
              tunnel = { command = [\"sh\", \"-c\", \"exit 255\", \"{port}\"] }\n",
@@ -609,6 +614,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_tunnel_that_dies_closes_its_session_and_says_why() {
+        let _ports = fixtures::TUNNEL_PORTS.lock().await;
         let marker = "pgbg-test-tunnel-that-dies";
         let (_backend, mut answers) = started_on(fixtures::tunnelled(marker));
         answers_until(&mut answers, |answer| *answer == Incoming::Opened).await;
@@ -626,6 +632,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_statement_after_the_tunnel_died_starts_it_again() {
+        let _ports = fixtures::TUNNEL_PORTS.lock().await;
         let marker = "pgbg-test-tunnel-started-again";
         let (backend, mut answers) = started_on(fixtures::tunnelled(marker));
         answers_until(&mut answers, |answer| *answer == Incoming::Opened).await;
@@ -781,6 +788,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_write_whose_session_stops_between_its_round_trips_never_commits() {
+        let _ports = fixtures::TUNNEL_PORTS.lock().await;
         let table = empty_table("pgbg_write_between_round_trips").await;
         on_a_side_session_writing(&format!("INSERT INTO {table} VALUES (1)")).await;
         let (backend, mut answers) = started_on(fixtures::tunnelled_slowly("pgbg-test-slow-write", WritePolicy::Allowed));
@@ -807,6 +815,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn the_schema_is_read_through_the_tunnel_of_the_session() {
+        let _ports = fixtures::TUNNEL_PORTS.lock().await;
         let marker = "pgbg-test-schema-through-the-tunnel";
         let (backend, mut answers) = started_on(fixtures::tunnelled(marker));
         backend.read_schema(&shop(), SessionId::FIRST);
