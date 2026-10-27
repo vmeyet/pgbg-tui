@@ -1,13 +1,17 @@
 //! The process groups pgbg owns (a tunnel's, a `before`, password or `[ai]` command's), so nothing they start outlives
 //! them, and a panic kills them where no `Drop` runs: release builds abort.
 use rustix::io::Errno;
-use rustix::process::{Pid, Signal, kill_process_group};
+use rustix::process::{Pid, Signal, WaitId, WaitIdOptions, kill_process_group, waitid};
 use std::collections::{BTreeSet, VecDeque};
+use std::convert::Infallible;
 use std::io::ErrorKind;
 use std::process::{ExitStatus, Output, Stdio};
 use std::sync::{Mutex, Once, PoisonError};
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
-use tokio::process::Command;
+use tokio::process::{Child, Command};
+use tokio::sync::oneshot;
+use tokio::time::timeout;
 
 /// A child given this as its group id leads a group of its own.
 pub(crate) const OWN_GROUP: i32 = 0;
@@ -16,6 +20,8 @@ pub(crate) const OWN_GROUP: i32 = 0;
 static LIVE: Mutex<BTreeSet<i32>> = Mutex::new(BTreeSet::new());
 static HOOK: Once = Once::new();
 
+/// How long a command's pipes are read once it exited, in case a process it left, maybe outside its group, still holds them.
+pub(crate) const LAST_WORDS_TIMEOUT: Duration = Duration::from_secs(1);
 const LAST_WORDS_LINES: usize = 5;
 const LAST_WORDS_LINE_CHARS: usize = 200;
 
@@ -35,33 +41,50 @@ pub(crate) fn kill(group: Pid) -> rustix::io::Result<()> {
     kill_process_group(group, Signal::KILL)
 }
 
-/// Forgets `group` without a signal: its leader was reaped, so its id may already be another's.
-fn forget(group: Pid) {
-    LIVE.lock().unwrap_or_else(PoisonError::into_inner).remove(&group.as_raw_nonzero().get());
+/// A command in a group of its own, owned until its leader is reaped: dropped before, the whole group is killed.
+struct Owned {
+    child: Child,
+    /// Taken once the group is killed, so no later kill signals an id the system may reuse.
+    group: Option<Pid>,
 }
 
-/// A group owned until its leader is reaped: dropped before, the whole group is killed.
-struct Owned(Option<Pid>);
-
 impl Owned {
-    fn new(leader: Option<u32>) -> Self {
-        let group = leader.and_then(|id| Pid::from_raw(id as i32));
+    fn spawn(command: &mut Command) -> std::io::Result<Self> {
+        let child = command.process_group(OWN_GROUP).kill_on_drop(true).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+        let group = child.id().and_then(|id| Pid::from_raw(id as i32));
         if let Some(group) = group {
             register(group);
         }
-        Self(group)
+        Ok(Self { child, group })
     }
 
-    fn reaped(mut self) {
-        if let Some(group) = self.0.take() {
-            forget(group);
+    /// What `streams` read to their end; once the leader exits, waited for [`LAST_WORDS_TIMEOUT`] at most, then the group
+    /// is killed, so a child it left holding a pipe stops holding it.
+    async fn drained<T>(&mut self, streams: impl Future<Output = T>) -> T {
+        let exited = leader_exited(self.child.id());
+        tokio::pin!(streams, exited);
+        tokio::select! {
+            read = &mut streams => read,
+            () = &mut exited => match timeout(LAST_WORDS_TIMEOUT, &mut streams).await {
+                Ok(read) => read,
+                Err(_lingering) => {
+                    self.kill();
+                    streams.await
+                }
+            },
         }
     }
-}
 
-impl Drop for Owned {
-    fn drop(&mut self) {
-        let Some(group) = self.0.take() else { return };
+    /// Waits for the leader to exit, kills what it left in its group, then reaps it: a zombie leader keeps the group id
+    /// from being reused until then.
+    async fn ended(mut self) -> std::io::Result<ExitStatus> {
+        leader_exited(self.child.id()).await;
+        self.kill();
+        self.child.wait().await
+    }
+
+    fn kill(&mut self) {
+        let Some(group) = self.group.take() else { return };
         match kill(group) {
             Ok(()) | Err(Errno::SRCH) => {}
             Err(err) => tracing::warn!("a command's process group could not be killed: {err}"),
@@ -69,14 +92,48 @@ impl Drop for Owned {
     }
 }
 
+impl Drop for Owned {
+    fn drop(&mut self) {
+        self.kill();
+    }
+}
+
+/// Resolves once the process `leader` exited, left unreaped; a thread of its own waits, so neither the runtime nor a
+/// paused test clock is held, and a thread that cannot start leaves it to [`LAST_WORDS_TIMEOUT`] and the group kill.
+async fn leader_exited(leader: Option<u32>) {
+    let Some(leader) = leader.and_then(|id| Pid::from_raw(id as i32)) else { return };
+    let (exited, on_exit) = oneshot::channel::<Infallible>();
+    let waiting = std::thread::Builder::new().name("pgbg-exit".into()).spawn(move || {
+        wait_unreaped(leader);
+        drop(exited);
+    });
+    if let Err(err) = waiting {
+        tracing::warn!("a command's exit cannot be watched: {err}");
+        return;
+    }
+    let Err(_exited) = on_exit.await;
+}
+
+fn wait_unreaped(leader: Pid) {
+    while matches!(waitid(WaitId::Pid(leader), WaitIdOptions::EXITED | WaitIdOptions::NOWAIT), Err(Errno::INTR)) {}
+}
+
 /// Runs `command` to its end as `Command::output` does, in a group of its own: dropped halfway (a timeout, a stop), it
-/// kills the whole group, so nothing the command started outlives it.
+/// kills the whole group, and once it ended, it kills what it left running, so nothing the command started outlives it.
 pub(crate) async fn output(command: &mut Command) -> std::io::Result<Output> {
-    let child = command.process_group(OWN_GROUP).kill_on_drop(true).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
-    let group = Owned::new(child.id());
-    let output = child.wait_with_output().await;
-    group.reaped();
-    output
+    let mut owned = Owned::spawn(command)?;
+    let (Some(stdout), Some(stderr)) = (owned.child.stdout.take(), owned.child.stderr.take()) else {
+        return Err(std::io::Error::other("a piped stream of the command is missing"));
+    };
+    let (stdout, stderr) = owned.drained(async { tokio::try_join!(read_to_end(stdout), read_to_end(stderr)) }).await?;
+    let status = owned.ended().await?;
+    Ok(Output { status, stdout, stderr })
+}
+
+async fn read_to_end(mut stream: impl AsyncRead + Unpin) -> std::io::Result<Vec<u8>> {
+    let mut read = vec![];
+    stream.read_to_end(&mut read).await?;
+    Ok(read)
 }
 
 /// How a command given its stdin ended.
@@ -99,22 +156,21 @@ enum Stop {
 }
 
 /// Runs `command` in a group of its own, writing `input` to its stdin while it reads its stdout, so a big prompt never
-/// deadlocks on a full pipe, and stops it once its stdout passes `cap` bytes; dropped halfway, it kills the whole group.
+/// deadlocks on a full pipe, and stops it once its stdout passes `cap` bytes; dropped halfway, it kills the whole group,
+/// and once it ended, it kills what it left running.
 pub(crate) async fn exchange(command: &mut Command, input: &[u8], cap: usize) -> std::io::Result<Exchanged> {
-    let mut child =
-        command.process_group(OWN_GROUP).kill_on_drop(true).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
-    let group = Owned::new(child.id());
-    let (Some(stdin), Some(stdout), Some(stderr)) = (child.stdin.take(), child.stdout.take(), child.stderr.take()) else {
+    let mut owned = Owned::spawn(command.stdin(Stdio::piped()))?;
+    let (Some(stdin), Some(stdout), Some(stderr)) = (owned.child.stdin.take(), owned.child.stdout.take(), owned.child.stderr.take()) else {
         return Err(std::io::Error::other("a piped stream of the command is missing"));
     };
-    let streams = tokio::try_join!(write_then_close(stdin, input), read_up_to(stdout, cap), async { Ok(keep_last_words(stderr).await) });
-    let (stdout, last_words) = match streams {
+    let streams =
+        async { tokio::try_join!(write_then_close(stdin, input), read_up_to(stdout, cap), async { Ok(keep_last_words(stderr).await) }) };
+    let (stdout, last_words) = match owned.drained(streams).await {
         Ok(((), stdout, last_words)) => (stdout, last_words),
         Err(Stop::PastCap) => return Ok(Exchanged::PastCap),
         Err(Stop::Failed(err)) => return Err(err),
     };
-    let status = child.wait().await?;
-    group.reaped();
+    let status = owned.ended().await?;
     Ok(Exchanged::Ended { status, stdout, last_words })
 }
 
@@ -197,7 +253,7 @@ fn kill_live_groups_on_panic() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fixtures::{leaving_a_sleep, sleep_goes_when_dropped};
+    use crate::fixtures::{is_gone, leaving_a_sleep, sleep_goes_when_dropped, written_pid};
     use std::os::unix::process::CommandExt;
 
     async fn exchanged(argv: &[&str], input: &[u8], cap: usize) -> Exchanged {
@@ -246,6 +302,52 @@ mod tests {
         assert!(sleep_goes_when_dropped(exchanging, &pid_file).await);
     }
 
+    fn leaving(line: &str, pid_file: &std::path::Path) -> Command {
+        let mut command = Command::new("sh");
+        command.args(["-c", line, "sh"]).arg(pid_file);
+        command
+    }
+
+    #[tokio::test(start_paused = true)]
+    #[ignore = "starts a process"]
+    async fn an_exchange_ends_with_its_command_though_a_child_holds_its_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("sleep.pid");
+        let mut command = leaving("(sleep 60; echo late) & echo $! > \"$1\"; echo 'SELECT 1'", &pid_file);
+        let Exchanged::Ended { stdout, .. } = exchange(&mut command, b"", 1024).await.unwrap() else { panic!("cut") };
+        assert_eq!(stdout, b"SELECT 1\n");
+        assert!(is_gone(written_pid(&pid_file).await).await);
+    }
+
+    #[tokio::test]
+    #[ignore = "starts a process"]
+    async fn an_exchange_kills_what_its_command_left_running() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("sleep.pid");
+        let mut command = leaving("nohup sleep 60 >/dev/null 2>&1 & echo $! > \"$1\"", &pid_file);
+        exchange(&mut command, b"", 1024).await.unwrap();
+        assert!(is_gone(written_pid(&pid_file).await).await);
+    }
+
+    #[tokio::test(start_paused = true)]
+    #[ignore = "starts a process"]
+    async fn an_output_ends_with_its_command_though_a_child_holds_its_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("sleep.pid");
+        let output = output(&mut leaving("(sleep 60; echo late) & echo $! > \"$1\"; echo hunter2", &pid_file)).await.unwrap();
+        assert_eq!(output.stdout, b"hunter2\n");
+        assert!(is_gone(written_pid(&pid_file).await).await);
+    }
+
+    #[tokio::test]
+    #[ignore = "starts a process"]
+    async fn an_output_kills_what_its_command_left_running() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("sleep.pid");
+        output(&mut leaving("nohup sleep 60 >/dev/null 2>&1 & echo $! > \"$1\"", &pid_file)).await.unwrap();
+        assert!(is_gone(written_pid(&pid_file).await).await);
+    }
+
     #[test]
     fn a_panic_ends_the_process_when_the_build_aborts_or_on_the_main_thread() {
         assert!(is_fatal(PanicStrategy::Abort, Some("tokio-runtime-worker")));
@@ -265,7 +367,7 @@ mod tests {
         let group = Pid::from_raw(child.id() as i32).unwrap();
         kill(group).unwrap();
         let ended = (0..20).find_map(|_| {
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            std::thread::sleep(Duration::from_millis(10));
             child.try_wait().unwrap()
         });
         assert_eq!(ended, None);

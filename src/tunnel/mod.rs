@@ -1,7 +1,7 @@
 //! A tunnel: a child process pgbg owns that forwards a free `127.0.0.1` port to a database this machine cannot reach straight.
 use crate::connection::TunnelSpec;
 use crate::db::model::{LocalPort, Route};
-use crate::groups::{self, OWN_GROUP, keep_last_words, with_last_words};
+use crate::groups::{self, LAST_WORDS_TIMEOUT, OWN_GROUP, keep_last_words, with_last_words};
 use crate::program::Program;
 use anyhow::{Context, Result, anyhow, bail};
 use rustix::io::Errno;
@@ -24,8 +24,6 @@ const BEFORE_TIMEOUT: Duration = Duration::from_secs(120);
 const SILENCE_TIMEOUT: Duration = Duration::from_secs(1);
 const HANDED_OFF: &str = "the tunnel ended cleanly before its port answered, so it likely handed the forward to another ssh \
                           (a `ControlMaster`) or went to the background: add `-o ControlPath=none` to an ssh command, and drop `-f`";
-/// How long a dead tunnel's stderr is waited for, in case a process outside its group still holds it.
-const LAST_WORDS_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// A running tunnel; dropping it kills its whole process group.
 #[derive(Debug)]

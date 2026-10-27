@@ -47,7 +47,7 @@ impl Asking {
     }
 
     /// What the command printed, once it exited with 0.
-    pub(crate) async fn reply(&mut self) -> Result<String, CommandError> {
+    pub(crate) async fn reply(mut self) -> Result<String, CommandError> {
         match (&mut self.task).await {
             Ok(reply) => reply,
             Err(err) if err.is_cancelled() => Err(CommandError::Killed),
