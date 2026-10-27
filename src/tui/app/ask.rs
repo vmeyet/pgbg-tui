@@ -1,13 +1,18 @@
 //! `ctrl-g`: an instruction typed on the footer line, the `[ai] command` asked about the statement under the cursor,
-//! and its answer, shown until `esc` drops it; nothing of it ever runs by itself.
+//! and its answer, which `tab` puts in the editor; nothing of it ever runs by itself.
+use super::diff::{self, DiffLine};
+use super::editor::Edited;
 use super::save::typed_into;
 use super::{Action, App, AskFailure, AskId, Overlay, Sheet};
 use crate::act::{self, Act, Pane};
 use crate::ai::{self, Instruction, LiteralPolicy, NotSent, Prompt};
 use crate::config::AiSettings;
 use crate::connection::AiAsking;
+use crate::db::guard::{self, Write};
+use crate::db::lex;
 use crate::db::model::{Catalog, Statement};
 use crossterm::event::KeyEvent;
+use std::ops::Range;
 use vtui::field::Field;
 
 /// Where an ask stands while it takes the keys.
@@ -17,8 +22,21 @@ pub(in crate::tui) enum AskStep {
     Instruction(Field),
     /// The command runs on this ask; `esc` drops it.
     Waiting(AskId),
-    /// The answer, until `esc` drops it.
-    Answered(Vec<Statement>),
+    /// The answer, until `tab` takes it or `esc` drops it.
+    Answered(Suggestion),
+}
+
+/// An answer, and the statement under the cursor it would replace.
+#[derive(Debug, PartialEq, Eq)]
+pub(in crate::tui) struct Suggestion {
+    /// The editor bytes it replaces: the statement under the cursor, or none to go in at the cursor.
+    replaces: Option<Range<usize>>,
+    /// The answer's statements, one after the other.
+    text: String,
+    /// The statement it replaces, then the answer, line by line.
+    pub(in crate::tui) lines: Vec<DiffLine>,
+    /// The first write among them, when the guard reads one.
+    pub(in crate::tui) write: Option<Write>,
 }
 
 /// What asking needs from the config, the id the next ask takes, and why the last one failed.
@@ -69,14 +87,18 @@ impl App {
         self.sheet_mut().want_schema_while_open()
     }
 
-    /// Hands `key` to the open ask: `⏎` sends the instruction, `esc` drops the ask at any step; `⏎` on an answer does
-    /// nothing, so taking it and running it are always two keys.
+    /// Hands `key` to the open ask: `⏎` sends the instruction, `esc` drops the ask at any step, `tab` takes an answer;
+    /// `⏎` on an answer does nothing, so taking it and running it are always two keys.
     pub(super) fn ask_key(&mut self, step: AskStep, key: KeyEvent) -> Vec<Action> {
         match (act::act_for(key, step.pane()), step) {
             (Some(Act::Quit), _) => self.quit(),
             (Some(Act::Close), AskStep::Waiting(ask)) => vec![Action::DropAsk(ask)],
             (Some(Act::Close), _) => vec![],
             (Some(Act::Open), AskStep::Instruction(instruction)) => self.send_ask(instruction),
+            (Some(Act::Insert), AskStep::Answered(suggestion)) => {
+                self.sheet_mut().take_suggestion(suggestion);
+                vec![]
+            }
             (_, AskStep::Instruction(mut instruction)) => {
                 typed_into(&mut instruction, key);
                 self.overlay = Some(Overlay::Ask(AskStep::Instruction(instruction)));
@@ -115,7 +137,7 @@ impl App {
             return;
         }
         match answer {
-            Ok(statements) => self.overlay = Some(Overlay::Ask(AskStep::Answered(statements))),
+            Ok(statements) => self.overlay = Some(Overlay::Ask(AskStep::Answered(self.sheet().suggestion(&statements)))),
             Err(failure) => {
                 self.overlay = None;
                 self.asks.failure = Some(failure);
@@ -136,6 +158,26 @@ impl Sheet {
         let unread = Catalog::default();
         let catalog = self.catalog().unwrap_or(&unread);
         ai::prompt(&ai::Ask { instruction: &instruction, statement: statement.as_ref(), catalog, tier: self.connection.tier(), literals })
+    }
+
+    /// `statements` against the statement under the cursor, which they would replace.
+    fn suggestion(&self, statements: &[Statement]) -> Suggestion {
+        let write = statements.iter().find_map(|statement| guard::write_in(statement.as_str(), &lex::tokens(statement.as_str())));
+        let text = statements.iter().map(Statement::as_str).collect::<Vec<_>>().join(";\n");
+        let replaces = self.range_under_cursor();
+        let lines = diff::lines(replaces.clone().map_or("", |range| &self.editor.text()[range]), &text);
+        Suggestion { replaces, text, lines, write }
+    }
+
+    /// Puts the answer in the editor as one paste, in place of the statement it was asked about.
+    fn take_suggestion(&mut self, suggestion: Suggestion) {
+        let edited = match suggestion.replaces {
+            Some(range) => self.editor.replace(range, &suggestion.text),
+            None => self.editor.paste(&suggestion.text),
+        };
+        if edited == Edited::Text {
+            self.text_changed();
+        }
     }
 }
 
@@ -273,6 +315,27 @@ pub(in crate::tui) mod tests {
     }
 
     #[test]
+    fn tab_puts_the_answer_in_place_of_the_statement_under_the_cursor() {
+        let mut app = answered("SELECT 1;\nSELECT * FROM orders", "SELECT id FROM orders");
+        assert_eq!(press(&mut app, KeyCode::Tab), []);
+        assert_eq!((step(&app), app.sheet().editor.text()), (None, "SELECT 1;\nSELECT id FROM orders"));
+    }
+
+    #[test]
+    fn tab_with_no_statement_under_the_cursor_puts_the_answer_at_the_cursor() {
+        let mut app = answered("", "SELECT id FROM orders");
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.sheet().editor.text(), "SELECT id FROM orders");
+    }
+
+    #[test]
+    fn a_taken_answer_drops_its_control_characters_as_a_paste_does() {
+        let mut app = answered("SELECT 1", "SELECT '\u{1b}[2J' \u{202e}FROM orders");
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.sheet().editor.text(), "SELECT '[2J' FROM orders");
+    }
+
+    #[test]
     fn esc_drops_the_answer_and_keeps_the_editor() {
         let mut app = answered("SELECT 1", "SELECT 2");
         assert_eq!(press(&mut app, KeyCode::Esc), []);
@@ -285,6 +348,34 @@ pub(in crate::tui) mod tests {
         assert_eq!(press(&mut app, KeyCode::Enter), []);
         assert!(matches!(step(&app), Some(AskStep::Answered(_))));
         assert_eq!((app.sheet().editor.text(), &app.sheet().run), ("SELECT 1", &Run::Idle));
+    }
+
+    #[test]
+    fn a_taken_write_asks_before_it_runs() {
+        let mut app = app_on(&connection("production", "allowed")).with_ai(Some(ai_settings()));
+        ctrl_g(&mut app);
+        type_in(&mut app, "drop the old ones");
+        press(&mut app, KeyCode::Enter);
+        app.apply(Answer::Asked { ask: AskId::FIRST, answer: Ok(vec![Statement::new("DELETE FROM orders")]) });
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(press(&mut app, KeyCode::Enter), []);
+        assert!(matches!(app.overlay(), Some(Overlay::Prompt(_))), "{:?}", app.overlay());
+    }
+
+    #[test]
+    fn an_answer_that_writes_names_its_write() {
+        let app = answered("SELECT 1", "DELETE FROM orders WHERE id = 7");
+        let Some(AskStep::Answered(suggestion)) = step(&app) else { panic!("no answer") };
+        assert_eq!(suggestion.write.as_ref().map(ToString::to_string).as_deref(), Some("DELETE from orders"));
+    }
+
+    #[test]
+    fn several_reads_are_no_write() {
+        let mut app = waiting("SELECT 1", "ids");
+        let reads = vec![Statement::new("SELECT 1"), Statement::new("SELECT 2")];
+        app.apply(Answer::Asked { ask: AskId::FIRST, answer: Ok(reads) });
+        let Some(AskStep::Answered(suggestion)) = step(&app) else { panic!("no answer") };
+        assert_eq!((suggestion.text.as_str(), &suggestion.write), ("SELECT 1;\nSELECT 2", &None));
     }
 
     #[test]

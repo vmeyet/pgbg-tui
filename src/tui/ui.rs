@@ -43,6 +43,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> Fit {
     }
     editor_view::draw(f, app, areas.editor);
     let grid = result_view::draw(f, app, areas.result);
+    ask_view::draw(f, app, areas.result);
     completion_view::draw(f, app, areas.editor);
     footer(f, app, areas.footer);
     finder_view::draw(f, app);

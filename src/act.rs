@@ -273,6 +273,9 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Quit, Pane::Instruction, &[control('c')]).help("^c", "quit"),
     row(Act::Close, Pane::Asking, &[key(KeyCode::Esc)]).help("esc", "stop the command").footer("esc", "stop"),
     row(Act::Quit, Pane::Asking, &[control('c')]).help("^c", "quit"),
+    row(Act::Insert, Pane::Answer, &[key(KeyCode::Tab)])
+        .help("⇥", "put the answer in place of the statement, to run with ⏎")
+        .footer("⇥", "take"),
     row(Act::Close, Pane::Answer, &[key(KeyCode::Esc)]).help("esc", "drop the answer").footer("esc", "drop"),
     row(Act::Quit, Pane::Answer, &[control('c')]).help("^c", "quit"),
     row(Act::CopyCsv, Pane::CopyAs, &[key(KeyCode::Char('c'))]).help("c", "copy the result as CSV").footer("c", "CSV"),

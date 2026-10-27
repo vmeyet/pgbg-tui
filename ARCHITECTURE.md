@@ -135,7 +135,7 @@ Running a statement with parameters:
 5. The history keeps the statement with its `{{name}}`, never the values; a run its parameters stopped, a type the server does not know included, is `refused`.
 6. `pgbg run` reads the `-- param:` lines heading its statement, and takes `--param name=value`, `--params-file <file>` (one `name=value` a line) or `--params-file -` on stdin, so a value need not sit in argv or the shell's history.
 
-Asking a command for SQL (planned):
+Asking a command for SQL:
 
 1. `[ai] command` in `config.toml` names any program that reads a prompt on stdin and writes SQL on stdout (`llm`, a wrapper around ollama, `claude -p`), as a list run without a shell; without it, or with a program that cannot be run, the feature is off and the keys say so.
    The `claude` example turns its tools off (`["claude", "-p", "--tools", "", "--strict-mcp-config"]`): a table or column name can carry instructions to the model, and any process of the user, the command included, can read pgbg's keychain items.
@@ -156,11 +156,11 @@ Asking a command for SQL (planned):
    It runs in its own process group through `groups::exchange`: stdin written then closed while stdout is read, so a big prompt never deadlocks, the command stopped once stdout passes 64 KiB, stderr's last lines kept, the group killed on a drop; `groups::output` would deadlock on a big prompt and keeps no cap.
    It gets 60 s, or the seconds `[ai] timeout` says; `Esc` while it waits, a new ask or quitting drops it, which kills the group, and a late answer is dropped by its `AskId`.
    No streaming: the answer is shown whole, once the command exits with 0; another exit shows its last lines of stderr.
-5. `ai::answer` drops a Markdown fence and the prose around it, and splits what is left with `db::lex`: one statement is shown as a diff against the statement under the cursor, several as a list to pick one from, all drawn through `render::printable`.
+5. `ai::answer` drops a Markdown fence and the prose around it, and splits what is left with `db::lex`; its statements, one after the other, are shown over the result pane as a line diff (`tui/app/diff.rs`) against the statement under the cursor, drawn through `render::printable`.
    An answer `db::guard` classifies as a write says so in the failure colour, above the diff.
    `tab` takes it, replacing the statement under the cursor (or inserting at the cursor when there is none) through the editor's paste, so its control characters are dropped as a paste's are; `esc` drops it.
    `⏎` takes nothing, so taking an answer and running it are always two keys; running it goes through `db::guard` like any statement.
-6. The idle ghost, when `[ai] ghost = true`, asks for the rest of the statement after 1 s without a key, the local completion's ghost first; any key kills that command, and its answer shows only while the text is the one it was asked for.
+6. The idle ghost (planned), when `[ai] ghost = true`, asks for the rest of the statement after 1 s without a key, the local completion's ghost first; any key kills that command, and its answer shows only while the text is the one it was asked for.
 7. The log says which program ran, how long, how it exited and how many bytes went each way; never the prompt, the instruction or the answer.
 
 Formatting a cell:
