@@ -5,10 +5,12 @@ use serde::{Deserialize, Serialize};
 use std::env::VarError;
 use std::fmt;
 use std::process::Stdio;
+pub(crate) use words::holds_secret;
 use zeroize::Zeroize;
 
 mod keychain;
 mod typed;
+mod words;
 
 /// The bytes a password typed or piped in has room for before its buffer grows, which would leave a copy behind.
 const TYPED_CAPACITY_BYTES: usize = 1024;

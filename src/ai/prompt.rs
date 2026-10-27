@@ -5,7 +5,7 @@ use super::slice::slice;
 use crate::connection::Tier;
 use crate::db::lex::{Lexed, Span, Token};
 use crate::db::model::{Catalog, Statement};
-use crate::history;
+use crate::secret;
 use std::fmt;
 
 /// The most bytes a prompt holds, so a big schema never makes a slow or costly ask.
@@ -38,8 +38,8 @@ pub(crate) struct Prompt {
 /// Why an ask is not sent.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum NotSent {
-    /// The statement holds `PASSWORD` or a URL with a password, by the rule the history keeps.
-    HoldsPassword,
+    /// The statement holds a secret, by the rule the history keeps: `secret::holds_secret`.
+    HoldsSecret,
     /// The statement holds a `{{` that opens no parameter, which no marker masks.
     UnreadableParam,
     /// The statement opens a quoted name or a string it never closes, which no marker masks whole.
@@ -70,7 +70,7 @@ fn refuse_unsafe(sql: &str) -> Result<(), NotSent> {
     let is_unreadable = lexed.tokens().iter().any(|placed| placed.token == Token::Unreadable);
     let is_unclosed = matches!(lexed.span_at(sql.len()), Span::String | Span::QuotedName);
     match () {
-        () if history::holds_password(sql) => Err(NotSent::HoldsPassword),
+        () if secret::holds_secret(sql) => Err(NotSent::HoldsSecret),
         () if is_unreadable => Err(NotSent::UnreadableParam),
         () if is_unclosed => Err(NotSent::UnclosedQuote),
         () => Ok(()),
@@ -129,7 +129,7 @@ impl fmt::Debug for Prompt {
 impl fmt::Display for NotSent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::HoldsPassword => "the statement holds a password, so it is never sent",
+            Self::HoldsSecret => "the statement holds a password, so it is never sent",
             Self::UnreadableParam => "the statement holds a `{{` that opens no parameter: close it as `{{name}}` first",
             Self::UnclosedQuote => "the statement opens a quote it never closes: close it first",
             Self::TooLong => "the instruction and the statement pass 16 KiB: shorten one of them",
@@ -184,7 +184,7 @@ mod tests {
     #[test]
     fn a_statement_holding_a_password_is_never_sent_even_with_literals_sent() {
         let refused = prompt_with("ALTER ROLE nina PASSWORD 'x'", "", &shop_catalog(), LiteralPolicy::Sent);
-        assert_eq!(refused.unwrap_err(), NotSent::HoldsPassword);
+        assert_eq!(refused.unwrap_err(), NotSent::HoldsSecret);
     }
 
     #[test]
@@ -202,19 +202,19 @@ mod tests {
 
     #[test]
     fn a_statement_holding_a_password_is_never_sent() {
-        assert_eq!(prompt_for("ALTER ROLE nina PASSWORD 'x'", "", &shop_catalog()).unwrap_err(), NotSent::HoldsPassword);
+        assert_eq!(prompt_for("ALTER ROLE nina PASSWORD 'x'", "", &shop_catalog()).unwrap_err(), NotSent::HoldsSecret);
     }
 
     #[test]
     fn a_statement_quoting_a_url_with_a_password_is_never_sent() {
         let sql = "SELECT dblink('postgresql://nina:x@db.example.com/shop', 'SELECT 1')";
-        assert_eq!(prompt_for(sql, "", &shop_catalog()).unwrap_err(), NotSent::HoldsPassword);
+        assert_eq!(prompt_for(sql, "", &shop_catalog()).unwrap_err(), NotSent::HoldsSecret);
     }
 
     #[test]
     fn a_statement_naming_a_secret_connection_key_is_never_sent() {
         let sql = "SELECT dblink_connect('host=db.example.com sslpassword=x')";
-        assert_eq!(prompt_for(sql, "", &shop_catalog()).unwrap_err(), NotSent::HoldsPassword);
+        assert_eq!(prompt_for(sql, "", &shop_catalog()).unwrap_err(), NotSent::HoldsSecret);
     }
 
     #[test]

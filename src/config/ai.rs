@@ -1,6 +1,6 @@
 //! The `[ai]` table: the command `ctrl-g` asks for SQL, and what reaches it.
 use crate::ai::LiteralPolicy;
-use crate::connection::Connection;
+use crate::connection::{Connection, TunnelSpec};
 use crate::secret::SecretSource;
 use anyhow::{Result, bail};
 use serde::Deserialize;
@@ -54,7 +54,8 @@ pub(super) fn read(table: AiTable, connections: &[Connection]) -> Result<ReadAi>
         seconds => Duration::from_secs(seconds.unwrap_or(DEFAULT_TIMEOUT_SECONDS)),
     };
     let passwords = password_variables(connections);
-    let warnings = env.iter().filter(|name| passwords.contains(name.as_str())).map(|name| password_warning(name)).collect();
+    let arguments = command_arguments(connections);
+    let warnings = env.iter().filter_map(|name| warning(name, &passwords, &arguments)).collect();
     let env = passed_variables(env, &passwords);
     Ok(ReadAi { settings: Some(AiSettings { command, env, timeout, literals }), warnings })
 }
@@ -67,6 +68,31 @@ fn password_variables(connections: &[Connection]) -> BTreeSet<&str> {
             _ => None,
         })
         .collect()
+}
+
+/// The arguments of the connections' password commands and tunnels, which may read a variable `[ai] env` passes on.
+fn command_arguments(connections: &[Connection]) -> Vec<&str> {
+    connections.iter().flat_map(commands_of).flatten().map(String::as_str).collect()
+}
+
+fn commands_of(connection: &Connection) -> [&[String]; 3] {
+    let password_command = match connection.password() {
+        Some(SecretSource::Command(argv)) => argv.as_slice(),
+        _ => &[],
+    };
+    let tunnel = connection.tunnel();
+    [password_command, tunnel.map(TunnelSpec::command).unwrap_or_default(), tunnel.and_then(TunnelSpec::before).unwrap_or_default()]
+}
+
+/// Why `name` in `[ai] env` is worth a warning: a password names it, so it is left out, or a command's `arguments`
+/// name it, which pgbg cannot tell is a secret, so it is passed.
+fn warning(name: &str, passwords: &BTreeSet<&str>, arguments: &[&str]) -> Option<String> {
+    let is_word_of = |argument: &&str| argument.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|word| word == name);
+    match () {
+        () if passwords.contains(name) => Some(password_warning(name)),
+        () if arguments.iter().any(is_word_of) => Some(command_warning(name)),
+        () => None,
+    }
 }
 
 /// The base variables then those `listed`, each once, without those `passwords` holds.
@@ -82,6 +108,10 @@ fn passed_variables(listed: Vec<String>, passwords: &BTreeSet<&str>) -> Vec<Stri
 
 fn password_warning(name: &str) -> String {
     format!("`[ai] env` lists `{name}`, which a connection's password names: the command never gets it")
+}
+
+fn command_warning(name: &str) -> String {
+    format!("`[ai] env` lists `{name}`, which a connection's password command or tunnel names: the command gets it all the same")
 }
 
 #[cfg(test)]
@@ -127,6 +157,36 @@ mod tests {
         let read = read.unwrap();
         assert!(!read.settings.unwrap().env.contains(&"SHOP_PGPASSWORD".to_owned()));
         assert!(read.warnings[0].contains("SHOP_PGPASSWORD"), "{:?}", read.warnings);
+    }
+
+    #[test]
+    fn a_variable_a_password_command_names_is_passed_with_a_warning() {
+        let shop = named(
+            "shop",
+            "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\npassword = { command = [\"sh\", \"-c\", \"echo $SHOP_TOKEN\"] }\n",
+        );
+        let read = settings("command = [\"llm\"]\nenv = [\"SHOP_TOKEN\"]", &[shop]).unwrap();
+        assert!(read.settings.unwrap().env.contains(&"SHOP_TOKEN".to_owned()));
+        assert!(read.warnings[0].contains("SHOP_TOKEN"), "{:?}", read.warnings);
+    }
+
+    #[test]
+    fn a_variable_a_tunnel_names_is_passed_with_a_warning() {
+        let tunnel = "tunnel = { command = [\"proxy\", \"{port}\"], before = [\"login\", \"--key=${PROXY_KEY}\"] }\n";
+        let shop = named("shop", &format!("tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\ntls = \"off\"\n{tunnel}"));
+        let read = settings("command = [\"llm\"]\nenv = [\"PROXY_KEY\"]", &[shop]).unwrap();
+        assert!(read.settings.unwrap().env.contains(&"PROXY_KEY".to_owned()));
+        assert!(read.warnings[0].contains("PROXY_KEY"), "{:?}", read.warnings);
+    }
+
+    #[test]
+    fn a_variable_only_part_of_a_word_in_a_command_is_passed_without_a_warning() {
+        let shop = named(
+            "shop",
+            "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\npassword = { command = [\"pass\", \"SHOP_TOKEN_OLD\"] }\n",
+        );
+        let read = settings("command = [\"llm\"]\nenv = [\"SHOP_TOKEN\"]", &[shop]).unwrap();
+        assert!(read.warnings.is_empty(), "{:?}", read.warnings);
     }
 
     #[test]
