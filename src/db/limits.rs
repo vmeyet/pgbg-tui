@@ -1,14 +1,16 @@
 //! What a session runs with: the statement timeout in effect, and the limits each read-only transaction sets.
 use super::server_error;
-use crate::connection::{StatementTimeout, TimeoutChoice};
+use crate::connection::StatementTimeout;
 use anyhow::{Context, Result};
 use std::time::Duration;
-use tokio_postgres::Client;
+use tokio_postgres::{Client, SimpleQueryMessage, SimpleQueryRow};
 
-/// The server's `statement_timeout` in milliseconds, whatever unit it was set in.
-const SERVER_STATEMENT_TIMEOUT: &str = "SELECT setting::bigint FROM pg_settings WHERE name = 'statement_timeout'";
-const SERVER_IDLE_IN_TRANSACTION_TIMEOUT: &str =
-    "SELECT setting::bigint FROM pg_settings WHERE name = 'idle_in_transaction_session_timeout'";
+/// The server's `statement_timeout` and `idle_in_transaction_session_timeout` in milliseconds, whatever unit they were set
+/// in, in one row.
+const SERVER_TIMEOUTS: &str = "SELECT
+    max(setting) FILTER (WHERE name = 'statement_timeout'),
+    max(setting) FILTER (WHERE name = 'idle_in_transaction_session_timeout')
+    FROM pg_settings WHERE name IN ('statement_timeout', 'idle_in_transaction_session_timeout')";
 /// The server ends the session of a read-only transaction left idle this long, should pgbg not close a portal waiting for
 /// its next page itself, after 5 minutes.
 const IDLE_IN_TRANSACTION_BACKSTOP: Duration = Duration::from_mins(6);
@@ -53,26 +55,39 @@ impl ReadLimits {
     }
 }
 
-/// The timeout a session runs with: the one the connection chose, else the stricter of its tier's and the one the
-/// server applies already (a role's or a database's default, or the URL's `options`).
-pub(super) async fn statement_timeout_in_effect(client: &Client, choice: TimeoutChoice) -> Result<StatementTimeout> {
-    let server = server_millis(client, SERVER_STATEMENT_TIMEOUT).await.context("reading the server's statement timeout")?;
-    Ok(choice.in_effect(StatementTimeout::from_millis(server)))
+/// The timeouts the server applies already: a role's or a database's default, or the URL's `options`.
+pub(super) struct ServerTimeouts {
+    pub(super) statement: StatementTimeout,
+    pub(super) idle: IdleTimeout,
 }
 
-/// A server setting in milliseconds, read by `sql`.
-async fn server_millis(client: &Client, sql: &str) -> Result<u64> {
-    let row = client.query_one(sql, &[]).await.map_err(server_error)?;
-    let ms: i64 = row.try_get(0).map_err(server_error)?;
-    u64::try_from(ms).context("the setting is negative")
+/// Both timeouts of the server in one round trip, as the simple query protocol sends a statement and its rows at once.
+pub(super) async fn read_server_timeouts(client: &Client) -> Result<ServerTimeouts> {
+    let messages = client.simple_query(SERVER_TIMEOUTS).await.map_err(server_error)?;
+    let row = messages.iter().find_map(only_row).context("the server gave no row of settings")?;
+    let statement = millis(row.get(0)).context("reading the server's statement timeout")?;
+    let idle = millis(row.get(1)).context("reading the server's idle timeout")?;
+    Ok(ServerTimeouts { statement: StatementTimeout::from_millis(statement), idle: idle_timeout(idle) })
+}
+
+fn only_row(message: &SimpleQueryMessage) -> Option<&SimpleQueryRow> {
+    match message {
+        SimpleQueryMessage::Row(row) => Some(row),
+        _ => None,
+    }
+}
+
+/// A setting `pg_settings` gives in milliseconds.
+fn millis(setting: Option<&str>) -> Result<u64> {
+    let setting = setting.context("the setting is missing")?;
+    setting.parse().with_context(|| format!("the setting is not a count of milliseconds: {setting}"))
 }
 
 /// The idle timeout a read-only transaction runs with: the server's own when stricter than the backstop, which then
 /// ends a portal left waiting for its next page should pgbg not close it itself.
-pub(super) async fn idle_timeout(client: &Client) -> Result<IdleTimeout> {
-    let server = server_millis(client, SERVER_IDLE_IN_TRANSACTION_TIMEOUT).await.context("reading the server's idle timeout")?;
-    let is_stricter_on_server = server != 0 && u128::from(server) <= IDLE_IN_TRANSACTION_BACKSTOP.as_millis();
-    Ok(if is_stricter_on_server { IdleTimeout::Server(Duration::from_millis(server)) } else { IdleTimeout::Backstop })
+fn idle_timeout(server_ms: u64) -> IdleTimeout {
+    let is_stricter_on_server = server_ms != 0 && u128::from(server_ms) <= IDLE_IN_TRANSACTION_BACKSTOP.as_millis();
+    if is_stricter_on_server { IdleTimeout::Server(Duration::from_millis(server_ms)) } else { IdleTimeout::Backstop }
 }
 
 /// Only where writes are allowed, whose own `BEGIN` and statements run outside pgbg's transactions; behind a
@@ -95,6 +110,44 @@ mod tests {
     async fn session(writes: WritePolicy) -> Session {
         let writes = if writes == WritePolicy::Allowed { "allowed" } else { "read-only" };
         Session::open(&fixtures::test_database("local", &format!("writes = \"{writes}\"\n")), Route::Direct).await.unwrap()
+    }
+
+    #[test]
+    fn no_idle_timeout_on_the_server_leaves_the_backstop() {
+        assert!(matches!(idle_timeout(0), IdleTimeout::Backstop));
+    }
+
+    #[test]
+    fn an_idle_timeout_on_the_server_looser_than_the_backstop_leaves_the_backstop() {
+        assert!(matches!(idle_timeout(3_600_000), IdleTimeout::Backstop));
+    }
+
+    #[test]
+    fn an_idle_timeout_on_the_server_stricter_than_the_backstop_is_kept() {
+        assert!(matches!(idle_timeout(60_000), IdleTimeout::Server(timeout) if timeout == Duration::from_mins(1)));
+    }
+
+    #[test]
+    fn a_setting_in_milliseconds_reads_as_a_number() {
+        assert_eq!(millis(Some("360000")).unwrap(), 360_000);
+    }
+
+    #[test]
+    fn a_negative_setting_is_refused() {
+        assert!(millis(Some("-1")).is_err());
+    }
+
+    #[test]
+    fn a_missing_setting_is_refused() {
+        assert!(millis(None).is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn one_read_gives_both_timeouts_of_the_server() {
+        let session = session(WritePolicy::ReadOnly).await;
+        let ServerTimeouts { statement, idle } = read_server_timeouts(&session.client).await.unwrap();
+        assert_eq!((statement, idle.on_server()), (StatementTimeout::from_millis(0), IDLE_IN_TRANSACTION_BACKSTOP));
     }
 
     /// `shop` on the test database, its server set to read a backslash in a string as an escape.

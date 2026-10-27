@@ -1,5 +1,5 @@
 //! Opening a session: the driver's config, the TLS it logs in with, and the task that drives its link.
-use super::limits::{ReadLimits, idle_timeout, set_session_limits, statement_timeout_in_effect};
+use super::limits::{ReadLimits, ServerTimeouts, read_server_timeouts, set_session_limits};
 use super::model::Route;
 use super::{Marks, SERVER_CLOSED, Session, server_error};
 use crate::connection::{Connection, Target, Tls, WritePolicy};
@@ -32,11 +32,12 @@ impl Session {
         };
         let Connected { client, ended, link } = connected.with_context(|| format!("connecting to {}", connection.name()))?;
         stop_statements_when_client_gone(&client).await;
-        let statement_timeout = statement_timeout_in_effect(&client, connection.statement_timeout()).await?;
+        let ServerTimeouts { statement, idle } = read_server_timeouts(&client).await?;
+        let statement_timeout = connection.statement_timeout().in_effect(statement);
         if connection.writes() == WritePolicy::Allowed {
             set_session_limits(&client, statement_timeout).await?;
         }
-        let limits = ReadLimits { statement_timeout, idle: idle_timeout(&client).await? };
+        let limits = ReadLimits { statement_timeout, idle };
         Ok(Self { client, tls, limits, ended, link, marks: Marks::default() })
     }
 }
