@@ -1,49 +1,23 @@
 //! A read on a connection that allows writes runs with writes refused: a write hidden in it, as in a function that
 //! writes, fails before anything is kept, and runs again as a write only once the user confirms it.
+//! Inside the user's own transaction a read runs as a write would: their `COMMIT` or `ROLLBACK` decides what stays.
 use super::guard::Admitted;
 use super::model::{ResultSet, ServerError, TriedToWrite};
-use super::run::{Access, fetch};
-use super::{Session, bind, server_error};
+use super::run::Access;
+use super::{Session, bind};
 use anyhow::Result;
 
-/// A transaction cannot turn writable again once it has read, so the read-only setting lives in a savepoint, and only
-/// rolling back to it ends the setting.
-const READ_ONLY_SAVEPOINT: &str = "SAVEPOINT pgbg_read; SET LOCAL transaction_read_only = on";
-const LEAVE_SAVEPOINT: &str = "ROLLBACK TO SAVEPOINT pgbg_read; RELEASE SAVEPOINT pgbg_read";
-
 impl Session {
-    /// Runs `admitted`, a read, with writes refused; one the server refuses as a write fails as `TriedToWrite`.
-    /// Outside the user's transaction it runs in a read-only one of pgbg's, committed so a setting it changes stays.
+    /// Runs `admitted`, a read, in a read-only transaction of pgbg's, committed so a setting it changes stays; one the
+    /// server refuses as a write fails as `TriedToWrite`.
+    /// Inside the user's transaction it runs as a write would, unchecked: a savepoint around it would undo a lock, a
+    /// cursor or a setting it made.
     pub(super) async fn run_read_first(&mut self, admitted: &Admitted) -> Result<ResultSet> {
         if self.is_in_user_transaction().await? {
-            return self.read_in_savepoint(admitted).await;
+            return self.run_writes(admitted).await;
         }
         let statement = bind::prepare(&self.client, admitted).await?;
         self.fetch_in_own_transaction(&statement, &admitted.params, Access::ReadOnly).await.map_err(as_tried_to_write)
-    }
-
-    /// Runs `admitted` in a read-only savepoint of the user's transaction, then rolls back to it: a cursor a function
-    /// opened or a setting it changed goes with it.
-    /// A read that fails for another reason leaves the user's transaction failed, as any failed statement does.
-    async fn read_in_savepoint(&self, admitted: &Admitted) -> Result<ResultSet> {
-        self.client.batch_execute(READ_ONLY_SAVEPOINT).await.map_err(server_error)?;
-        let read = self.read_in_users_transaction(admitted).await.map_err(as_tried_to_write);
-        let is_clean_end = match &read {
-            Ok(_) => true,
-            Err(err) => err.is::<TriedToWrite>(),
-        };
-        if is_clean_end {
-            self.client.batch_execute(LEAVE_SAVEPOINT).await.map_err(server_error)?;
-        }
-        read
-    }
-
-    async fn read_in_users_transaction(&self, admitted: &Admitted) -> Result<ResultSet> {
-        let statement = bind::prepare(&self.client, admitted).await?;
-        if admitted.is_query {
-            return self.fetch_through_cursor(&statement, admitted).await;
-        }
-        fetch(&self.client, &statement, &admitted.params).await
     }
 }
 
@@ -57,8 +31,8 @@ mod tests {
     use super::*;
     use crate::connection::WritePolicy;
     use crate::db::guard;
-    use crate::db::model::{Params, Statement, Value};
-    use crate::fixtures::{run, run_on, session, try_on};
+    use crate::db::model::{ParamValue, Params, Statement, TypeName, Value};
+    use crate::fixtures::{run, run_on, session};
 
     /// A fresh `table` and a function `add_to_<table>()` that inserts a row into it, called by a `SELECT`.
     async fn table_and_writing_function(table: &str) -> String {
@@ -119,25 +93,59 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
-    async fn a_function_that_writes_inside_the_users_transaction_fails_as_a_write_to_confirm() {
+    async fn a_function_that_writes_inside_the_users_transaction_runs_without_asking() {
         let call = table_and_writing_function("orders_hidden_inside").await;
         let mut writer = session(WritePolicy::Allowed).await;
         run_on(&mut writer, "BEGIN").await;
-        let err = try_on(&mut writer, &call).await.unwrap_err();
-        assert_eq!(err.downcast_ref(), Some(&TriedToWrite), "{err}");
+        assert_eq!(run_on(&mut writer, &call).await.rows(), [[Value::Int(1)]]);
+        run_on(&mut writer, "COMMIT").await;
+        assert_eq!(rows_of("orders_hidden_inside").await, [[Value::Int(1)]]);
     }
 
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
-    async fn a_write_refused_inside_the_users_transaction_leaves_it_open_and_writable() {
-        let call = table_and_writing_function("orders_hidden_kept").await;
+    async fn a_lock_a_read_takes_inside_the_users_transaction_stays_held() {
         let mut writer = session(WritePolicy::Allowed).await;
         run_on(&mut writer, "BEGIN").await;
-        run_on(&mut writer, "INSERT INTO orders_hidden_kept VALUES (7)").await;
-        assert!(try_on(&mut writer, &call).await.is_err());
-        run_on(&mut writer, "INSERT INTO orders_hidden_kept VALUES (8)").await;
+        run_on(&mut writer, "SELECT pg_advisory_xact_lock(161042)").await;
+        let mut other = session(WritePolicy::Allowed).await;
+        assert_eq!(run_on(&mut other, "SELECT pg_try_advisory_lock(161042)").await.rows(), [[Value::Bool(false)]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_cursor_a_function_opens_inside_the_users_transaction_can_be_fetched() {
+        let function = "CREATE OR REPLACE FUNCTION open_orders_cursor() RETURNS refcursor LANGUAGE plpgsql AS \
+            $$ DECLARE found refcursor := 'nina_orders'; BEGIN OPEN found FOR SELECT 7; RETURN found; END $$";
+        run(WritePolicy::Allowed, function).await.unwrap();
+        let mut writer = session(WritePolicy::Allowed).await;
+        run_on(&mut writer, "BEGIN").await;
+        run_on(&mut writer, "SELECT open_orders_cursor()").await;
+        assert_eq!(run_on(&mut writer, "FETCH ALL FROM nina_orders").await.rows(), [[Value::Int(7)]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_setting_a_read_changes_inside_the_users_transaction_stays_until_it_ends() {
+        let mut writer = session(WritePolicy::Allowed).await;
+        run_on(&mut writer, "BEGIN").await;
+        run_on(&mut writer, "SELECT set_config('shop.owner', 'nina', true)").await;
+        assert_eq!(run_on(&mut writer, "SELECT current_setting('shop.owner')").await.rows(), [[Value::Text("nina".into())]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_read_failing_before_the_server_runs_it_leaves_the_users_transaction_writable() {
+        run(WritePolicy::Allowed, "DROP TABLE IF EXISTS orders_unknown_type").await.unwrap();
+        run(WritePolicy::Allowed, "CREATE TABLE orders_unknown_type (id int)").await.unwrap();
+        let mut writer = session(WritePolicy::Allowed).await;
+        run_on(&mut writer, "BEGIN").await;
+        let params = Params::new(vec![Some(ParamValue::new("7"))], vec![Some(TypeName::new("no_such_type"))]);
+        let typed = guard::admit(Statement::new("SELECT $1"), params, WritePolicy::Allowed).unwrap();
+        assert!(writer.run(&typed).await.is_err());
+        run_on(&mut writer, "INSERT INTO orders_unknown_type VALUES (7)").await;
         run_on(&mut writer, "COMMIT").await;
-        assert_eq!(rows_of("orders_hidden_kept").await, [[Value::Int(7)], [Value::Int(8)]]);
+        assert_eq!(rows_of("orders_unknown_type").await, [[Value::Int(7)]]);
     }
 
     #[tokio::test]
