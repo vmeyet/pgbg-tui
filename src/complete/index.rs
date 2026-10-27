@@ -16,7 +16,7 @@ pub(crate) struct Index {
     /// The columns of every table, each name once.
     pub(super) columns: Names,
     pub(super) keywords: Names,
-    /// Each table by its completion name and by `schema.table`, lowercased.
+    /// Each table by its completion name and by `schema.table`, spelled exactly as PostgreSQL resolves a name.
     by_name: HashMap<String, usize>,
     /// The names that need quotes, as spelled: every other name goes in as it is.
     quoted: HashMap<String, Box<str>>,
@@ -56,7 +56,7 @@ struct Named<'a> {
 impl Index {
     pub(crate) fn new(catalog: &Catalog) -> Self {
         let named = named_tables(catalog);
-        let by_name = named.iter().enumerate().flat_map(|(at, table)| [(table.name.to_lowercase(), at), (table.qualified.clone(), at)]);
+        let by_name = named.iter().enumerate().flat_map(|(at, table)| [(table.name.clone(), at), (table.qualified.clone(), at)]);
         let table_columns = named.iter().map(|table| Names::new(column_names(table.table).collect())).collect();
         let columns = distinct(named.iter().flat_map(|table| column_names(table.table)));
         let quoted_tables = named.iter().filter_map(|table| Some((table.name.clone(), table.quoted.clone()?.into())));
@@ -72,7 +72,7 @@ impl Index {
         }
     }
 
-    /// The columns of the table a statement names `name`, lowercased, bare or with its schema.
+    /// The columns of the table a statement names `name`, as PostgreSQL resolves it, bare or with its schema.
     pub(super) fn columns_of(&self, name: &str) -> Option<&Names> {
         self.by_name.get(name).map(|&at| &self.table_columns[at])
     }
@@ -134,10 +134,10 @@ fn column_names(table: &Table) -> impl Iterator<Item = &str> {
     table.columns.iter().map(|column| column.name.as_str())
 }
 
-/// `names` in their order, each once, case aside.
+/// `names` in their order, each once.
 fn distinct<'a>(names: impl Iterator<Item = &'a str>) -> Vec<&'a str> {
     let mut seen = HashSet::new();
-    names.filter(|name| seen.insert(name.to_lowercase())).collect()
+    names.filter(|name| seen.insert(*name)).collect()
 }
 
 fn named_tables(catalog: &Catalog) -> Vec<Named<'_>> {
@@ -151,7 +151,7 @@ fn named_table<'a>(node: &SchemaNode, table: &'a Table, bare: &HashSet<(&str, &s
     let qualified_name = format!("{}.{}", node.name, table.name);
     let name = if is_bare { table.name.clone() } else { qualified_name.clone() };
     let quoted = if is_bare { sql_name(&table.name).into_owned() } else { qualified(&node.name, &table.name) };
-    Named { quoted: (quoted != name).then_some(quoted), name, qualified: qualified_name.to_lowercase(), table }
+    Named { quoted: (quoted != name).then_some(quoted), name, qualified: qualified_name, table }
 }
 
 /// The tables a statement names bare: in a schema of the search path, the first one there to hold that name.
@@ -232,5 +232,23 @@ mod tests {
         let index = Index::new(&Catalog { schema, search_path: vec!["public".to_owned()], is_cut: false });
         assert_eq!(index.insert("id"), "id");
         assert_eq!(index.insert("ID"), "\"ID\"");
+    }
+
+    #[test]
+    fn a_table_is_found_by_its_exact_name_beside_one_that_differs_only_in_case() {
+        let mut schema = shop_schema();
+        schema.schemas[1].tables[1].name = "Orders".to_owned();
+        let index = Index::new(&Catalog { schema, search_path: vec!["public".to_owned()], is_cut: false });
+        assert_eq!(index.columns_of("orders").map(all), Some(vec!["id".to_owned(), "customer_id".to_owned(), "total".to_owned()]));
+        assert_eq!(index.columns_of("Orders").map(all), Some(vec!["id".to_owned(), "name".to_owned()]));
+        assert_eq!(index.columns_of("public.Orders").map(all), Some(vec!["id".to_owned(), "name".to_owned()]));
+    }
+
+    #[test]
+    fn two_columns_that_differ_only_in_case_both_come() {
+        let mut schema = shop_schema();
+        schema.schemas[1].tables[1].columns[1].name = "ID".to_owned();
+        let index = Index::new(&Catalog { schema, search_path: vec!["public".to_owned()], is_cut: false });
+        assert_eq!(all(&index.columns), ["id", "order_id", "customer_id", "total", "ID"]);
     }
 }

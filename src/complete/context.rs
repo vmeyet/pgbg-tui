@@ -17,7 +17,7 @@ pub(crate) struct Ask {
     pub(crate) want: Want,
 }
 
-/// The kind of name the cursor wants; table names are lowercased, as the statement names them.
+/// The kind of name the cursor wants; a table is named as PostgreSQL resolves it: a bare name lowercased, a quoted one as written.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Want {
     /// A keyword, at a statement's start.
@@ -79,7 +79,10 @@ struct Qualifier {
 fn qualifier(before: &str, head: &[Placed], word_start: usize) -> Option<Qualifier> {
     let [.., name, dot] = head else { return None };
     let is_attached = is_dot(before, dot) && dot.range.end == word_start && name.range.end == dot.range.start;
-    (is_attached && is_word(name)).then(|| Qualifier { start: name.range.start, name: before[name.range.clone()].to_lowercase() })
+    if !is_attached {
+        return None;
+    }
+    Some(Qualifier { start: name.range.start, name: resolved(before, name)? })
 }
 
 /// The table a qualifier stands for: the one it aliases or names last, else the qualifier itself.
@@ -95,21 +98,35 @@ fn table_of(qualifier: &str, refs: &[TableRef]) -> String {
 fn table_refs(statement: &str) -> Vec<TableRef> {
     let tokens = lex::tokens(statement);
     let places = (1..tokens.len()).filter(|&at| is_table_place(statement, &tokens[at - 1], last_clause(statement, &tokens[..at])));
-    places.filter(|&at| is_word(&tokens[at])).map(|at| table_ref(statement, &tokens[at..])).collect()
+    places.filter_map(|at| table_ref(statement, &tokens[at..])).collect()
 }
 
-/// The table named at the start of `tokens`, `schema.table` or bare, with its alias, `AS` or not.
-fn table_ref(statement: &str, tokens: &[Placed]) -> TableRef {
-    let text = |placed: &Placed| statement[placed.range.clone()].to_lowercase();
+/// The table named at the start of `tokens`, `schema.table` or bare, with its alias, `AS` or not; `None` when no name
+/// starts there.
+fn table_ref(statement: &str, tokens: &[Placed]) -> Option<TableRef> {
+    let resolve = |placed: &Placed| resolved(statement, placed);
     let (name, rest) = match tokens {
-        [schema, dot, table, rest @ ..] if is_dot(statement, dot) && is_word(table) => (format!("{}.{}", text(schema), text(table)), rest),
-        [table, rest @ ..] => (text(table), rest),
-        [] => (String::new(), tokens),
+        [schema, dot, table, rest @ ..] if is_dot(statement, dot) && resolve(table).is_some() => {
+            (format!("{}.{}", resolve(schema)?, resolve(table)?), rest)
+        }
+        [table, rest @ ..] => (resolve(table)?, rest),
+        [] => return None,
     };
     let is_as = rest.first().and_then(|placed| placed.word(statement)).is_some_and(|word| word.eq_ignore_ascii_case("AS"));
     let rest = if is_as { &rest[1..] } else { rest };
-    let alias = rest.first().filter(|placed| placed.word(statement).is_some_and(|word| !is_keyword(word))).map(text);
-    TableRef { name, alias }
+    let is_clause = |placed: &&Placed| placed.word(statement).is_some_and(is_keyword);
+    let alias = rest.first().filter(|placed| !is_clause(placed)).and_then(resolve);
+    Some(TableRef { name, alias })
+}
+
+/// The name a word or a quoted name stands for, as PostgreSQL resolves it: a word lowercased, a quoted name as written.
+fn resolved(text: &str, placed: &Placed) -> Option<String> {
+    let written = &text[placed.range.clone()];
+    if placed.token == Token::Word {
+        return Some(written.to_ascii_lowercase());
+    }
+    let quoted = written.strip_prefix('"')?.strip_suffix('"')?;
+    Some(quoted.replace("\"\"", "\""))
 }
 
 /// Whether a table name goes after `previous`: a `FROM` or `JOIN`, or a `,` in a `FROM` list.
@@ -207,5 +224,24 @@ mod tests {
         assert_eq!(asked("SELECT /* fr|"), None);
         assert_eq!(asked("SELECT \"Or|"), None);
         assert_eq!(asked("SELECT {{na|"), None);
+    }
+
+    #[test]
+    fn a_bare_table_is_named_lowercased_and_a_quoted_one_as_written() {
+        let want = columns_of(&["Orders", "orders"]);
+        assert_eq!(asked("SELECT t| FROM \"Orders\" JOIN ORDERS o ON true"), Some(("t".to_owned(), want)));
+    }
+
+    #[test]
+    fn a_quoted_table_named_with_its_schema_keeps_its_case() {
+        assert_eq!(asked("SELECT t| FROM public.\"Orders\""), Some(("t".to_owned(), columns_of(&["public.Orders"]))));
+    }
+
+    #[test]
+    fn a_quoted_qualifier_or_alias_stands_for_its_table_as_written() {
+        let want = Want::ColumnOf { table: "Orders".to_owned() };
+        assert_eq!(asked("SELECT \"Orders\".| FROM \"Orders\""), Some((String::new(), want.clone())));
+        assert_eq!(asked("SELECT \"O\".| FROM \"Orders\" AS \"O\""), Some((String::new(), want)));
+        assert_eq!(asked("SELECT O.| FROM orders o"), Some((String::new(), Want::ColumnOf { table: "orders".to_owned() })));
     }
 }

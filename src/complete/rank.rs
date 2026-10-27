@@ -224,4 +224,14 @@ mod tests {
         let inserts: Vec<String> = index.candidates(&ask("SELECT * FROM ord|")).into_iter().map(|found| found.insert).collect();
         assert_eq!(inserts[..2], ["orders", "\"Orders\""]);
     }
+
+    #[test]
+    fn the_list_offers_the_columns_of_the_table_named_beside_one_that_differs_only_in_case() {
+        let mut schema = shop_schema();
+        schema.schemas[1].tables[1].name = "Orders".to_owned();
+        let index = Index::new(&Catalog { schema, search_path: vec!["public".to_owned()], is_cut: false });
+        let listed = |marked| index.candidates(&ask(marked)).into_iter().map(|found| found.name).collect::<Vec<_>>();
+        assert_eq!(listed("SELECT t.| FROM orders t"), ["id", "total", "customer_id"]);
+        assert_eq!(listed("SELECT t.| FROM \"Orders\" t"), ["id", "name"]);
+    }
 }
