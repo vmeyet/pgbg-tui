@@ -1,6 +1,7 @@
 //! Before a write is sent, the footer line asks for it: `y` sends it, any other key drops it.
 use super::sheet::ToRun;
 use super::{Action, App, Overlay, Prompt};
+use crate::connection::ConnectionName;
 use crate::db::guard::Write;
 
 /// A statement the guard read as a write, waiting for a `y`.
@@ -30,6 +31,15 @@ impl App {
         vec![]
     }
 
+    /// Asks for `to_run`, which tried to write on `connection`, once its sheet is on screen and no overlay takes the
+    /// keys; otherwise its failed run says so, and running it again asks.
+    pub(super) fn ask_for_hidden_write(&mut self, connection: &ConnectionName, to_run: ToRun) {
+        if self.overlay.is_some() || self.sheet().name() != connection {
+            return;
+        }
+        self.overlay = Some(Overlay::Prompt(Prompt::SendWrite(Box::new(WriteToSend { write: Write::Hidden, to_run }))));
+    }
+
     pub(super) fn send_write(&mut self, waiting: WriteToSend) -> Vec<Action> {
         self.sheet_mut().run(waiting.to_run, Some(Confirmed(())))
     }
@@ -37,9 +47,10 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{app_on, connection, first_run, shop, with_focus};
-    use super::super::{Focus, Run};
+    use super::super::tests::{app_on, connection, first_run, shop, to_shop, with_focus};
+    use super::super::{Focus, Incoming, Run, RunId};
     use super::*;
+    use crate::db::model::Statement;
     use crate::query::params::Given;
     use crossterm::event::{KeyCode, KeyEvent};
 
@@ -106,6 +117,43 @@ mod tests {
         let mut app = typed_on("read-only", "DELETE FROM orders");
         assert_eq!(press(&mut app, KeyCode::Enter), [first_run(&shop(), "DELETE FROM orders")]);
         assert_eq!(asked(&app), None);
+    }
+
+    /// The app on a connection that allows writes, once `sql` was sent unconfirmed and the server found a write in it.
+    fn tried_to_write(sql: &str) -> App {
+        let mut app = typed_on("allowed", sql);
+        press(&mut app, KeyCode::Enter);
+        app.apply(to_shop(Incoming::TriedToWrite { run: RunId::FIRST }));
+        app
+    }
+
+    #[test]
+    fn a_statement_that_tried_to_write_asks_before_it_runs_again() {
+        assert_eq!(asked(&tried_to_write("SELECT archive_orders()")).as_deref(), Some("this statement tried to write: run it"));
+    }
+
+    #[test]
+    fn y_to_a_statement_that_tried_to_write_sends_it_again_confirmed() {
+        let mut app = tried_to_write("SELECT archive_orders()");
+        let sent = press(&mut app, KeyCode::Char('y'));
+        let is_again = |statement: &Statement| statement.as_str() == "SELECT archive_orders()";
+        assert!(matches!(&*sent, [Action::Run { statement, confirmed: Some(_), .. }] if is_again(statement)), "{sent:?}");
+    }
+
+    #[test]
+    fn no_to_a_statement_that_tried_to_write_sends_nothing() {
+        let mut app = tried_to_write("SELECT archive_orders()");
+        assert_eq!(press(&mut app, KeyCode::Char('n')), []);
+        assert!(matches!(&app.sheet().run, Run::Failed(why) if why.contains("tried to write")), "{:?}", app.sheet().run);
+    }
+
+    #[test]
+    fn a_statement_that_tried_to_write_keeps_an_overlay_already_open() {
+        let mut app = typed_on("allowed", "SELECT archive_orders()");
+        press(&mut app, KeyCode::Enter);
+        app.overlay = Some(Overlay::CopyAs);
+        app.apply(to_shop(Incoming::TriedToWrite { run: RunId::FIRST }));
+        assert_eq!(app.overlay, Some(Overlay::CopyAs));
     }
 
     #[test]

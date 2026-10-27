@@ -65,6 +65,13 @@ impl Admitted {
     pub(crate) const fn write(&self) -> Option<&Write> {
         self.write.as_ref()
     }
+
+    /// The statement once the user said yes to it: a read that tried to write runs as a write; a read-only
+    /// connection stays read only.
+    pub(crate) fn confirmed(self) -> Self {
+        let mode = if self.mode == Mode::ReadThenAsk { Mode::Writes } else { self.mode };
+        Self { mode, ..self }
+    }
 }
 
 /// A statement that is not a read, as a confirmation names it.
@@ -76,6 +83,8 @@ pub(crate) enum Write {
         cascades: bool,
     },
     Several,
+    /// A statement the guard reads as a read that the server refused as a write, as a function that writes does.
+    Hidden,
 }
 
 /// One write of a statement: the word that makes it one, and the names it writes to when the guard can read them.
@@ -114,6 +123,9 @@ pub(super) enum TransactionStep {
 pub(super) enum Mode {
     /// Inside `BEGIN READ ONLY`, always rolled back.
     ReadOnly,
+    /// A read on a connection that allows writes: run with writes refused, so a write hidden in it, as in a function,
+    /// fails before anything is kept, and runs only once confirmed.
+    ReadThenAsk,
     /// As is, on a connection that allows writes.
     Writes,
 }
@@ -142,7 +154,8 @@ pub(crate) fn admit(statement: Statement, params: Params, writes: WritePolicy) -
     let found = not_read(&tokens, &words);
     let (mode, transaction_step) = match (writes, &found) {
         (_, Some(NotRead::Several)) => return Err(Refusal::Multiple),
-        (WritePolicy::Allowed, _) => (Mode::Writes, transaction_step(&words)),
+        (WritePolicy::Allowed, None) => (Mode::ReadThenAsk, TransactionStep::Keeps),
+        (WritePolicy::Allowed, Some(NotRead::Word(_))) => (Mode::Writes, transaction_step(&words)),
         (WritePolicy::ReadOnly, Some(NotRead::Word(at))) => return Err(Refusal::Write(words[*at].to_owned())),
         (WritePolicy::ReadOnly, None) => (Mode::ReadOnly, TransactionStep::Keeps),
     };
@@ -346,6 +359,9 @@ impl fmt::Display for Refusal {
                 write!(f, "`{word}` is not a read, and this connection is read only: set `writes = \"allowed\"` on it to run writes")
             }
             Self::Multiple => f.write_str("one statement at a time: this text holds more than one"),
+            Self::Unconfirmed(Write::Hidden) => {
+                f.write_str("this statement tried to write, and no one said yes to it: answer `y`, or pass `--yes` where no terminal can")
+            }
             Self::Unconfirmed(write) => {
                 write!(f, "`{write}` is a write, and no one said yes to it: answer `y`, or pass `--yes` where no terminal can")
             }
@@ -358,7 +374,11 @@ impl fmt::Display for Refusal {
 
 impl fmt::Display for Write {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self::Statement { changes, cascades } = self else { return f.write_str("more than one statement") };
+        let (changes, cascades) = match self {
+            Self::Statement { changes, cascades } => (changes, cascades),
+            Self::Several => return f.write_str("more than one statement"),
+            Self::Hidden => return f.write_str("this statement tried to write: run it"),
+        };
         let changes: Vec<String> = changes.iter().map(ToString::to_string).collect();
         f.write_str(&changes.join(" and "))?;
         if *cascades { f.write_str(" CASCADE") } else { Ok(()) }
@@ -589,6 +609,30 @@ mod tests {
     fn a_connection_that_allows_writes_runs_a_write_as_is() {
         let admitted = admit(Statement::new("DELETE FROM orders"), Params::default(), WritePolicy::Allowed);
         assert_eq!(admitted.map(|admitted| admitted.mode), Ok(Mode::Writes));
+    }
+
+    #[test]
+    fn a_read_where_writes_are_allowed_runs_with_writes_refused_until_confirmed() {
+        let admitted = admit(Statement::new("SELECT archive_orders()"), Params::default(), WritePolicy::Allowed).unwrap();
+        assert_eq!(admitted.mode, Mode::ReadThenAsk);
+        assert_eq!(admitted.confirmed().mode, Mode::Writes);
+    }
+
+    #[test]
+    fn a_confirmed_read_on_a_read_only_connection_stays_read_only() {
+        let admitted = admit(Statement::new("SELECT archive_orders()"), Params::default(), WritePolicy::ReadOnly).unwrap();
+        assert_eq!(admitted.confirmed().mode, Mode::ReadOnly);
+    }
+
+    #[test]
+    fn a_hidden_write_asks_whether_to_run_the_statement() {
+        assert_eq!(Write::Hidden.to_string(), "this statement tried to write: run it");
+    }
+
+    #[test]
+    fn an_unconfirmed_hidden_write_says_the_statement_tried_to_write() {
+        let refusal = Refusal::Unconfirmed(Write::Hidden).to_string();
+        assert!(refusal.starts_with("this statement tried to write, and no one said yes to it"), "{refusal}");
     }
 
     #[test]

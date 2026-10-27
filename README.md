@@ -2,7 +2,7 @@
 
 Read your PostgreSQL databases from the terminal: local, staging, and production behind a tunnel.
 
-- **Read only by default.** A connection takes writes only when you say so, and then each write asks first.
+- **Read only by default.** A connection takes writes only when you say so, and then each write asks first, even one inside a function call.
 - **Tunnels built in.** pgbg starts your `ssh` (or any other) tunnel, and stops it when you quit.
 - **Saved queries are plain `.sql` files.** Keep them in your project, next to the code, and review them like code.
 - **Charts in the terminal.** Press `v` on a result to see it as bars or a line.
@@ -144,12 +144,15 @@ Four layers stand between you and a write, outermost first:
 
 1. **The connection.** It is read only unless it says `writes = "allowed"`, whatever its tier.
 2. **The guard.** pgbg reads each statement before it sends it, and refuses anything that is not a read.
-3. **The transaction.** Each statement runs alone in `BEGIN READ ONLY`, always rolled back, so the server refuses a write the guard missed.
+3. **The transaction.** On a read-only connection, each statement runs alone in `BEGIN READ ONLY`, always rolled back, so the server refuses a write the guard missed.
+   On a connection that allows writes, a statement the guard reads as a read runs with writes refused too, and a write the server finds in it, as in `SELECT archive_orders()`, asks before it runs again.
 4. **The role.** Only a read-only database role truly stops a write: use one for production.
 
 On a connection that allows writes, each write asks first; `BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT` and cursor statements do not.
 The TUI's footer names it, such as `DELETE from orders?`: `y` sends it, any other key drops it.
+A write hidden in a read, as a function that writes or `setval`, runs nothing at first, then asks `this statement tried to write: run it?`.
 `pgbg run` asks `y/N` on the terminal; with no terminal, it refuses the write unless you pass `--yes`.
+A read-only transaction does not stop `dblink` or `pg_terminate_backend`: those run without asking, and only the role stops them.
 
 `pgbg doctor prod` checks a connection, one line per check, with how to fix what fails:
 

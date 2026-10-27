@@ -43,7 +43,7 @@ impl Session {
     /// Runs `admitted` alone and returns its first page; on a read-only connection the rest wait in its portal, kept
     /// open in `Started::rest`. On a connection that allows writes it runs as `run` does, its first `ROW_CAP` rows kept.
     pub(crate) async fn start(&mut self, admitted: &Admitted) -> Result<Started<'_>> {
-        if admitted.mode == Mode::Writes {
+        if admitted.mode != Mode::ReadOnly {
             return Ok(Started { result: self.run(admitted).await?, rest: None });
         }
         let Self { client, limits, marks, ended, .. } = self;
