@@ -39,7 +39,7 @@ pub(crate) struct YColumn {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ChartError {
     UnknownColumn(String),
-    /// More columns than one answer to the name: `count`, `?column?`.
+    /// Several columns answer to the name, like `count` or `?column?`.
     AmbiguousColumn(String),
     NotNumeric(ColumnName),
     /// No x was given and the result has no text, date or time column.
@@ -67,7 +67,7 @@ impl std::error::Error for ChartError {}
 
 impl Series {
     /// The points of `result` for `spec`, x and y filled as `chart::infer` would when the spec leaves them out.
-    /// A name matches a column as PostgreSQL folds an unquoted one, whatever its case, unless one column has it exactly.
+    /// A name matches a column whatever its case, as PostgreSQL folds an unquoted name, unless a column has that exact name.
     pub(crate) fn from_result(result: &ResultSet, spec: &ChartSpec) -> Result<Self, ChartError> {
         Self::from_columns(result, &resolve(result, spec)?)
     }
