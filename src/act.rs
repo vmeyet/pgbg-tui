@@ -159,7 +159,7 @@ impl Row {
 }
 
 /// The actions whose footer hint stays when the others no longer fit, the one kept longest first.
-const FOOTER_KEPT_LONGEST: [Act; 2] = [Act::Quit, Act::Help];
+const FOOTER_KEPT_LONGEST: [Act; 3] = [Act::Quit, Act::Help, Act::Close];
 
 /// Every action, in the order the help and the footer list them; where two rows share a key in a pane, the first wins.
 pub(crate) const ROWS: &[Row] = &[
@@ -229,11 +229,11 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Close, Pane::Finder, &[key(KeyCode::Esc)]).help("esc", "close the finder").footer("esc", "closes"),
     row(Act::Find, Pane::Anywhere, &[control('p')]).help("^p", "find a saved query").footer("^p", "find"),
     row(Act::FindTable, Pane::Anywhere, &[control('t')]).help("^t", "find a table of the schema"),
-    row(Act::Down, Pane::TableFinder, &[key(KeyCode::Down), control('n')]).help("↓ ^n", "next, previous table").footer("↑↓", "pick"),
-    row(Act::Up, Pane::TableFinder, &[key(KeyCode::Up), control('p')]),
-    row(Act::Open, Pane::TableFinder, &[key(KeyCode::Enter)]).help("⏎", "its columns and indexes").footer("⏎", "columns"),
+    row(Act::Open, Pane::TableFinder, &[key(KeyCode::Enter)]).help("⏎", "its columns and indexes").footer("⏎", "opens"),
     row(Act::Preview, Pane::TableFinder, &[control('r')]).help("^r", "run SELECT * FROM it LIMIT 100").footer("^r", "preview"),
     row(Act::Insert, Pane::TableFinder, &[key(KeyCode::Tab)]).help("⇥", "put its name in the editor").footer("⇥", "insert"),
+    row(Act::Down, Pane::TableFinder, &[key(KeyCode::Down), control('n')]).help("↓ ^n", "next, previous table").footer("↑↓", "pick"),
+    row(Act::Up, Pane::TableFinder, &[key(KeyCode::Up), control('p')]),
     row(Act::Close, Pane::TableFinder, &[key(KeyCode::Esc)]).help("esc", "close the finder").footer("esc", "closes"),
     row(Act::Quit, Pane::TableFinder, &[control('c')]).help("^c", "quit"),
     row(Act::Cancel, Pane::Anywhere, &[key(KeyCode::Esc)]).help("esc", "cancel the running statement"),

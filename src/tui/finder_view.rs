@@ -1,6 +1,7 @@
 //! The `ctrl-p` finder: a vtui palette over every saved query, best match first.
 use super::app::{App, Overlay};
-use crate::act::{self, Pane};
+use super::palette_footer;
+use crate::act::Pane;
 use crate::query::{Query, Source};
 use ratatui::Frame;
 use ratatui::style::Style;
@@ -24,8 +25,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) {
     let labels: Vec<String> = in_view.iter().map(|query| query.path.to_string()).collect();
     let picks: Vec<Pick<'_>> = in_view.iter().zip(&labels).map(|(query, label)| pick(app, query, label)).collect();
     let selected = finder.palette.selected - finder.first_in_view(MAX_SHOWN);
-    let hints: Vec<String> = act::footer(Pane::Finder).map(|hint| format!("{} {}", hint.keys, hint.does)).collect();
-    let footer = format!("  {}", hints.join(" · "));
+    let footer = palette_footer::text(Pane::Finder, f.area());
     let popup = Popup { title: "Queries", prompt: view::prompt(theme, &finder.palette, "", |_| vec![]), footer: &footer };
     view::draw(f, theme, f.area(), popup, |room| {
         if app.queries().all.is_empty() {

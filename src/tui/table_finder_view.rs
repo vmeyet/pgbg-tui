@@ -1,6 +1,7 @@
 //! The `ctrl-t` finder: a vtui palette over every table of the schema, best match first.
 use super::app::{App, Overlay, SchemaState};
-use crate::act::{self, Pane};
+use super::palette_footer;
+use crate::act::Pane;
 use crate::connection::SchemaReading;
 use crate::render::printable;
 use ratatui::Frame;
@@ -31,8 +32,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) {
     let picks: Vec<Pick<'_>> =
         labels.iter().map(|label| Pick { icon: "▦", colour: theme.accent, label, detail: view::faded(theme, "") }).collect();
     let selected = finder.search.palette.selected - finder.search.first_in_view(MAX_SHOWN);
-    let hints: Vec<String> = act::footer(Pane::TableFinder).map(|hint| format!("{} {}", hint.keys, hint.does)).collect();
-    let footer = format!("  {}", hints.join(" · "));
+    let footer = palette_footer::text(Pane::TableFinder, f.area());
     let popup = Popup { title: "Tables", prompt: view::prompt(theme, &finder.search.palette, "", |_| vec![]), footer: &footer };
     view::draw(f, theme, f.area(), popup, |room| {
         if picks.is_empty() {

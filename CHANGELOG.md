@@ -39,7 +39,7 @@ Each entry says what changed, then where, then how to use it.
   Lines heading the statement declare them: `-- param: since date = 2024-01-01` gives a type and a default, `-- param: owner text optional` binds NULL when left empty; a type the server does not know stops the run.
   One file may serve several queries: a name in it the statement lacks is left alone, while a `--param` for one is refused as a typo.
   A name with no value, or a statement mixing its own `$1` with `{{name}}` stops the run before anything is sent; the history keeps `{{name}}`, never the value.
-- **`ctrl-t` finds a table** in the TUI, from anywhere: type a few letters of `schema.table`, then `⏎` shows its columns and indexes, `ctrl-r` runs its first 100 rows, `⇥` puts its name in the editor.
+- **`ctrl-t` finds a table** in the TUI, from anywhere: type a few letters of `schema.table`, then `⏎` opens its columns and indexes, `ctrl-r` runs its first 100 rows, `⇥` puts its name in the editor.
   It reads the schema the first time, like the sidebar's schema tab.
 - **The schema** in the TUI's sidebar: on the sidebar, `]` or `[` switches from the saved queries to the schema of the connection on screen, its schemas and their tables; `⏎` folds a schema, `/` keeps the tables whose name holds what you type, `r` reads it again.
   On a table, `p` runs `SELECT * FROM` it `LIMIT 100`, `i` puts its name in the editor at the cursor, quoted when it needs it, and `⏎` shows its columns, their types, defaults and indexes in the result pane.
@@ -130,6 +130,7 @@ Each entry says what changed, then where, then how to use it.
 
 ### Fixed
 
+- **The `ctrl-t` finder's keys fit a narrow terminal**, in the TUI: the hints that do not fit go whole, `esc closes` last, instead of being cut mid-word.
 - **A relative time over a month counts calendar months and years**, in a `relative` column: a day short of a year reads `11 mo ago`, not `12 mo ago`, and a span of years no longer drifts with leap days.
 - **Copying over 100 KB works on Linux**, from the TUI's grid: it goes through `wl-copy`, `xclip` or `xsel`, and when none takes it the status line says the copy was too big for the terminal.
 - **A `before` or password command leaves nothing running**, in `config.toml`: a helper it started in the background is stopped once it ends.
