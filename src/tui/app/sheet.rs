@@ -113,6 +113,8 @@ pub(in crate::tui) struct Sheet {
     pub(in crate::tui) is_dirty: bool,
     /// Why the last page asked for failed, until the next run.
     pub(in crate::tui) page_failure: Option<String>,
+    /// What the result pane shows when it is no run's result but a table's columns, as its title says it.
+    pub(in crate::tui) shown: Option<String>,
     pub(in crate::tui) schema: SchemaState,
     /// The completion index of the catalog read, once the backend built it.
     pub(in crate::tui) index: Option<Arc<Index>>,
@@ -137,6 +139,7 @@ impl Sheet {
             header: Header::default(),
             is_dirty: false,
             page_failure: None,
+            shown: None,
             schema: SchemaState::NotRead,
             index: None,
             ghost: None,
@@ -326,19 +329,44 @@ impl Sheet {
 
     /// Runs the statement under the cursor with the values of the parameter bar, the editor's other statements left alone.
     pub(super) fn run_editor(&mut self) -> Vec<Action> {
-        if self.is_running() {
-            return vec![];
-        }
         let Some((range, statement)) = self.statement_under_cursor() else { return vec![] };
         let names = params::names(&statement).unwrap_or_default();
         let input = ParamInput { given: self.bar.given(&names), specs: self.header.params.clone() };
-        let run = self.last_run.map_or(RunId::FIRST, RunId::next);
+        self.run_statement(statement, Some(range.start), input)
+    }
+
+    /// Runs `statement` with `input` for its parameters; it starts at the editor's byte `start` when it was cut from
+    /// the editor. Nothing while another one runs.
+    pub(super) fn run_statement(&mut self, statement: Statement, start: Option<usize>, input: ParamInput) -> Vec<Action> {
+        if self.is_running() {
+            return vec![];
+        }
+        let run = self.next_run();
         self.run = Run::Running { run };
+        self.sent = Some(Sent { start, statement: statement.clone() });
+        vec![Action::Run { connection: self.name().clone(), run, statement, input }]
+    }
+
+    /// Shows `result` in the result pane as if a run gave it, titled `title`; nothing while a statement runs, whose
+    /// answer it would drop.
+    pub(super) fn show(&mut self, title: String, result: ResultSet, reading: &Reading) {
+        if self.is_running() {
+            return;
+        }
+        let run = self.next_run();
+        self.shown = Some(title);
+        let grid = Box::new(Grid::new(&result, format::opening(result.columns(), &[], reading.mode), &reading.clock));
+        self.run = Run::Done { run, grid, result, took: Duration::ZERO, view: View::Grid, is_page_asked: false };
+    }
+
+    /// A new run's id, the marks of the last one dropped.
+    fn next_run(&mut self) -> RunId {
+        let run = self.last_run.map_or(RunId::FIRST, RunId::next);
         self.last_run = Some(run);
         self.error_mark = None;
         self.page_failure = None;
-        self.sent = Some(Sent { start: Some(range.start), statement: statement.clone() });
-        vec![Action::Run { connection: self.name().clone(), run, statement, input }]
+        self.shown = None;
+        run
     }
 
     /// The editor's byte at character `position` of the statement sent; the end of it when the server

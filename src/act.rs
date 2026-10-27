@@ -46,6 +46,8 @@ pub(crate) enum Act {
     ReadAgain,
     TakeGhost,
     Complete,
+    Preview,
+    Insert,
 }
 
 impl Act {
@@ -118,7 +120,9 @@ impl Act {
             Self::Filter => Some(Self::ReadAgain),
             Self::ReadAgain => Some(Self::TakeGhost),
             Self::TakeGhost => Some(Self::Complete),
-            Self::Complete => None,
+            Self::Complete => Some(Self::Preview),
+            Self::Preview => Some(Self::Insert),
+            Self::Insert => None,
         }
     }
 
@@ -265,7 +269,11 @@ pub(crate) const ROWS: &[Row] = &[
         .footer("[]", "schema"),
     row(Act::Down, Pane::Schema, &[key(KeyCode::Char('j')), key(KeyCode::Down)]).help("j k", "next, previous table").footer("j/k", "move"),
     row(Act::Up, Pane::Schema, &[key(KeyCode::Char('k')), key(KeyCode::Up)]),
-    row(Act::Open, Pane::Schema, &[key(KeyCode::Enter)]).help("⏎", "fold the schema"),
+    row(Act::Open, Pane::Schema, &[key(KeyCode::Enter)])
+        .help("⏎", "fold the schema, or the table's columns and indexes")
+        .footer("⏎", "columns"),
+    row(Act::Preview, Pane::Schema, &[key(KeyCode::Char('p'))]).help("p", "run SELECT * FROM the table LIMIT 100").footer("p", "preview"),
+    row(Act::Insert, Pane::Schema, &[key(KeyCode::Char('i'))]).help("i", "put the table's name in the editor").footer("i", "insert"),
     row(Act::Filter, Pane::Schema, &[key(KeyCode::Char('/'))])
         .help("/", "keep the tables whose name holds what you type")
         .footer("/", "filter"),

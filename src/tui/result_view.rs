@@ -15,7 +15,7 @@ use vtui::pane;
 pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) -> Room {
     let focused = app.focus == Focus::Result;
     let run = &app.sheet().run;
-    let block = pane::framed(&app.theme, &title(run), focused);
+    let block = pane::framed(&app.theme, &title(run, app.sheet().shown.as_deref()), focused);
     let inside = block.inner(area);
     f.render_widget(block, area);
     let body = match run {
@@ -40,9 +40,11 @@ fn printable_lines(text: &str) -> Text<'static> {
     text.lines().map(|line| Line::from(render::printable(line).into_owned())).collect()
 }
 
-fn title(run: &Run) -> String {
-    match run {
-        Run::Done { result, took, view, .. } => {
+/// What the result is, `orders · 3 columns · 1 index` for a table's columns, else its rows and time.
+fn title(run: &Run, shown: Option<&str>) -> String {
+    match (run, shown) {
+        (Run::Done { .. }, Some(shown)) => format!("Result ─ {}", render::printable(shown)),
+        (Run::Done { result, took, view, .. }, None) => {
             format!("Result ─ {} · {} ms ─ {}", row_count(result), took.as_millis(), view_switch(view))
         }
         _ => "Result".to_owned(),

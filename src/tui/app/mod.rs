@@ -335,7 +335,7 @@ impl App {
             Act::CopyResult => self.ask_copy_format(),
             Act::SwitchTab => self.switch_tab(),
             Act::Close | Act::Delete | Act::CloseSession | Act::Add | Act::Edit | Act::CopyCsv | Act::CopyJson | Act::CopyMarkdown => {}
-            Act::Filter | Act::ReadAgain => {}
+            Act::Filter | Act::ReadAgain | Act::Preview | Act::Insert => {}
         }
         vec![]
     }
