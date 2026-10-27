@@ -1,10 +1,9 @@
 //! A tunnel: a child process pgbg owns that forwards a free `127.0.0.1` port to a database this machine cannot reach straight.
 use crate::connection::TunnelSpec;
 use crate::db::model::{LocalPort, Route};
-use crate::groups::{self, LAST_WORDS_TIMEOUT, OWN_GROUP, keep_last_words, with_last_words};
+use crate::groups::{self, ExitWatch, LAST_WORDS_TIMEOUT, OWN_GROUP, keep_last_words, with_last_words};
 use crate::program::Program;
 use anyhow::{Context, Result, anyhow, bail};
-use rustix::io::Errno;
 use rustix::process::Pid;
 use std::fmt;
 use std::net::Ipv4Addr;
@@ -33,6 +32,8 @@ pub(crate) struct Tunnel {
     child: Child,
     /// Taken once the group is killed, so a stop never signals a reused id.
     group: Option<Pid>,
+    /// Sees the tunnel's own process end before it is reaped, so its group is killed while its id is still its own.
+    exit: ExitWatch,
     last_words: Option<JoinHandle<Vec<String>>>,
 }
 
@@ -76,14 +77,14 @@ impl Tunnel {
 
     /// Waits until the tunnel ends on its own, then says how; its group is killed on the way.
     pub(crate) async fn ended(&mut self) -> Died {
-        let status = self.child.wait().await.ok();
+        let status = self.reaped().await;
         self.died(status).await
     }
 
     /// Whether the tunnel's own process still runs.
     /// Once it is seen ended, its group is killed at once, while its id cannot yet be reused.
     pub(crate) fn is_running(&mut self) -> bool {
-        let is_running = matches!(self.child.try_wait(), Ok(None));
+        let is_running = !self.exit.has_exited();
         if !is_running {
             self.kill_group();
         }
@@ -120,12 +121,12 @@ impl Tunnel {
             .kill_on_drop(true)
             .spawn()
             .with_context(|| format!("starting the tunnel `{program}`"))?;
-        let group = child.id().and_then(|id| Pid::from_raw(id as i32));
-        if let Some(group) = group {
-            groups::register(group);
-        }
+        let leader =
+            child.id().and_then(|id| Pid::from_raw(id as i32)).with_context(|| format!("the tunnel `{program}` has no process id"))?;
+        let exit = ExitWatch::start(leader).with_context(|| format!("watching the tunnel `{program}`"))?;
+        groups::register(leader);
         let last_words = child.stderr.take().map(|stderr| tokio::spawn(keep_last_words(stderr)));
-        Ok(Self { port, program: Program::new(program), child, group, last_words })
+        Ok(Self { port, program: Program::new(program), child, group: Some(leader), exit, last_words })
     }
 
     async fn wait_until_ready(&mut self, ready_timeout: Duration) -> Result<()> {
@@ -138,7 +139,7 @@ impl Tunnel {
                 bail!("the tunnel `{}` did not answer on port {} within {}s", self.program, self.port, ready_timeout.as_secs_f32());
             }
             tokio::select! {
-                status = self.child.wait() => return Err(self.died_before_ready(status.ok()).await),
+                status = self.reaped() => return Err(self.died_before_ready(status).await),
                 () = sleep(READY_POLL) => {}
             }
         }
@@ -150,8 +151,14 @@ impl Tunnel {
         if is_clean_exit { died.context(HANDED_OFF) } else { died }
     }
 
-    async fn died(&mut self, status: Option<ExitStatus>) -> Died {
+    /// Waits for the tunnel's own process to end, kills what it left in its group, then reaps it.
+    async fn reaped(&mut self) -> Option<ExitStatus> {
+        self.exit.exited().await;
         self.kill_group();
+        self.child.wait().await.ok()
+    }
+
+    async fn died(&mut self, status: Option<ExitStatus>) -> Died {
         let last_words = self.last_words().await;
         Died { program: self.program.clone(), status, last_words }
     }
@@ -166,9 +173,8 @@ impl Tunnel {
 
     fn kill_group(&mut self) {
         let Some(group) = self.group.take() else { return };
-        match groups::kill(group) {
-            Ok(()) | Err(Errno::SRCH) => {}
-            Err(err) => tracing::warn!("the tunnel `{}` could not be killed: {err}", self.program),
+        if let Err(err) = groups::kill(group) {
+            tracing::warn!("the tunnel `{}` could not be killed: {err}", self.program);
         }
     }
 }
@@ -230,8 +236,8 @@ mod tests {
     use crate::db::Session;
     use crate::db::guard;
     use crate::db::model::{Params, Statement, Value};
-    use crate::fixtures::{self, FORWARD, TUNNEL_PORTS};
-    use rustix::process::{Signal, kill_process, test_kill_process_group};
+    use crate::fixtures::{self, FORWARD, TUNNEL_PORTS, is_gone, written_pid};
+    use rustix::process::{Signal, WaitId, WaitIdOptions, kill_process, test_kill_process_group, waitid};
 
     const LISTEN: &str = "import socket, sys, time; server = socket.create_server(('127.0.0.1', int(sys.argv[1]))); time.sleep(60)";
     /// A forward that leaves the tunnel's group, as an ssh `ControlMaster` holds one, and goes away on its own soon after.
@@ -398,7 +404,22 @@ time.sleep(60)
         let group = group_of(&tunnel);
         kill_process(group, Signal::KILL).unwrap();
         assert!(until_ended(&mut tunnel).await);
+        tunnel.child.wait().await.unwrap();
         assert!(until_gone(group).await);
+    }
+
+    #[tokio::test]
+    #[ignore = "starts a process"]
+    async fn a_tunnel_seen_ended_has_its_group_killed_before_its_leader_is_reaped() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("sleep.pid");
+        let command = ["sh", "-c", "sleep 60 & echo $! > \"$1\"", "sh"].map(str::to_owned);
+        let mut tunnel = Tunnel::spawn(&[&command[..], &[pid_file.display().to_string()]].concat(), LocalPort::new(1)).unwrap();
+        let (leader, sleeping) = (group_of(&tunnel), written_pid(&pid_file).await);
+        assert!(until_ended(&mut tunnel).await);
+        let is_unreaped =
+            matches!(waitid(WaitId::Pid(leader), WaitIdOptions::EXITED | WaitIdOptions::NOWAIT | WaitIdOptions::NOHANG), Ok(Some(_)));
+        assert!(is_unreaped && is_gone(sleeping).await);
     }
 
     #[tokio::test]

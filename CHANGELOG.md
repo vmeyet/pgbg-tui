@@ -133,6 +133,8 @@ Each entry says what changed, then where, then how to use it.
 
 ### Fixed
 
+- **A command that ends cleanly no longer logs a warning on macOS**, for a `before`, password or `[ai]` command: pgbg no longer says it could not kill its process group.
+- **A command whose helper left its process group no longer hangs**, for a `before`, password or `[ai]` command: when that helper still holds its output a second after the group is stopped, the command fails and says so.
 - **The question before a write shows its table names escaped**, in `pgbg run` and the TUI's footer: a control character or a mark that reverses text in a name can no longer hide the verb.
 - **`pgbg run` stops on ctrl-c while it waits on stdin**, for `--file -`, `--params-file -` or a write's `y/N`: it exits within 3 seconds, its tunnel with it.
 - **A function that tried to write no longer says nothing ran**, in the TUI and `pgbg run`: what it did before the write may have run, and confirming runs it again.
