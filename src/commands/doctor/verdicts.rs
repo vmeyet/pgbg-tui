@@ -18,7 +18,7 @@ pub(super) fn config(connection: &Connection) -> Check {
     Check::ok("config", format!("`{}` loads, {password}", connection.name()))
 }
 
-/// `mode` holds the permission bits of the file at `path`.
+/// Warns when other users can read or write the file at `path`, whose permission bits `mode` holds.
 pub(super) fn file_mode(path: &Path, mode: u32) -> Check {
     let found = format!("{} is {:04o}", path.display(), mode & 0o777);
     if mode & OTHERS_READ_OR_WRITE == 0 {
