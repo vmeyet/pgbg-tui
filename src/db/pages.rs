@@ -1,8 +1,9 @@
 //! A result shown a page at a time: its portal stays open between pages, in its `BEGIN READ ONLY` transaction.
 use super::guard::{Admitted, Mode};
 use super::model::{Column, Extent, Page, ResultSet};
-use super::{FetchSize, Marks, Session, columns, fetch_page, roll_back, server_error};
+use super::{FetchSize, Marks, Session, columns, fetch_page, roll_back, server_error, why_ended};
 use anyhow::Result;
+use tokio::sync::watch;
 use tokio_postgres::{Portal, Transaction};
 
 /// The rows of one page: the grid asks for the next page as it nears the end of the rows it has.
@@ -26,6 +27,7 @@ pub(crate) struct Pages<'s> {
     transaction: Transaction<'s>,
     portal: Portal,
     marks: &'s mut Marks,
+    ended: &'s watch::Receiver<Option<String>>,
 }
 
 /// A statement bound to its portal, and the columns it returns.
@@ -41,7 +43,7 @@ impl Session {
         if admitted.mode == Mode::Writes {
             return Ok(Started { result: self.run(admitted).await?, rest: None });
         }
-        let Self { client, marks, .. } = self;
+        let Self { client, marks, ended, .. } = self;
         let transaction = marks.during(client.build_transaction().read_only(true).start()).await.map_err(server_error)?;
         let bound = marks.during(bind(&transaction, admitted.statement.as_str())).await;
         let Bound { columns, portal } = match bound {
@@ -51,7 +53,7 @@ impl Session {
                 return Err(err);
             }
         };
-        let Fetched { page, rest } = Pages { transaction, portal, marks }.next().await?;
+        let Fetched { page, rest } = Pages { transaction, portal, marks, ended }.next().await?;
         Ok(Started { result: ResultSet::new(columns, page), rest })
     }
 }
@@ -74,6 +76,11 @@ impl<'s> Pages<'s> {
     /// Ends the portal's transaction; the rows it did not send stay on the server.
     pub(crate) async fn close(self) -> Result<()> {
         roll_back(self.transaction, self.marks).await
+    }
+
+    /// Waits until the link to the server ends, and says why.
+    pub(crate) async fn closed(&self) -> String {
+        why_ended(self.ended).await
     }
 }
 

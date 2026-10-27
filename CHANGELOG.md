@@ -8,6 +8,9 @@ Each entry says what changed, then where, then how to use it.
 
 ### New
 
+- **Big results page in** in the TUI: a result comes 500 rows at a time, and the next page is fetched as the grid's cursor nears the last row, with no cap.
+  The title says `1 500 rows · more…` while rows wait on the server, and `all 1 732 rows` once they all came; a result left 5 minutes without a page asked stops there, so its open transaction does not hold up the server, and a page the server fails says why in the status line.
+  A connection that allows writes, and `pgbg run`, still keep the first 10 000 rows.
 - **Row detail** in the TUI: on the grid, press `⏎` or `space` to see the row under the cursor, one column after another with its type and its whole value, long ones wrapped, starting at the cursor's column.
   JSON shows indented and coloured; `j`/`k` scroll, `esc` goes back to the grid.
 - **Copy** from the grid: `h`/`l` move the grid's cursor from column to column, the grid scrolling only when it leaves the view; `y` copies the cell under it, `Y` the row as a CSV line, and `c` then `c`, `j` or `m` the whole result as CSV, JSON or a Markdown table.
