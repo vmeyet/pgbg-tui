@@ -1,5 +1,6 @@
 //! Classifies a statement before it is sent: a read, a write, or more than one statement.
 //! A best effort that spares a round trip; the read-only transaction and role are what hold.
+use super::lex::{self, Placed, Token};
 use super::model::Statement;
 use crate::connection::WritePolicy;
 use std::fmt;
@@ -63,7 +64,7 @@ fn check_read(tokens: &[Token]) -> Result<(), Refusal> {
 /// whitespace around it left out; `None` when `sql` holds no statement. A cursor right after a `;`, or on blank text after
 /// it, stands in the statement before it.
 pub(crate) fn statement_at(sql: &str, at: usize) -> Option<Range<usize>> {
-    let pieces = pieces(&placed_tokens(sql), sql.len());
+    let pieces = pieces(&lex::tokens(sql), sql.len());
     let holding = pieces.iter().position(|piece| at <= piece.range.end + 1).unwrap_or(pieces.len() - 1);
     let statement = pieces[..=holding].iter().rev().find(|piece| piece.has_tokens)?;
     Some(trimmed(sql, statement.range.clone()))
@@ -81,8 +82,8 @@ fn pieces(tokens: &[Placed], len: usize) -> Vec<Piece> {
     let mut has_tokens = false;
     for placed in tokens {
         if placed.token == Token::End {
-            pieces.push(Piece { range: start..placed.at, has_tokens });
-            (start, has_tokens) = (placed.at + 1, false);
+            pieces.push(Piece { range: start..placed.range.start, has_tokens });
+            (start, has_tokens) = (placed.range.end, false);
         } else {
             has_tokens = true;
         }
@@ -109,139 +110,7 @@ fn first_write_word<'a>(words: &[&'a str]) -> Option<&'a str> {
 }
 
 fn tokens(sql: &str) -> Vec<Token> {
-    placed_tokens(sql).into_iter().map(|placed| placed.token).collect()
-}
-
-/// The words of `sql` in upper case, its `;`, and one `Other` for anything else, each with the byte
-/// it starts at: comments and whitespace drop out, and string literals and quoted identifiers hide what they hold.
-fn placed_tokens(sql: &str) -> Vec<Placed> {
-    let mut tokens = vec![];
-    let mut rest = sql;
-    while let Some(c) = rest.chars().next() {
-        let after = &rest[c.len_utf8()..];
-        let at = sql.len() - rest.len();
-        let mut push = |token| tokens.push(Placed { at, token });
-        rest = match c {
-            '-' if after.starts_with('-') => after.find(['\n', '\r']).map_or("", |end| &after[end..]),
-            '/' if after.starts_with('*') => after_block_comment(&after[1..]),
-            c if c.is_whitespace() => after,
-            ';' => {
-                push(Token::End);
-                after
-            }
-            c if c.is_alphabetic() || c == '_' => {
-                let end = rest.find(|c: char| !is_word_char(c)).unwrap_or(rest.len());
-                let word = rest[..end].to_uppercase();
-                let next = &rest[end..];
-                let is_escape_string = word == "E" && next.starts_with('\'');
-                push(Token::Word(word));
-                if is_escape_string { after_escape_string(&next[1..]) } else { next }
-            }
-            '\'' | '"' => {
-                push(Token::Other);
-                after_quoted(after, c)
-            }
-            '$' => {
-                push(Token::Other);
-                after_dollar(rest)
-            }
-            _ => {
-                push(Token::Other);
-                after
-            }
-        };
-    }
-    tokens
-}
-
-fn is_word_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_' || c == '$'
-}
-
-fn after_block_comment(body: &str) -> &str {
-    let mut depth = 1;
-    let mut rest = body;
-    while depth > 0 {
-        let Some(at) = rest.find(['*', '/']) else { return "" };
-        let mark = &rest[at..];
-        rest = if let Some(after) = mark.strip_prefix("*/") {
-            depth -= 1;
-            after
-        } else if let Some(after) = mark.strip_prefix("/*") {
-            depth += 1;
-            after
-        } else {
-            &mark[1..]
-        };
-    }
-    rest
-}
-
-/// After a literal opened by `quote`, where a doubled quote stands for itself.
-fn after_quoted(body: &str, quote: char) -> &str {
-    let mut rest = body;
-    while let Some(at) = rest.find(quote) {
-        let after = &rest[at + 1..];
-        if !after.starts_with(quote) {
-            return after;
-        }
-        rest = &after[1..];
-    }
-    ""
-}
-
-/// After an `E'...'` literal, where a backslash also escapes the next character.
-fn after_escape_string(body: &str) -> &str {
-    let mut chars = body.char_indices();
-    while let Some((at, c)) = chars.next() {
-        match c {
-            '\\' => {
-                chars.next();
-            }
-            '\'' if body[at + 1..].starts_with('\'') => {
-                chars.next();
-            }
-            '\'' => return &body[at + 1..],
-            _ => {}
-        }
-    }
-    ""
-}
-
-/// After a `$tag$...$tag$` literal; a `$` that opens none, such as the parameter `$1`, is skipped alone.
-fn after_dollar(rest: &str) -> &str {
-    let tag_end = rest[1..].find(|c: char| !(c.is_alphanumeric() || c == '_')).map(|at| at + 1);
-    let opens_quote = tag_end.is_some_and(|end| rest[end..].starts_with('$')) && !rest[1..].starts_with(|c: char| c.is_ascii_digit());
-    match tag_end {
-        Some(end) if opens_quote => {
-            let tag = &rest[..=end];
-            let body = &rest[tag.len()..];
-            body.find(tag).map_or("", |at| &body[at + tag.len()..])
-        }
-        _ => &rest[1..],
-    }
-}
-
-#[derive(Debug)]
-struct Placed {
-    at: usize,
-    token: Token,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum Token {
-    Word(String),
-    End,
-    Other,
-}
-
-impl Token {
-    fn word(&self) -> Option<&str> {
-        match self {
-            Self::Word(word) => Some(word),
-            Self::End | Self::Other => None,
-        }
-    }
+    lex::tokens(sql).into_iter().map(|placed| placed.token).collect()
 }
 
 impl fmt::Display for Refusal {

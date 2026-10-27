@@ -18,6 +18,7 @@ use tokio_postgres_rustls::MakeRustlsConnect;
 mod cancel;
 mod decode;
 pub(crate) mod guard;
+mod lex;
 pub(crate) mod model;
 mod open;
 mod pages;
