@@ -83,11 +83,10 @@ mod tests {
 
     pub(super) fn sales() -> ResultSet {
         let row = |customer: &str, orders: i64, refunds: i64| vec![Value::Text(customer.into()), Value::Int(orders), Value::Int(refunds)];
-        ResultSet {
-            columns: vec![column("customer", ColumnKind::Text), column("orders", ColumnKind::Int), column("refunds", ColumnKind::Int)],
-            rows: vec![row("nina", 1200, 30), row("Zoë Nakamura", 450, 0), row("noel", 3, 1)],
-            is_cut: false,
-        }
+        ResultSet::whole(
+            vec![column("customer", ColumnKind::Text), column("orders", ColumnKind::Int), column("refunds", ColumnKind::Int)],
+            vec![row("nina", 1200, 30), row("Zoë Nakamura", 450, 0), row("noel", 3, 1)],
+        )
     }
 
     #[test]
@@ -103,15 +102,10 @@ mod tests {
 
     #[test]
     fn a_label_or_a_column_name_cannot_reverse_the_text_around_it() {
-        let result = ResultSet {
-            columns: vec![
-                column("customer", ColumnKind::Text),
-                column("total\u{202e}", ColumnKind::Int),
-                column("refunds", ColumnKind::Int),
-            ],
-            rows: vec![vec![Value::Text("nina\u{2067}".into()), Value::Int(12), Value::Int(1)]],
-            is_cut: false,
-        };
+        let result = ResultSet::whole(
+            vec![column("customer", ColumnKind::Text), column("total\u{202e}", ColumnKind::Int), column("refunds", ColumnKind::Int)],
+            vec![vec![Value::Text("nina\u{2067}".into()), Value::Int(12), Value::Int(1)]],
+        );
         let drawn = render(&series(&result, "bar"), 60, 6).backend().to_string();
         assert!(drawn.contains("\\u{2067}") && drawn.contains("\\u{202e}"), "{drawn}");
         assert!(!drawn.contains(['\u{202e}', '\u{2067}']), "{drawn}");

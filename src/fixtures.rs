@@ -79,16 +79,15 @@ pub(crate) fn column(name: &str, kind: ColumnKind) -> Column {
 /// Four orders: an id, a total and the customer, one of them `NULL`, one with a name past ASCII.
 pub(crate) fn orders() -> ResultSet {
     let row = |id: i64, total: &str, customer: Value| vec![Value::Int(id), Value::Numeric(total.into()), customer];
-    ResultSet {
-        columns: vec![column("id", ColumnKind::Int), column("total", ColumnKind::Numeric), column("customer", ColumnKind::Text)],
-        rows: vec![
+    ResultSet::whole(
+        vec![column("id", ColumnKind::Int), column("total", ColumnKind::Numeric), column("customer", ColumnKind::Text)],
+        vec![
             row(7, "12.50", Value::Text("nina".into())),
             row(12, "1499.00", Value::Null),
             row(103, "3.20", Value::Text("Zoë Nakamura".into())),
             row(104, "0.99", Value::Text("noel".into())),
         ],
-        is_cut: false,
-    }
+    )
 }
 
 fn schema_column(name: &str, type_name: &str, default: Option<&str>) -> SchemaColumn {

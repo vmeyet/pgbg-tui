@@ -1,6 +1,7 @@
 //! The neutral model of what a statement returns: code outside `db/` never sees a driver type.
 pub(crate) use cancel::CancelToken;
 pub(crate) use error::ServerError;
+pub(crate) use result::{Extent, Page, ResultSet};
 pub(crate) use route::{LocalPort, Route};
 pub(crate) use schema::{Index, Schema, SchemaColumn, SchemaNode, Table, TableKind};
 use serde::Serialize;
@@ -9,6 +10,7 @@ pub(crate) use value::Value;
 
 mod cancel;
 mod error;
+mod result;
 mod route;
 #[cfg_attr(not(test), expect(dead_code, reason = "`Schema::complete` waits for the editor's completion, the next step"))]
 mod schema;
@@ -57,24 +59,4 @@ pub(crate) struct Column {
     /// The server's name for the type: `int4`, `timestamptz`, `inet`.
     #[serde(rename = "type")]
     pub(crate) type_name: String,
-}
-
-/// The columns and rows a statement returned; each row has one value per column.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
-pub(crate) struct ResultSet {
-    pub(crate) columns: Vec<Column>,
-    pub(crate) rows: Vec<Vec<Value>>,
-    /// The statement returned more rows than pgbg keeps: `rows` holds the first ones.
-    pub(crate) is_cut: bool,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_cut_result_says_so_in_json() {
-        let result = ResultSet { columns: vec![], rows: vec![], is_cut: true };
-        assert_eq!(serde_json::to_value(&result).unwrap()["is_cut"], true);
-    }
 }

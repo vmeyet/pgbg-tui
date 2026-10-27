@@ -69,7 +69,7 @@ mod tests {
     fn daily(orders: &[Option<i64>]) -> ResultSet {
         let day = |at: usize| Value::Date(chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap() + chrono::Days::new(at as u64 * 2));
         let rows = orders.iter().enumerate().map(|(at, orders)| vec![day(at), orders.map_or(Value::Null, Value::Int)]).collect();
-        ResultSet { columns: vec![column("day", ColumnKind::Date), column("orders", ColumnKind::Int)], rows, is_cut: false }
+        ResultSet::whole(vec![column("day", ColumnKind::Date), column("orders", ColumnKind::Int)], rows)
     }
 
     #[test]

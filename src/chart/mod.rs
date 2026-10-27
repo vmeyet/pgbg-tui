@@ -55,11 +55,11 @@ pub(crate) struct ChartColumns {
 /// The kind is bar when x is text or there are at most 12 rows, line otherwise: a line reads a trend, bars compare a few values.
 pub(crate) fn infer(result: &ResultSet) -> Option<ChartColumns> {
     let x = default_x(result)?;
-    let y = default_y(&result.columns, x);
+    let y = default_y(result.columns(), x);
     if y.is_empty() {
         return None;
     }
-    Some(ChartColumns { kind: suited_kind(&result.columns[x], result.rows.len()), x, y })
+    Some(ChartColumns { kind: suited_kind(&result.columns()[x], result.rows().len()), x, y })
 }
 
 /// The series of the chart `infer` picks for `result`, or why there is none.
@@ -73,14 +73,14 @@ fn missing_axis(result: &ResultSet) -> ChartError {
 }
 
 fn default_x(result: &ResultSet) -> Option<usize> {
-    result.columns.iter().position(|column| is_label(&column.kind)).or_else(|| ascending_integers(result))
+    result.columns().iter().position(|column| is_label(&column.kind)).or_else(|| ascending_integers(result))
 }
 
 /// The first numeric column, when it is an integer one whose every value is greater than the one before.
 fn ascending_integers(result: &ResultSet) -> Option<usize> {
-    let first = result.columns.iter().position(|column| is_numeric(&column.kind))?;
-    let is_integer = result.columns[first].kind == ColumnKind::Int;
-    let integers: Option<Vec<i64>> = result.rows.iter().map(|row| integer(&row[first])).collect();
+    let first = result.columns().iter().position(|column| is_numeric(&column.kind))?;
+    let is_integer = result.columns()[first].kind == ColumnKind::Int;
+    let integers: Option<Vec<i64>> = result.rows().iter().map(|row| integer(&row[first])).collect();
     let is_ascending = integers.is_some_and(|integers| integers.windows(2).all(|pair| pair[0] < pair[1]));
     (is_integer && is_ascending).then_some(first)
 }
@@ -114,7 +114,7 @@ mod tests {
     pub(super) use crate::fixtures::column;
 
     pub(super) fn result(columns: Vec<Column>, rows: Vec<Vec<Value>>) -> ResultSet {
-        ResultSet { columns, rows, is_cut: false }
+        ResultSet::whole(columns, rows)
     }
 
     fn rows(count: usize, row: impl Fn(usize) -> Vec<Value>) -> Vec<Vec<Value>> {

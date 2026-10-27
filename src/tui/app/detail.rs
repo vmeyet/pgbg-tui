@@ -12,7 +12,7 @@ pub(in crate::tui) struct Detail {
 impl App {
     /// Opens the detail of the grid's row, when the result has one.
     pub(super) fn open_detail(&mut self) {
-        let has_row = matches!(&self.sheet().run, Run::Done { result, grid, .. } if grid.row < result.rows.len());
+        let has_row = matches!(&self.sheet().run, Run::Done { result, grid, .. } if grid.row < result.rows().len());
         if has_row {
             self.overlay = Some(Overlay::Detail(Detail::default()));
         }
@@ -70,7 +70,7 @@ mod tests {
     fn an_empty_result_has_no_detail_to_open() {
         let mut app = typed("SELECT 1");
         press(&mut app, KeyCode::Enter);
-        let empty = crate::db::model::ResultSet { rows: vec![], ..orders() };
+        let empty = crate::db::model::ResultSet::whole(orders().columns().to_vec(), vec![]);
         app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result: empty, took: Duration::from_millis(1) }));
         press(&mut app, KeyCode::Tab);
         press(&mut app, KeyCode::Enter);

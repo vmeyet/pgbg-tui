@@ -42,7 +42,7 @@ pub(crate) enum Outcome {
 impl Outcome {
     pub(crate) fn of(result: &anyhow::Result<ResultSet>) -> Self {
         match result {
-            Ok(result) => Self::Rows { count: result.rows.len(), is_cut: result.is_cut },
+            Ok(result) => Self::Rows { count: result.rows().len(), is_cut: result.is_cut() },
             Err(err) if err.is::<Refusal>() => Self::Refused,
             Err(err) if err.is::<ServerError>() => Self::ServerError,
             Err(_) => Self::LinkError,
@@ -210,6 +210,7 @@ fn parsed(line: &str) -> Option<Entry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::model::{Extent, Page};
     use std::os::unix::fs::PermissionsExt;
 
     fn store(dir: &tempfile::TempDir) -> Store {
@@ -359,7 +360,7 @@ mod tests {
 
     #[test]
     fn an_outcome_of_rows_says_how_many() {
-        let result = ResultSet { columns: vec![], rows: vec![vec![]], is_cut: true };
+        let result = ResultSet::new(vec![], Page { rows: vec![vec![]], extent: Extent::Cut });
         assert_eq!(Outcome::of(&Ok(result)).to_string(), "1 row, cut");
     }
 }

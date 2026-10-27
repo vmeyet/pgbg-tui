@@ -23,12 +23,12 @@ const SHARE_OF_SCREEN_PCT: u16 = 80;
 pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> usize {
     let Some(Overlay::Detail(detail)) = &app.overlay else { return 0 };
     let Run::Done { result, grid, .. } = &app.sheet().run else { return 0 };
-    let Some(row) = result.rows.get(grid.row) else { return 0 };
+    let Some(row) = result.rows().get(grid.row) else { return 0 };
     let area = centred(f.area());
-    let block = pane::framed(&app.theme, &format!("Row {} of {}", grid.row + 1, result.rows.len()), true);
+    let block = pane::framed(&app.theme, &format!("Row {} of {}", grid.row + 1, result.rows().len()), true);
     let [body, footer] = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(block.inner(area));
     let lines: Vec<Line<'static>> =
-        result.columns.iter().zip(row).flat_map(|(column, value)| column_lines(&app.theme, column, value, body.width)).collect();
+        result.columns().iter().zip(row).flat_map(|(column, value)| column_lines(&app.theme, column, value, body.width)).collect();
     let last_scroll = lines.len().saturating_sub(usize::from(body.height));
     let shown: Vec<Line<'static>> = lines.into_iter().skip(detail.scroll.min(last_scroll)).take(usize::from(body.height)).collect();
     f.render_widget(Clear, area);
@@ -145,10 +145,10 @@ mod tests {
 
     fn a_note() -> ResultSet {
         let note = "Leave at the door.\nRing twice: the bell is \u{202e}broken";
-        let mut result = orders();
-        result.columns.push(Column { type_name: "text".into(), ..column("note", ColumnKind::Text) });
-        result.rows.iter_mut().for_each(|row| row.push(Value::Text(note.into())));
-        result
+        let orders = orders();
+        let columns = orders.columns().iter().cloned().chain([Column { type_name: "text".into(), ..column("note", ColumnKind::Text) }]);
+        let rows = orders.rows().iter().map(|row| row.iter().cloned().chain([Value::Text(note.into())]).collect());
+        ResultSet::whole(columns.collect(), rows.collect())
     }
 
     #[test]
@@ -165,8 +165,7 @@ mod tests {
     #[test]
     fn json_is_indented_and_coloured() {
         let items = Value::Json(serde_json::json!({"sku": "TEA-01", "count": 2, "gift": null}));
-        let result =
-            ResultSet { columns: vec![column("items", ColumnKind::Json)], rows: vec![vec![items.clone()], vec![items]], is_cut: false };
+        let result = ResultSet::whole(vec![column("items", ColumnKind::Json)], vec![vec![items.clone()], vec![items]]);
         insta::assert_snapshot!("detail_json_styled", styled::runs(render(&detail_of(result), 40, 12).0.backend().buffer()));
     }
 

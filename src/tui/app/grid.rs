@@ -35,13 +35,13 @@ pub(in crate::tui) struct Grid {
 impl Grid {
     /// The grid on `result`, its cursor on the first row.
     pub(in crate::tui) fn new(result: &ResultSet) -> Self {
-        let widths = (0..result.columns.len()).map(|c| column_width(result, c)).collect();
+        let widths = (0..result.columns().len()).map(|c| column_width(result, c)).collect();
         Self { widths, row: 0, top: 0, column: 0 }
     }
 
     /// Moves the cursor by `step` in `result`, keeping it among the `visible` rows in view.
     pub(super) fn step(&mut self, step: Move, result: &ResultSet, visible: usize) {
-        let last_row = result.rows.len().saturating_sub(1);
+        let last_row = result.rows().len().saturating_sub(1);
         let page = visible.max(1);
         match step {
             Move::Down => self.row = (self.row + 1).min(last_row),
@@ -69,8 +69,8 @@ impl Grid {
 }
 
 fn column_width(result: &ResultSet, column: usize) -> usize {
-    let header = render::width(&render::printable(&result.columns[column].name));
-    let cells = result.rows.iter().take(WIDTH_SAMPLE_ROWS).filter_map(|row| row.get(column));
+    let header = render::width(&render::printable(&result.columns()[column].name));
+    let cells = result.rows().iter().take(WIDTH_SAMPLE_ROWS).filter_map(|row| row.get(column));
     let widest_cell = cells.map(|value| render::width(&render::cell_text(value, MAX_COLUMN_WIDTH))).max().unwrap_or(0);
     header.max(widest_cell).min(MAX_COLUMN_WIDTH)
 }
@@ -83,11 +83,10 @@ mod tests {
 
     fn result(rows: usize) -> ResultSet {
         let int = |name: &str| column(name, ColumnKind::Int);
-        ResultSet {
-            columns: vec![int("id"), int("total"), int("customer")],
-            rows: (0..rows).map(|n| vec![Value::Int(n as i64), Value::Int(12), Value::Text("nina".into())]).collect(),
-            is_cut: false,
-        }
+        ResultSet::whole(
+            vec![int("id"), int("total"), int("customer")],
+            (0..rows).map(|n| vec![Value::Int(n as i64), Value::Int(12), Value::Text("nina".into())]).collect(),
+        )
     }
 
     fn stepped(rows: usize, steps: &[Move], visible: usize) -> Grid {
@@ -101,15 +100,13 @@ mod tests {
 
     #[test]
     fn a_column_is_as_wide_as_its_header_or_its_widest_cell() {
-        let mut result = result(1);
-        result.rows[0][2] = Value::Text("Zoë Nakamura".into());
+        let result = result(1).with_cell(0, 2, Value::Text("Zoë Nakamura".into()));
         assert_eq!(Grid::new(&result).widths, [2, 5, 12]);
     }
 
     #[test]
     fn a_long_cell_is_capped() {
-        let mut result = result(1);
-        result.rows[0][2] = Value::Text("n".repeat(300));
+        let result = result(1).with_cell(0, 2, Value::Text("n".repeat(300)));
         assert_eq!(Grid::new(&result).widths[2], MAX_COLUMN_WIDTH);
     }
 
