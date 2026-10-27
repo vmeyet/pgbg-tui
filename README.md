@@ -147,7 +147,7 @@ Four layers stand between you and a write, outermost first:
 3. **The transaction.** Each statement runs alone in `BEGIN READ ONLY`, always rolled back, so the server refuses a write the guard missed.
 4. **The role.** Only a read-only database role truly stops a write: use one for production.
 
-On a connection that allows writes, each write asks first; `BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT` and cursor statements do not.
+On a connection that allows writes, each write asks first; `BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT` and cursor statements do not, but `COMMIT PREPARED` and `ROLLBACK PREPARED` do.
 The TUI's footer names it, such as `DELETE from orders?`: `y` sends it, any other key drops it.
 `pgbg run` asks `y/N` on the terminal; with no terminal, it refuses the write unless you pass `--yes`.
 

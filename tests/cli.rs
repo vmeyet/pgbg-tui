@@ -221,6 +221,14 @@ fn run_refuses_a_write_it_cannot_ask_about_without_a_terminal_before_connecting(
 }
 
 #[test]
+fn run_refuses_the_end_of_a_prepared_transaction_it_cannot_ask_about() {
+    let output = pgbg(WRITABLE_BEHIND_A_DEAD_TUNNEL, &["run", "shop", "COMMIT PREPARED 'nightly'"]);
+    assert!(!output.status.success());
+    let err = stderr(&output);
+    assert!(err.contains("`COMMIT PREPARED` is a write") && !err.contains("tunnel"), "{err}");
+}
+
+#[test]
 fn run_with_yes_sends_a_write_without_asking() {
     let output = pgbg(WRITABLE_BEHIND_A_DEAD_TUNNEL, &["run", "shop", "DELETE FROM orders", "--yes"]);
     assert!(stderr(&output).contains("tunnel `sh` died"), "{}", stderr(&output));
