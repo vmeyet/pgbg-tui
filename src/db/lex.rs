@@ -1,4 +1,5 @@
-//! The tokens of SQL text, each with its place: the guard and the parameters read them, and completion will.
+//! The tokens of SQL text, each with its place, and what kind of text a byte falls in: the guard, the parameters and
+//! completion read them.
 use std::ops::Range;
 
 /// One token of SQL text and the bytes it spans.
@@ -25,6 +26,34 @@ pub(crate) enum Token {
     Other,
 }
 
+/// What kind of text a byte of SQL falls in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Span {
+    Code,
+    /// A string literal: quoted, `E'...'` or `$tag$...$tag$`.
+    String,
+    Comment,
+    QuotedName,
+    /// A `{{name}}`, or what an unreadable `{{` opens.
+    Param,
+}
+
+/// A token, a comment or a run of blanks, and whether text typed at its end would still fall in it: the end of a line
+/// comment, or of a string, a comment or a `{{` never closed.
+struct Lexeme {
+    range: Range<usize>,
+    kind: Kind,
+    is_open: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Kind {
+    Token(Token),
+    Comment,
+    LineComment,
+    Blank,
+}
+
 impl Token {
     pub(crate) fn word(&self) -> Option<&str> {
         match self {
@@ -36,28 +65,57 @@ impl Token {
 
 /// Every token of `sql`, in order.
 pub(crate) fn tokens(sql: &str) -> Vec<Placed> {
-    let mut tokens = vec![];
+    let placed = |lexeme: Lexeme| match lexeme.kind {
+        Kind::Token(token) => Some(Placed { range: lexeme.range, token }),
+        Kind::Comment | Kind::LineComment | Kind::Blank => None,
+    };
+    lexemes(sql).into_iter().filter_map(placed).collect()
+}
+
+/// What kind of text a character typed at byte `at` of `sql` would fall in.
+pub(crate) fn span_at(sql: &str, at: usize) -> Span {
+    let holds = |lexeme: &&Lexeme| lexeme.range.start < at && (at < lexeme.range.end || (at == lexeme.range.end && lexeme.is_open));
+    lexemes(sql).iter().find(holds).map_or(Span::Code, |lexeme| lexeme.span(&sql[lexeme.range.clone()]))
+}
+
+/// The lexemes of `sql`; a helper's `None` says its literal or comment runs to the end unclosed.
+fn lexemes(sql: &str) -> Vec<Lexeme> {
+    let mut lexemes = vec![];
     let mut rest = sql;
     while let Some(c) = rest.chars().next() {
         let after = &rest[c.len_utf8()..];
         let at = sql.len() - rest.len();
-        let (token, next) = match c {
-            '-' if after.starts_with('-') => (None, after.find(['\n', '\r']).map_or("", |end| &after[end..])),
-            '/' if after.starts_with('*') => (None, after_block_comment(&after[1..])),
-            c if c.is_whitespace() => (None, after),
-            ';' => (Some(Token::End), after),
+        let (kind, next) = match c {
+            '-' if after.starts_with('-') => (Kind::LineComment, after.find(['\n', '\r']).map(|end| &after[end..])),
+            '/' if after.starts_with('*') => (Kind::Comment, after_block_comment(&after[1..])),
+            c if c.is_whitespace() => (Kind::Blank, Some(after)),
+            ';' => (Kind::Token(Token::End), Some(after)),
             c if c.is_alphabetic() || c == '_' => word(rest),
-            '\'' | '"' => (Some(Token::Other), after_quoted(after, c)),
+            '\'' | '"' => (Kind::Token(Token::Other), after_quoted(after, c)),
             '$' => dollar(rest),
             '{' if after.starts_with('{') => param(sql, at),
-            _ => (Some(Token::Other), after),
+            _ => (Kind::Token(Token::Other), Some(after)),
         };
-        if let Some(token) = token {
-            tokens.push(Placed { range: at..sql.len() - next.len(), token });
-        }
+        let is_open = next.is_none() || kind == Kind::LineComment;
+        let next = next.unwrap_or("");
+        lexemes.push(Lexeme { range: at..sql.len() - next.len(), kind, is_open });
         rest = next;
     }
-    tokens
+    lexemes
+}
+
+impl Lexeme {
+    fn span(&self, text: &str) -> Span {
+        let is_escape_string = text.starts_with(['E', 'e']) && text[1..].starts_with('\'');
+        match &self.kind {
+            Kind::Comment | Kind::LineComment => Span::Comment,
+            Kind::Token(Token::Param(_) | Token::Unreadable) => Span::Param,
+            Kind::Token(Token::Word(_)) if is_escape_string => Span::String,
+            Kind::Token(Token::Other) if text.starts_with('"') => Span::QuotedName,
+            Kind::Token(Token::Other) if text.starts_with('\'') || (text.starts_with('$') && text.len() > 1) => Span::String,
+            Kind::Token(_) | Kind::Blank => Span::Code,
+        }
+    }
 }
 
 fn is_word_char(c: char) -> bool {
@@ -65,23 +123,23 @@ fn is_word_char(c: char) -> bool {
 }
 
 /// A word at the start of `rest`, and an `E'...'` literal right after an `E`.
-fn word(rest: &str) -> (Option<Token>, &str) {
+fn word(rest: &str) -> (Kind, Option<&str>) {
     let end = rest.find(|c: char| !is_word_char(c)).unwrap_or(rest.len());
     let word = rest[..end].to_uppercase();
     let next = &rest[end..];
     let is_escape_string = word == "E" && next.starts_with('\'');
-    (Some(Token::Word(word)), if is_escape_string { after_escape_string(&next[1..]) } else { next })
+    (Kind::Token(Token::Word(word)), if is_escape_string { after_escape_string(&next[1..]) } else { Some(next) })
 }
 
 /// `{{name}}` at byte `at` of `sql`, spaces allowed around the name; anything else from `{{` on is unreadable.
-fn param(sql: &str, at: usize) -> (Option<Token>, &str) {
+fn param(sql: &str, at: usize) -> (Kind, Option<&str>) {
     let rest = &sql[at + 2..];
-    let Some(close) = rest.find("}}") else { return (Some(Token::Unreadable), "") };
+    let Some(close) = rest.find("}}") else { return (Kind::Token(Token::Unreadable), None) };
     let name = rest[..close].trim_matches(' ');
     let next = &rest[close + 2..];
     let is_glued = sql[..at].ends_with(is_word_char) || next.starts_with(is_word_char);
     let token = if is_param_name(name) && !is_glued { Token::Param(name.to_owned()) } else { Token::Unreadable };
-    (Some(token), next)
+    (Kind::Token(token), Some(next))
 }
 
 /// Whether `name` can name a parameter: a letter or `_`, then letters, digits or `_`.
@@ -91,11 +149,11 @@ pub(crate) fn is_param_name(name: &str) -> bool {
     starts_well && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-fn after_block_comment(body: &str) -> &str {
+fn after_block_comment(body: &str) -> Option<&str> {
     let mut depth = 1;
     let mut rest = body;
     while depth > 0 {
-        let Some(at) = rest.find(['*', '/']) else { return "" };
+        let at = rest.find(['*', '/'])?;
         let mark = &rest[at..];
         rest = if let Some(after) = mark.strip_prefix("*/") {
             depth -= 1;
@@ -107,24 +165,24 @@ fn after_block_comment(body: &str) -> &str {
             &mark[1..]
         };
     }
-    rest
+    Some(rest)
 }
 
 /// After a literal opened by `quote`, where a doubled quote stands for itself.
-fn after_quoted(body: &str, quote: char) -> &str {
+fn after_quoted(body: &str, quote: char) -> Option<&str> {
     let mut rest = body;
     while let Some(at) = rest.find(quote) {
         let after = &rest[at + 1..];
         if !after.starts_with(quote) {
-            return after;
+            return Some(after);
         }
         rest = &after[1..];
     }
-    ""
+    None
 }
 
 /// After an `E'...'` literal, where a backslash also escapes the next character.
-fn after_escape_string(body: &str) -> &str {
+fn after_escape_string(body: &str) -> Option<&str> {
     let mut chars = body.char_indices();
     while let Some((at, c)) = chars.next() {
         match c {
@@ -134,33 +192,33 @@ fn after_escape_string(body: &str) -> &str {
             '\'' if body[at + 1..].starts_with('\'') => {
                 chars.next();
             }
-            '\'' => return &body[at + 1..],
+            '\'' => return Some(&body[at + 1..]),
             _ => {}
         }
     }
-    ""
+    None
 }
 
 /// The parameter `$1`, a `$tag$...$tag$` literal, or a lone `$`, at the start of `rest`.
-fn dollar(rest: &str) -> (Option<Token>, &str) {
+fn dollar(rest: &str) -> (Kind, Option<&str>) {
     let digits_end = rest[1..].find(|c: char| !c.is_ascii_digit()).map_or(rest.len(), |at| at + 1);
     if digits_end > 1 {
         let number = rest[1..digits_end].parse().unwrap_or(u32::MAX);
-        return (Some(Token::Numbered(number)), &rest[digits_end..]);
+        return (Kind::Token(Token::Numbered(number)), Some(&rest[digits_end..]));
     }
-    (Some(Token::Other), after_dollar(rest))
+    (Kind::Token(Token::Other), after_dollar(rest))
 }
 
 /// After a `$tag$...$tag$` literal; a `$` that opens none is skipped alone.
-fn after_dollar(rest: &str) -> &str {
+fn after_dollar(rest: &str) -> Option<&str> {
     let tag_end = rest[1..].find(|c: char| !(c.is_alphanumeric() || c == '_')).map(|at| at + 1);
     match tag_end {
         Some(end) if rest[end..].starts_with('$') => {
             let tag = &rest[..=end];
             let body = &rest[tag.len()..];
-            body.find(tag).map_or("", |at| &body[at + tag.len()..])
+            body.find(tag).map(|at| &body[at + tag.len()..])
         }
-        _ => &rest[1..],
+        _ => Some(&rest[1..]),
     }
 }
 
@@ -221,6 +279,43 @@ mod tests {
         assert_eq!(params("SELECT x{{since}}"), [Token::Unreadable]);
         assert_eq!(params("SELECT {{since}}e"), [Token::Unreadable]);
         assert_eq!(params("SELECT {{since}}1"), [Token::Unreadable]);
+    }
+
+    /// The span a character typed at the `|` of `marked` would fall in.
+    fn span(marked: &str) -> Span {
+        span_at(&marked.replace('|', ""), marked.find('|').unwrap())
+    }
+
+    #[test]
+    fn a_byte_inside_a_literal_falls_in_its_kind() {
+        assert_eq!(span("SELECT 'a|b'"), Span::String);
+        assert_eq!(span("SELECT \"Or|ders\""), Span::QuotedName);
+        assert_eq!(span("SELECT /* a| */ 1"), Span::Comment);
+        assert_eq!(span("SELECT {{si|nce}}"), Span::Param);
+        assert_eq!(span("SELECT $$ a| $$"), Span::String);
+    }
+
+    #[test]
+    fn the_end_of_a_closed_literal_is_code_and_of_an_open_one_is_not() {
+        assert_eq!(span("SELECT 'ab'|"), Span::Code);
+        assert_eq!(span("SELECT 'ab|"), Span::String);
+        assert_eq!(span("SELECT E'a\\'|"), Span::String);
+        assert_eq!(span("SELECT /* a */|"), Span::Code);
+        assert_eq!(span("SELECT /* a|"), Span::Comment);
+        assert_eq!(span("SELECT {{na|"), Span::Param);
+    }
+
+    #[test]
+    fn the_end_of_a_line_comment_is_in_the_comment() {
+        assert_eq!(span("SELECT 1 -- note|\nFROM orders"), Span::Comment);
+        assert_eq!(span("SELECT 1 -- note\n|FROM orders"), Span::Code);
+    }
+
+    #[test]
+    fn words_numbers_and_blanks_are_code() {
+        assert_eq!(span("SELECT or|"), Span::Code);
+        assert_eq!(span("SELECT $1|"), Span::Code);
+        assert_eq!(span("SELECT |"), Span::Code);
     }
 
     #[test]
