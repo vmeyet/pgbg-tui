@@ -412,7 +412,6 @@ mod tests {
     use super::*;
     use crate::connection::WritePolicy;
     use crate::fixtures;
-    use crate::query::params::ParamError;
     use model::LocalPort;
     use model::{Params, Statement};
     use std::net::Ipv4Addr;
@@ -819,7 +818,7 @@ mod tests {
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_type_the_server_does_not_know_stops_the_run() {
         let err = run_typed(WritePolicy::ReadOnly, "SELECT $1", "1", "no_such_kind").await.unwrap_err();
-        assert_eq!(err.downcast_ref(), Some(&ParamError::UnknownType(model::TypeName::new("no_such_kind"))), "{err}");
+        assert_eq!(err.downcast_ref(), Some(&model::UnknownType(model::TypeName::new("no_such_kind"))), "{err}");
     }
 
     #[tokio::test]

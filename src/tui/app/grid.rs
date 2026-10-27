@@ -150,7 +150,7 @@ fn column_width(result: &ResultSet, column: usize, format: Format, clock: &Clock
     let header = render::width(&render::printable(&result.columns()[column].name));
     let cells = result.rows().iter().take(WIDTH_SAMPLE_ROWS).filter_map(|row| row.get(column));
     let widest_cell = cells.map(|value| render::width(&format::cell(value, format, clock, MAX_COLUMN_WIDTH))).max().unwrap_or(0);
-    header.max(widest_cell).min(MAX_COLUMN_WIDTH)
+    header.max(widest_cell).max(format::least_width(format)).min(MAX_COLUMN_WIDTH)
 }
 
 #[cfg(test)]
@@ -216,6 +216,16 @@ mod tests {
         let mut grid = stepped_format(&result, 1);
         grid.switch_every_format(&result, &clock_at_epoch());
         assert_eq!(grid.formats, [Format::Raw; 3]);
+    }
+
+    #[test]
+    fn a_relative_column_leaves_room_for_its_text_to_grow_as_the_clock_runs() {
+        let clock = clock_at_epoch();
+        let result = ResultSet::whole(
+            vec![column("at", ColumnKind::TimestampTz)],
+            vec![vec![Value::TimestampTz(clock.now - chrono::Duration::minutes(1))]],
+        );
+        assert_eq!(Grid::new(&result, vec![Format::Relative], &clock).widths, ["59 min ago".len()]);
     }
 
     #[test]

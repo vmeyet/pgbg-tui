@@ -93,8 +93,22 @@ pub(crate) fn allowed(kind: &ColumnKind) -> &'static [Format] {
 }
 
 /// The readable format of `kind`: the first after raw, or raw when it has no other.
+///
+/// A timestamp without time zone stays raw: its relative form reads it as UTC, wrong on a server in another zone.
 pub(crate) fn readable(kind: &ColumnKind) -> Format {
-    Format::Raw.next(kind)
+    match kind {
+        ColumnKind::Timestamp => Format::Raw,
+        _ => Format::Raw.next(kind),
+    }
+}
+
+/// The width a column in `format` needs whatever the clock says: a relative time grows as it runs, `1 min ago` to
+/// `59 min ago`.
+pub(crate) const fn least_width(format: Format) -> usize {
+    match format {
+        Format::Relative => time::WIDEST_UNDER_A_YEAR.len(),
+        Format::Raw | Format::Local | Format::Grouped | Format::Bytes | Format::Short => 0,
+    }
 }
 
 /// The moment and the time zone cells are read in, read once at the edge.
@@ -171,6 +185,19 @@ mod tests {
     #[test]
     fn the_readable_format_is_the_first_after_raw() {
         assert_eq!([readable(&ColumnKind::Int), readable(&ColumnKind::Uuid)], [Format::Grouped, Format::Short]);
+    }
+
+    #[test]
+    fn a_timestamp_without_time_zone_stays_raw_when_readable_and_steps_to_relative() {
+        assert_eq!((readable(&ColumnKind::Timestamp), Format::Raw.next(&ColumnKind::Timestamp)), (Format::Raw, Format::Relative));
+    }
+
+    #[test]
+    fn a_relative_column_is_as_wide_as_the_widest_relative_time_under_a_year() {
+        let widest =
+            (1..60 * 24 * 365).map(|minutes| time::relative(paris_summer().now - chrono::Duration::minutes(minutes), paris_summer().now));
+        assert_eq!(widest.map(|text| text.len()).max(), Some(least_width(Format::Relative)));
+        assert_eq!(least_width(Format::Grouped), 0);
     }
 
     #[test]

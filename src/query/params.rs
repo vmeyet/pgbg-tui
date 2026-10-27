@@ -71,8 +71,6 @@ pub(crate) enum ParamError {
     /// A value given for a name the statement does not hold, other than by a params file.
     Unknown(ParamName),
     Twice(ParamName),
-    /// A type a header names that the server does not know.
-    UnknownType(TypeName),
 }
 
 impl Given {
@@ -248,7 +246,6 @@ impl fmt::Display for ParamError {
             Self::Missing(name) => write!(f, "`{{{{{name}}}}}` has no value"),
             Self::Unknown(name) => write!(f, "a value was given for `{name}`, and the statement holds no `{{{{{name}}}}}`"),
             Self::Twice(name) => write!(f, "`{name}` was given twice"),
-            Self::UnknownType(name) => write!(f, "the server knows no type `{}`", name.as_str()),
         }
     }
 }

@@ -3,7 +3,7 @@
 use crate::config;
 use crate::connection::ConnectionName;
 use crate::db::guard::Refusal;
-use crate::db::model::{ResultSet, ServerError};
+use crate::db::model::{ResultSet, ServerError, UnknownType};
 use crate::query::params::ParamError;
 use chrono::{DateTime, Utc};
 use rustix::fs::{FlockOperation, flock};
@@ -49,7 +49,7 @@ impl Outcome {
     pub(crate) fn of(result: &anyhow::Result<ResultSet>) -> Self {
         match result {
             Ok(result) => Self::Rows { count: result.rows().len(), is_cut: !result.is_whole() },
-            Err(err) if err.is::<Refusal>() || err.is::<ParamError>() => Self::Refused,
+            Err(err) if err.is::<Refusal>() || err.is::<ParamError>() || err.is::<UnknownType>() => Self::Refused,
             Err(err) if err.is::<ServerError>() => Self::ServerError,
             Err(_) => Self::LinkError,
         }
@@ -381,7 +381,7 @@ mod tests {
     #[test]
     fn a_parameter_that_cannot_be_filled_or_typed_is_refused() {
         assert_eq!(Outcome::of(&Err(ParamError::Mixed.into())), Outcome::Refused);
-        assert_eq!(Outcome::of(&Err(ParamError::UnknownType(TypeName::new("dat")).into())), Outcome::Refused);
+        assert_eq!(Outcome::of(&Err(UnknownType(TypeName::new("dat")).into())), Outcome::Refused);
     }
 
     #[test]

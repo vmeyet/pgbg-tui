@@ -146,7 +146,7 @@ Asking a command for SQL (planned):
 Formatting a cell:
 
 1. A result opens with every column in the format the header's `-- format:` names, else the config's `[display] format` (`raw` or `readable`), else raw.
-2. `f` on a column steps through its kind's formats, `F` sets every column raw or readable; the sheet keeps the choice by column index with the result, and the grid widths are measured again on the first page.
+2. `f` on a column steps through its kind's formats, `F` sets every column raw or readable (a `timestamp` without time zone stays raw, as relative reads it as UTC); the sheet keeps the choice by column index with the result, and the grid widths are measured again on the first page, a relative column at least as wide as `59 min ago`.
 3. The loop reads the clock and the local time zone before each frame and hands them to the app as a `Clock`, so the app and `format/` stay pure; a relative time redraws each minute while one is shown.
    A header format a column's kind does not allow is left out, and a header name matches a column whatever its case.
    The row's detail shows values raw and whole.
