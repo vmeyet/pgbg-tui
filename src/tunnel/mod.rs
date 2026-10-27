@@ -491,6 +491,6 @@ time.sleep(60)
         let tunnel = Tunnel::start(&spec(&["python3", "-c", FORWARD, "{port}", &host, &port], None)).await.unwrap();
         let mut session = Session::open(&connection, tunnel.route()).await.unwrap();
         let result = session.run(&guard::admit(Statement::new("SELECT 7"), WritePolicy::ReadOnly).unwrap()).await.unwrap();
-        assert_eq!(result.rows, [[Value::Int(7)]]);
+        assert_eq!(result.rows(), [[Value::Int(7)]]);
     }
 }

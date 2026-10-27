@@ -76,18 +76,18 @@ impl Series {
     /// A line over dates, times or integers is placed on their scale and sorted; anything else keeps the result's order.
     pub(crate) fn from_columns(result: &ResultSet, columns: &ChartColumns) -> Result<Self, ChartError> {
         let ChartColumns { kind, x, ref y } = *columns;
-        let axis = XAxis::of(kind, &result.columns[x].kind);
+        let axis = XAxis::of(kind, &result.columns()[x].kind);
         let placed = place(result, x, axis);
         let kept: Vec<Placed> = kind.keep(placed.len()).into_iter().map(|index| placed[index]).collect();
         let rows: Vec<usize> = kept.iter().map(|point| point.row).collect();
         let series = Self {
             kind,
-            x: result.columns[x].name.clone(),
+            x: result.columns()[x].name.clone(),
             axis,
             positions: kept.iter().map(|point| point.position).collect(),
-            labels: rows.iter().map(|&row| result.rows[row][x].prefix(MAX_LABEL_CHARS)).collect(),
+            labels: rows.iter().map(|&row| result.rows()[row][x].prefix(MAX_LABEL_CHARS)).collect(),
             y: y.iter().map(|&column| y_values(result, column, &rows)).collect(),
-            is_cut: result.is_cut || kept.len() < result.rows.len(),
+            is_cut: result.is_cut() || kept.len() < result.rows().len(),
         };
         if series.has_no_value() {
             return Err(ChartError::Empty);
@@ -115,7 +115,7 @@ impl Series {
 
 fn place(result: &ResultSet, x: usize, axis: XAxis) -> Vec<Placed> {
     let mut placed: Vec<Placed> = result
-        .rows
+        .rows()
         .iter()
         .enumerate()
         .filter_map(|(row, values)| Some(Placed { row, position: axis.position(row, &values[x])? }))
@@ -126,10 +126,10 @@ fn place(result: &ResultSet, x: usize, axis: XAxis) -> Vec<Placed> {
 
 fn resolve(result: &ResultSet, spec: &ChartSpec) -> Result<ChartColumns, ChartError> {
     let x = match &spec.x {
-        Some(name) => find(&result.columns, name)?,
+        Some(name) => find(result.columns(), name)?,
         None => default_x(result).ok_or(ChartError::NoX)?,
     };
-    let y = if spec.y.is_empty() { default_y(&result.columns, x) } else { find_numbers(&result.columns, &spec.y)? };
+    let y = if spec.y.is_empty() { default_y(result.columns(), x) } else { find_numbers(result.columns(), &spec.y)? };
     if y.is_empty() {
         return Err(ChartError::NoY);
     }
@@ -162,7 +162,7 @@ fn numeric(columns: &[Column], index: usize) -> Result<usize, ChartError> {
 }
 
 fn y_values(result: &ResultSet, column: usize, rows: &[usize]) -> YColumn {
-    YColumn { name: result.columns[column].name.clone(), values: rows.iter().map(|&row| number(&result.rows[row][column])).collect() }
+    YColumn { name: result.columns()[column].name.clone(), values: rows.iter().map(|&row| number(&result.rows()[row][column])).collect() }
 }
 
 /// The value as a finite float; a NUMERIC past `f64`'s range, or `NaN`, has none.
@@ -182,7 +182,7 @@ mod tests {
     use super::super::tests::{column, result};
     use super::super::{bar, line};
     use super::*;
-    use crate::db::model::ColumnKind;
+    use crate::db::model::{ColumnKind, Extent, Page};
 
     fn spec(text: &str) -> ChartSpec {
         text.parse().unwrap()
@@ -358,7 +358,8 @@ mod tests {
 
     #[test]
     fn a_cut_result_gives_a_cut_series() {
-        let cut = ResultSet { is_cut: true, ..totals(vec![Value::Int(1)], ColumnKind::Int) };
+        let whole = totals(vec![Value::Int(1)], ColumnKind::Int);
+        let cut = ResultSet::new(whole.columns().to_vec(), Page { rows: whole.rows().to_vec(), extent: Extent::Cut });
         assert!(Series::from_result(&cut, &spec("bar")).unwrap().is_cut);
     }
 

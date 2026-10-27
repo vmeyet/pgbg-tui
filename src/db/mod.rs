@@ -3,7 +3,8 @@ use crate::connection::{Connection, StatementTimeout, Target, TimeoutChoice, Tls
 use anyhow::{Context, Result, anyhow};
 use futures_util::{StreamExt, TryStreamExt, future};
 use guard::{Admitted, Mode};
-use model::{CancelToken, ResultSet, Route, ServerError};
+use model::{CancelToken, Column, Extent, Page, ResultSet, Route, ServerError, Value};
+use std::pin::pin;
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::task::AbortHandle;
@@ -11,7 +12,7 @@ use tokio::time::timeout;
 use tokio_postgres::config::SslMode;
 use tokio_postgres::error::{ErrorPosition, SqlState};
 use tokio_postgres::tls::MakeTlsConnect;
-use tokio_postgres::{Client, Config, NoTls, RowStream, Socket, Statement as Prepared, Transaction};
+use tokio_postgres::{Client, Config, NoTls, Portal, RowStream, Socket, Statement as Prepared, Transaction};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
 mod decode;
@@ -114,9 +115,10 @@ impl Session {
             return fetch(&self.client, &statement).await;
         }
         let transaction = self.client.transaction().await.map_err(server_error)?;
-        let result = fetch_from_portal(&transaction, &statement).await?;
+        let portal = transaction.bind(&statement, &[]).await.map_err(server_error)?;
+        let first = fetch_capped(&transaction, &portal).await?;
         transaction.commit().await.map_err(server_error)?;
-        Ok(result)
+        Ok(ResultSet::new(columns(&statement), first))
     }
 
     /// Whether a `BEGIN` the user ran left a transaction open: only there does a savepoint take.
@@ -129,7 +131,12 @@ impl Session {
     }
 
     async fn run_read_only(&mut self, sql: &str) -> Result<ResultSet> {
-        self.read_only(async |transaction| prepare_and_fetch_from_portal(transaction, sql).await).await
+        self.read_only(async |transaction| {
+            let statement = transaction.prepare(sql).await.map_err(server_error)?;
+            let portal = transaction.bind(&statement, &[]).await.map_err(server_error)?;
+            Ok(ResultSet::new(columns(&statement), fetch_capped(transaction, &portal).await?))
+        })
+        .await
     }
 
     /// `read` inside `BEGIN READ ONLY`, always rolled back.
@@ -231,29 +238,38 @@ async fn set_statement_timeout(client: &Client, timeout: StatementTimeout) -> Re
 /// Streams the rows of `statement`, prepared first so a result without rows still has its columns.
 async fn fetch(client: &Client, statement: &Prepared) -> Result<ResultSet> {
     let rows = client.query_raw(statement, NO_PARAMETERS).await.map_err(server_error)?;
-    first_rows(statement, rows).await
+    Ok(ResultSet::new(columns(statement), first_rows(rows).await?))
 }
 
-/// Like `fetch`, through a portal: the server sends no row past the cap, so ending the transaction does not wait on them.
-async fn fetch_from_portal(transaction: &Transaction<'_>, statement: &Prepared) -> Result<ResultSet> {
-    let portal = transaction.bind(statement, &[]).await.map_err(server_error)?;
-    let rows = transaction.query_portal_raw(&portal, (ROW_CAP + 1) as i32).await.map_err(server_error)?;
-    first_rows(statement, rows).await
+fn columns(statement: &Prepared) -> Vec<Column> {
+    statement.columns().iter().map(decode::column).collect()
 }
 
-async fn prepare_and_fetch_from_portal(transaction: &Transaction<'_>, sql: &str) -> Result<ResultSet> {
-    let statement = transaction.prepare(sql).await.map_err(server_error)?;
-    fetch_from_portal(transaction, &statement).await
+/// The next `count` rows of `portal`, decoded: all of them when the portal ran to its end, else more wait in it.
+async fn fetch_page(transaction: &Transaction<'_>, portal: &Portal, count: usize) -> Result<Page> {
+    let mut stream = pin!(transaction.query_portal_raw(portal, count as i32).await.map_err(server_error)?);
+    let rows = stream.as_mut().and_then(|row| future::ready(decode::row(&row))).try_collect().await.map_err(server_error)?;
+    let has_ended = stream.rows_affected().is_some();
+    Ok(Page { rows, extent: if has_ended { Extent::All } else { Extent::More } })
+}
+
+/// The first `ROW_CAP` rows of `portal`; one more says the result is cut, and the server sends no row past it, so
+/// ending the transaction does not wait on them.
+async fn fetch_capped(transaction: &Transaction<'_>, portal: &Portal) -> Result<Page> {
+    let Page { rows, .. } = fetch_page(transaction, portal, ROW_CAP + 1).await?;
+    Ok(capped(rows))
 }
 
 /// The first `ROW_CAP` rows of `rows`, decoded; one more says the result is cut.
-async fn first_rows(statement: &Prepared, rows: RowStream) -> Result<ResultSet> {
-    let columns = statement.columns().iter().map(decode::column).collect();
-    let mut rows: Vec<_> =
-        rows.take(ROW_CAP + 1).and_then(|row| future::ready(decode::row(&row))).try_collect().await.map_err(server_error)?;
+async fn first_rows(rows: RowStream) -> Result<Page> {
+    let rows: Vec<_> = rows.take(ROW_CAP + 1).and_then(|row| future::ready(decode::row(&row))).try_collect().await.map_err(server_error)?;
+    Ok(capped(rows))
+}
+
+fn capped(mut rows: Vec<Vec<Value>>) -> Page {
     let is_cut = rows.len() > ROW_CAP;
     rows.truncate(ROW_CAP);
-    Ok(ResultSet { columns, rows, is_cut })
+    Page { rows, extent: if is_cut { Extent::Cut } else { Extent::All } }
 }
 
 /// A `ServerError` when the server answered with one, the driver's error otherwise.
@@ -278,7 +294,7 @@ mod tests {
     use crate::connection::WritePolicy;
     use crate::fixtures;
     use model::LocalPort;
-    use model::{Statement, Value};
+    use model::Statement;
     use std::net::Ipv4Addr;
     use std::time::Duration;
     use url::Url;
@@ -388,21 +404,21 @@ mod tests {
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_result_past_the_row_cap_keeps_its_first_rows_and_says_it_is_cut() {
         let result = run(WritePolicy::ReadOnly, &numbers_up_to(ROW_CAP + 1)).await.unwrap();
-        assert_eq!((result.rows.len(), result.is_cut), (ROW_CAP, true));
+        assert_eq!((result.rows().len(), result.is_cut()), (ROW_CAP, true));
     }
 
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_result_of_exactly_the_row_cap_is_whole() {
         let result = run(WritePolicy::ReadOnly, &numbers_up_to(ROW_CAP)).await.unwrap();
-        assert_eq!((result.rows.len(), result.is_cut), (ROW_CAP, false));
+        assert_eq!((result.rows().len(), result.is_cut()), (ROW_CAP, false));
     }
 
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_result_on_a_connection_that_allows_writes_is_cut_too() {
         let result = run(WritePolicy::Allowed, &numbers_up_to(ROW_CAP + 1)).await.unwrap();
-        assert_eq!((result.rows.len(), result.is_cut), (ROW_CAP, true));
+        assert_eq!((result.rows().len(), result.is_cut()), (ROW_CAP, true));
     }
 
     async fn run_on(session: &mut Session, sql: &str) -> ResultSet {
@@ -413,11 +429,11 @@ mod tests {
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_cut_result_on_a_connection_that_allows_writes_leaves_the_server_idle() {
         let mut writer = session(WritePolicy::Allowed).await;
-        let pid = run_on(&mut writer, "SELECT pg_backend_pid()").await.rows[0][0].to_string();
+        let pid = run_on(&mut writer, "SELECT pg_backend_pid()").await.rows()[0][0].to_string();
         run_on(&mut writer, &numbers_up_to(100_000_000)).await;
         let state = format!("SELECT state FROM pg_stat_activity WHERE pid = {pid}");
         let watched = run(WritePolicy::ReadOnly, &state).await.unwrap();
-        assert_eq!(watched.rows, [[Value::Text("idle".into())]]);
+        assert_eq!(watched.rows(), [[Value::Text("idle".into())]]);
     }
 
     #[tokio::test]
@@ -427,7 +443,7 @@ mod tests {
         run(WritePolicy::Allowed, "CREATE TABLE orders_returned (id int)").await.unwrap();
         run(WritePolicy::Allowed, "INSERT INTO orders_returned VALUES (41) RETURNING id").await.unwrap();
         let seen = run(WritePolicy::ReadOnly, "SELECT count(*)::int4 FROM orders_returned WHERE id = 41").await.unwrap();
-        assert_eq!(seen.rows, [[Value::Int(1)]]);
+        assert_eq!(seen.rows(), [[Value::Int(1)]]);
     }
 
     #[tokio::test]
@@ -441,7 +457,7 @@ mod tests {
         run_on(&mut writer, "SELECT id FROM orders_undone").await;
         run_on(&mut writer, "ROLLBACK").await;
         let seen = run(WritePolicy::ReadOnly, "SELECT count(*)::int4 FROM orders_undone").await.unwrap();
-        assert_eq!(seen.rows, [[Value::Int(0)]]);
+        assert_eq!(seen.rows(), [[Value::Int(0)]]);
     }
 
     #[tokio::test]
@@ -462,14 +478,14 @@ mod tests {
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_session_runs_with_the_statement_timeout_of_its_tier() {
         let shown = on(session_on("staging", "").await, "SHOW statement_timeout").await.unwrap();
-        assert_eq!(shown.rows, [[Value::Text("1min".into())]]);
+        assert_eq!(shown.rows(), [[Value::Text("1min".into())]]);
     }
 
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_session_runs_with_the_statement_timeout_of_its_connection() {
         let shown = on(session_on("staging", "statement_timeout = \"90s\"").await, "SHOW statement_timeout").await.unwrap();
-        assert_eq!(shown.rows, [[Value::Text("90s".into())]]);
+        assert_eq!(shown.rows(), [[Value::Text("90s".into())]]);
     }
 
     async fn shown_timeout_with_a_server_default(tier: &str, extra: &str) -> Vec<Vec<Value>> {
@@ -477,7 +493,7 @@ mod tests {
         url.query_pairs_mut().append_pair("options", "-cstatement_timeout=5s");
         let connection = fixtures::connection(&format!("tier = \"{tier}\"\nurl = \"{url}\"\n{extra}"));
         let session = Session::open(&connection, Route::Direct).await.unwrap();
-        on(session, "SHOW statement_timeout").await.unwrap().rows
+        on(session, "SHOW statement_timeout").await.unwrap().rows().to_vec()
     }
 
     #[tokio::test]
@@ -510,13 +526,13 @@ mod tests {
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_session_asks_the_server_to_stop_its_statement_once_pgbg_is_gone() {
         let result = run(WritePolicy::ReadOnly, "SHOW client_connection_check_interval").await.unwrap();
-        assert_eq!(result.rows, [[Value::Text("1s".into())]]);
+        assert_eq!(result.rows(), [[Value::Text("1s".into())]]);
     }
 
     async fn ended_on_the_server() -> Session {
         let mut doomed = session(WritePolicy::ReadOnly).await;
-        let pid =
-            &doomed.run(&guard::admit(Statement::new("SELECT pg_backend_pid()"), WritePolicy::ReadOnly).unwrap()).await.unwrap().rows[0][0];
+        let admitted = guard::admit(Statement::new("SELECT pg_backend_pid()"), WritePolicy::ReadOnly).unwrap();
+        let pid = doomed.run(&admitted).await.unwrap().rows()[0][0].to_string();
         run(WritePolicy::ReadOnly, &format!("SELECT pg_terminate_backend({pid}, 5000)")).await.unwrap();
         doomed
     }
@@ -543,9 +559,9 @@ mod tests {
         let sql = "SELECT 7::int4 AS id, 'nina' AS name, true AS paid, 12.50::numeric AS total, NULL::text AS note, \
                    '2026-10-26'::date AS day, '{\"items\": 2}'::jsonb AS cart, 1.5::float8 AS ratio, '\\x0102'::bytea AS raw";
         let result = run(WritePolicy::ReadOnly, sql).await.unwrap();
-        let names: Vec<&str> = result.columns.iter().map(|column| column.name.as_str()).collect();
+        let names: Vec<&str> = result.columns().iter().map(|column| column.name.as_str()).collect();
         assert_eq!(names, ["id", "name", "paid", "total", "note", "day", "cart", "ratio", "raw"]);
-        let shown: Vec<String> = result.rows[0].iter().map(Value::to_string).collect();
+        let shown: Vec<String> = result.rows()[0].iter().map(Value::to_string).collect();
         assert_eq!(shown, ["7", "nina", "true", "12.50", "NULL", "2026-10-26", "{\"items\":2}", "1.5", "\\x0102"]);
     }
 
@@ -554,7 +570,7 @@ mod tests {
     async fn infinite_dates_and_special_floats_decode_in_their_row() {
         let sql = "SELECT 'infinity'::date, '-infinity'::timestamptz, 'NaN'::float8, pg_sleep(0), 7";
         let result = run(WritePolicy::ReadOnly, sql).await.unwrap();
-        let shown: Vec<String> = result.rows[0].iter().map(Value::to_string).collect();
+        let shown: Vec<String> = result.rows()[0].iter().map(Value::to_string).collect();
         assert_eq!(shown, ["infinity", "-infinity", "NaN", "NULL", "7"]);
     }
 
@@ -562,8 +578,8 @@ mod tests {
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_result_without_rows_keeps_its_columns() {
         let result = run(WritePolicy::ReadOnly, "SELECT 1 AS id WHERE false").await.unwrap();
-        assert_eq!(result.columns.len(), 1);
-        assert_eq!(result.rows, Vec::<Vec<Value>>::new());
+        assert_eq!(result.columns().len(), 1);
+        assert_eq!(result.rows(), Vec::<Vec<Value>>::new());
     }
 
     #[tokio::test]
@@ -590,7 +606,7 @@ mod tests {
         let running = tokio::spawn(async move { sleeper.run(&guard::admit(Statement::new(SLEEP), WritePolicy::ReadOnly).unwrap()).await });
         let mut watcher = session(WritePolicy::ReadOnly).await;
         let is_sleeping = format!("SELECT 1 FROM pg_stat_activity WHERE query = '{SLEEP}' AND state = 'active'");
-        while watcher.run(&guard::admit(Statement::new(&is_sleeping), WritePolicy::ReadOnly).unwrap()).await.unwrap().rows.is_empty() {}
+        while watcher.run(&guard::admit(Statement::new(&is_sleeping), WritePolicy::ReadOnly).unwrap()).await.unwrap().rows().is_empty() {}
         token.cancel().await.unwrap();
         let err = running.await.unwrap().unwrap_err();
         assert!(err.to_string().contains("canceling statement due to user request"), "{err}");
@@ -605,9 +621,9 @@ mod tests {
         let mut watcher = session(WritePolicy::ReadOnly).await;
         let is_sleeping = format!("SELECT 1 FROM pg_stat_activity WHERE query = '{SLEEP}'");
         let is_sleeping = guard::admit(Statement::new(&is_sleeping), WritePolicy::ReadOnly).unwrap();
-        while watcher.run(&is_sleeping).await.unwrap().rows.is_empty() {}
+        while watcher.run(&is_sleeping).await.unwrap().rows().is_empty() {}
         running.abort();
-        let ended = async { while !watcher.run(&is_sleeping).await.unwrap().rows.is_empty() {} };
+        let ended = async { while !watcher.run(&is_sleeping).await.unwrap().rows().is_empty() {} };
         assert!(timeout(Duration::from_secs(10), ended).await.is_ok(), "the statement still runs on the server");
     }
 

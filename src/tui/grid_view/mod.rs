@@ -52,7 +52,7 @@ pub(super) fn draw(f: &mut Frame<'_>, view: GridView<'_>, area: Rect) -> usize {
     let room = usize::from(area.width).saturating_sub(CURSOR.chars().count());
     let shown = in_view(&view.grid.widths, view.grid.column, room);
     let body_rows = usize::from(area.height).saturating_sub(1);
-    let rows = view.result.rows.iter().enumerate().skip(view.grid.top).take(body_rows);
+    let rows = view.result.rows().iter().enumerate().skip(view.grid.top).take(body_rows);
     let lines: Vec<Line<'_>> =
         std::iter::once(header(view, &shown)).chain(rows.map(|(index, row)| row_line(view, &shown, index, row))).collect();
     f.render_widget(Paragraph::new(lines), area);
@@ -62,7 +62,7 @@ pub(super) fn draw(f: &mut Frame<'_>, view: GridView<'_>, area: Rect) -> usize {
 fn header<'a>(view: GridView<'a>, shown: &[Shown]) -> Line<'a> {
     let style = Style::default().add_modifier(Modifier::BOLD);
     let cells = shown.iter().map(|column| {
-        let name = &view.result.columns[column.index];
+        let name = &view.result.columns()[column.index];
         (aligned(&render::printable(&name.name), name, column.width), style)
     });
     line(Span::raw(NO_CURSOR), cells.collect())
@@ -71,7 +71,7 @@ fn header<'a>(view: GridView<'a>, shown: &[Shown]) -> Line<'a> {
 fn row_line<'a>(view: GridView<'a>, shown: &[Shown], index: usize, row: &[Value]) -> Line<'a> {
     let is_current = index == view.grid.row;
     let cells = shown.iter().map(|column| {
-        (aligned(&cell(&row[column.index], column.width), &view.result.columns[column.index], column.width), Style::default())
+        (aligned(&cell(&row[column.index], column.width), &view.result.columns()[column.index], column.width), Style::default())
     });
     let colour = if view.focused { view.theme.accent } else { view.theme.faded };
     let marker = Span::styled(if is_current { CURSOR } else { NO_CURSOR }, Style::default().fg(colour));
@@ -145,8 +145,7 @@ mod tests {
 
     #[test]
     fn a_control_character_in_a_cell_is_drawn_escaped() {
-        let mut result = orders();
-        result.rows[0][2] = Value::Text("nina\u{1b}]0;owned\u{7}".into());
+        let result = orders().with_cell(0, 2, Value::Text("nina\u{1b}]0;owned\u{7}".into()));
         insta::assert_snapshot!("escaped", render(&result, &Grid::new(&result), 50, 2).backend());
     }
 }

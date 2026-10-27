@@ -58,8 +58,7 @@ mod tests {
 
     #[test]
     fn a_gap_draws_no_bar() {
-        let mut sales = sales();
-        sales.rows[1][1] = crate::db::model::Value::Null;
+        let sales = sales().with_cell(1, 1, crate::db::model::Value::Null);
         let drawn: Result<_, ChartError> = series(&sales, "bar y=orders");
         insta::assert_snapshot!("bars_gap", render(&drawn, 40, 4).backend());
     }

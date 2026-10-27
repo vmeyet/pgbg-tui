@@ -16,11 +16,11 @@ pub(crate) fn table(rows: &[Vec<String>]) -> String {
 
 /// `1 row`, `12 rows`, or `first 10000 rows` when the result is cut.
 pub(crate) fn row_count(result: &ResultSet) -> String {
-    let count = match result.rows.len() {
+    let count = match result.rows().len() {
         1 => "1 row".to_owned(),
         count => format!("{count} rows"),
     };
-    if result.is_cut { format!("first {count}") } else { count }
+    if result.is_cut() { format!("first {count}") } else { count }
 }
 
 /// The first `chars` characters `value` prints, control characters escaped.
@@ -63,6 +63,7 @@ pub(crate) fn width(cell: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::model::{Extent, Page};
 
     fn row(cells: &[&str]) -> Vec<String> {
         cells.iter().map(|&cell| cell.to_owned()).collect()
@@ -74,19 +75,19 @@ mod tests {
         assert_eq!(table(&rows), "local    local    postgres://nina@localhost/shop\nstaging  staging\n");
     }
 
-    fn numbers(count: usize, is_cut: bool) -> ResultSet {
-        ResultSet { columns: vec![], rows: vec![vec![]; count], is_cut }
+    fn numbers(count: usize, extent: Extent) -> ResultSet {
+        ResultSet::new(vec![], Page { rows: vec![vec![]; count], extent })
     }
 
     #[test]
     fn a_whole_result_counts_its_rows() {
-        assert_eq!(row_count(&numbers(1, false)), "1 row");
-        assert_eq!(row_count(&numbers(12, false)), "12 rows");
+        assert_eq!(row_count(&numbers(1, Extent::All)), "1 row");
+        assert_eq!(row_count(&numbers(12, Extent::All)), "12 rows");
     }
 
     #[test]
     fn a_cut_result_says_its_rows_are_the_first_ones() {
-        assert_eq!(row_count(&numbers(10, true)), "first 10 rows");
+        assert_eq!(row_count(&numbers(10, Extent::Cut)), "first 10 rows");
     }
 
     #[test]

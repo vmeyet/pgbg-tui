@@ -635,14 +635,14 @@ mod tests {
 
     async fn on_a_side_session(sql: &str) -> Vec<Vec<Value>> {
         let mut session = Session::open(&connection(), Route::Direct).await.unwrap();
-        session.run(&guard::admit(Statement::new(sql), WritePolicy::ReadOnly).unwrap()).await.unwrap().rows
+        session.run(&guard::admit(Statement::new(sql), WritePolicy::ReadOnly).unwrap()).await.unwrap().rows().to_vec()
     }
 
     async fn backend_pid(backend: &Backend, answers: &mut UnboundedReceiver<Answer>) -> Value {
         let Incoming::Result { result, .. } = answer_to(backend, answers, RunId::FIRST, "SELECT pg_backend_pid()").await else {
             panic!("no pid")
         };
-        result.rows[0][0].clone()
+        result.rows()[0][0].clone()
     }
 
     async fn until_sleeping() {
@@ -672,7 +672,7 @@ mod tests {
         let pid = backend_pid(&backend, &mut answers).await;
         backend.open(connection());
         let again = answer_to(&backend, &mut answers, RunId::FIRST.next(), "SELECT pg_backend_pid()").await;
-        assert!(matches!(again, Incoming::Result { result, .. } if result.rows[0][0] == pid));
+        assert!(matches!(again, Incoming::Result { result, .. } if result.rows()[0][0] == pid));
     }
 
     #[tokio::test]
