@@ -8,6 +8,10 @@ Each entry says what changed, then where, then how to use it.
 
 ### New
 
+- **`ctrl-g` asks your `[ai] command` for SQL**, in the TUI's editor: type what you want on the footer line and press `⏎`; the statement under the cursor and the tables it needs go along, its values masked unless `[ai] literals = "sent"`.
+  The answer shows as a diff of the statement under the cursor, and a write in it is named in red.
+  Press `⇥` to put it in the editor, `esc` to drop it; it never runs by itself, and a write still asks before it is sent.
+  Set `[ai] command` in `config.toml` to any program that reads a prompt on stdin and prints SQL, and `ai = "off"` on a connection to keep it from asking.
 - **A write asks before it is sent**, on a connection with `writes = "allowed"`, whatever its tier: the TUI's footer names it, as `DELETE from orders?`.
   Press `y` to send it; any other key drops it and nothing reaches the server.
   `pgbg run` asks `y/N` on the terminal; without a terminal, as in a script, it refuses the write unless you pass `--yes`.

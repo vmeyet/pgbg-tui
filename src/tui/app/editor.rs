@@ -82,6 +82,16 @@ impl Editor {
         })
     }
 
+    /// Puts `text` in place of the bytes `range` as one paste, cleaned as [`Editor::paste`] cleans it.
+    pub(super) fn replace(&mut self, range: Range<usize>, text: &str) -> Edited {
+        let mut field = Field::joined(&self.field.text()[..range.start], &self.field.text()[range.end..]);
+        field.paste(text);
+        self.field = field;
+        self.lexed = Lexed::of(self.field.text());
+        self.has_stale_colours = true;
+        Edited::Text
+    }
+
     fn change(&mut self, edit: impl FnOnce(&mut Field)) -> Edited {
         let revision = self.field.revision();
         edit(&mut self.field);

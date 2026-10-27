@@ -1,0 +1,85 @@
+---
+source: src/tui/ask_view.rs
+expression: "styled::runs(render(&app, 60, 14).backend().buffer())"
+---
+Green/NONE "╭"
+Green/BOLD " ● shop · local "
+Green/NONE "──────────────────────────────────────────╮"
+---
+Green/NONE "│"
+Indexed(238)/NONE "╭"
+Cyan/BOLD " Editor "
+Indexed(238)/NONE "─"
+Indexed(245)/NONE " READ ONLY "
+Indexed(238)/NONE "────────────────────────────────────╮"
+Green/NONE "│"
+---
+Green/NONE "│"
+Indexed(238)/NONE "│"
+Reset/NONE " SELECT * FROM orders                                   "
+Indexed(238)/NONE "│"
+Green/NONE "│"
+---
+Green/NONE "│"
+Indexed(238)/NONE "│"
+Reset/NONE "                                                        "
+Indexed(238)/NONE "│"
+Green/NONE "│"
+---
+Green/NONE "│"
+Indexed(238)/NONE "╰────────────────────────────────────────────────────────╯"
+Green/NONE "│"
+---
+Green/NONE "│"
+Indexed(238)/NONE "╭"
+Cyan/BOLD " Answer "
+Indexed(238)/NONE "────────────────────────────────────────────────╮"
+Green/NONE "│"
+---
+Green/NONE "│"
+Indexed(238)/NONE "│"
+Reset/NONE " "
+Red/BOLD "writes: DELETE from orders"
+Reset/NONE "                             "
+Indexed(238)/NONE "│"
+Green/NONE "│"
+---
+Green/NONE "│"
+Indexed(238)/NONE "│"
+Reset/NONE " "
+Red/NONE "- SELECT * FROM orders"
+Reset/NONE "                                 "
+Indexed(238)/NONE "│"
+Green/NONE "│"
+---
+Green/NONE "│"
+Indexed(238)/NONE "│"
+Reset/NONE " "
+Green/NONE "+ DELETE FROM orders WHERE id = 7"
+Reset/NONE "                      "
+Indexed(238)/NONE "│"
+Green/NONE "│"
+---
+Green/NONE "│"
+Indexed(238)/NONE "│"
+Reset/NONE "                                                        "
+Indexed(238)/NONE "│"
+Green/NONE "│"
+---
+Green/NONE "│"
+Indexed(238)/NONE "│"
+Reset/NONE "                                                        "
+Indexed(238)/NONE "│"
+Green/NONE "│"
+---
+Green/NONE "│"
+Indexed(238)/NONE "╰────────────────────────────────────────────────────────╯"
+Green/NONE "│"
+---
+Green/NONE "│"
+Cyan/BOLD " the [ai] command answered: "
+Indexed(245)/NONE " ⇥ take  esc drop "
+Reset/NONE "            "
+Green/NONE "│"
+---
+Green/NONE "╰──────────────────────────────────────────────────────────╯"
