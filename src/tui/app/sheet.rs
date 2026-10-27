@@ -2,6 +2,7 @@
 use super::editor::Editor;
 use super::ghost::Ghost;
 use super::grid::{Clock, Move, Reading, Room};
+use super::param_bar::{Direction, ParamBar};
 use super::{Action, Grid, Incoming, RunId, SessionId, TunnelState};
 use crate::chart::{self, ChartError, Series};
 use crate::complete::Index;
@@ -9,7 +10,10 @@ use crate::connection::{Connection, ConnectionName, SchemaReading};
 use crate::db::guard;
 use crate::db::model::{Catalog, Extent, Page, ResultSet, Statement};
 use crate::format::{self, Format};
+use crate::query::params::{self, ParamInput, ParamName};
 use crate::query::{Header, Query};
+use crossterm::event::KeyEvent;
+use std::ops::Range;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -113,6 +117,7 @@ pub(in crate::tui) struct Sheet {
     /// The completion index of the catalog read, once the backend built it.
     pub(in crate::tui) index: Option<Arc<Index>>,
     pub(in crate::tui) ghost: Option<Ghost>,
+    pub(in crate::tui) bar: ParamBar,
 }
 
 impl Sheet {
@@ -135,6 +140,7 @@ impl Sheet {
             schema: SchemaState::NotRead,
             index: None,
             ghost: None,
+            bar: ParamBar::default(),
         }
     }
 
@@ -276,21 +282,63 @@ impl Sheet {
         self.running_run() == Some(run)
     }
 
-    /// Runs the statement under the cursor, the editor's other statements left alone.
+    /// The statement under the editor's cursor, and where it stands in the editor's text.
+    fn statement_under_cursor(&self) -> Option<(Range<usize>, Statement)> {
+        let (before, _, _) = self.editor.split();
+        let range = guard::statement_at(self.editor.text(), before.len())?;
+        let statement = Statement::new(&self.editor.text()[range.clone()]);
+        Some((range, statement))
+    }
+
+    /// The `{{name}}` of the statement under the cursor, each once; none when it has none or a `{{` it cannot read.
+    pub(in crate::tui) fn param_names(&self) -> Vec<ParamName> {
+        let names = self.statement_under_cursor().map(|(_, statement)| params::names(&statement));
+        names.and_then(Result::ok).unwrap_or_default()
+    }
+
+    /// The parameter bar's field with the keys, among the names of the statement under the cursor.
+    pub(in crate::tui) fn param_at(&self) -> Option<ParamName> {
+        let names = self.param_names();
+        let last = names.len().checked_sub(1)?;
+        names.into_iter().nth(self.bar.at.min(last))
+    }
+
+    /// Moves the bar's keys to its next field, or the one before; false past either end.
+    pub(super) fn step_bar(&mut self, direction: Direction) -> bool {
+        let count = self.param_names().len();
+        self.bar.at = self.bar.at.min(count.saturating_sub(1));
+        self.bar.step(count, direction)
+    }
+
+    /// Applies `key` to the bar's field with the keys.
+    pub(super) fn edit_bar(&mut self, key: KeyEvent) {
+        if let Some(name) = self.param_at() {
+            self.bar.edit(&name, key);
+        }
+    }
+
+    /// Pastes `text` in the bar's field with the keys.
+    pub(super) fn paste_in_bar(&mut self, text: &str) {
+        if let Some(name) = self.param_at() {
+            self.bar.paste(&name, text);
+        }
+    }
+
+    /// Runs the statement under the cursor with the values of the parameter bar, the editor's other statements left alone.
     pub(super) fn run_editor(&mut self) -> Vec<Action> {
         if self.is_running() {
             return vec![];
         }
-        let (before, _, _) = self.editor.split();
-        let Some(range) = guard::statement_at(self.editor.text(), before.len()) else { return vec![] };
-        let statement = Statement::new(&self.editor.text()[range.clone()]);
+        let Some((range, statement)) = self.statement_under_cursor() else { return vec![] };
+        let names = params::names(&statement).unwrap_or_default();
+        let input = ParamInput { given: self.bar.given(&names), specs: self.header.params.clone() };
         let run = self.last_run.map_or(RunId::FIRST, RunId::next);
         self.run = Run::Running { run };
         self.last_run = Some(run);
         self.error_mark = None;
         self.page_failure = None;
         self.sent = Some(Sent { start: Some(range.start), statement: statement.clone() });
-        vec![Action::Run { connection: self.name().clone(), run, statement }]
+        vec![Action::Run { connection: self.name().clone(), run, statement, input }]
     }
 
     /// The editor's byte at character `position` of the statement sent; the end of it when the server

@@ -3,6 +3,7 @@ use super::app::{Action, Answer, RunId, SessionId};
 use crate::connection::{Connection, ConnectionName};
 use crate::db::model::Statement;
 use crate::history::{History, Store};
+use crate::query::params::ParamInput;
 use crate::query::{Query, Roots};
 use config::ConfigFile;
 use futures_util::future;
@@ -58,7 +59,7 @@ impl Backend {
     pub(super) fn dispatch(&mut self, action: Action) {
         match action {
             Action::Open { connection, session } => self.open(connection, session),
-            Action::Run { connection, run, statement } => self.run(&connection, run, statement),
+            Action::Run { connection, run, statement, input } => self.run(&connection, run, statement, input),
             Action::NextPage { connection, session, run } => self.next_page(&connection, session, run),
             Action::ReadSchema { connection, session } => self.read_schema(&connection, session),
             Action::Cancel { connection, run } => self.cancel(&connection, run),
@@ -117,12 +118,12 @@ impl Backend {
     }
 
     /// Queues `statement` on the session of `connection`; its answer comes back as an `Answer`.
-    fn run(&self, connection: &ConnectionName, run: RunId, statement: Statement) {
+    fn run(&self, connection: &ConnectionName, run: RunId, statement: Statement, input: ParamInput) {
         let Some(session) = self.sessions.get(connection) else {
             tracing::warn!("no session for `{connection}`: the statement is dropped");
             return;
         };
-        session.send(Job::Run(Queued { run, statement }));
+        session.send(Job::Run(Queued { run, statement, input }));
     }
 
     /// Asks the session of `connection` for the next page of `run`; nothing comes when its portal is closed.

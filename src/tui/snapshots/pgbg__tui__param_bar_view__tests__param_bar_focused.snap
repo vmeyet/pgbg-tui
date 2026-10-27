@@ -1,0 +1,18 @@
+---
+source: src/tui/param_bar_view.rs
+expression: "styled::runs(&bar)"
+---
+Green/NONE "│"
+Indexed(236)/NONE "╭"
+Indexed(240)/NONE " [Queries] Schema "
+Indexed(236)/NONE "──────────╮"
+Indexed(245)/NONE " since "
+Indexed(240)/ITALIC "2024-01-01"
+Reset/NONE " "
+Indexed(245)/NONE " owner "
+Cyan/UNDERLINED "nina"
+Reset/NONE " "
+Indexed(245)/NONE " note "
+Indexed(240)/ITALIC "NULL"
+Reset/NONE "        "
+Green/NONE "│"

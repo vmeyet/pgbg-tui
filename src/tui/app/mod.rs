@@ -11,6 +11,7 @@ pub(super) use form::{Form, PasswordFrom, Slot};
 use grid::Move;
 pub(super) use grid::{Clock, GAP, Grid, Reading, Room};
 pub(super) use history::Recall;
+use param_bar::Direction;
 pub(super) use picker::{Note, Picker};
 pub(super) use protocol::{
     Action, Answer, ConfigAnswer, ConfigChangeId, Incoming, KeychainPassword, QueryAnswer, RunId, SaveConnection, Saving, SessionId,
@@ -29,6 +30,7 @@ pub(super) mod form;
 mod ghost;
 mod grid;
 pub(super) mod history;
+mod param_bar;
 pub(super) mod picker;
 mod protocol;
 pub(super) mod queries;
@@ -42,18 +44,21 @@ mod sheet;
 pub(super) enum Focus {
     #[default]
     Editor,
+    /// The parameter bar above the editor, drawn while the statement under the cursor has a `{{name}}`.
+    Params,
     Result,
     Queries,
 }
 
 impl Focus {
     /// The order `tab` goes through the panes.
-    const ORDER: [Self; 3] = [Self::Editor, Self::Result, Self::Queries];
+    const ORDER: [Self; 4] = [Self::Editor, Self::Params, Self::Result, Self::Queries];
 
     /// The pane of the action table whose keys work here.
     pub(super) fn pane(self) -> Pane {
         match self {
             Self::Editor => Pane::Editor,
+            Self::Params => Pane::Params,
             Self::Result => Pane::Result,
             Self::Queries => Pane::Queries,
         }
@@ -200,8 +205,10 @@ impl App {
         if let Some(act) = act::act_for(key, self.pane()) {
             return self.act(act);
         }
-        if self.focus == Focus::Editor {
-            return self.sheet_mut().edit(key);
+        match self.focus {
+            Focus::Editor => return self.sheet_mut().edit(key),
+            Focus::Params => self.sheet_mut().edit_bar(key),
+            Focus::Result | Focus::Queries => {}
         }
         vec![]
     }
@@ -224,9 +231,13 @@ impl App {
             self.schema_tab.filter.paste(text);
             return vec![];
         }
-        let is_editor_on_top = self.overlay.is_none() && self.focus == Focus::Editor;
-        if is_editor_on_top {
-            self.sheet_mut().paste(text);
+        if self.overlay.is_some() {
+            return vec![];
+        }
+        match self.focus {
+            Focus::Editor => self.sheet_mut().paste(text),
+            Focus::Params => self.sheet_mut().paste_in_bar(text),
+            Focus::Result | Focus::Queries => {}
         }
         vec![]
     }
@@ -279,9 +290,12 @@ impl App {
             Act::Run => return self.sheet_mut().run_editor(),
             Act::Cancel => return self.sheet_mut().cancel(),
             Act::NewLine => return self.sheet_mut().edit(KeyEvent::from(KeyCode::Enter)),
-            Act::SwitchPane => self.focus = self.next_pane(),
+            Act::SwitchPane => self.switch_pane(),
             Act::Help => self.overlay = Some(Overlay::Help(Help::default())),
             Act::Quit => return self.quit(),
+            Act::Down if self.focus == Focus::Params => self.step_bar(Direction::Forward),
+            Act::Up if self.focus == Focus::Params => self.step_bar(Direction::Back),
+            Act::Close if self.focus == Focus::Params => self.focus = Focus::Editor,
             Act::Down if self.focus == Focus::Queries => self.step_sidebar(1),
             Act::Up if self.focus == Focus::Queries => self.step_sidebar(-1),
             act if act.is_grid() && self.sheet().is_chart_shown() => {}
@@ -319,6 +333,25 @@ impl App {
         vec![]
     }
 
+    /// Gives the keys to the next pane; the parameter bar takes them on its first field.
+    fn switch_pane(&mut self) {
+        self.focus = self.next_pane();
+        if self.focus == Focus::Params {
+            self.sheet_mut().bar.at = 0;
+        }
+    }
+
+    /// Steps through the bar's fields; past its last one the keys go to the next pane, before its first to the editor.
+    fn step_bar(&mut self, direction: Direction) {
+        if self.sheet_mut().step_bar(direction) {
+            return;
+        }
+        self.focus = match direction {
+            Direction::Forward => self.next_pane(),
+            Direction::Back => Focus::Editor,
+        };
+    }
+
     /// The pane `tab` goes to: the next in `Focus::ORDER` that the frame drew.
     fn next_pane(&self) -> Focus {
         let at = Focus::ORDER.iter().position(|&focus| focus == self.focus).unwrap_or_default();
@@ -327,7 +360,11 @@ impl App {
     }
 
     fn is_drawn(&self, focus: Focus) -> bool {
-        focus != Focus::Queries || self.fit.has_sidebar
+        match focus {
+            Focus::Queries => self.fit.has_sidebar,
+            Focus::Params => !self.sheet().param_names().is_empty(),
+            Focus::Editor | Focus::Result => true,
+        }
     }
 
     /// Tells the app what the frame just drawn had room for: the grid's cursor stays among its rows, and the keys
@@ -417,6 +454,7 @@ pub(super) mod tests {
     use crate::connection::ConnectionName;
     use crate::db::model::{ResultSet, Statement};
     use crate::fixtures;
+    use crate::query::params::ParamInput;
     use crossterm::event::KeyModifiers;
     use std::time::Duration;
 
@@ -459,6 +497,11 @@ pub(super) mod tests {
         app
     }
 
+    /// The first run of `sql` on `connection`, with no parameter.
+    pub(crate) fn first_run(connection: &ConnectionName, sql: &str) -> Action {
+        Action::Run { connection: connection.clone(), run: RunId::FIRST, statement: Statement::new(sql), input: ParamInput::default() }
+    }
+
     fn enter(app: &mut App) -> Vec<Action> {
         app.handle_key(KeyEvent::from(KeyCode::Enter))
     }
@@ -471,7 +514,7 @@ pub(super) mod tests {
     #[test]
     fn enter_runs_the_text_of_the_editor() {
         let mut app = typed("SELECT 1");
-        assert_eq!(enter(&mut app), [Action::Run { connection: shop(), run: RunId::FIRST, statement: Statement::new("SELECT 1") }]);
+        assert_eq!(enter(&mut app), [first_run(&shop(), "SELECT 1")]);
         assert_eq!(app.sheet().run, Run::Running { run: RunId::FIRST });
     }
 
@@ -493,7 +536,7 @@ pub(super) mod tests {
     fn enter_runs_only_the_statement_under_the_cursor() {
         let mut app = typed("SELECT 1;\nSELECT 2;\nSELECT 3");
         app.handle_key(KeyEvent::from(KeyCode::Up));
-        assert_eq!(enter(&mut app), [Action::Run { connection: shop(), run: RunId::FIRST, statement: Statement::new("SELECT 2") }]);
+        assert_eq!(enter(&mut app), [first_run(&shop(), "SELECT 2")]);
     }
 
     #[test]

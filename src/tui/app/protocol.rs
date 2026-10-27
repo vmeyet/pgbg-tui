@@ -5,6 +5,7 @@ use crate::connection::{Connection, ConnectionName};
 use crate::db::model::{Catalog, LocalPort, Page, ResultSet, Statement};
 use crate::export::Format;
 use crate::history::Entry;
+use crate::query::params::ParamInput;
 use crate::query::{Query, QueryPath};
 use crate::secret::{KeychainItem, Secret};
 use std::sync::Arc;
@@ -52,7 +53,7 @@ pub(in crate::tui) enum Action {
     /// Open the session `session` on this connection; one already open stays as it is.
     Open { connection: Connection, session: SessionId },
     /// Run this statement on the connection's session.
-    Run { connection: ConnectionName, run: RunId, statement: Statement },
+    Run { connection: ConnectionName, run: RunId, statement: Statement, input: ParamInput },
     /// Fetch the next page of this run's result, if its portal is still open on the session `session`.
     NextPage { connection: ConnectionName, session: SessionId, run: RunId },
     /// Read the connection's schema on a second session along the route of `session`, once that one is open.

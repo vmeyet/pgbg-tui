@@ -148,6 +148,8 @@ pub(crate) enum Pane {
     /// Whichever pane has the keys, before that pane's own keys.
     Anywhere,
     Editor,
+    /// The parameter bar above the editor.
+    Params,
     Result,
     /// The saved queries in the sidebar.
     Queries,
@@ -223,6 +225,10 @@ pub(crate) const ROWS: &[Row] = &[
     )
     .help("⌥⏎ ⇧⏎", "break the line")
     .footer("⌥⏎", "new line"),
+    row(Act::Run, Pane::Params, &[key(KeyCode::Enter)]).help("⏎", "run the statement with these values").footer("⏎", "run"),
+    row(Act::Down, Pane::Params, &[key(KeyCode::Tab)]).help("⇥ ⇧⇥", "next, previous parameter").footer("⇥", "next"),
+    row(Act::Up, Pane::Params, &[key(KeyCode::BackTab)]),
+    row(Act::Close, Pane::Params, &[key(KeyCode::Esc)]).help("esc", "back to the editor").footer("esc", "editor"),
     row(Act::Down, Pane::Result, &[key(KeyCode::Char('j')), key(KeyCode::Down)]).help("j k", "next, previous row").footer("j/k", "rows"),
     row(Act::Up, Pane::Result, &[key(KeyCode::Char('k')), key(KeyCode::Up)]),
     row(Act::PageDown, Pane::Result, &[key(KeyCode::PageDown)]).help("PgDn PgUp", "a page down, up"),
@@ -306,8 +312,8 @@ pub(crate) const ROWS: &[Row] = &[
 
 /// Whether `pressed` is `own`; a typed character is its own shift, so `G` matches with or without it.
 fn is_the_key(own: &KeyEvent, pressed: KeyEvent) -> bool {
-    let is_char = matches!(pressed.code, KeyCode::Char(_));
-    let modifiers = if is_char { pressed.modifiers - KeyModifiers::SHIFT } else { pressed.modifiers };
+    let is_shifted_already = matches!(pressed.code, KeyCode::Char(_) | KeyCode::BackTab);
+    let modifiers = if is_shifted_already { pressed.modifiers - KeyModifiers::SHIFT } else { pressed.modifiers };
     own.code == pressed.code && own.modifiers == modifiers
 }
 
@@ -357,6 +363,7 @@ pub(crate) fn footer_within(pane: Pane, columns: usize, width: impl Fn(Hint) -> 
 pub(crate) fn sections(pane: Pane, every_key: bool) -> Vec<Section> {
     let panes = [
         (Pane::Editor, "editor"),
+        (Pane::Params, "parameters"),
         (Pane::Result, "result"),
         (Pane::Queries, "queries"),
         (Pane::Schema, "schema"),
@@ -466,9 +473,14 @@ mod tests {
     }
 
     #[test]
+    fn shift_tab_reads_the_same_whether_the_terminal_says_shift_or_not() {
+        assert_eq!(act_for(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT), Pane::Form), Some(Act::Up));
+    }
+
+    #[test]
     fn the_first_help_lists_the_focused_pane_and_what_works_anywhere() {
         let titles: Vec<&str> = sections(Pane::Result, false).iter().map(|section| section.title).collect();
         assert_eq!(titles, ["result", "anywhere"]);
-        assert_eq!(sections(Pane::Result, true).len(), 12);
+        assert_eq!(sections(Pane::Result, true).len(), 13);
     }
 }

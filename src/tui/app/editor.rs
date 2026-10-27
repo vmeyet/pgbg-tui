@@ -84,7 +84,8 @@ impl Editor {
     }
 }
 
-fn apply(field: &mut Field, key: KeyEvent) {
+/// Applies `key` to `field` as the editor does: a key that types, deletes or moves the cursor.
+pub(super) fn apply(field: &mut Field, key: KeyEvent) {
     let alt = key.modifiers.contains(KeyModifiers::ALT);
     let control = key.modifiers.contains(KeyModifiers::CONTROL);
     match key.code {
