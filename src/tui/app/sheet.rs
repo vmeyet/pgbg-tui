@@ -3,7 +3,7 @@ use super::editor::Editor;
 use super::ghost::Ghost;
 use super::grid::{Clock, Move, Reading, Room};
 use super::param_bar::{Direction, ParamBar};
-use super::{Action, Grid, Incoming, RunId, SessionId, TunnelState};
+use super::{Action, Confirmed, Grid, Incoming, RunId, SessionId, TunnelState};
 use crate::chart::{self, ChartError, Series};
 use crate::complete::Index;
 use crate::connection::{Connection, ConnectionName, SchemaReading, WritePolicy};
@@ -359,20 +359,27 @@ impl Sheet {
         guard::write_in(self.editor.text(), self.editor.lexed().tokens_in(range))
     }
 
-    pub(super) fn run(&mut self, to_run: ToRun) -> Vec<Action> {
-        self.run_statement(to_run.statement, to_run.start, to_run.input)
+    /// Runs `to_run`; a write the backend refuses unless `confirmed` says the user answered `y`.
+    pub(super) fn run(&mut self, to_run: ToRun, confirmed: Option<Confirmed>) -> Vec<Action> {
+        self.run_statement(to_run.statement, to_run.start, to_run.input, confirmed)
     }
 
     /// Runs `statement` with `input` for its parameters; it starts at the editor's byte `start` when it was cut from
     /// the editor. Nothing while another one runs.
-    pub(super) fn run_statement(&mut self, statement: Statement, start: Option<usize>, input: ParamInput) -> Vec<Action> {
+    pub(super) fn run_statement(
+        &mut self,
+        statement: Statement,
+        start: Option<usize>,
+        input: ParamInput,
+        confirmed: Option<Confirmed>,
+    ) -> Vec<Action> {
         if self.is_running() {
             return vec![];
         }
         let run = self.next_run();
         self.run = Run::Running { run };
         self.sent = Some(Sent { start, numbering: params::numbering(&statement), statement: statement.clone() });
-        vec![Action::Run { connection: self.name().clone(), run, statement, input }]
+        vec![Action::Run { connection: self.name().clone(), run, statement, input, confirmed }]
     }
 
     /// Shows `result` in the result pane as if a run gave it, titled `title`; nothing while a statement runs, whose

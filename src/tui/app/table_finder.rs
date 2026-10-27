@@ -124,7 +124,7 @@ mod tests {
     #[test]
     fn ctrl_r_previews_the_table_found() {
         let statement = Statement::new("SELECT * FROM billing.invoices LIMIT 100");
-        let run = Action::Run { connection: shop(), run: RunId::FIRST, statement, input: ParamInput::default() };
+        let run = Action::Run { connection: shop(), run: RunId::FIRST, statement, input: ParamInput::default(), confirmed: None };
         assert_eq!(finding("inv").handle_key(ctrl('r')), [run]);
     }
 

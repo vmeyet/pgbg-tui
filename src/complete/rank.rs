@@ -69,7 +69,7 @@ impl Index {
         Some(Ghosted { rest, insert })
     }
 
-    /// The best names for `ask`, at most 50, each name once: a column of a table the statement names wins over the
+    /// The best names for `ask`, at most `MAX_LISTED`, each name once: a column of a table the statement names wins over the
     /// same name among every column.
     pub(crate) fn candidates(&self, ask: &Ask) -> Vec<Candidate> {
         let mut seen = HashSet::new();

@@ -1,4 +1,4 @@
-//! The result pane: its row count and time in the title, the grid or the chart inside, or what the statement came to.
+//! The result pane: its row count and time in the title, and the grid, the chart or the statement's outcome inside.
 use super::app::{App, Focus, Room, Run, View};
 use super::chart_view;
 use super::grid_view::{self, GridView};
@@ -35,7 +35,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) -> Room {
     Room::default()
 }
 
-/// Each line of `text` escaped on its own, so its line breaks still break lines.
+/// Each line of `text` escaped on its own, so its line breaks still start new lines.
 fn printable_lines(text: &str) -> Text<'static> {
     text.lines().map(|line| Line::from(render::printable(line).into_owned())).collect()
 }
@@ -51,13 +51,13 @@ fn title(run: &Run, shown: Option<&str>) -> String {
     }
 }
 
-/// `first 1 500 rows · more…` while more pages wait in the portal, else the count every other place says.
+/// `first 1 500 rows · more…` while more pages wait in the portal, or else the same count as everywhere else.
 fn row_count(result: &ResultSet) -> String {
     let count = render::row_count(result);
     if result.extent() == Extent::More { format!("{count} · more…") } else { count }
 }
 
-/// `[grid] chart` or `grid [chart]`: the view shown in brackets, the other one `v` switches to.
+/// `[grid] chart` or `grid [chart]`: the view shown is in brackets, the other is the one `v` switches to.
 const fn view_switch(view: &View) -> &'static str {
     match view {
         View::Grid => "[grid] chart",

@@ -1,5 +1,6 @@
-//! The connection picker over the screen: each connection's dot in its tier's colour, where it goes, whether it
-//! takes writes, and whether its session is open. vtui draws the popup around it.
+//! The connection picker over the screen: each connection's dot in its tier's colour, where it connects, whether it
+//! takes writes, and whether its session is open.
+//! vtui draws the popup around it.
 use super::app::{App, Note, Overlay, Search, SessionState};
 use crate::connection::{Connection, WritePolicy};
 use ratatui::Frame;
@@ -27,7 +28,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) {
     });
 }
 
-/// The question or the word under the list.
+/// The question or the message below the list.
 fn note_line(app: &App, note: &Note, room: usize) -> Line<'static> {
     let (text, style) = match note {
         Note::ConfirmRemove(name) => (
@@ -48,8 +49,8 @@ fn lines(app: &App, search: &Search<Connection>, rows: usize, room: usize) -> Ve
     view::pick_lines(app.theme(), &picks, selected, room)
 }
 
-/// `● prod  via tunnel · read only  open`: the dot in the tier's colour; vtui cuts the name before the badges,
-/// and the place is cut first to the room the name leaves.
+/// `● prod  via tunnel · read only  open`: the dot in the tier's colour.
+/// vtui cuts the name before the badges, and the place is cut first to the room the name leaves.
 fn pick<'a>(app: &App, connection: &Connection, name: &'a str, room: usize) -> Pick<'a> {
     let badges = badges(app, connection);
     let place = connection.tunnel().map_or_else(|| connection.target().place(), |_| "via tunnel".to_owned());
@@ -70,7 +71,8 @@ fn badges(app: &App, connection: &Connection) -> Line<'static> {
     Line::from(vec![writes, Span::styled(state, state_style)])
 }
 
-/// `running…` while a statement runs, else `open`, `opening…` or `failed` once its session was asked for; nothing before.
+/// `running…` while a statement runs, or else `open`, `opening…` or `failed` once its session was asked for; nothing
+/// before that.
 fn session_state(app: &App, connection: &Connection) -> (&'static str, Style) {
     let Some(sheet) = app.sheet_of(connection.name()) else { return ("", Style::default()) };
     if sheet.is_running() {

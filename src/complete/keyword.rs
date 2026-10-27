@@ -1,4 +1,5 @@
-//! The SQL keywords completion offers, which no alias can be and a name must be quoted to take.
+//! The SQL keywords completion offers.
+//! No alias can be one of them, and a name that is one needs quotes.
 
 /// In upper case.
 const KEYWORDS: &str = "ALL AND AS ASC BETWEEN BY CASE CROSS DESC DISTINCT ELSE END EXCEPT EXISTS EXPLAIN FALSE FETCH FOR FROM FULL GROUP \
