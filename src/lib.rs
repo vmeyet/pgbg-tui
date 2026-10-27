@@ -3,6 +3,8 @@ mod act;
 mod chart;
 pub mod cli;
 pub mod commands;
+#[cfg_attr(not(test), expect(dead_code, reason = "the ranked candidates and the editor take it up, the next steps"))]
+mod complete;
 mod config;
 mod connection;
 mod db;
