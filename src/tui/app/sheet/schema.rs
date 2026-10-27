@@ -66,6 +66,12 @@ impl Sheet {
         }
     }
 
+    /// Forgets the schema and its index, read on a connection the sheet no longer stands for.
+    pub(super) fn forget_schema(&mut self) {
+        self.schema = SchemaState::NotRead;
+        self.index = None;
+    }
+
     /// Keeps the schema read, or why it failed; the index of the last one is dropped.
     pub(super) fn take_schema(&mut self, read: Result<Arc<Catalog>, Failure>) {
         self.schema = read.map_or_else(|failure| SchemaState::Failed(failure.to_string()), SchemaState::Read);
@@ -87,6 +93,11 @@ mod tests {
 
     fn catalog() -> Arc<Catalog> {
         Arc::new(shop_catalog())
+    }
+
+    fn catalog_read(app: &super::super::super::App) -> Arc<Catalog> {
+        let SchemaState::Read(catalog) = &app.sheet().schema else { panic!("no schema read") };
+        Arc::clone(catalog)
     }
 
     #[test]
@@ -183,6 +194,18 @@ mod tests {
         app.apply(to_shop(Incoming::NotOpened(Failure::Login("connection refused".into()))));
         app.sheet_mut().want_schema();
         assert_eq!(app.sheet().session, SessionState::Opening);
+    }
+
+    #[test]
+    fn a_closed_sheet_that_takes_a_changed_connection_forgets_the_schema_of_the_old_one() {
+        let mut app = app();
+        app.sheet_mut().want_schema();
+        app.apply(to_shop(Incoming::Schema(Ok(catalog()))));
+        app.apply(to_shop(Incoming::Index { index: Arc::new(Index::new(&catalog())), catalog: catalog_read(&app) }));
+        app.sheet_mut().close();
+        let connection = app.sheet().connection.clone();
+        app.sheet_mut().take_closed(connection);
+        assert_eq!((&app.sheet().schema, app.sheet().index.is_none()), (&SchemaState::NotRead, true));
     }
 
     #[test]

@@ -175,14 +175,14 @@ impl Sheet {
         self.tunnel = None;
         self.stop_paging();
         self.fail_running(REOPENED_WHILE_RUNNING);
-        self.schema = SchemaState::NotRead;
-        self.index = None;
+        self.forget_schema();
     }
 
     /// Takes `connection` as it is now and leaves the session closed: picking the sheet later opens it with the config
-    /// of that moment.
+    /// of that moment, and reads its schema again.
     pub(super) fn take_closed(&mut self, connection: Connection) {
         self.connection = connection;
+        self.forget_schema();
     }
 
     /// Forgets the session, which the backend closes; a statement running on it fails, and the editor stays.

@@ -1,5 +1,4 @@
 //! `ctrl-r`: the statements run on the connection on screen, narrowed as fzf does; picking one puts it in the editor.
-use super::editor::Editor;
 use super::search::{Search, Searching};
 use super::{Action, App, Focus, Overlay};
 use crate::act::Pane;
@@ -52,7 +51,7 @@ impl App {
         let sheet = self.sheet_mut();
         let held = sheet.editor.text().trim_end();
         let text = if held.is_empty() { statement.to_owned() } else { format!("{held}\n\n{statement}") };
-        sheet.editor = Editor::new(&text);
+        sheet.editor.reload(&text);
         sheet.text_changed();
         self.focus = Focus::Editor;
     }

@@ -1,5 +1,4 @@
 //! The saved queries in the app: the sidebar's tree and its cursor, the `ctrl-p` finder, and the query opened in the editor.
-use super::editor::Editor;
 use super::search::{Search, Searching};
 use super::{Action, App, Focus, Overlay};
 use crate::act::Pane;
@@ -83,7 +82,7 @@ impl App {
         let Some(sheet) = self.sheet_of_mut(connection) else { return };
         sheet.query_error = None;
         sheet.opened = Some(query);
-        sheet.editor = Editor::new(text);
+        sheet.editor.reload(text);
         sheet.text_changed();
         sheet.is_dirty = false;
         if is_on_screen {

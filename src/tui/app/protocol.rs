@@ -162,6 +162,8 @@ pub(in crate::tui) enum AskFailure {
     NotSent(NotSent),
     Command(CommandError),
     Answer(AnswerError),
+    /// The editor changed while the ask was on screen, so the answer no longer fits the text it was asked about.
+    EditorChanged,
 }
 
 /// The outcome of a change to the config.
@@ -258,6 +260,7 @@ impl fmt::Display for AskFailure {
             Self::NotSent(not_sent) => write!(f, "not asked: {not_sent}"),
             Self::Command(failed) => failed.fmt(f),
             Self::Answer(unread) => unread.fmt(f),
+            Self::EditorChanged => f.write_str("the answer is dropped: the editor changed since ^g asked"),
         }
     }
 }
