@@ -195,7 +195,7 @@ fn kept(entry: &Entry) -> Entry {
 
 /// Whether `password` stands as a word of its own, as in `ALTER ROLE nina PASSWORD '...'`, or a URL holds one, as in
 /// `postgresql://nina:...@db.example.com`; `password_hash` is another word.
-fn holds_password(statement: &str) -> bool {
+pub(crate) fn holds_password(statement: &str) -> bool {
     let is_word_char = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
     let has_password_word = statement.split(|c: char| !is_word_char(c)).any(|word| word.eq_ignore_ascii_case(PASSWORD_WORD));
     has_password_word || statement.match_indices(SCHEME_END).any(|(at, _)| is_url_with_password(&statement[..at], &statement[at..]))
