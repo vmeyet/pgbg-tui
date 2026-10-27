@@ -5,24 +5,20 @@ use anyhow::Result;
 
 const INDENT: &str = "  ";
 const NO_TABLE: &str = "(no table the role can read)\n";
-const CUT: &str = "the role can read more than 20 000 tables: only the first 20 000 by name are read";
+const CUT: &str = "more than 20 000 tables: only the first 20 000 by name are shown";
 
 /// Prints every table the role can read on the connection named `connection`, with its columns and indexes; only
 /// those whose name holds `filter` when there is one. JSON with `json`.
 pub async fn run(connection: &ConnectionName, filter: Option<&str>, json: bool) -> Result<()> {
     let connection = super::connection(Some(connection))?;
-    let catalog = super::on_session(&connection, async |session| session.read_schema().await).await?;
+    let catalog = super::on_session(&connection, async |session| session.read_schema_matching(filter.unwrap_or_default()).await).await?;
     if catalog.is_cut {
         super::warn(CUT);
     }
-    let schema = match filter {
-        Some(filter) => catalog.schema.matching(filter),
-        None => catalog.schema,
-    };
     if json {
-        println!("{}", serde_json::to_string_pretty(&schema)?);
+        println!("{}", serde_json::to_string_pretty(&catalog.schema)?);
     } else {
-        print!("{}", text(&schema));
+        print!("{}", text(&catalog.schema));
     }
     Ok(())
 }

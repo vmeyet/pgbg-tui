@@ -1,7 +1,7 @@
 //! A result shown a page at a time: its portal stays open between pages, in its `BEGIN READ ONLY` transaction.
 use super::guard::{Admitted, Mode};
 use super::model::{Column, Extent, Page, ResultSet};
-use super::{FetchSize, Marks, Session, begin_read_only, bind_portal, columns, fetch_page, roll_back, why_ended};
+use super::{FetchSize, Isolation, Marks, Session, begin_read_only, bind_portal, columns, fetch_page, roll_back, why_ended};
 use anyhow::Result;
 use std::time::Duration;
 use tokio::sync::watch;
@@ -47,7 +47,7 @@ impl Session {
         }
         let Self { client, limits, marks, ended, .. } = self;
         let idle_limit_on_server = limits.idle.on_server();
-        let transaction = marks.during(begin_read_only(client, limits)).await?;
+        let transaction = marks.during(begin_read_only(client, limits, Isolation::EachStatement)).await?;
         let bound = marks.during(bind(&transaction, admitted)).await;
         let Bound { columns, portal } = match bound {
             Ok(bound) => bound,

@@ -1,19 +1,21 @@
 //! The schema the role can see, read from the catalogs in one read-only transaction.
 use super::model::{Catalog, Index, Route, Schema, SchemaColumn, SchemaNode, Table, TableKind};
-use super::{Session, server_error};
+use super::{Isolation, Session, server_error};
 use crate::connection::Connection;
 use anyhow::{Result, bail};
 use std::collections::HashMap;
 use tokio_postgres::{Row, Transaction};
 
-/// The relations a statement reads from, outside the catalogs, that the role may read at least one column of, the
-/// first `$1` by name; a partition is left to its parent, which reads them all.
+/// The relations a statement reads from, outside the catalogs, that the role may read at least one column of, whose
+/// `schema.table` holds `$2` whatever its case, the first `$1` by name; a partition is left to its parent, which reads
+/// them all.
 const VISIBLE: &str = "WITH visible AS (
     SELECT c.oid, n.nspname, c.relname, c.relkind, c.reltuples
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE c.relkind IN ('r', 'v', 'm', 'f', 'p') AND NOT c.relispartition
       AND n.nspname NOT LIKE 'pg\\_%' AND n.nspname <> 'information_schema'
       AND has_schema_privilege(n.oid, 'USAGE') AND has_any_column_privilege(c.oid, 'SELECT')
+      AND strpos(lower(n.nspname || '.' || c.relname), lower($2)) > 0
     ORDER BY n.nspname, c.relname
     LIMIT $1
 )";
@@ -33,7 +35,7 @@ const SEARCH_PATH: &str = "SELECT current_schemas(false)::text[]";
 /// How many tables a read keeps, the first by name, so a database of many tenants cannot fill the memory nor slow
 /// every key of completion.
 #[derive(Clone, Copy, Debug)]
-pub(super) struct TableCap(pub(super) usize);
+struct TableCap(usize);
 
 const TABLE_CAP: TableCap = TableCap(20_000);
 
@@ -46,17 +48,22 @@ struct Listed {
 
 impl Session {
     /// Every schema, table, column and index the role can read, the first 20 000 tables by name, and the search path,
-    /// in one read-only transaction.
+    /// in one read-only transaction that sees one snapshot.
     pub(crate) async fn read_schema(&mut self) -> Result<Catalog> {
-        self.read_schema_capped(TABLE_CAP).await
+        self.read_schema_capped(TABLE_CAP, "").await
     }
 
-    pub(super) async fn read_schema_capped(&mut self, cap: TableCap) -> Result<Catalog> {
+    /// The same, of only the tables whose `schema.table` holds `filter`, whatever its case.
+    pub(crate) async fn read_schema_matching(&mut self, filter: &str) -> Result<Catalog> {
+        self.read_schema_capped(TABLE_CAP, filter).await
+    }
+
+    async fn read_schema_capped(&mut self, cap: TableCap, filter: &str) -> Result<Catalog> {
         let limit = i64::try_from(cap.0 + 1)?;
-        self.read_only(async |transaction| {
-            let tables = rows(transaction, TABLES, limit).await?.iter().map(listed).collect::<Result<Vec<_>>>()?;
-            let columns = rows(transaction, COLUMNS, limit).await?.iter().map(column).collect::<Result<Vec<_>>>()?;
-            let indexes = rows(transaction, INDEXES, limit).await?.iter().map(index).collect::<Result<Vec<_>>>()?;
+        self.read_only(Isolation::OneSnapshot, async |transaction| {
+            let tables = rows(transaction, TABLES, limit, filter).await?.iter().map(listed).collect::<Result<Vec<_>>>()?;
+            let columns = rows(transaction, COLUMNS, limit, filter).await?.iter().map(column).collect::<Result<Vec<_>>>()?;
+            let indexes = rows(transaction, INDEXES, limit, filter).await?.iter().map(index).collect::<Result<Vec<_>>>()?;
             let search_path = transaction.query_one(SEARCH_PATH, &[]).await.map_err(server_error)?.try_get(0)?;
             let is_cut = tables.len() > cap.0;
             let kept = tables.into_iter().take(cap.0).collect();
@@ -72,8 +79,8 @@ pub(crate) async fn read_schema_along(connection: &Connection, route: Route) -> 
     Session::open(connection, route).await?.read_schema().await
 }
 
-async fn rows(transaction: &Transaction<'_>, sql: &str, limit: i64) -> Result<Vec<Row>> {
-    transaction.query(&format!("{VISIBLE} {sql}"), &[&limit]).await.map_err(server_error)
+async fn rows(transaction: &Transaction<'_>, sql: &str, limit: i64, filter: &str) -> Result<Vec<Row>> {
+    transaction.query(&format!("{VISIBLE} {sql}"), &[&limit, &filter]).await.map_err(server_error)
 }
 
 fn listed(row: &Row) -> Result<Listed> {
@@ -258,15 +265,23 @@ mod tests {
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_read_past_the_table_cap_keeps_the_first_tables_by_name_and_says_it_is_cut() {
         let mut session = session_reading_only("shop_cap", "pgbg_test_cap", &["orders", "customers", "invoices"]).await;
-        let catalog = session.read_schema_capped(TableCap(2)).await.unwrap();
+        let catalog = session.read_schema_capped(TableCap(2), "").await.unwrap();
         assert_eq!((names_in(&catalog, "shop_cap"), catalog.is_cut), (vec!["customers", "invoices"], true));
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_filter_is_read_before_the_cap_so_a_table_past_it_still_comes() {
+        let mut session = session_reading_only("shop_cap_filter", "pgbg_test_cap_filter", &["customers", "invoices", "orders"]).await;
+        let catalog = session.read_schema_capped(TableCap(1), "ORD").await.unwrap();
+        assert_eq!((names_in(&catalog, "shop_cap_filter"), catalog.is_cut), (vec!["orders"], false));
     }
 
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_read_of_as_many_tables_as_the_cap_is_whole() {
         let mut session = session_reading_only("shop_cap_whole", "pgbg_test_cap_whole", &["orders", "customers"]).await;
-        let catalog = session.read_schema_capped(TableCap(2)).await.unwrap();
+        let catalog = session.read_schema_capped(TableCap(2), "").await.unwrap();
         assert_eq!((names_in(&catalog, "shop_cap_whole"), catalog.is_cut), (vec!["customers", "orders"], false));
     }
 

@@ -1,7 +1,7 @@
 //! What the server says of a session: who it is, its version, its timeout, what its role can write; read in
 //! a read-only transaction, so asking writes nothing.
 use super::model::{RoleFlag, RolePowers, RoleRights, ServerFacts};
-use super::{Session, server_error};
+use super::{Isolation, Session, server_error};
 use crate::connection::StatementTimeout;
 use anyhow::{Context, Result};
 use tokio_postgres::Row;
@@ -54,7 +54,7 @@ ORDER BY role <> session_user, role, rank, object";
 impl Session {
     /// Who the session is, the server's version, and the timeout in effect beside the one the server applied before pgbg's.
     pub(crate) async fn server_facts(&mut self) -> Result<ServerFacts> {
-        self.read_only(async |transaction| {
+        self.read_only(Isolation::EachStatement, async |transaction| {
             let row = transaction.query_one(SERVER_FACTS, &[]).await.map_err(server_error)?;
             Ok(ServerFacts {
                 user: row.try_get(0)?,
@@ -68,7 +68,7 @@ impl Session {
 
     /// What the login role, and each role it may become, can write: its flags and the first objects it may change.
     pub(crate) async fn role_rights(&mut self) -> Result<RoleRights> {
-        self.read_only(async |transaction| {
+        self.read_only(Isolation::EachStatement, async |transaction| {
             let rows = transaction.query(ROLE_POWERS, &[]).await.map_err(server_error)?;
             Ok(RoleRights { roles: roles_holding(&rows)? })
         })

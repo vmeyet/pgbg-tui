@@ -89,7 +89,7 @@ Each entry says what changed, then where, then how to use it.
   Press `tab` to give it the keys, then `j`/`k`, `PgUp`/`PgDn` and `g`/`G` to scroll its rows, `h`/`l` its columns; `tab` again goes back to the editor.
 - **`pgbg schema <connection>`** prints every table your role can read, with its columns, their types and defaults, and its indexes.
   Add a few letters to see only the tables whose name holds them, `pgbg schema prod orders`, and `--json` for a script.
-  It reads the first 20 000 tables by name, and says so on stderr when the role can read more.
+  It reads the first 20 000 tables by name that hold the letters you gave, and says so on stderr when there are more.
 - **`pgbg run <connection> "<sql>"`** runs one statement and prints its result as a table, with the row count.
   Add `--json` for a script: `{"columns": [...], "rows": [[...]], "is_cut": false}`; `is_cut` is `true` when only the first 10 000 rows came back.
   A connection is read only unless it says `writes = "allowed"`: a statement that is not a read is refused before it is sent, and every read runs in a read-only transaction that is rolled back.
