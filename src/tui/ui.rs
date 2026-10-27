@@ -30,8 +30,7 @@ struct Areas {
 
 /// The whole screen for `app`; returns what it had room for.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> Fit {
-    let has_tab = !app.queries.all.is_empty() || app.sidebar == SidebarTab::Schema;
-    let has_sidebar = has_tab && f.area().width >= SIDEBAR_MIN_SCREEN_COLUMNS;
+    let has_sidebar = f.area().width >= SIDEBAR_MIN_SCREEN_COLUMNS;
     let areas = layout(framed(f, app), has_sidebar);
     if let Some(sidebar) = areas.sidebar {
         sidebar_view::draw(f, app, sidebar);

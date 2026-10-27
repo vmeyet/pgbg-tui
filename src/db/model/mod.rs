@@ -12,7 +12,6 @@ mod cancel;
 mod error;
 mod result;
 mod route;
-#[cfg_attr(not(test), expect(dead_code, reason = "`Schema::matching` serves only tests since the read filters in its SQL"))]
 mod schema;
 mod server;
 mod value;
