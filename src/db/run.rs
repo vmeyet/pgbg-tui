@@ -58,6 +58,13 @@ enum WritePath {
     UsersCursor,
 }
 
+/// Whether pgbg's own transaction lets its statement write.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Access {
+    ReadOnly,
+    ReadWrite,
+}
+
 impl UserTransaction {
     /// The state once the server has run, or refused, a statement that takes `step`.
     fn after(self, step: TransactionStep, has_run: bool) -> Self {
@@ -76,6 +83,7 @@ impl Session {
         self.marks.is_mid_statement = true;
         let result = match admitted.mode {
             Mode::Writes => self.run_writes(admitted).await,
+            Mode::ReadThenAsk => self.run_read_first(admitted).await,
             Mode::ReadOnly => self.run_read_only(admitted).await,
         };
         self.marks.is_mid_statement = false;
@@ -93,7 +101,7 @@ impl Session {
             let statement = bind::prepare(&self.client, admitted).await?;
             match self.write_path(&statement, admitted).await? {
                 WritePath::AsIs => fetch(&self.client, &statement, &admitted.params).await,
-                WritePath::OwnTransaction => self.fetch_in_own_transaction(&statement, &admitted.params).await,
+                WritePath::OwnTransaction => self.fetch_in_own_transaction(&statement, &admitted.params, Access::ReadWrite).await,
                 WritePath::UsersCursor => self.fetch_through_cursor(&statement, admitted).await,
             }
         };
@@ -115,8 +123,12 @@ impl Session {
         Ok(if admitted.is_query { WritePath::UsersCursor } else { WritePath::AsIs })
     }
 
-    async fn fetch_in_own_transaction(&mut self, statement: &Prepared, params: &Params) -> Result<ResultSet> {
-        let transaction = self.client.transaction().await.map_err(server_error)?;
+    /// Reads the first `ROW_CAP` rows through a portal in a transaction of pgbg's, then commits it; a writable one starts
+    /// as a plain `BEGIN`, so a server whose default is read only keeps it so.
+    pub(super) async fn fetch_in_own_transaction(&mut self, statement: &Prepared, params: &Params, access: Access) -> Result<ResultSet> {
+        let builder = self.client.build_transaction();
+        let builder = if access == Access::ReadOnly { builder.read_only(true) } else { builder };
+        let transaction = builder.start().await.map_err(server_error)?;
         let portal = bind_portal(&transaction, statement, params).await?;
         let first = fetch_capped(&transaction, &portal).await?;
         transaction.commit().await.map_err(server_error)?;
@@ -125,7 +137,7 @@ impl Session {
 
     /// Reads through an SQL cursor: the driver binds a portal only inside a transaction handle of its own, whose start
     /// or drop would roll the user's transaction back.
-    async fn fetch_through_cursor(&self, statement: &Prepared, admitted: &Admitted) -> Result<ResultSet> {
+    pub(super) async fn fetch_through_cursor(&self, statement: &Prepared, admitted: &Admitted) -> Result<ResultSet> {
         let cursor = free_cursor_name(&self.cursors_taken().await?);
         let declare = format!("DECLARE {cursor} NO SCROLL CURSOR FOR {}", admitted.statement.as_str());
         let declare = self.client.prepare_typed(&declare, statement.params()).await.map_err(server_error)?;
@@ -144,7 +156,7 @@ impl Session {
     }
 
     /// Whether a `BEGIN` the user ran left a transaction open, asking the server only when the session is unsure.
-    async fn is_in_user_transaction(&mut self) -> Result<bool> {
+    pub(super) async fn is_in_user_transaction(&mut self) -> Result<bool> {
         match self.marks.user_transaction {
             UserTransaction::None => Ok(false),
             UserTransaction::Open => Ok(true),
@@ -223,7 +235,7 @@ pub(super) async fn bind_portal(transaction: &Transaction<'_>, statement: &Prepa
 }
 
 /// Streams the rows of `statement` run with `params`, prepared first so a result without rows still has its columns.
-async fn fetch(client: &Client, statement: &Prepared, params: &Params) -> Result<ResultSet> {
+pub(super) async fn fetch(client: &Client, statement: &Prepared, params: &Params) -> Result<ResultSet> {
     let rows = client.query_raw(statement, bind::as_text(params)).await.map_err(server_error)?;
     Ok(ResultSet::new(columns(statement), first_rows(rows).await?))
 }

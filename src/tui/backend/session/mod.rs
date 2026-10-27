@@ -353,7 +353,14 @@ mod tests {
     }
 
     fn is_answer_to(run: RunId, answer: &Incoming) -> bool {
-        matches!(answer, Incoming::Result { run: of, .. } | Incoming::Refused { run: of, .. } | Incoming::Failed { run: of, .. } if *of == run)
+        matches!(
+            answer,
+            Incoming::Result { run: of, .. }
+                | Incoming::Refused { run: of, .. }
+                | Incoming::Failed { run: of, .. }
+                | Incoming::TriedToWrite { run: of }
+                if *of == run
+        )
     }
 
     #[tokio::test]
@@ -394,6 +401,35 @@ mod tests {
         backend.stop().await;
         let rows = on_a_side_session(&format!("SELECT n FROM {table}")).await;
         assert_eq!(rows.len(), 0, "{rows:?}");
+    }
+
+    /// A fresh `table` and a function `add_to_<table>()` that inserts a row into it; gives the `SELECT` calling it.
+    async fn table_and_writing_function(table: &str) -> Statement {
+        empty_table(table).await;
+        on_a_side_session_writing(&format!(
+            "CREATE OR REPLACE FUNCTION add_to_{table}() RETURNS int LANGUAGE sql AS $$ INSERT INTO {table} VALUES (1) RETURNING n $$"
+        ))
+        .await;
+        Statement::new(format!("SELECT add_to_{table}()"))
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_function_that_writes_answers_that_it_tried_to_write() {
+        let call = table_and_writing_function("pgbg_hidden_write").await;
+        let (backend, mut answers) = started_on(fixtures::test_database("local", "writes = \"allowed\"\n"));
+        backend.run(&shop(), RunId::FIRST, call, ParamInput::default(), None);
+        assert_eq!(next_answer(&mut answers).await, Incoming::TriedToWrite { run: RunId::FIRST });
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_confirmed_function_that_writes_runs() {
+        let call = table_and_writing_function("pgbg_hidden_write_confirmed").await;
+        let (backend, mut answers) = started_on(fixtures::test_database("local", "writes = \"allowed\"\n"));
+        backend.run(&shop(), RunId::FIRST, call, ParamInput::default(), Some(Confirmed::FOR_TESTS));
+        next_answer(&mut answers).await;
+        assert_eq!(on_a_side_session("SELECT n FROM pgbg_hidden_write_confirmed").await, [[Value::Int(1)]]);
     }
 
     async fn answers_until(answers: &mut UnboundedReceiver<Answer>, last: impl Fn(&Incoming) -> bool) -> Vec<Incoming> {

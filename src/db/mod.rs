@@ -6,7 +6,7 @@ use model::{CancelToken, ServerError};
 use run::UserTransaction;
 use tokio::sync::watch;
 use tokio::task::AbortHandle;
-use tokio_postgres::error::ErrorPosition;
+use tokio_postgres::error::{ErrorPosition, SqlState};
 use tokio_postgres::{Client, Transaction};
 
 mod bind;
@@ -19,6 +19,7 @@ mod limits;
 pub(crate) mod model;
 mod open;
 mod pages;
+mod read_first;
 mod run;
 mod schema;
 mod server;
@@ -119,6 +120,7 @@ fn server_error(err: tokio_postgres::Error) -> anyhow::Error {
         detail: db.detail().map(str::to_owned),
         hint: db.hint().map(str::to_owned),
         position,
+        is_refused_write: db.code() == &SqlState::READ_ONLY_SQL_TRANSACTION,
     })
 }
 

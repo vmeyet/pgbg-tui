@@ -8,7 +8,7 @@ use crate::chart::{self, ChartError, Series};
 use crate::complete::Index;
 use crate::connection::{Connection, ConnectionName, SchemaReading, WritePolicy};
 use crate::db::guard::{self, Write};
-use crate::db::model::{Catalog, Extent, Page, ResultSet, Statement};
+use crate::db::model::{Catalog, Extent, Page, ResultSet, Statement, TriedToWrite};
 use crate::format::{self, Format};
 use crate::query::params::{self, Numbering, ParamInput, ParamName};
 use crate::query::{Header, Query};
@@ -31,6 +31,7 @@ struct Sent {
     statement: Statement,
     /// The `$n` the server got for each `{{name}}`, which the server's error position counts in.
     numbering: Numbering,
+    input: ParamInput,
 }
 
 /// A statement to run, the editor byte where it starts when it was cut from the editor, and the values of its parameters.
@@ -382,7 +383,7 @@ impl Sheet {
         }
         let run = self.next_run();
         self.run = Run::Running { run };
-        self.sent = Some(Sent { start, numbering: params::numbering(&statement), statement: statement.clone() });
+        self.sent = Some(Sent { start, numbering: params::numbering(&statement), statement: statement.clone(), input: input.clone() });
         vec![Action::Run { connection: self.name().clone(), run, statement, input, confirmed }]
     }
 
@@ -417,7 +418,11 @@ impl Sheet {
     }
 
     /// Takes an answer from the session; a result opens in the formats its header and `reading` give it.
-    pub(super) fn apply(&mut self, incoming: Incoming, reading: &Reading) {
+    /// Gives the statement the server found a write in, to ask about before it runs again.
+    pub(super) fn apply(&mut self, incoming: Incoming, reading: &Reading) -> Option<ToRun> {
+        if let Incoming::TriedToWrite { run } = incoming {
+            return self.tried_to_write(run);
+        }
         let is_closed = self.session == SessionState::Closed;
         match incoming {
             Incoming::Opened
@@ -462,7 +467,20 @@ impl Sheet {
                 self.error_mark = position.and_then(|position| self.editor_byte(position));
                 self.run = Run::Failed(error);
             }
+            Incoming::TriedToWrite { .. } => {}
         }
+        None
+    }
+
+    /// Takes the answer that the run `run` tried to write and ran nothing; gives the statement sent, when `run` is the
+    /// one running.
+    fn tried_to_write(&mut self, run: RunId) -> Option<ToRun> {
+        if !self.is_answer_to_running(run) {
+            return None;
+        }
+        self.run = Run::Failed(TriedToWrite.to_string());
+        let Sent { statement, start, input, .. } = self.sent.clone()?;
+        Some(ToRun { statement, start, input })
     }
 
     /// Moves the grid's cursor by `step` in the `room` it has, and asks for the next page once it nears the last row.

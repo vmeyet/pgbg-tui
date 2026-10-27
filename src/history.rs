@@ -3,7 +3,7 @@
 use crate::config;
 use crate::connection::ConnectionName;
 use crate::db::guard::Refusal;
-use crate::db::model::{ResultSet, ServerError, UnknownType};
+use crate::db::model::{ResultSet, ServerError, TriedToWrite, UnknownType};
 use crate::query::params::ParamError;
 use chrono::{DateTime, Utc};
 use rustix::fs::{FlockOperation, flock};
@@ -49,7 +49,9 @@ impl Outcome {
     pub(crate) fn of(result: &anyhow::Result<ResultSet>) -> Self {
         match result {
             Ok(result) => Self::Rows { count: result.rows().len(), is_cut: !result.is_whole() },
-            Err(err) if err.is::<Refusal>() || err.is::<ParamError>() || err.is::<UnknownType>() => Self::Refused,
+            Err(err) if err.is::<Refusal>() || err.is::<ParamError>() || err.is::<UnknownType>() || err.is::<TriedToWrite>() => {
+                Self::Refused
+            }
             Err(err) if err.is::<ServerError>() => Self::ServerError,
             Err(_) => Self::LinkError,
         }
@@ -371,11 +373,23 @@ mod tests {
 
     #[test]
     fn an_outcome_says_what_failed_without_the_servers_words() {
-        let server = ServerError { severity: "ERROR".into(), message: "nina".into(), detail: None, hint: None, position: None };
+        let server = ServerError {
+            severity: "ERROR".into(),
+            message: "nina".into(),
+            detail: None,
+            hint: None,
+            position: None,
+            is_refused_write: false,
+        };
         assert_eq!(Outcome::of(&Err(server.into())), Outcome::ServerError);
         assert_eq!(Outcome::of(&Err(anyhow::anyhow!("connection refused"))), Outcome::LinkError);
         assert_eq!(Outcome::of(&Err(Refusal::Multiple.into())), Outcome::Refused);
         assert_eq!(serde_json::to_string(&Outcome::ServerError).unwrap(), r#"{"kind":"server_error"}"#);
+    }
+
+    #[test]
+    fn a_statement_that_tried_to_write_unconfirmed_is_refused() {
+        assert_eq!(Outcome::of(&Err(TriedToWrite.into())), Outcome::Refused);
     }
 
     #[test]

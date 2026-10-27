@@ -207,6 +207,10 @@ pub(in crate::tui) enum Incoming {
         run: RunId,
         why: String,
     },
+    /// The statement, which the guard read as a read, tried to write: the server refused it, so nothing of it ran.
+    TriedToWrite {
+        run: RunId,
+    },
     /// The statement failed on the server or on the link to it; the server may say where in the statement.
     Failed {
         run: RunId,

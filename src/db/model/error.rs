@@ -11,6 +11,8 @@ pub(crate) struct ServerError {
     pub(crate) hint: Option<String>,
     /// Where in the statement the server stopped: a character count from 1, as PostgreSQL counts.
     pub(crate) position: Option<usize>,
+    /// A read-only transaction refused a write the statement tried (SQLSTATE `25006`).
+    pub(crate) is_refused_write: bool,
 }
 
 /// The severity and message, then the detail and the hint on lines of their own.
@@ -51,6 +53,19 @@ impl fmt::Display for InsideUserTransaction {
 
 impl std::error::Error for InsideUserTransaction {}
 
+/// A statement the guard read as a read tried to write, as a function that writes does, and the server refused it:
+/// nothing of it ran, and it runs again only once the user confirms it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TriedToWrite;
+
+impl fmt::Display for TriedToWrite {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("this statement tried to write, so nothing ran: it runs only once you confirm it")
+    }
+}
+
+impl std::error::Error for TriedToWrite {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -63,6 +78,7 @@ mod tests {
             detail: None,
             hint: Some("Perhaps you meant to reference the column \"orders.total\".".into()),
             position: Some(8),
+            is_refused_write: false,
         };
         assert_eq!(error.to_string(), "ERROR: column \"totl\" does not exist\nPerhaps you meant to reference the column \"orders.total\".");
     }

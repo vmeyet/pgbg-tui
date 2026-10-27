@@ -501,6 +501,40 @@ fn schema_json_lists_the_tables_the_filter_keeps() {
     assert_eq!(json["schemas"][0]["tables"].as_array().unwrap().len(), 1);
 }
 
+/// On `shop`, a fresh `table` and a function `add_to_<table>()` that inserts a row into it; gives the `SELECT` calling it.
+fn table_and_writing_function(dir: &Path, config: &str, table: &str) -> String {
+    let function = format!(
+        "CREATE OR REPLACE FUNCTION add_to_{table}() RETURNS int LANGUAGE sql AS $$ INSERT INTO {table} VALUES (1) RETURNING id $$"
+    );
+    for sql in [format!("DROP TABLE IF EXISTS {table}"), format!("CREATE TABLE {table} (id int)"), function] {
+        let output = pgbg_in(dir, config, &["run", "shop", &sql, "--yes"]);
+        assert!(output.status.success(), "{}", stderr(&output));
+    }
+    format!("SELECT add_to_{table}()")
+}
+
+#[test]
+#[ignore = "needs PGBG_TEST_DATABASE_URL"]
+fn run_refuses_a_function_that_writes_without_a_terminal_and_keeps_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = writable("shop", &std::env::var("PGBG_TEST_DATABASE_URL").unwrap());
+    let call = table_and_writing_function(dir.path(), &config, "cli_hidden_orders");
+    let output = pgbg_in(dir.path(), &config, &["run", "shop", &call]);
+    assert!(!output.status.success() && stderr(&output).contains("tried to write"), "{}", stderr(&output));
+    assert_eq!(value_of(dir.path(), &config, "SELECT count(*) FROM cli_hidden_orders"), 0);
+}
+
+#[test]
+#[ignore = "needs PGBG_TEST_DATABASE_URL"]
+fn run_with_yes_runs_a_function_that_writes_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = writable("shop", &std::env::var("PGBG_TEST_DATABASE_URL").unwrap());
+    let call = table_and_writing_function(dir.path(), &config, "cli_hidden_confirmed_orders");
+    let output = pgbg_in(dir.path(), &config, &["run", "shop", &call, "--yes"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(value_of(dir.path(), &config, "SELECT count(*) FROM cli_hidden_confirmed_orders"), 1);
+}
+
 /// A proxy to `argv[1]:argv[2]` that writes its port to `argv[3]` and keeps the server's side of a link open once the
 /// client hangs up, as a pooler or a server that cannot check does: only a cancel request then stops a statement.
 const HIDING_HANG_UPS: &str = "

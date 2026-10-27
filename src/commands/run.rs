@@ -1,7 +1,8 @@
 use crate::cli::StatementArgs;
 use crate::connection::{Connection, ConnectionName};
+use crate::db::Session;
 use crate::db::guard::{Admitted, Refusal, Write};
-use crate::db::model::{ResultSet, Statement};
+use crate::db::model::{ResultSet, Statement, TriedToWrite};
 use crate::history::{Entry, Outcome, Store};
 use crate::query::params::{self, Assignment, Given};
 use crate::query::{Header, Roots};
@@ -33,7 +34,7 @@ pub async fn run(
     let admitted = admit(&connection, sql, &given, yes).await;
     let (started_at, clock) = (Utc::now(), Instant::now());
     let result = match admitted {
-        Ok(admitted) => super::on_session(&connection, async |session| session.run(&admitted).await).await,
+        Ok(admitted) => super::on_session(&connection, async |session| run_asking_for_hidden_writes(session, admitted).await).await,
         Err(err) => Err(err),
     };
     let took_ms = u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -97,9 +98,26 @@ async fn admit(connection: &Connection, sql: &str, given: &Given, yes: bool) -> 
         super::warn(warning);
     }
     let admitted = params::admit(&Statement::new(sql), given, &header.params, connection.writes())?;
+    if yes {
+        return Ok(admitted.confirmed());
+    }
     match admitted.write() {
-        Some(write) if !yes && !is_confirmed_at_the_terminal(write).await? => Err(Refusal::Unconfirmed(write.clone()).into()),
+        Some(write) if !is_confirmed_at_the_terminal(write).await? => Err(Refusal::Unconfirmed(write.clone()).into()),
         _ => Ok(admitted),
+    }
+}
+
+/// Runs `admitted`; when the server finds a write in a read, as in a function that writes, nothing ran, and it runs
+/// again as a write once the user says yes on the terminal.
+async fn run_asking_for_hidden_writes(session: &mut Session, admitted: Admitted) -> Result<ResultSet> {
+    match session.run(&admitted).await {
+        Err(err) if err.is::<TriedToWrite>() => {
+            if !is_confirmed_at_the_terminal(&Write::Hidden).await? {
+                return Err(Refusal::Unconfirmed(Write::Hidden).into());
+            }
+            session.run(&admitted.confirmed()).await
+        }
+        ran => ran,
     }
 }
 

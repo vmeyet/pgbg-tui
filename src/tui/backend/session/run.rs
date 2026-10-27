@@ -2,7 +2,7 @@
 use super::link::Queued;
 use crate::connection::WritePolicy;
 use crate::db::guard::Admitted;
-use crate::db::model::{CancelToken, ServerError};
+use crate::db::model::{CancelToken, ServerError, TriedToWrite};
 use crate::db::{Interrupted, Pages, Session, Started};
 use crate::history::Outcome;
 use crate::query::params;
@@ -144,6 +144,7 @@ async fn answer_to(session: &mut Session, writes: WritePolicy, queued: Queued) -
     let outcome = Outcome::of(&result);
     let incoming = match result {
         Ok(result) => Incoming::Result { run, result, took: started.elapsed() },
+        Err(err) if err.is::<TriedToWrite>() => Incoming::TriedToWrite { run },
         Err(err) => {
             let position = err.downcast_ref::<ServerError>().and_then(|server| server.position);
             Incoming::Failed { run, position, error: format!("{err:#}") }
@@ -153,13 +154,14 @@ async fn answer_to(session: &mut Session, writes: WritePolicy, queued: Queued) -
 }
 
 /// `queued` with its parameters filled in and checked against the connection's `writes` policy; a write the user did
-/// not confirm is refused here too.
+/// not confirm is refused here too, and one confirmed runs as a write even when the guard reads it as a read.
 fn admit(queued: &Queued, writes: WritePolicy) -> anyhow::Result<Admitted> {
     let admitted = params::admit(&queued.statement, &queued.input.given, &queued.input.specs, writes)?;
-    if admitted.write().is_some() && queued.confirmed.is_none() {
-        anyhow::bail!(UNCONFIRMED_WRITE);
+    match queued.confirmed {
+        Some(_) => Ok(admitted.confirmed()),
+        None if admitted.write().is_some() => anyhow::bail!(UNCONFIRMED_WRITE),
+        None => Ok(admitted),
     }
-    Ok(admitted)
 }
 
 #[cfg(test)]

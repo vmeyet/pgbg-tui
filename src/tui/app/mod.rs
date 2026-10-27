@@ -296,8 +296,9 @@ impl App {
         match answer {
             Answer::Session { connection, session, incoming } => {
                 let reading = self.reading;
-                if let Some(sheet) = self.sheet_of_mut(&connection).filter(|sheet| sheet.session_id == session) {
-                    sheet.apply(incoming, &reading);
+                let sheet = self.sheet_of_mut(&connection).filter(|sheet| sheet.session_id == session);
+                if let Some(tried_to_write) = sheet.and_then(|sheet| sheet.apply(incoming, &reading)) {
+                    self.ask_for_hidden_write(&connection, tried_to_write);
                 }
             }
             Answer::Queries(QueryAnswer::All(all)) => self.listed(all),
