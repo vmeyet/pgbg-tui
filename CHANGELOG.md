@@ -102,6 +102,8 @@ Each entry says what changed, then where, then how to use it.
 - **A failed change to the config says why in the status line** until the next key, unless the form that asked is open; it no longer replaces the result on screen.
   A second `⏎` while the form saves sends nothing.
 - **`ctrl-x` in the connection picker keeps it open** and says which session it closed.
+- **A connection picked again soon after `ctrl-x` or a config change shows its new session's state**: the words of the old one, still stopping, are dropped.
+- **Config changes from the TUI answer in the order you made them**, one at a time.
 - **`ctrl-x` keeps the sheet it closes**: the editor text stays, the picker says `closed`, and picking the connection opens a new session.
 - **A save the config refuses keeps the password typed** in the connection form, so a second `⏎` sends it again.
 - **The history stops waiting** on a disk whose files keep changing under the lock, such as some network mounts, and says so in the log.
