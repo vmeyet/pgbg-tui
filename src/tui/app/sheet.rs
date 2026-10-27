@@ -113,6 +113,8 @@ pub(in crate::tui) struct Sheet {
     pub(in crate::tui) is_dirty: bool,
     /// Why the last page asked for failed, until the next run.
     pub(in crate::tui) page_failure: Option<String>,
+    /// What the result pane shows when it is no run's result but a table's columns, as its title says it.
+    pub(in crate::tui) shown: Option<String>,
     pub(in crate::tui) schema: SchemaState,
     /// The completion index of the catalog read, once the backend built it.
     pub(in crate::tui) index: Option<Arc<Index>>,
@@ -137,6 +139,7 @@ impl Sheet {
             header: Header::default(),
             is_dirty: false,
             page_failure: None,
+            shown: None,
             schema: SchemaState::NotRead,
             index: None,
             ghost: None,
@@ -344,12 +347,14 @@ impl Sheet {
         vec![Action::Run { connection: self.name().clone(), run, statement, input }]
     }
 
-    /// Shows `result` in the result pane as if a run gave it; nothing while a statement runs, whose answer it would drop.
-    pub(super) fn show(&mut self, result: ResultSet, reading: &Reading) {
+    /// Shows `result` in the result pane as if a run gave it, titled `title`; nothing while a statement runs, whose
+    /// answer it would drop.
+    pub(super) fn show(&mut self, title: String, result: ResultSet, reading: &Reading) {
         if self.is_running() {
             return;
         }
         let run = self.next_run();
+        self.shown = Some(title);
         let grid = Box::new(Grid::new(&result, format::opening(result.columns(), &[], reading.mode), &reading.clock));
         self.run = Run::Done { run, grid, result, took: Duration::ZERO, view: View::Grid, is_page_asked: false };
     }
@@ -360,6 +365,7 @@ impl Sheet {
         self.last_run = Some(run);
         self.error_mark = None;
         self.page_failure = None;
+        self.shown = None;
         run
     }
 

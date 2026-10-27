@@ -41,6 +41,14 @@ fn described(table: &Table) -> ResultSet {
     ResultSet::new(columns.collect(), Page { rows: rows.collect(), extent: Extent::All })
 }
 
+/// `public.orders · 3 columns · 1 index`.
+fn described_title(schema: &str, table: &Table) -> String {
+    let counted = |count: usize, one: &str, many: &str| if count == 1 { format!("1 {one}") } else { format!("{count} {many}") };
+    let columns = counted(table.columns.len(), "column", "columns");
+    let indexes = counted(table.indexes.len(), "index", "indexes");
+    format!("{} · {columns} · {indexes}", qualified(schema, &table.name))
+}
+
 fn column_row(column: &SchemaColumn) -> Vec<Value> {
     let nullable = if column.is_nullable { None } else { Some("not null".to_owned()) };
     let default = column.default.as_ref().map(|default| format!("default {default}"));
@@ -151,9 +159,9 @@ impl App {
                 let closed = &mut self.schema_tab.closed;
                 _ = if is_open { closed.insert(name) } else { closed.remove(&name) };
             }
-            Some(SchemaRow::Table { table, .. }) => {
-                let (result, reading) = (described(table), self.reading);
-                self.sheet_mut().show(result, &reading);
+            Some(SchemaRow::Table { schema, table }) => {
+                let (title, result, reading) = (described_title(schema, table), described(table), self.reading);
+                self.sheet_mut().show(title, result, &reading);
             }
             None => {}
         }
@@ -312,6 +320,15 @@ mod tests {
         let text = |name: &str| Value::Text(name.to_owned());
         assert_eq!(names, [&text("id"), &text("customer_id"), &text("total"), &text("orders_pkey")]);
         assert_eq!(result.rows()[2][3], text("default 0"));
+    }
+
+    #[test]
+    fn a_table_shown_is_titled_by_its_name_and_counts_and_a_run_after_drops_that_title() {
+        let mut app = on_orders();
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.sheet().shown.as_deref(), Some("public.orders · 3 columns · 1 index"));
+        press(&mut app, KeyCode::Char('p'));
+        assert_eq!(app.sheet().shown, None);
     }
 
     #[test]
