@@ -49,8 +49,9 @@ impl TypeName {
     }
 }
 
-/// A value given for a statement's parameter, sent as text for the server to read.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// A value given for a statement's parameter, sent as text for the server to read; `Debug` hides it, since it may be
+/// personal data.
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ParamValue(String);
 
 impl ParamValue {
@@ -130,6 +131,12 @@ impl ColumnName {
     }
 }
 
+impl fmt::Debug for ParamValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("<value>")
+    }
+}
+
 impl fmt::Display for ColumnName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
@@ -144,4 +151,15 @@ pub(crate) struct Column {
     /// The server's name for the type: `int4`, `timestamptz`, `inet`.
     #[serde(rename = "type")]
     pub(crate) type_name: TypeName,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_parameter_value_never_shows_in_debug_output() {
+        let params = Params::new(vec![Some(ParamValue::new("nina@example.com"))], vec![]);
+        assert!(!format!("{params:?}").contains("nina"), "{params:?}");
+    }
 }

@@ -54,7 +54,7 @@ fn rows_text(estimated_rows: Option<u64>) -> String {
 fn column_cells(column: &SchemaColumn) -> Vec<String> {
     let nullable = if column.is_nullable { "" } else { "not null" };
     let default = column.default.as_ref().map_or_else(String::new, |default| format!("default {default}"));
-    vec![column.name.clone(), column.type_name.clone(), nullable.to_owned(), default]
+    vec![column.name.clone(), column.type_name.as_str().to_owned(), nullable.to_owned(), default]
 }
 
 fn index_text(index: &Index) -> String {

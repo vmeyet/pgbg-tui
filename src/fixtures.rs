@@ -157,7 +157,7 @@ pub(crate) fn orders() -> ResultSet {
 fn schema_column(name: &str, type_name: &str, default: Option<&str>) -> SchemaColumn {
     SchemaColumn {
         name: name.to_owned(),
-        type_name: type_name.to_owned(),
+        type_name: TypeName::new(type_name),
         is_nullable: default.is_some(),
         default: default.map(str::to_owned),
     }
