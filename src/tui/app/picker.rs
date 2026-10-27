@@ -600,4 +600,16 @@ pub(in crate::tui) mod tests {
         app.apply(failed("permission denied"));
         assert!(matches!(app.sheet().run, Run::Running { .. }), "{:?}", app.sheet().run);
     }
+
+    #[test]
+    fn a_statement_running_when_its_connection_changes_fails_as_its_session_opens_again() {
+        let mut app = on_local();
+        press(&mut app, "SELECT pg_sleep(5)");
+        key(&mut app, KeyCode::Enter);
+        let local = named("local", "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\nwrites = \"allowed\"\n");
+        let mut connections = app.connections.clone();
+        connections[0] = local;
+        app.apply(Answer::Config { id: ConfigChangeId::FIRST, answer: ConfigAnswer::Changed { connections, warning: None } });
+        assert_eq!(app.sheet().run, Run::Failed("cancelled: its session was reopened".into()));
+    }
 }

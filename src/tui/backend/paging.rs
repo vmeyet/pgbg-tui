@@ -1,11 +1,10 @@
 //! A result's portal held open across jobs: the session task serves its pages here until the portal closes.
-use super::{Job, OnServer, Woken, cancel, ended, send};
+use super::{Cancels, Job, OnServer, Woken, ended, send, warn_if_still_running};
 use crate::connection::ConnectionName;
 use crate::db::model::{CancelToken, Extent, Page};
 use crate::db::{Fetched, Pages};
 use crate::tui::app::{Answer, Incoming, RunId, SessionId};
 use crate::tunnel::{Died, Tunnel};
-use std::pin::pin;
 use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::time::{Instant, sleep_until};
@@ -20,7 +19,7 @@ pub(super) struct Paging<'a, 's> {
     pub(super) run: RunId,
     pub(super) token: CancelToken,
     pub(super) queue: &'a mut UnboundedReceiver<Job>,
-    pub(super) cancelled: &'a mut UnboundedReceiver<RunId>,
+    pub(super) cancelled: &'a mut Cancels,
     pub(super) on_server: &'a OnServer,
     pub(super) tunnel: Option<&'a mut Tunnel>,
     pub(super) connection: &'a ConnectionName,
@@ -46,7 +45,7 @@ enum Fetch<'s> {
     Cancelled,
     /// The server failed the fetch in these words, so the portal is gone.
     Failed(String),
-    /// The session is closing: the portal closed with the fetch.
+    /// The session is stopping: the fetch was dropped, and the portal goes with the session.
     Closing,
 }
 
@@ -155,45 +154,22 @@ fn still_to_act_on(held: Held, is_queue_closed: bool) -> Option<Woken> {
     }
 }
 
-/// Fetches the next page, asking the server to cancel it when its run's cancel comes or the session closes;
-/// `on_server` holds `token` while it is fetched.
-async fn next_page<'s>(
-    pages: Pages<'s>,
-    run: RunId,
-    token: &CancelToken,
-    cancelled: &mut UnboundedReceiver<RunId>,
-    on_server: &OnServer,
-) -> Fetch<'s> {
+/// Fetches the next page, asking the server to cancel it when its run's cancel comes; a stop stops it as
+/// `CancelToken::unless_stopped` says. `on_server` holds `token` until it is fetched or dropped.
+async fn next_page<'s>(pages: Pages<'s>, run: RunId, token: &CancelToken, cancelled: &mut Cancels, on_server: &OnServer) -> Fetch<'s> {
     on_server.starts(token);
-    let mut fetched = pin!(pages.next());
-    let (mut is_closing, mut is_cancelled) = (false, false);
-    let fetched = loop {
-        tokio::select! {
-            fetched = &mut fetched => break fetched,
-            cancel_of = cancelled.recv(), if !is_closing => match cancel_of {
-                Some(of) if of == run => {
-                    is_cancelled = true;
-                    _ = cancel(token).await;
-                }
-                Some(_) => {}
-                None => {
-                    is_closing = true;
-                    on_server.cancel_as_closing(token).await;
-                }
-            },
-        }
-    };
+    let fetched = token.unless_stopped(pages.next(), cancelled.stopping(run, token)).await;
     on_server.ended();
+    let is_cancelled = cancelled.latest == Some(run);
     match fetched {
-        Ok(Fetched { rest: Some(rest), .. }) if is_closing => {
-            close(rest).await;
+        Err(interrupted) => {
+            warn_if_still_running(&interrupted.cancel);
             Fetch::Closing
         }
-        _ if is_closing => Fetch::Closing,
-        Ok(Fetched { page, rest: Some(rest) }) => Fetch::More(page, rest),
-        Ok(Fetched { page, rest: None }) => Fetch::Last(page),
-        Err(_) if is_cancelled => Fetch::Cancelled,
-        Err(err) => Fetch::Failed(format!("{err:#}")),
+        Ok(Ok(Fetched { page, rest: Some(rest) })) => Fetch::More(page, rest),
+        Ok(Ok(Fetched { page, rest: None })) => Fetch::Last(page),
+        Ok(Err(_)) if is_cancelled => Fetch::Cancelled,
+        Ok(Err(err)) => Fetch::Failed(format!("{err:#}")),
     }
 }
 
@@ -324,6 +300,23 @@ mod tests {
         while on_a_side_session(&is_active).await.is_empty() {}
         backend.cancel(&shop(), RunId::FIRST);
         assert_eq!(page_of(next(&mut answers).await), Page { rows: vec![], extent: Extent::Cut });
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_cancel_of_the_next_run_while_a_page_is_fetched_keeps_that_run_from_the_server() {
+        let (backend, mut answers) = started(PAGES_IDLE_LIMIT);
+        run(&backend, RunId::FIRST, SLOW_AFTER_THE_FIRST_PAGE);
+        next(&mut answers).await;
+        ask_next_page(&backend);
+        let is_active = format!("SELECT 1 FROM pg_stat_activity WHERE query = '{SLOW_AFTER_THE_FIRST_PAGE}' AND state = 'active'");
+        while on_a_side_session(&is_active).await.is_empty() {}
+        run(&backend, RunId::FIRST.next(), "SELECT 7");
+        backend.cancel(&shop(), RunId::FIRST.next());
+        backend.cancel(&shop(), RunId::FIRST);
+        next(&mut answers).await;
+        let answer = next(&mut answers).await;
+        assert!(matches!(&answer, Incoming::Failed { run, .. } if *run == RunId::FIRST.next()), "{answer:?}");
     }
 
     #[tokio::test]

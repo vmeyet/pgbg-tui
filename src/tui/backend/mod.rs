@@ -2,9 +2,10 @@
 use super::app::{Action, Answer, Incoming, RunId, SessionId, TunnelState};
 use crate::connection::{Connection, ConnectionName, WritePolicy};
 use crate::db::model::{CancelToken, ServerError, Statement};
-use crate::db::{NotOpened, Opened, Pages, Session, Started, TunnelStep, guard, open_along};
+use crate::db::{Interrupted, NotOpened, Opened, Pages, Session, Started, TunnelStep, guard, open_along};
 use crate::history::{Entry, History, Outcome, Store};
 use crate::query::{Query, Roots};
+use crate::signal::STOP_WAIT;
 use crate::tunnel::{Died, Tunnel};
 use chrono::Utc;
 use config::ConfigFile;
@@ -13,7 +14,6 @@ use paging::{PAGES_IDLE_LIMIT, Paging, serve_pages};
 use queries::QueryFiles;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::pin::pin;
 use std::time::Duration;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -28,11 +28,8 @@ pub(super) use clipboard::reaches_the_terminal;
 mod paging;
 mod queries;
 
-/// How long closing a session waits for its task to finish a cancel before it aborts the task, so the terminal comes back soon.
-const STOP_WAIT: Duration = Duration::from_secs(2);
-/// How long closing a session waits for the server to take a cancel request before it aborts the session task.
-const CANCEL_WAIT: Duration = Duration::from_secs(1);
 const CANCELLED_BEFORE_SENT: &str = "cancelled before it was sent";
+const STOPPED_WITH_ITS_SESSION: &str = "cancelled: its session stopped";
 const TUNNEL_NOT_STARTED: &str = "its tunnel did not start";
 const TUNNEL_DIED: &str = "its tunnel died";
 
@@ -154,6 +151,7 @@ impl Backend {
         }
         let name = connection.name().clone();
         let (cancels, cancelled) = mpsc::unbounded_channel();
+        let cancelled = Cancels { receiver: cancelled, latest: None };
         let (on_server, running) = watch::channel(None);
         let (answers, history, idle_limit) = (self.answers.clone(), self.history.clone(), self.idle_limit);
         let on_server = OnServer(on_server);
@@ -214,7 +212,7 @@ impl SessionLink {
         }
     }
 
-    /// Cancels the running statement and lets the session task finish it, waiting `STOP_WAIT` at most;
+    /// Stops the session task, which cancels the running statement and drops it, waiting `STOP_WAIT` at most;
     /// past it, the server is asked to cancel a statement or a page whose cancel did not reach it, and the task is
     /// aborted, which cuts the session's link.
     async fn stop(self) {
@@ -226,10 +224,8 @@ impl SessionLink {
             Err(_) => {
                 tracing::warn!("the session task did not stop within {STOP_WAIT:?}: it is aborted");
                 let on_server = running.borrow().clone();
-                if let Some(token) = on_server
-                    && let Err(err) = token.cancel_within(CANCEL_WAIT).await
-                {
-                    tracing::warn!("the statement may still run on the server: {err:#}");
+                if let Some(token) = on_server {
+                    warn_if_still_running(&token.cancel_as_stopping().await);
                 }
                 task.abort();
             }
@@ -251,7 +247,7 @@ struct SessionTask {
     id: SessionId,
     tunnel: Option<Tunnel>,
     session: Option<Session>,
-    cancelled: UnboundedReceiver<RunId>,
+    cancelled: Cancels,
     on_server: OnServer,
     answers: UnboundedSender<Answer>,
     history: Option<Store>,
@@ -270,11 +266,40 @@ impl OnServer {
     fn ended(&self) {
         self.0.send_replace(None);
     }
+}
 
-    /// Cancels what is on the server as the session closes; once the server took it, an abort has nothing to cancel.
-    async fn cancel_as_closing(&self, token: &CancelToken) {
-        if cancel(token).await {
-            self.ended();
+/// The cancels a session task is sent, each for a `RunId`, and the latest run one was heard for: ids only grow, and a
+/// sheet sends one run at a time, so it is the only one a run still to come can be cancelled by.
+struct Cancels {
+    receiver: UnboundedReceiver<RunId>,
+    latest: Option<RunId>,
+}
+
+impl Cancels {
+    /// The next cancel, kept when it is the latest; none once the session is stopping.
+    async fn recv(&mut self) -> Option<RunId> {
+        let of = self.receiver.recv().await;
+        self.latest = self.latest.max(of);
+        of
+    }
+
+    /// Whether `run` was cancelled before it started, by its own cancel or by its session stopping.
+    fn was_cancelled(&mut self, run: RunId) -> bool {
+        loop {
+            match self.receiver.try_recv() {
+                Ok(of) => self.latest = self.latest.max(Some(of)),
+                Err(TryRecvError::Empty) => return self.latest == Some(run),
+                Err(TryRecvError::Disconnected) => return true,
+            }
+        }
+    }
+
+    /// Asks the server to cancel `run` at each of its cancels, and ends once the session is stopping.
+    async fn stopping(&mut self, run: RunId, token: &CancelToken) {
+        while let Some(of) = self.recv().await {
+            if of == run {
+                cancel(token).await;
+            }
         }
     }
 }
@@ -284,6 +309,15 @@ struct Answered<'s> {
     incoming: Incoming,
     outcome: Outcome,
     rest: Option<Pages<'s>>,
+}
+
+impl Answered<'_> {
+    /// The answer to `run`, stopped with its session before the server answered.
+    fn stopped(run: RunId, interrupted: &Interrupted<()>) -> Self {
+        warn_if_still_running(&interrupted.cancel);
+        let incoming = Incoming::Failed { run, error: STOPPED_WITH_ITS_SESSION.to_owned(), position: None };
+        Self { incoming, outcome: Outcome::LinkError, rest: None }
+    }
 }
 
 impl SessionTask {
@@ -384,7 +418,7 @@ impl SessionTask {
         }
         let session = self.session.as_mut()?;
         let run = queued.run;
-        if was_cancelled(&mut self.cancelled, run) {
+        if self.cancelled.was_cancelled(run) {
             self.send(Incoming::Failed { run, error: CANCELLED_BEFORE_SENT.to_owned(), position: None });
             return None;
         }
@@ -482,57 +516,35 @@ async fn ended(tunnel: Option<&mut Tunnel>) -> Died {
     }
 }
 
-/// Whether `run` was cancelled before it started, by its own cancel or by its session closing; a cancel for an
-/// earlier run is dropped.
-fn was_cancelled(cancelled: &mut UnboundedReceiver<RunId>, run: RunId) -> bool {
-    loop {
-        match cancelled.try_recv() {
-            Ok(cancelled) if cancelled == run => return true,
-            Ok(_) => {}
-            Err(TryRecvError::Empty) => return false,
-            Err(TryRecvError::Disconnected) => return true,
-        }
-    }
-}
-
-/// Runs `queued`, asking the server to cancel it when its cancel comes or its session closes; a cancel for another
-/// run does nothing. `on_server` holds its token while it runs.
+/// Runs `queued`, asking the server to cancel it when its cancel comes; a cancel for another run does nothing. A stop
+/// stops it as `CancelToken::unless_stopped` says. `on_server` holds its token until it is answered or dropped.
 async fn run_until_answered<'s>(
     session: &'s mut Session,
     writes: WritePolicy,
     queued: Queued,
-    cancelled: &mut UnboundedReceiver<RunId>,
+    cancelled: &mut Cancels,
     on_server: &OnServer,
 ) -> Answered<'s> {
     let token = session.cancel_token();
     let run = queued.run;
     on_server.starts(&token);
-    let mut answer = pin!(answer_to(session, writes, queued));
-    let mut is_closing = false;
-    let answered = loop {
-        tokio::select! {
-            answer = &mut answer => break answer,
-            cancel_of = cancelled.recv(), if !is_closing => match cancel_of {
-                Some(cancelled) if cancelled == run => _ = cancel(&token).await,
-                Some(_) => {}
-                None => {
-                    is_closing = true;
-                    on_server.cancel_as_closing(&token).await;
-                }
-            },
-        }
-    };
+    let answered = token.unless_stopped(answer_to(session, writes, queued), cancelled.stopping(run, &token)).await;
     on_server.ended();
-    answered
+    answered.unwrap_or_else(|interrupted| Answered::stopped(run, &interrupted))
 }
 
-/// Whether the server took the cancel request.
-async fn cancel(token: &CancelToken) -> bool {
-    let sent = token.cancel().await;
-    if let Err(err) = &sent {
+/// Warns when the server did not take the cancel a stop sent it.
+fn warn_if_still_running(cancel: &anyhow::Result<()>) {
+    if let Err(err) = cancel {
+        tracing::warn!("the statement may still run on the server: {err:#}");
+    }
+}
+
+/// Asks the server to cancel what the session runs; a request that failed is logged, and the statement runs on.
+async fn cancel(token: &CancelToken) {
+    if let Err(err) = token.cancel().await {
         tracing::warn!("the cancel request failed: {err:#}");
     }
-    sent.is_ok()
 }
 
 async fn answer_to(session: &mut Session, writes: WritePolicy, queued: Queued) -> Answered<'_> {
@@ -593,11 +605,14 @@ mod tests {
 
     /// An empty table `name` in the test database, made again from scratch.
     async fn empty_table(name: &str) -> String {
-        let mut session = Session::open(&connection(), Route::Direct).await.unwrap();
-        for sql in [format!("DROP TABLE IF EXISTS {name}"), format!("CREATE TABLE {name} (n int)")] {
-            session.run(&guard::admit(Statement::new(&sql), WritePolicy::Allowed).unwrap()).await.unwrap();
-        }
+        on_a_side_session_writing(&format!("DROP TABLE IF EXISTS {name}")).await;
+        on_a_side_session_writing(&format!("CREATE TABLE {name} (n int)")).await;
         name.to_owned()
+    }
+
+    async fn on_a_side_session_writing(sql: &str) {
+        let mut session = Session::open(&connection(), Route::Direct).await.unwrap();
+        session.run(&guard::admit(Statement::new(sql), WritePolicy::Allowed).unwrap()).await.unwrap();
     }
 
     fn is_answer_to(run: RunId, answer: &Incoming) -> bool {
@@ -825,14 +840,25 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
-    async fn closing_a_session_cancels_its_running_statement() {
-        const SLEEP_AT_CLOSE: &str = "SELECT pg_sleep(31)";
-        let (mut backend, mut answers) = started();
-        backend.run(&shop(), RunId::FIRST, Statement::new(SLEEP_AT_CLOSE));
-        until_active(SLEEP_AT_CLOSE).await;
-        backend.close(&shop());
-        let answer = next_answer(&mut answers).await;
-        assert!(matches!(&answer, Incoming::Failed { error, .. } if error.contains("canceling statement")), "{answer:?}");
+    async fn stopping_a_session_ends_its_running_statement_on_the_server() {
+        const SLEEP_AT_STOP: &str = "SELECT pg_sleep(31)";
+        let (backend, _answers) = started();
+        backend.run(&shop(), RunId::FIRST, Statement::new(SLEEP_AT_STOP));
+        until_active(SLEEP_AT_STOP).await;
+        backend.stop().await;
+        let is_active = format!("SELECT 1 FROM pg_stat_activity WHERE query = '{SLEEP_AT_STOP}' AND state = 'active'");
+        while !on_a_side_session(&is_active).await.is_empty() {}
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_statement_running_when_its_session_stops_fails_with_it() {
+        let (backend, mut answers) = started();
+        backend.run(&shop(), RunId::FIRST, Statement::new(SLEEP));
+        until_sleeping().await;
+        backend.stop().await;
+        let failed = Incoming::Failed { run: RunId::FIRST, error: STOPPED_WITH_ITS_SESSION.to_owned(), position: None };
+        assert_eq!(next_answer(&mut answers).await, failed);
     }
 
     #[tokio::test]
@@ -851,13 +877,28 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
-    async fn stopping_after_a_cancel_waits_for_the_cancelled_run_to_end() {
+    async fn a_write_whose_session_stops_between_its_round_trips_never_commits() {
+        let table = empty_table("pgbg_write_between_round_trips").await;
+        on_a_side_session_writing(&format!("INSERT INTO {table} VALUES (1)")).await;
+        let (backend, mut answers) = started_on(fixtures::tunnelled_slowly("pgbg-test-slow-write", WritePolicy::Allowed));
+        answers_until(&mut answers, |answer| *answer == Incoming::Opened).await;
+        let mut running = backend.sessions[&shop()].running.clone();
+        backend.run(&shop(), RunId::FIRST, Statement::new(format!("UPDATE {table} SET n = 2")));
+        running.wait_for(Option::is_some).await.unwrap();
+        backend.stop().await;
+        let rows = on_a_side_session(&format!("SELECT n FROM {table}")).await;
+        assert_eq!(rows, [[Value::Int(1)]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_run_cancelled_then_stopped_is_answered_as_failed() {
         let (backend, mut answers) = started();
         backend.run(&shop(), RunId::FIRST, Statement::new(SLEEP));
         until_sleeping().await;
         backend.cancel(&shop(), RunId::FIRST);
         backend.stop().await;
         let answer = next_answer(&mut answers).await;
-        assert!(matches!(&answer, Incoming::Failed { error, .. } if error.contains("canceling statement")), "{answer:?}");
+        assert!(matches!(&answer, Incoming::Failed { run, .. } if *run == RunId::FIRST), "{answer:?}");
     }
 }

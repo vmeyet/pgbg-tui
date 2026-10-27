@@ -9,7 +9,7 @@ use crate::secret::{KeychainItem, Secret};
 use std::time::Duration;
 
 /// Which run of a statement an answer or a cancel is about, so a late one never lands on the next run.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(in crate::tui) struct RunId(u64);
 
 impl RunId {

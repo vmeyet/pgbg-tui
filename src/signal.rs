@@ -8,7 +8,7 @@ use tokio::signal::unix::{SignalKind, signal};
 /// The exit code of a process a signal stopped is this plus the signal's number, as shells report it.
 const SIGNALLED_EXIT_BASE: i32 = 128;
 /// How long stopped work has to end on its own (a session cancels its statement, a tunnel stops) before it is dropped.
-const STOP_WAIT: Duration = Duration::from_secs(3);
+pub(crate) const STOP_WAIT: Duration = Duration::from_secs(3);
 
 /// The signal that stopped pgbg; `main` exits with its code.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

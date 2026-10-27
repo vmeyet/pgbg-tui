@@ -8,11 +8,14 @@ use std::time::Duration;
 /// The environment variable naming the throwaway database the `#[ignore]`d tests run against.
 const DATABASE_URL: &str = "PGBG_TEST_DATABASE_URL";
 
-/// A forwarder from `127.0.0.1:argv[1]` to `argv[2]:argv[3]`, for tunnels in tests.
+/// A forwarder from `127.0.0.1:argv[1]` to `argv[2]:argv[3]`, for tunnels in tests; `argv[5]`, when given, holds each
+/// chunk that many seconds on its way.
 pub(crate) const FORWARD: &str = "
-import socket, sys, threading
+import socket, sys, threading, time
+hop = float(sys.argv[5]) if len(sys.argv) > 5 else 0
 def pipe(source, sink):
     while data := source.recv(65536):
+        time.sleep(hop)
         sink.sendall(data)
     sink.shutdown(socket.SHUT_WR)
 server = socket.create_server(('127.0.0.1', int(sys.argv[1])))
@@ -26,6 +29,8 @@ while True:
 /// How long a test waits on a child process: to write its pid, or to be gone.
 const PROCESS_WAIT: Duration = Duration::from_secs(5);
 const PROCESS_POLL: Duration = Duration::from_millis(20);
+/// How long the slow forwarder holds each chunk each way: a round trip of about 30 ms, as to a distant server.
+const SLOW_HOP: Duration = Duration::from_millis(15);
 
 /// A shell line that starts a `sleep` it does not wait on, as `gcloud` starts helpers, writes that `sleep`'s pid to
 /// `pid_file`, then waits for it.
@@ -90,20 +95,26 @@ pub(crate) fn test_database_by(user: &str, extra: &str) -> Connection {
 
 /// `shop` on the test database through a forwarder whose command line carries `marker`, so a test can find it.
 pub(crate) fn tunnelled(marker: &str) -> Connection {
-    through_forwarder("\"python3\", \"-c\"", marker, WritePolicy::ReadOnly)
+    through_forwarder("\"python3\", \"-c\"", marker, WritePolicy::ReadOnly, Duration::ZERO)
+}
+
+/// Like `tunnelled`, each round trip through it about 30 ms long.
+pub(crate) fn tunnelled_slowly(marker: &str, writes: WritePolicy) -> Connection {
+    through_forwarder("\"python3\", \"-c\"", marker, writes, SLOW_HOP)
 }
 
 /// Like `tunnelled`, the forwarder started once the shell line `first` succeeds, a tunnel that died when it fails.
 pub(crate) fn tunnelled_after(marker: &str, first: &str, writes: WritePolicy) -> Connection {
     let script = format!("{first} || exit 1; exec python3 -c \"$0\" \"$@\"");
-    through_forwarder(&format!("\"sh\", \"-c\", {script:?}"), marker, writes)
+    through_forwarder(&format!("\"sh\", \"-c\", {script:?}"), marker, writes, Duration::ZERO)
 }
 
-/// `shop` on the test database through a tunnel that runs `program`, then the forwarder's code and arguments.
-fn through_forwarder(program: &str, marker: &str, writes: WritePolicy) -> Connection {
+/// `shop` on the test database through a tunnel that runs `program`, then the forwarder's code and arguments, each
+/// chunk held `hop` on its way.
+fn through_forwarder(program: &str, marker: &str, writes: WritePolicy, hop: Duration) -> Connection {
     let database = url::Url::parse(&test_database_url()).unwrap();
     let (host, port) = (database.host_str().unwrap().to_owned(), database.port().unwrap_or(5432));
-    let command = format!("[{program}, {FORWARD:?}, \"{{port}}\", \"{host}\", \"{port}\", \"{marker}\"]");
+    let command = format!("[{program}, {FORWARD:?}, \"{{port}}\", \"{host}\", \"{port}\", \"{marker}\", \"{}\"]", hop.as_secs_f64());
     let writes = if writes == WritePolicy::Allowed { "writes = \"allowed\"\n" } else { "" };
     connection(&format!("tier = \"local\"\nurl = \"{database}\"\ntls = \"off\"\n{writes}tunnel = {{ command = {command} }}\n"))
 }
