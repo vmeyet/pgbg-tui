@@ -16,7 +16,7 @@ When a boundary or a flow changes, change this page in the same MR.
 | `connection/` | `Connection`: name, tier, target, tunnel, secret source, write policy, TLS, statement timeout, whether the TUI reads its schema; parsed once from config |
 | `secret/` | `Secret` (prints `<redacted>`, never cloned, wiped from memory on drop, as is the hex line written to `security -i`; a password typed or piped in grows in place within a buffer sized ahead) and its sources (a `KeychainItem` is one word `security -i` cannot split): keychain through `/usr/bin/security`, environment variable, command; `SecretSource::read` reads one when a session opens; `Secret::from_stdin` reads one typed hidden or piped in, and the TUI's connection form types one into a `Secret` it never shows |
 | `tunnel/` | `Tunnel`: a child process forwarding a free `127.0.0.1` port to the database; start, wait for the port, stop; its `Route` is what a session opens along |
-| `groups.rs` | The process groups pgbg owns (a tunnel's, a `before` or password command's): each one killed whole when dropped, and every live one by a panic hook |
+| `groups.rs` | The process groups pgbg owns (a tunnel's, a `before`, password or `[ai]` (planned) command's): each one killed whole when dropped, and every live one by a panic hook |
 | `db/` | The only module that sees `tokio_postgres`: connect over rustls, open a session along its route, through the connection's tunnel when it has one (`open_along` for the TUI's session task, which keeps the tunnel for the next open and hears it start; `open_once` for a command, which owns the tunnel and stops it), run a statement, stream rows, cancel |
 | `db/model/` | The neutral model: `ResultSet` (its columns, and its rows a `Page` at a time, `push`ed on; its `Extent` says whether it holds them all, was cut, or has more waiting in its portal), `Column`, `ColumnKind`, `Value`, `Catalog` (a `Schema` as one read gave it, with the session's `current_schemas(false)` and whether the table cap cut it), `Schema` (its tables, their columns and indexes, filtered by name; completion lives in `complete/` (planned), which replaces `Schema::complete` and `CompletionContext`), `Table`, `ServerError`, `Route` (direct, or a tunnel's `LocalPort`), `Params` (the values bound to a statement's `$n`, in order), and `CancelToken`, whose driver part only `db/` reads |
 | `db/cancel.rs` | `CancelToken`: the server's cancel request, and `unless_stopped`, the one way pgbg stops a statement it leaves (a signal under a command, a session closing in the TUI): cancel within `CANCEL_WAIT`, then drop the work |
@@ -123,16 +123,24 @@ Running a statement with parameters (the header and the parameter bar planned):
 
 Asking a command for SQL (planned):
 
-1. `[ai] command = ["claude", "-p"]` in `config.toml` names any program that reads a prompt on stdin and writes SQL on stdout (`claude -p`, `llm`, a wrapper around ollama); without it, or with a program that cannot be run, the feature is off and the keys say so.
-   A connection says `ai = "on"` or `"off"`; a production connection is off unless it says on, since the schema slice leaves the machine with the command.
-2. `ctrl-g` in the editor asks for an instruction on the footer line; the prompt holds it, the statement under the cursor, the tier, and a slice of the schema: the tables the statement names and the closest matches in the index to the instruction's words, with their columns and types, never a row, a default, the history or a server's words.
+1. `[ai] command` in `config.toml` names any program that reads a prompt on stdin and writes SQL on stdout (`llm`, a wrapper around ollama, `claude -p`); without it, or with a program that cannot be run, the feature is off and the keys say so.
+   The `claude` example turns its tools off (`["claude", "-p", "--tools", "", "--strict-mcp-config"]`): a table or column name can carry instructions to the model, and any process of the user, the command included, can read pgbg's keychain items.
+2. A connection says `ai = "on"` or `"off"`; one on production or one that allows writes is off unless it says on, since the schema slice leaves the machine with the command and an answer may be a write.
+3. `ctrl-g` in the editor asks for an instruction on the footer line; the prompt holds it, the statement under the cursor, the tier, and a slice of the schema: the tables the statement names and the closest matches in the index to the instruction's words, with their columns and types.
+   It never holds a row, a default, the history, a server's words, the connection's name, host or URL, nor a parameter's value: a parameter goes as its `{{name}}`.
+   Each string literal of the statement goes as `'<literal 1>'`, `'<literal 2>'`, found with `db::lex`, and the answer's markers are put back from that list before it is shown; `[ai] literals = "sent"` sends them as typed.
+   A statement holding `PASSWORD` or a URL with a password, by the rule the history uses, is never sent: the ask stops and says why.
    The prompt is capped at 16 KiB, the schema slice cut first, table by table, and the prompt says when it was.
-3. The backend runs the command as it runs a `before` command: its own process group in `groups.rs`, the prompt written to stdin then closed, stdout read to its end up to 64 KiB, 60 s at most (`[ai] timeout`); `Esc`, a new ask or a closed sheet kills the group, and a late answer is dropped by its `AskId`.
+4. The command runs from a new empty temp folder, removed after, with a cleared environment: `PATH`, `HOME`, `LANG`, `TERM` and the names `[ai] env` lists, never a variable a connection's `password = { env = ... }` names, even when listed.
+   It runs in its own process group in `groups.rs`, through a helper of its own there: stdin written by its own task then closed, stdout read at the same time and cut at 64 KiB, stderr's last lines kept, the group killed on a drop; `groups::output` would deadlock on a big prompt and keeps no cap.
+   It gets 60 s at most (`[ai] timeout`); `Esc`, a new ask or a closed sheet drops it, which kills the group, and a late answer is dropped by its `AskId`.
    No streaming: the answer is shown whole, once the command exits with 0; another exit shows its last lines of stderr.
-4. `ai::answer` drops a Markdown fence and the prose around it, and splits what is left with `db::lex`: one statement is shown as a diff against the statement under the cursor, several as a list to pick one from; `⏎` replaces the statement under the cursor (or inserts at the cursor when there is none), `esc` drops it.
-   An answer never runs by itself: running it is `⏎` again in the editor, through `db::guard` like any statement.
-5. The idle ghost, when `[ai] ghost = true`, asks for the rest of the statement after 1 s without a key, the local completion's ghost first; any key kills that command, and its answer shows only while the text is the one it was asked for.
-6. The log says which program ran, how long, how it exited and how many bytes went each way; never the prompt, the instruction or the answer.
+5. `ai::answer` drops a Markdown fence and the prose around it, and splits what is left with `db::lex`: one statement is shown as a diff against the statement under the cursor, several as a list to pick one from, all drawn through `render::printable`.
+   An answer `db::guard` classifies as a write says so in the failure colour, above the diff.
+   `tab` takes it, replacing the statement under the cursor (or inserting at the cursor when there is none) through the editor's paste, so its control characters are dropped as a paste's are; `esc` drops it.
+   `⏎` takes nothing, so taking an answer and running it are always two keys; running it goes through `db::guard` like any statement.
+6. The idle ghost, when `[ai] ghost = true`, asks for the rest of the statement after 1 s without a key, the local completion's ghost first; any key kills that command, and its answer shows only while the text is the one it was asked for.
+7. The log says which program ran, how long, how it exited and how many bytes went each way; never the prompt, the instruction or the answer.
 
 Formatting a cell (planned):
 
