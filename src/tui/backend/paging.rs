@@ -2,6 +2,7 @@
 use super::session::{Cancels, Job, Mailbox, Next, OnServer, SessionAnswers, Woken, ended, warn_if_still_running};
 use crate::db::model::{CancelToken, Extent, Page};
 use crate::db::{Fetched, Pages};
+use crate::failure::{Failure, Lost};
 use crate::tui::app::{Incoming, RunId};
 use crate::tunnel::{Died, Tunnel};
 use std::time::Duration;
@@ -25,7 +26,7 @@ pub(super) struct Paging<'a, 's> {
 enum Held {
     Queued(Option<Job>),
     Cancelled(Option<RunId>),
-    Closed(String),
+    Closed(Lost),
     TunnelEnded(Died),
     Idle,
 }
@@ -36,8 +37,8 @@ enum Fetch<'s> {
     Last(Page),
     /// The run's cancel stopped the fetch, so the portal is gone.
     Cancelled,
-    /// The server failed the fetch with this message, so the portal is gone.
-    Failed(String),
+    /// The server failed the fetch, so the portal is gone.
+    Failed(Failure),
     /// The session is stopping: the fetch was dropped, and the portal goes with the session.
     Closing,
 }
@@ -54,8 +55,8 @@ impl Outbox<'_> {
     }
 
     /// Reports that the server failed the next page, so the result is cut.
-    fn send_failure(&self, error: String) {
-        self.say(Incoming::PageFailed { run: self.run, error });
+    fn send_failure(&self, failure: Failure) {
+        self.say(Incoming::PageFailed { run: self.run, failure });
     }
 
     fn say(&self, incoming: Incoming) {
@@ -108,8 +109,8 @@ pub(super) async fn serve_pages(paging: Paging<'_, '_>) -> Next {
                         outbox.send_cut();
                         return Next::Wait;
                     }
-                    Fetch::Failed(error) => {
-                        outbox.send_failure(error);
+                    Fetch::Failed(failure) => {
+                        outbox.send_failure(failure);
                         return Next::Wait;
                     }
                     Fetch::Closing => {
@@ -163,7 +164,7 @@ async fn next_page<'s>(pages: Pages<'s>, run: RunId, token: &CancelToken, cancel
         Ok(Ok(Fetched { page, rest: Some(rest) })) => Fetch::More(page, rest),
         Ok(Ok(Fetched { page, rest: None })) => Fetch::Last(page),
         Ok(Err(_)) if is_cancelled => Fetch::Cancelled,
-        Ok(Err(err)) => Fetch::Failed(format!("{err:#}")),
+        Ok(Err(err)) => Fetch::Failed(Failure::from(&err)),
     }
 }
 
@@ -341,7 +342,7 @@ mod tests {
         next(&mut answers).await;
         ask_next_page(&backend);
         let failed = next(&mut answers).await;
-        assert!(matches!(&failed, Incoming::PageFailed { error, .. } if error.contains("division by zero")), "{failed:?}");
+        assert!(matches!(&failed, Incoming::PageFailed { failure, .. } if failure.to_string().contains("division by zero")), "{failed:?}");
     }
 
     #[tokio::test]

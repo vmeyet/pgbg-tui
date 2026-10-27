@@ -51,6 +51,7 @@ mod tests {
     use super::super::{Focus, Incoming, Run, RunId};
     use super::*;
     use crate::db::model::Statement;
+    use crate::failure::Failure;
     use crate::query::params::Given;
     use crossterm::event::{KeyCode, KeyEvent};
 
@@ -123,7 +124,7 @@ mod tests {
     fn tried_to_write(sql: &str) -> App {
         let mut app = typed_on("allowed", sql);
         press(&mut app, KeyCode::Enter);
-        app.apply(to_shop(Incoming::TriedToWrite { run: RunId::FIRST }));
+        app.apply(to_shop(Incoming::Failed { run: RunId::FIRST, failure: Failure::TriedToWrite }));
         app
     }
 
@@ -152,7 +153,7 @@ mod tests {
         let mut app = typed_on("allowed", "SELECT archive_orders()");
         press(&mut app, KeyCode::Enter);
         app.overlay = Some(Overlay::CopyAs);
-        app.apply(to_shop(Incoming::TriedToWrite { run: RunId::FIRST }));
+        app.apply(to_shop(Incoming::Failed { run: RunId::FIRST, failure: Failure::TriedToWrite }));
         assert_eq!(app.overlay, Some(Overlay::CopyAs));
     }
 

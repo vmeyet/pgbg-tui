@@ -3,6 +3,7 @@ use super::guard::{Admitted, Mode};
 use super::model::{Column, Extent, Page, ResultSet};
 use super::run::{FetchSize, begin_read_only, bind_portal, columns, fetch_page};
 use super::{Isolation, Marks, Session, roll_back, why_ended};
+use crate::failure::Lost;
 use anyhow::Result;
 use std::time::Duration;
 use tokio::sync::watch;
@@ -29,7 +30,7 @@ pub(crate) struct Pages<'s> {
     transaction: Transaction<'s>,
     portal: Portal,
     marks: &'s mut Marks,
-    ended: &'s watch::Receiver<Option<String>>,
+    ended: &'s watch::Receiver<Option<Lost>>,
     idle_limit_on_server: Duration,
 }
 
@@ -88,7 +89,7 @@ impl<'s> Pages<'s> {
     }
 
     /// Waits until the link to the server ends, and says why.
-    pub(crate) async fn closed(&self) -> String {
+    pub(crate) async fn closed(&self) -> Lost {
         why_ended(self.ended).await
     }
 }

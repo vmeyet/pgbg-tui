@@ -1,8 +1,9 @@
 //! Opening a session: the driver's config, the TLS it logs in with, and the task that drives its link.
 use super::limits::{ReadLimits, ServerTimeouts, read_server_timeouts, set_session_limits};
 use super::model::Route;
-use super::{Marks, SERVER_CLOSED, Session, server_error};
+use super::{Marks, Session, server_error};
 use crate::connection::{Connection, Target, Tls, WritePolicy};
+use crate::failure::Lost;
 use anyhow::{Context, Result, anyhow};
 use std::time::Duration;
 use tokio::sync::watch;
@@ -56,7 +57,7 @@ fn connect_wait(config: &Config) -> Duration {
 /// A client, why its link ended once it has, and the task that drives the link.
 struct Connected {
     client: Client,
-    ended: watch::Receiver<Option<String>>,
+    ended: watch::Receiver<Option<Lost>>,
     link: AbortHandle,
 }
 
@@ -72,15 +73,15 @@ where
         .map_err(server_error)?;
     let (end, ended) = watch::channel(None);
     let link = tokio::spawn(async move {
-        let reason = match connection.await {
-            Ok(()) => SERVER_CLOSED.to_owned(),
+        let lost = match connection.await {
+            Ok(()) => Lost::ServerClosed,
             Err(err) => {
-                let reason = format!("{:#}", server_error(err));
-                tracing::warn!("the connection closed: {reason}");
-                reason
+                let why = format!("{:#}", server_error(err));
+                tracing::warn!("the connection closed: {why}");
+                Lost::LinkFailed(why)
             }
         };
-        end.send_replace(Some(reason));
+        end.send_replace(Some(lost));
     });
     Ok(Connected { client, ended, link: link.abort_handle() })
 }

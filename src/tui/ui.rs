@@ -176,6 +176,7 @@ mod tests {
     use super::super::styled;
     use super::*;
     use crate::db::model::{Catalog, Extent, LocalPort, Page, ResultSet};
+    use crate::failure::{Failure, Lost};
     use crate::tui::theme::Theme;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
@@ -252,21 +253,21 @@ mod tests {
     fn a_tunnel_that_died_says_how_in_the_status_line() {
         let mut app = app();
         app.apply(to_shop(Incoming::Tunnel(TunnelState::Died("the tunnel `ssh` died, exit status: 255".into()))));
-        app.apply(to_shop(Incoming::Closed("its tunnel died".into())));
+        app.apply(to_shop(Incoming::Closed(Lost::TunnelDied)));
         insta::assert_snapshot!("tunnel_died", render(&app, 100, 14).backend());
     }
 
     #[test]
     fn a_session_that_cannot_open_says_so_in_the_status_line() {
         let mut app = app();
-        app.apply(to_shop(Incoming::NotOpened("connecting to shop: connection refused".into())));
+        app.apply(to_shop(Incoming::NotOpened(Failure::Login("connecting to shop: connection refused".into()))));
         insta::assert_snapshot!("not_opened", render(&app, 60, 14).backend());
     }
 
     #[test]
     fn a_session_error_cannot_reverse_the_status_line() {
         let mut app = app();
-        app.apply(to_shop(Incoming::NotOpened("role \u{202e}anin does not exist".into())));
+        app.apply(to_shop(Incoming::NotOpened(Failure::Login("role \u{202e}anin does not exist".into()))));
         let drawn = render(&app, 60, 14).backend().to_string();
         assert!(drawn.contains("\\u{202e}anin") && !drawn.contains('\u{202e}'), "{drawn}");
     }
@@ -275,7 +276,7 @@ mod tests {
     fn a_failed_run_cannot_reverse_the_result_pane() {
         let mut app = typed("SELECT 1");
         app.handle_key(KeyEvent::from(KeyCode::Enter));
-        app.apply(to_shop(Incoming::Failed { run: RunId::FIRST, error: "column \u{2066}latot does not exist".into(), position: None }));
+        app.apply(to_shop(Incoming::Failed { run: RunId::FIRST, failure: Failure::Link("column \u{2066}latot does not exist".into()) }));
         let drawn = render(&app, 60, 14).backend().to_string();
         assert!(drawn.contains("\\u{2066}latot") && !drawn.contains('\u{2066}'), "{drawn}");
     }
@@ -445,7 +446,7 @@ mod tests {
     fn a_dead_tunnel_gives_the_one_reason_the_session_is_down() {
         let mut app = app();
         app.apply(to_shop(Incoming::Tunnel(TunnelState::Died("the tunnel `ssh` died, exit status: 255".into()))));
-        app.apply(to_shop(Incoming::Closed("its tunnel died".into())));
+        app.apply(to_shop(Incoming::Closed(Lost::TunnelDied)));
         let footer = footer_of(&render(&app, 100, 8));
         assert_eq!(footer.matches('✗').count(), 1, "{footer}");
         assert!(footer.contains("✗ the tunnel `ssh` died"), "{footer}");
@@ -466,7 +467,7 @@ mod tests {
         app.handle_key(KeyEvent::from(KeyCode::Enter));
         let result = ResultSet::new(orders().columns().to_vec(), first);
         app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result, took: Duration::from_millis(38) }));
-        app.apply(to_shop(Incoming::PageFailed { run: RunId::FIRST, error: "ERROR: division by zero".into() }));
+        app.apply(to_shop(Incoming::PageFailed { run: RunId::FIRST, failure: Failure::Link("ERROR: division by zero".into()) }));
         assert!(footer_of(&render(&app, 100, 8)).contains("✗ the next page failed: ERROR: division by zero"));
     }
 
@@ -493,7 +494,7 @@ mod tests {
     #[test]
     fn a_production_frame_and_an_error_never_share_a_colour() {
         let mut app = app_on(&connection("production", "read-only"));
-        app.apply(to_shop(Incoming::NotOpened("connecting to shop: connection refused".into())));
+        app.apply(to_shop(Incoming::NotOpened(Failure::Login("connecting to shop: connection refused".into()))));
         insta::assert_snapshot!("production_error_styled", styled::runs(render(&app, 60, 6).backend().buffer()));
     }
 

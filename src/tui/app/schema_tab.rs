@@ -245,6 +245,7 @@ mod tests {
     use crate::connection::WritePolicy;
     use crate::db::model::Params;
     use crate::db::{guard, lex};
+    use crate::failure::Failure;
     use crate::fixtures::{self, shop_catalog};
     use crossterm::event::KeyCode;
     use std::sync::Arc;
@@ -305,7 +306,7 @@ mod tests {
     fn failed_under_a_hidden_schema_tab() -> App {
         let mut app = app();
         app.sidebar = SidebarTab::Schema;
-        app.apply(to_shop(Incoming::NotOpened("connection refused".to_owned())));
+        app.apply(to_shop(Incoming::NotOpened(Failure::Login("connection refused".into()))));
         app.fit(Fit { has_sidebar: true, ..Fit::default() });
         app
     }

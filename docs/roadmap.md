@@ -132,7 +132,7 @@ Needs step 12: the lexer, the statement under the cursor and the schema's index.
 
 The code keeps its own rules where they slipped, one MR per step.
 
-- [ ] One failure type crosses from `db/` to the app, in place of strings and a parallel `history::Outcome`
+- [x] One failure type crosses from `db/` to the app, in place of strings and a parallel `history::Outcome`
 - [x] Newtypes where the rules already ask for them, parsed at the boundary
 - [ ] Bounded channels between the session task and the app
 - [ ] The session task split by concern

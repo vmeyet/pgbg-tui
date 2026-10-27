@@ -5,6 +5,7 @@ use crate::complete::Index;
 use crate::connection::Connection;
 use crate::db::model::{Catalog, Route};
 use crate::db::read_schema_along;
+use crate::failure::Failure;
 use crate::tui::app::Incoming;
 use futures_util::FutureExt;
 use std::sync::Arc;
@@ -22,7 +23,7 @@ pub(super) struct SchemaReader {
 
 impl SchemaReader {
     /// Reads the schema at each ask once the session is open; asks that arrive during a read are served by that read.
-    /// A failed read answers with its message, and the session stays as it is.
+    /// A failed read answers why, and the session stays as it is.
     /// It never ends: the session task drops it.
     pub(super) async fn serve(mut self) {
         loop {
@@ -59,9 +60,9 @@ impl SchemaReader {
     }
 }
 
-fn answer(connection: &Connection, read: anyhow::Result<Catalog>) -> Result<Arc<Catalog>, String> {
+fn answer(connection: &Connection, read: anyhow::Result<Catalog>) -> Result<Arc<Catalog>, Failure> {
     read.map(Arc::new).map_err(|err| {
         tracing::warn!("the schema of `{}` was not read: {err:#}", connection.name());
-        format!("{err:#}")
+        Failure::from(&err)
     })
 }
