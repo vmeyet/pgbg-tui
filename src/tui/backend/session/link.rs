@@ -1,5 +1,7 @@
 //! The handle to one session task: it sends jobs, cancels and schema asks, and sees what the task has on the server so
 //! an abort can cancel it.
+use super::open::Opener;
+use super::record::Recorder;
 use super::run::{Cancels, OnServer, warn_if_still_running};
 use super::{Mailbox, SessionTask};
 use crate::connection::{Connection, ConnectionName};
@@ -84,7 +86,8 @@ impl SessionLink {
             SchemaReader { connection: connection.clone(), answers: answers.clone(), asks: Arc::clone(&schema_asks), route: open_route };
         let (cancelled, on_server) = (Cancels::new(cancelled), OnServer::new(on_server));
         let mailbox = Mailbox { queue, cancelled, on_server, answers };
-        let task = SessionTask { connection, tunnel: None, session: None, route, mailbox, history, idle_limit };
+        let recorder = Recorder { store: history, connection: connection.name().clone() };
+        let task = SessionTask { opener: Opener::new(connection, route), mailbox, recorder, idle_limit };
         Self { session, jobs, cancels, schema_asks, running, task: tokio::spawn(task.serve(reader)) }
     }
 

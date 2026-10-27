@@ -17,6 +17,8 @@ use tokio::sync::mpsc::UnboundedSender;
 
 mod clipboard;
 mod config;
+#[cfg(test)]
+mod fixtures;
 
 pub(super) use clipboard::reaches_the_terminal;
 mod paging;

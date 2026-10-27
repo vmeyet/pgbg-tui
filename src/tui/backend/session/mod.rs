@@ -2,24 +2,24 @@
 //! cancels by `RunId`, and stops a statement the same way every stop in pgbg does.
 use super::paging::{Paging, serve_pages};
 use super::schema::SchemaReader;
-use crate::connection::Connection;
-use crate::db::model::{Route, Statement};
-use crate::db::{NotOpened, Opened, Session, TunnelStep, open_along};
+use crate::db::Session;
 use crate::failure::{Failure, Lost};
-use crate::history::{Entry, Outcome, Store};
-use crate::tui::app::{Incoming, TunnelState};
-use crate::tunnel::{Died, Tunnel};
-use chrono::{DateTime, Utc};
+use crate::history::Outcome;
+use crate::tui::app::{Incoming, RunId};
+use crate::tunnel::Died;
+use open::Opener;
+use record::{Recorder, RunStart};
 use run::{Answered, run_until_answered};
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedReceiver;
-use tokio::sync::watch;
-use tokio::time::Instant;
 
 mod link;
+mod open;
+mod record;
 mod run;
 
 pub(super) use link::{Job, Queued, SessionAnswers, SessionLink};
+pub(super) use open::ended;
 pub(super) use run::{Cancels, OnServer, warn_if_still_running};
 
 /// What woke the session task.
@@ -39,30 +39,13 @@ pub(super) enum Next {
     Stop,
 }
 
-/// A run's history entry before its answer comes: what was sent, and when.
-struct RunStart {
-    statement: Statement,
-    started_at: DateTime<Utc>,
-    clock: Instant,
-}
-
-impl RunStart {
-    fn of(queued: &Queued) -> Self {
-        Self { statement: queued.statement.clone(), started_at: Utc::now(), clock: Instant::now() }
-    }
-}
-
 /// The task that owns the session and its tunnel: it opens them, runs each statement in turn, and reports when they are
 /// lost.
 struct SessionTask {
-    connection: Connection,
-    tunnel: Option<Tunnel>,
-    /// The open session between runs; a run takes it out while it uses it.
-    session: Option<Session>,
-    /// The route of the open session, for the schema reader; none while it is not open.
-    route: watch::Sender<Option<Route>>,
+    opener: Opener,
     mailbox: Mailbox,
-    history: Option<Store>,
+    recorder: Recorder,
+    /// How long a result's portal waits for its next page.
     idle_limit: Duration,
 }
 
@@ -94,7 +77,7 @@ impl SessionTask {
             () = self.serve_jobs() => {}
             () = reader.serve() => {}
         }
-        self.stop().await;
+        self.opener.stop().await;
     }
 
     async fn serve_jobs(&mut self) {
@@ -115,105 +98,70 @@ impl SessionTask {
             Woken::Queued(Some(_)) if self.mailbox.queue.is_closed() => {}
             Woken::Queued(Some(Job::Run(queued))) => return self.run(queued).await,
             Woken::Queued(Some(Job::NextPage { .. })) => {}
-            Woken::Queued(Some(Job::Open)) if self.session.is_none() => self.open_or_fail_queued().await,
+            Woken::Queued(Some(Job::Open)) if !self.opener.is_open() => self.open_or_fail_queued().await,
             Woken::Queued(Some(Job::Open)) => {}
             Woken::Queued(None) => return Next::Stop,
-            Woken::Closed(why) => self.lose(why),
-            Woken::TunnelEnded(died) => self.lose_tunnel(&died),
+            Woken::Closed(why) => self.opener.lose(why, &self.mailbox.answers),
+            Woken::TunnelEnded(died) => self.opener.lose_tunnel(&died, &self.mailbox.answers),
         }
         Next::Wait
     }
 
     async fn woken(&mut self) -> Woken {
-        let Self { session, tunnel, mailbox, .. } = self;
+        let Self { opener, mailbox, .. } = self;
         tokio::select! {
             queued = mailbox.queue.recv() => Woken::Queued(queued),
-            why = closed(session.as_ref()) => Woken::Closed(why),
-            died = ended(tunnel.as_mut()) => Woken::TunnelEnded(died),
-        }
-    }
-
-    /// Opens a session, gives the schema reader its route and reports the outcome; returns why when it did not open.
-    async fn open(&mut self) -> Result<Session, Failure> {
-        let opened = self.connect().await;
-        let route = opened.as_ref().ok().map(|_| self.tunnel.as_ref().map_or(Route::Direct, Tunnel::route));
-        self.route.send_replace(route);
-        match &opened {
-            Ok(_) => self.send(Incoming::Opened),
-            Err(failure) => self.send(Incoming::NotOpened(failure.clone())),
-        }
-        opened
-    }
-
-    /// The open session, taken out for a run, or one opened for it.
-    async fn take_or_open(&mut self) -> Result<Session, Failure> {
-        match self.session.take() {
-            Some(session) => Ok(session),
-            None => self.open().await,
-        }
-    }
-
-    /// Opens the session through the kept tunnel, or a restarted one, as `pgbg run` does.
-    /// The tunnel stays for the next try when the login fails, and its state is sent each time it changes.
-    async fn connect(&mut self) -> Result<Session, Failure> {
-        let answers = &self.mailbox.answers;
-        let on_tunnel = |step| answers.say(Incoming::Tunnel(tunnel_state(step)));
-        match open_along(&self.connection, self.tunnel.take(), on_tunnel).await {
-            Ok(Opened { session, tunnel }) => {
-                self.tunnel = tunnel;
-                Ok(session)
-            }
-            Err(NotOpened::Tunnel(err)) => {
-                let how = format!("{err:#}");
-                self.send(Incoming::Tunnel(TunnelState::Died(how.clone())));
-                Err(Failure::TunnelNotStarted(how))
-            }
-            Err(NotOpened::Login { error, tunnel }) => {
-                self.tunnel = tunnel.map(|tunnel| *tunnel);
-                Err(Failure::Login(format!("{error:#}")))
-            }
+            ending = opener.ending() => ending,
         }
     }
 
     /// Opens the session; when it does not open, every statement sent meanwhile fails with it, so a later open never
     /// sends one.
     async fn open_or_fail_queued(&mut self) {
-        match self.open().await {
-            Ok(session) => self.session = Some(session),
-            Err(failure) => self.mailbox.fail_queued(&failure),
+        if let Err(failure) = self.opener.open(&self.mailbox.answers).await {
+            self.mailbox.fail_queued(&failure);
         }
     }
 
     /// Runs `queued` on the open session, or on one opened for it; returns what the task does next.
     async fn run(&mut self, queued: Queued) -> Next {
-        let start = RunStart::of(&queued);
-        let mut session = match self.take_or_open().await {
+        let start = RunStart::now(&queued);
+        let mut session = match self.opener.take_or_open(&self.mailbox.answers).await {
             Ok(session) => session,
-            Err(failure) => {
-                self.record(start, Duration::ZERO, Outcome::from(&failure));
-                self.send(Incoming::Failed { run: queued.run, failure });
-                return Next::Wait;
-            }
+            Err(failure) => return self.fail_unopened(start, queued.run, failure),
         };
         if self.mailbox.cancelled.was_cancelled(queued.run) {
-            self.session = Some(session);
-            self.send(Incoming::Failed { run: queued.run, failure: Failure::CancelledBeforeSent });
-            return Next::Wait;
+            return self.refuse_cancelled(session, queued.run);
         }
         let next = self.answer_and_page(&mut session, queued, start).await;
         self.keep_unless_lost(session, next)
     }
 
+    /// Records and answers `run` as failed, since its session did not open.
+    fn fail_unopened(&self, start: RunStart, run: RunId, failure: Failure) -> Next {
+        self.recorder.record(start, Duration::ZERO, Outcome::from(&failure));
+        self.send(Incoming::Failed { run, failure });
+        Next::Wait
+    }
+
+    /// Keeps `session` and answers `run` as cancelled, since its cancel came before it was sent.
+    fn refuse_cancelled(&mut self, session: Session, run: RunId) -> Next {
+        self.opener.keep(session);
+        self.send(Incoming::Failed { run, failure: Failure::CancelledBeforeSent });
+        Next::Wait
+    }
+
     /// Answers `queued` on `session`, then serves the pages of its result while its portal is open.
     async fn answer_and_page(&mut self, session: &mut Session, queued: Queued, start: RunStart) -> Next {
         let (run, token) = (queued.run, session.cancel_token());
+        let writes = self.opener.connection().writes();
         let Answered { incoming, outcome, rest } =
-            run_until_answered(session, self.connection.writes(), queued, &mut self.mailbox.cancelled, &self.mailbox.on_server).await;
-        let took = start.clock.elapsed();
-        self.record(start, took, outcome);
+            run_until_answered(session, writes, queued, &mut self.mailbox.cancelled, &self.mailbox.on_server).await;
+        let took = start.elapsed();
+        self.recorder.record(start, took, outcome);
         self.send(incoming);
         let Some(pages) = rest else { return Next::Wait };
-        let (tunnel, mailbox, idle_limit) = (self.tunnel.as_mut(), &mut self.mailbox, self.idle_limit);
+        let (tunnel, mailbox, idle_limit) = (self.opener.tunnel(), &mut self.mailbox, self.idle_limit);
         serve_pages(Paging { pages, run, token, mailbox, tunnel, idle_limit }).await
     }
 
@@ -221,49 +169,15 @@ impl SessionTask {
     /// Closing it already reports the loss, so a pending `Closed` wake is then dropped.
     fn keep_unless_lost(&mut self, session: Session, next: Next) -> Next {
         let Some(lost) = session.lost() else {
-            self.session = Some(session);
+            self.opener.keep(session);
             return next;
         };
         drop(session);
-        self.lose(lost);
+        self.opener.lose(lost, &self.mailbox.answers);
         match next {
             Next::Act(Woken::Closed(_)) => Next::Wait,
             next => next,
         }
-    }
-
-    /// Closes the session that a dead tunnel carried; the next statement starts both again.
-    fn lose_tunnel(&mut self, died: &Died) {
-        self.tunnel = None;
-        self.send(Incoming::Tunnel(TunnelState::Died(died.to_string())));
-        if self.session.is_some() {
-            self.lose(Lost::TunnelDied);
-        }
-    }
-
-    /// Closes the session, then stops its tunnel, warning when its port still answers.
-    async fn stop(mut self) {
-        self.session = None;
-        if let Some(tunnel) = self.tunnel.as_mut()
-            && let Err(err) = tunnel.stop().await
-        {
-            tracing::warn!("{err:#}");
-        }
-    }
-
-    /// Closes the session, and tells the schema reader there is no route.
-    fn lose(&mut self, lost: Lost) {
-        self.session = None;
-        self.route.send_replace(None);
-        self.send(Incoming::Closed(lost));
-    }
-
-    /// Records the run that `start` began in the history, in the background: the next statement never waits on the disk.
-    fn record(&self, start: RunStart, took: Duration, outcome: Outcome) {
-        let Some(store) = self.history.as_ref() else { return };
-        let RunStart { statement, started_at, .. } = start;
-        let took_ms = u64::try_from(took.as_millis()).unwrap_or(u64::MAX);
-        drop(store.record(Entry { statement, connection: self.connection.name().clone(), started_at, took_ms, outcome }));
     }
 
     fn send(&self, incoming: Incoming) {
@@ -271,114 +185,18 @@ impl SessionTask {
     }
 }
 
-fn tunnel_state(step: TunnelStep) -> TunnelState {
-    match step {
-        TunnelStep::Starting => TunnelState::Starting,
-        TunnelStep::Up(port) => TunnelState::Up(port),
-    }
-}
-
-/// Why `session` ended, once it has; never resolves when there is no session.
-async fn closed(session: Option<&Session>) -> Lost {
-    match session {
-        Some(session) => session.closed().await,
-        None => std::future::pending().await,
-    }
-}
-
-/// How `tunnel` ended, once it has; never resolves when there is no tunnel.
-pub(super) async fn ended(tunnel: Option<&mut Tunnel>) -> Died {
-    match tunnel {
-        Some(tunnel) => tunnel.ended().await,
-        None => std::future::pending().await,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::super::Backend;
+    use super::super::fixtures::{
+        SLEEP, answer_to, answers_until, backend_pid, empty_table, next_answer, on_a_side_session, on_a_side_session_writing, shop,
+        started, started_on, until_sleeping,
+    };
     use super::*;
-    use crate::connection::{ConnectionName, WritePolicy};
-    use crate::db::guard;
-    use crate::db::model::Statement;
-    use crate::db::model::{Params, Route, Value};
+    use crate::connection::WritePolicy;
+    use crate::db::model::{Statement, Value};
     use crate::fixtures;
-    use crate::query::Roots;
     use crate::query::params::ParamInput;
-    use crate::tui::app::Confirmed;
-    use crate::tui::app::{Answer, RunId, SessionId};
-    use std::path::PathBuf;
-    use tokio::sync::mpsc;
-
-    const SLEEP: &str = "SELECT pg_sleep(30)";
-
-    fn connection() -> Connection {
-        fixtures::test_database_as("shop")
-    }
-
-    fn shop() -> ConnectionName {
-        connection().name().clone()
-    }
-
-    fn incoming(answer: Answer) -> Incoming {
-        let Answer::Session { incoming, .. } = answer else { panic!("not a session's answer: {answer:?}") };
-        incoming
-    }
-
-    fn started() -> (Backend, UnboundedReceiver<Answer>) {
-        started_on(connection())
-    }
-
-    fn started_on(connection: Connection) -> (Backend, UnboundedReceiver<Answer>) {
-        let (sender, answers) = mpsc::unbounded_channel();
-        let mut backend = Backend::new(Roots::default(), PathBuf::from("config.toml"), sender);
-        backend.open(connection, SessionId::FIRST);
-        (backend, answers)
-    }
-
-    /// An empty table `name` in the test database, created again from scratch.
-    async fn empty_table(name: &str) -> String {
-        on_a_side_session_writing(&format!("DROP TABLE IF EXISTS {name}")).await;
-        on_a_side_session_writing(&format!("CREATE TABLE {name} (n int)")).await;
-        name.to_owned()
-    }
-
-    async fn on_a_side_session_writing(sql: &str) {
-        let _changing = fixtures::changing_the_catalog().await;
-        let mut session = Session::open(&connection(), Route::Direct).await.unwrap();
-        session.run(&guard::admit(Statement::new(sql), Params::default(), WritePolicy::Allowed).unwrap()).await.unwrap();
-    }
-
-    fn is_answer_to(run: RunId, answer: &Incoming) -> bool {
-        matches!(
-            answer,
-            Incoming::Result { run: of, .. }
-                | Incoming::Failed { run: of, .. }
-                if *of == run
-        )
-    }
-
-    #[tokio::test]
-    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
-    async fn a_statement_sent_while_the_session_fails_to_open_never_reaches_the_server() {
-        let _ports = fixtures::TUNNEL_PORTS.lock().await;
-        let flags = tempfile::tempdir().unwrap();
-        let started_once = flags.path().join("started");
-        let fails_the_first_time = format!("[ -e {0:?} ] || {{ touch {0:?}; sleep 3; exit 1; }}", started_once.display().to_string());
-        let table = empty_table("pgbg_sent_while_failing_to_open").await;
-        let (backend, mut answers) =
-            started_on(fixtures::tunnelled_after("pgbg-test-fails-once", &fails_the_first_time, WritePolicy::Allowed));
-        backend.run(
-            &shop(),
-            RunId::FIRST,
-            Statement::new(format!("INSERT INTO {table} VALUES (1)")),
-            ParamInput::default(),
-            Some(Confirmed::FOR_TESTS),
-        );
-        answers_until(&mut answers, |answer| is_answer_to(RunId::FIRST, answer)).await;
-        let rows = on_a_side_session(&format!("SELECT n FROM {table}")).await;
-        assert_eq!(rows.len(), 0, "{rows:?}");
-    }
+    use crate::tui::app::{Answer, Confirmed, RunId, SessionId};
 
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
@@ -427,133 +245,6 @@ mod tests {
         assert_eq!(on_a_side_session("SELECT n FROM pgbg_hidden_write_confirmed").await, [[Value::Int(1)]]);
     }
 
-    async fn answers_until(answers: &mut UnboundedReceiver<Answer>, last: impl Fn(&Incoming) -> bool) -> Vec<Incoming> {
-        let mut seen = vec![];
-        while seen.last().is_none_or(|answer| !last(answer)) {
-            seen.push(incoming(answers.recv().await.unwrap()));
-        }
-        seen
-    }
-
-    fn is_tunnel_death(answer: &Incoming) -> bool {
-        matches!(answer, Incoming::Tunnel(TunnelState::Died(_)))
-    }
-
-    async fn kill_tunnel_marked(marker: &str) {
-        tokio::process::Command::new("pkill").args(["-f", marker]).status().await.unwrap();
-    }
-
-    #[tokio::test]
-    #[ignore = "starts a tunnel"]
-    async fn a_tunnel_that_does_not_start_says_why_and_the_session_does_not_open() {
-        let _ports = fixtures::TUNNEL_PORTS.lock().await;
-        let (_backend, mut answers) = started_on(fixtures::connection(
-            "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\ntls = \"off\"\n\
-             tunnel = { command = [\"sh\", \"-c\", \"echo 'bastion.example.com: no route' >&2; exit 255\", \"{port}\"] }\n",
-        ));
-        let seen = answers_until(&mut answers, |answer| matches!(answer, Incoming::NotOpened(_))).await;
-        assert_eq!(seen[0], Incoming::Tunnel(TunnelState::Starting));
-        assert!(matches!(&seen[1], Incoming::Tunnel(TunnelState::Died(how)) if how.contains("no route")), "{seen:?}");
-        assert!(matches!(&seen[2], Incoming::NotOpened(Failure::TunnelNotStarted(how)) if how.contains("no route")), "{seen:?}");
-    }
-
-    #[tokio::test]
-    #[ignore = "starts a tunnel"]
-    async fn opening_again_a_connection_that_failed_tries_again() {
-        let _ports = fixtures::TUNNEL_PORTS.lock().await;
-        let shop = fixtures::connection(
-            "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\ntls = \"off\"\n\
-             tunnel = { command = [\"sh\", \"-c\", \"exit 255\", \"{port}\"] }\n",
-        );
-        let (mut backend, mut answers) = started_on(shop.clone());
-        answers_until(&mut answers, |answer| matches!(answer, Incoming::NotOpened(_))).await;
-        backend.open(shop, SessionId::FIRST);
-        let again = answers_until(&mut answers, |answer| matches!(answer, Incoming::NotOpened(_))).await;
-        assert_eq!(again[0], Incoming::Tunnel(TunnelState::Starting));
-    }
-
-    #[tokio::test]
-    #[ignore = "starts a tunnel"]
-    async fn a_statement_sent_while_the_tunnel_fails_to_start_fails_with_how_it_ended() {
-        let _ports = fixtures::TUNNEL_PORTS.lock().await;
-        let shop = fixtures::connection(
-            "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\ntls = \"off\"\n\
-             tunnel = { command = [\"sh\", \"-c\", \"echo 'bastion.example.com: no route' >&2; exit 255\", \"{port}\"] }\n",
-        );
-        let name = shop.name().clone();
-        let (backend, mut answers) = started_on(shop);
-        backend.run(&name, RunId::FIRST, Statement::new("SELECT 1"), ParamInput::default(), None);
-        let seen = answers_until(&mut answers, |answer| is_answer_to(RunId::FIRST, answer)).await;
-        let is_how_it_ended = |failure: &Failure| matches!(failure, Failure::TunnelNotStarted(how) if how.contains("no route"));
-        assert!(matches!(seen.last(), Some(Incoming::Failed { failure, .. }) if is_how_it_ended(failure)), "{seen:?}");
-    }
-
-    #[tokio::test]
-    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
-    async fn a_tunnel_that_dies_closes_its_session_and_says_why() {
-        let _ports = fixtures::TUNNEL_PORTS.lock().await;
-        let marker = "pgbg-test-tunnel-that-dies";
-        let (_backend, mut answers) = started_on(fixtures::tunnelled(marker));
-        answers_until(&mut answers, |answer| *answer == Incoming::Opened).await;
-        kill_tunnel_marked(marker).await;
-        let mut seen = vec![];
-        while !seen.iter().any(|answer| matches!(answer, Incoming::Closed(_))) || !seen.iter().any(is_tunnel_death) {
-            seen.push(incoming(answers.recv().await.unwrap()));
-        }
-        assert!(
-            seen.iter().any(|answer| matches!(answer, Incoming::Tunnel(TunnelState::Died(how)) if how.contains("`python3` died"))),
-            "{seen:?}"
-        );
-    }
-
-    #[tokio::test]
-    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
-    async fn a_statement_after_the_tunnel_died_starts_it_again() {
-        let _ports = fixtures::TUNNEL_PORTS.lock().await;
-        let marker = "pgbg-test-tunnel-started-again";
-        let (backend, mut answers) = started_on(fixtures::tunnelled(marker));
-        answers_until(&mut answers, |answer| *answer == Incoming::Opened).await;
-        kill_tunnel_marked(marker).await;
-        answers_until(&mut answers, is_tunnel_death).await;
-        backend.run(&shop(), RunId::FIRST, Statement::new("SELECT 1"), ParamInput::default(), None);
-        let seen = answers_until(&mut answers, |answer| matches!(answer, Incoming::Result { .. })).await;
-        let seen: Vec<Incoming> = seen.into_iter().filter(|answer| !matches!(answer, Incoming::Closed(_))).collect();
-        assert_eq!(seen[0], Incoming::Tunnel(TunnelState::Starting));
-        assert!(matches!(seen[1], Incoming::Tunnel(TunnelState::Up(_))), "{seen:?}");
-        assert_eq!(seen[2], Incoming::Opened);
-    }
-
-    async fn next_answer(answers: &mut UnboundedReceiver<Answer>) -> Incoming {
-        loop {
-            match incoming(answers.recv().await.unwrap()) {
-                Incoming::Opened => {}
-                answer => return answer,
-            }
-        }
-    }
-
-    async fn answer_to(backend: &Backend, answers: &mut UnboundedReceiver<Answer>, run: RunId, sql: &str) -> Incoming {
-        backend.run(&shop(), run, Statement::new(sql), ParamInput::default(), Some(Confirmed::FOR_TESTS));
-        next_answer(answers).await
-    }
-
-    async fn on_a_side_session(sql: &str) -> Vec<Vec<Value>> {
-        let mut session = Session::open(&connection(), Route::Direct).await.unwrap();
-        session.run(&guard::admit(Statement::new(sql), Params::default(), WritePolicy::ReadOnly).unwrap()).await.unwrap().rows().to_vec()
-    }
-
-    async fn backend_pid(backend: &Backend, answers: &mut UnboundedReceiver<Answer>) -> Value {
-        let Incoming::Result { result, .. } = answer_to(backend, answers, RunId::FIRST, "SELECT pg_backend_pid()").await else {
-            panic!("no pid")
-        };
-        result.rows()[0][0].clone()
-    }
-
-    async fn until_sleeping() {
-        let is_sleeping = format!("SELECT 1 FROM pg_stat_activity WHERE query = '{SLEEP}' AND state = 'active'");
-        while on_a_side_session(&is_sleeping).await.is_empty() {}
-    }
-
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn an_answer_names_the_connection_whose_session_gave_it() {
@@ -567,37 +258,6 @@ mod tests {
             }
         };
         assert_eq!(&connection, copy.name());
-    }
-
-    #[tokio::test]
-    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
-    async fn opening_a_connection_twice_keeps_its_one_session() {
-        let (mut backend, mut answers) = started();
-        let pid = backend_pid(&backend, &mut answers).await;
-        backend.open(connection(), SessionId::FIRST);
-        let again = answer_to(&backend, &mut answers, RunId::FIRST.next(), "SELECT pg_backend_pid()").await;
-        assert!(matches!(again, Incoming::Result { result, .. } if result.rows()[0][0] == pid));
-    }
-
-    #[tokio::test]
-    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
-    async fn a_statement_after_the_session_died_runs_on_a_new_one() {
-        let (backend, mut answers) = started();
-        let pid = backend_pid(&backend, &mut answers).await;
-        on_a_side_session(&format!("SELECT pg_terminate_backend({pid}, 5000)")).await;
-        next_answer(&mut answers).await;
-        let after = answer_to(&backend, &mut answers, RunId::FIRST.next(), "SELECT 1").await;
-        assert!(matches!(after, Incoming::Result { .. }), "{after:?}");
-    }
-
-    #[tokio::test]
-    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
-    async fn a_session_that_dies_while_idle_says_so_at_once() {
-        let (backend, mut answers) = started();
-        let pid = backend_pid(&backend, &mut answers).await;
-        on_a_side_session(&format!("SELECT pg_terminate_backend({pid}, 5000)")).await;
-        let answer = next_answer(&mut answers).await;
-        assert!(matches!(&answer, Incoming::Closed(lost) if lost.to_string().contains("terminating connection")), "{answer:?}");
     }
 
     #[tokio::test]
@@ -682,76 +342,6 @@ mod tests {
         backend.stop().await;
         let rows = on_a_side_session(&format!("SELECT n FROM {table}")).await;
         assert_eq!(rows, [[Value::Int(1)]]);
-    }
-
-    #[tokio::test]
-    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
-    async fn the_schema_is_read_while_a_statement_runs() {
-        let (backend, mut answers) = started();
-        backend.run(&shop(), RunId::FIRST, Statement::new(SLEEP), ParamInput::default(), None);
-        until_sleeping().await;
-        let _reading = fixtures::reading_the_catalog().await;
-        backend.read_schema(&shop(), SessionId::FIRST);
-        let answer = next_answer(&mut answers).await;
-        assert!(matches!(&answer, Incoming::Schema(Ok(catalog)) if !catalog.search_path.is_empty()), "{answer:?}");
-    }
-
-    #[tokio::test]
-    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
-    async fn the_completion_index_of_a_schema_read_follows_it() {
-        let (backend, mut answers) = started();
-        let _reading = fixtures::reading_the_catalog().await;
-        backend.read_schema(&shop(), SessionId::FIRST);
-        let seen = answers_until(&mut answers, |answer| matches!(answer, Incoming::Index { .. })).await;
-        let read = seen.iter().find_map(|answer| if let Incoming::Schema(Ok(catalog)) = answer { Some(catalog) } else { None });
-        let is_built_from_it =
-            matches!((read, seen.last()), (Some(read), Some(Incoming::Index { catalog, .. })) if std::sync::Arc::ptr_eq(read, catalog));
-        assert!(is_built_from_it, "{seen:?}");
-    }
-
-    #[tokio::test]
-    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
-    async fn the_schema_is_read_through_the_tunnel_of_the_session() {
-        let _ports = fixtures::TUNNEL_PORTS.lock().await;
-        let marker = "pgbg-test-schema-through-the-tunnel";
-        let (backend, mut answers) = started_on(fixtures::tunnelled(marker));
-        let _reading = fixtures::reading_the_catalog().await;
-        backend.read_schema(&shop(), SessionId::FIRST);
-        let seen = answers_until(&mut answers, |answer| matches!(answer, Incoming::Schema(_))).await;
-        let tunnels_started = seen.iter().filter(|answer| **answer == Incoming::Tunnel(TunnelState::Starting)).count();
-        assert!(matches!(seen.last(), Some(Incoming::Schema(Ok(_)))) && tunnels_started == 1, "{seen:?}");
-    }
-
-    /// `shop` on the test database, its password from the shell line `line`, which gets `file` as `$1`.
-    fn with_password_command(line: &str, file: &std::path::Path) -> Connection {
-        let command = format!("password = {{ command = [\"sh\", \"-c\", {line:?}, \"sh\", {:?}] }}\n", file.display().to_string());
-        fixtures::test_database("local", &command)
-    }
-
-    #[tokio::test]
-    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
-    async fn the_schema_session_reads_the_password_again() {
-        let dir = tempfile::tempdir().unwrap();
-        let reads = dir.path().join("reads");
-        let (backend, mut answers) = started_on(with_password_command("echo read >> \"$1\"; echo nina-password", &reads));
-        let _reading = fixtures::reading_the_catalog().await;
-        backend.read_schema(&shop(), SessionId::FIRST);
-        answers_until(&mut answers, |answer| matches!(answer, Incoming::Schema(_))).await;
-        assert_eq!(std::fs::read_to_string(&reads).unwrap(), "read\nread\n");
-    }
-
-    #[tokio::test]
-    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
-    async fn a_schema_read_that_fails_leaves_the_session_open() {
-        let dir = tempfile::tempdir().unwrap();
-        let once = "[ -e \"$1\" ] && exit 1; touch \"$1\"; echo nina-password";
-        let (backend, mut answers) = started_on(with_password_command(once, &dir.path().join("read")));
-        let _reading = fixtures::reading_the_catalog().await;
-        backend.read_schema(&shop(), SessionId::FIRST);
-        let seen = answers_until(&mut answers, |answer| matches!(answer, Incoming::Schema(_))).await;
-        assert!(matches!(seen.last(), Some(Incoming::Schema(Err(_)))), "{seen:?}");
-        let after = answer_to(&backend, &mut answers, RunId::FIRST, "SELECT 1").await;
-        assert!(matches!(after, Incoming::Result { .. }), "{after:?}");
     }
 
     #[tokio::test]
