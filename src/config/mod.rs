@@ -1,4 +1,5 @@
-//! `config.toml`: the connections and how results read, read once, with a warning for each key pgbg ignores.
+//! `config.toml`: the connections and how results show.
+//! It is read once, with a warning for each key pgbg ignores.
 use crate::connection::{Connection, Entry};
 use crate::format::Mode;
 use anyhow::{Context, Result};
@@ -48,7 +49,7 @@ pub(crate) struct Loaded {
     pub(crate) warnings: Vec<String>,
 }
 
-/// The file `$PGBG_CONFIG` names, else `config.toml` in pgbg's folder of the user config folder.
+/// The file `$PGBG_CONFIG` names, else `pgbg/config.toml` in the user's config folder.
 pub(crate) fn path() -> PathBuf {
     path_from(std::env::var_os(PATH_VARIABLE), dirs::config_dir())
 }

@@ -125,6 +125,10 @@ Each entry says what changed, then where, then how to use it.
 
 ### Fixed
 
+- **A write's question names every write it holds and every table it lists**, in the TUI's footer and `pgbg run`: `WITH moved AS (INSERT INTO archived_orders ...) DELETE FROM orders ...` asks `INSERT into archived_orders and DELETE from orders?`, and `TRUNCATE orders, customers CASCADE` names both tables and the `CASCADE`.
+- **`BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT` and the cursor statements `FETCH`, `MOVE` and `CLOSE` run without asking** on a connection that allows writes, since they change no data by themselves.
+- **More than one statement is refused before pgbg asks about it** in `pgbg run`; it asked `y/N`, then the server refused it anyway.
+- **A query inside your own transaction no longer fails beside a cursor of yours named `pgbg_result_1`**, on a connection that allows writes: pgbg reads through a cursor name no open cursor holds.
 - **A table named like a write, as `delete` or `update`, previews again** with `p` and `^r` in the TUI's schema, and goes in quoted from `i`, `⇥` and completion.
   pgbg quotes such a name, so its guard no longer takes the read for a write.
 - **JSON keeps its keys in the order the server gives them**, in the grid, the row's detail, copies and `pgbg run`, as `psql` shows them: as written for `json`, shorter keys first for `jsonb`.

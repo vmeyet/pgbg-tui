@@ -15,6 +15,8 @@ const PROBE_SAVEPOINT: &str = "SAVEPOINT pgbg_probe";
 const RELEASE_PROBE: &str = "RELEASE SAVEPOINT pgbg_probe";
 /// The start of the name of a cursor a result inside the user's transaction is read through.
 const CURSOR: &str = "pgbg_result";
+/// The cursors open on the session whose name could be one pgbg picks.
+const CURSORS_TAKEN: &str = r"SELECT name FROM pg_cursors WHERE name LIKE 'pgbg\_result\_%'";
 
 /// How many rows one fetch from a portal asks for: never 0, which the protocol reads as every row.
 #[derive(Clone, Copy, Debug)]
@@ -123,9 +125,8 @@ impl Session {
 
     /// A cursor of SQL, since the driver binds a portal only in a transaction handle of its own, whose start or drop
     /// would roll the user's back.
-    async fn fetch_through_cursor(&mut self, statement: &Prepared, admitted: &Admitted) -> Result<ResultSet> {
-        self.marks.cursors_declared += 1;
-        let cursor = format!("{CURSOR}_{}", self.marks.cursors_declared);
+    async fn fetch_through_cursor(&self, statement: &Prepared, admitted: &Admitted) -> Result<ResultSet> {
+        let cursor = free_cursor_name(&self.cursors_taken().await?);
         let declare = format!("DECLARE {cursor} NO SCROLL CURSOR FOR {}", admitted.statement.as_str());
         let declare = self.client.prepare_typed(&declare, statement.params()).await.map_err(server_error)?;
         self.client.execute_raw(&declare, bind::as_text(&admitted.params)).await.map_err(server_error)?;
@@ -134,6 +135,12 @@ impl Session {
         let first = first?;
         closed?;
         Ok(ResultSet::new(columns(statement), first))
+    }
+
+    /// Asked before each `DECLARE`, since a name the user holds already would fail it and abort the user's transaction.
+    async fn cursors_taken(&self) -> Result<Vec<String>> {
+        let rows = self.client.query(CURSORS_TAKEN, &[]).await.map_err(server_error)?;
+        rows.iter().map(|row| row.try_get(0).map_err(server_error)).collect()
     }
 
     /// Whether a `BEGIN` the user ran left a transaction open, asking the server only when the session is unsure.
@@ -186,6 +193,15 @@ impl Session {
         roll_back(transaction, &mut self.marks).await?;
         result
     }
+}
+
+/// The first `pgbg_result_<n>` that `taken` does not hold.
+fn free_cursor_name(taken: &[String]) -> String {
+    let mut n = 1;
+    while taken.contains(&format!("{CURSOR}_{n}")) {
+        n += 1;
+    }
+    format!("{CURSOR}_{n}")
 }
 
 /// `BEGIN READ ONLY`, then the transaction's own limits.
@@ -255,6 +271,12 @@ mod tests {
     use crate::db::guard;
     use crate::db::model::{self, ParamValue, Statement};
     use crate::fixtures::{run, run_on, session, try_on};
+
+    #[test]
+    fn a_cursor_takes_the_first_name_no_open_cursor_holds() {
+        assert_eq!(free_cursor_name(&[]), "pgbg_result_1");
+        assert_eq!(free_cursor_name(&["pgbg_result_1".to_owned(), "pgbg_result_3".to_owned()]), "pgbg_result_2");
+    }
 
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
@@ -500,6 +522,16 @@ mod tests {
         run_on(&mut writer, "DECLARE pgbg_result CURSOR FOR SELECT 1").await;
         assert_eq!(run_on(&mut writer, "SELECT 2").await.rows(), [[Value::Int(2)]]);
         assert_eq!(run_on(&mut writer, "FETCH 1 FROM pgbg_result").await.rows(), [[Value::Int(1)]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_read_inside_a_transaction_of_the_user_takes_a_cursor_name_the_user_does_not_hold() {
+        let mut writer = session(WritePolicy::Allowed).await;
+        run_on(&mut writer, "BEGIN").await;
+        run_on(&mut writer, "DECLARE pgbg_result_1 CURSOR FOR SELECT 1").await;
+        assert_eq!(run_on(&mut writer, "SELECT 2").await.rows(), [[Value::Int(2)]]);
+        assert_eq!(run_on(&mut writer, "FETCH 1 FROM pgbg_result_1").await.rows(), [[Value::Int(1)]]);
     }
 
     #[tokio::test]
@@ -753,13 +785,6 @@ mod tests {
         run(WritePolicy::Allowed, "CREATE SEQUENCE IF NOT EXISTS order_numbers").await.unwrap();
         let err = run(WritePolicy::ReadOnly, "SELECT nextval('order_numbers')").await.unwrap_err();
         assert!(err.to_string().contains("read-only transaction"), "{err}");
-    }
-
-    #[tokio::test]
-    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
-    async fn two_statements_are_refused_by_the_server_even_when_writes_are_allowed() {
-        let err = run(WritePolicy::Allowed, "SELECT 1; SELECT 2").await.unwrap_err();
-        assert!(err.to_string().contains("multiple commands"), "{err}");
     }
 
     #[tokio::test]

@@ -1,4 +1,5 @@
-//! A saved query in the user's own editor, `$VISUAL` or `$EDITOR`: the loop lends it the terminal, then reads the file again.
+//! A saved query in the user's own editor, `$VISUAL` or `$EDITOR`: the loop lends it the terminal, then reads the file
+//! again.
 use anyhow::{Context, Result, bail};
 use std::path::Path;
 use std::process::Command;
@@ -25,7 +26,8 @@ fn variable(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|value| !value.trim().is_empty())
 }
 
-/// Runs the user's editor on `path` until it exits; blocks the thread, so the loop calls it with the terminal lent.
+/// Runs the user's editor on `path` until it exits; it blocks the thread, so the loop calls it while the terminal is
+/// lent.
 pub(super) fn edit(path: &Path) -> Result<()> {
     edit_with(&Editor::pick(variable("VISUAL"), variable("EDITOR")), path)
 }

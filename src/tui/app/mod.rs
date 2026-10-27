@@ -6,7 +6,7 @@ use crate::format::Mode;
 use vtui::help::Help;
 
 pub(super) use completion::Completions;
-pub(super) use confirm::WriteToSend;
+pub(super) use confirm::{Confirmed, WriteToSend};
 pub(super) use detail::{Detail, DetailFit, DetailScroll, DrawnDetail, DrawnRow};
 pub(super) use form::{Form, PasswordFrom, Slot};
 pub(super) use grid::{Clock, GAP, Grid, Reading, Room};
@@ -383,7 +383,13 @@ pub(super) mod tests {
 
     /// The first run of `sql` on `connection`, with no parameter.
     pub(crate) fn first_run(connection: &ConnectionName, sql: &str) -> Action {
-        Action::Run { connection: connection.clone(), run: RunId::FIRST, statement: Statement::new(sql), input: ParamInput::default() }
+        Action::Run {
+            connection: connection.clone(),
+            run: RunId::FIRST,
+            statement: Statement::new(sql),
+            input: ParamInput::default(),
+            confirmed: None,
+        }
     }
 
     pub(crate) fn enter(app: &mut App) -> Vec<Action> {

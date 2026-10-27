@@ -107,11 +107,12 @@ fn configuration() -> Option<&'static HighlightConfiguration> {
         .as_ref()
 }
 
-/// The grammar's query is written for Neovim: its number patterns use Lua's `%d`, which the Rust
-/// highlighter reads as a literal `%`, so every literal stayed a string; comments also carry a
-/// Neovim-only `@spell`. Here a literal is a string only when quoted, a number when it is digits with an optional
-/// exponent, and `NULL` a constant rather than a type. A table name keeps the plain colour, not the type colour
-/// upstream gives it.
+/// The SQL grammar's colours, with its query fixed for this highlighter.
+/// The query is written for Neovim: its number patterns use Lua's `%d`, which the Rust highlighter reads as a
+/// literal `%`, so every literal would read as a string; comments also carry a Neovim-only `@spell`.
+/// Here a literal is a string only when quoted, a number when it is digits with an optional exponent,
+/// and `NULL` a constant rather than a type.
+/// A table name keeps the plain colour, not the type colour upstream gives it.
 fn sql() -> Option<HighlightConfiguration> {
     const OVERRIDES: &str = r#"((literal) @string (#match? @string "^['\"]"))
 ((literal) @number (#match? @number "^[-+]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)?$"))

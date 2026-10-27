@@ -1,6 +1,7 @@
-//! One statement on the server: its cancels, the token an abort reaches it by, and its answer.
+//! One statement on the server: its cancels, the token an abort uses to reach it, and its answer.
 use super::link::Queued;
 use crate::connection::WritePolicy;
+use crate::db::guard::Admitted;
 use crate::db::model::{CancelToken, ServerError};
 use crate::db::{Interrupted, Pages, Session, Started};
 use crate::history::Outcome;
@@ -13,8 +14,9 @@ use tokio::time::Instant;
 
 pub(super) const CANCELLED_BEFORE_SENT: &str = "cancelled before it was sent";
 pub(super) const STOPPED_WITH_ITS_SESSION: &str = "cancelled: its session stopped";
+const UNCONFIRMED_WRITE: &str = "a write runs only once confirmed";
 
-/// Holds the cancel token of what a session task has on the server, a statement or a page, for its link's abort.
+/// Holds the cancel token of what a session task runs on the server, a statement or a page, for its link's abort.
 #[derive(Debug)]
 pub(in crate::tui::backend) struct OnServer(watch::Sender<Option<CancelToken>>);
 
@@ -32,8 +34,9 @@ impl OnServer {
     }
 }
 
-/// The cancels a session task is sent, each for a `RunId`, and the latest run one was heard for: ids only grow, and a
-/// sheet sends one run at a time, so it is the only one a run still to come can be cancelled by.
+/// The cancels sent to a session task, each for a `RunId`, and the latest run a cancel was received for.
+/// Ids only grow and a sheet sends one run at a time, so only the latest cancel can apply to a run that has not
+/// started yet.
 pub(in crate::tui::backend) struct Cancels {
     receiver: UnboundedReceiver<RunId>,
     latest: Option<RunId>,
@@ -44,14 +47,14 @@ impl Cancels {
         Self { receiver, latest: None }
     }
 
-    /// The next cancel, kept when it is the latest; none once the session is stopping.
+    /// The next cancel, remembered when it is the latest; none once the session is stopping.
     pub(in crate::tui::backend) async fn recv(&mut self) -> Option<RunId> {
         let of = self.receiver.recv().await;
         self.latest = self.latest.max(of);
         of
     }
 
-    /// Whether the latest cancel heard is for `run`.
+    /// Whether the latest cancel received is for `run`.
     pub(in crate::tui::backend) fn is_latest(&self, run: RunId) -> bool {
         self.latest == Some(run)
     }
@@ -77,7 +80,7 @@ impl Cancels {
     }
 }
 
-/// A run's answer for the app, what came of it for the history, and its portal while more pages wait in it.
+/// A run's answer for the app, its outcome for the history, and its portal while more pages wait in it.
 pub(super) struct Answered<'s> {
     pub(super) incoming: Incoming,
     pub(super) outcome: Outcome,
@@ -93,8 +96,9 @@ impl Answered<'_> {
     }
 }
 
-/// Runs `queued`, asking the server to cancel it when its cancel comes; a cancel for another run does nothing. A stop
-/// stops it as `CancelToken::unless_stopped` says. `on_server` holds its token until it is answered or dropped.
+/// Runs `queued`, asking the server to cancel it when its cancel comes; a cancel for another run does nothing.
+/// A stop ends it as `CancelToken::unless_stopped` describes; `on_server` holds its token until it is answered or
+/// dropped.
 pub(super) async fn run_until_answered<'s>(
     session: &'s mut Session,
     writes: WritePolicy,
@@ -117,7 +121,7 @@ pub(in crate::tui::backend) fn warn_if_still_running(cancel: &anyhow::Result<()>
     }
 }
 
-/// Asks the server to cancel what the session runs; a request that failed is logged, and the statement runs on.
+/// Asks the server to cancel what the session runs; a failed request is logged, and the statement keeps running.
 async fn cancel(token: &CancelToken) {
     if let Err(err) = token.cancel().await {
         tracing::warn!("the cancel request failed: {err:#}");
@@ -125,8 +129,8 @@ async fn cancel(token: &CancelToken) {
 }
 
 async fn answer_to(session: &mut Session, writes: WritePolicy, queued: Queued) -> Answered<'_> {
-    let Queued { run, statement, input } = queued;
-    let admitted = match params::admit(&statement, &input.given, &input.specs, writes) {
+    let run = queued.run;
+    let admitted = match admit(&queued, writes) {
         Ok(admitted) => admitted,
         Err(refusal) => {
             return Answered { incoming: Incoming::Refused { run, why: refusal.to_string() }, outcome: Outcome::Refused, rest: None };
@@ -148,10 +152,44 @@ async fn answer_to(session: &mut Session, writes: WritePolicy, queued: Queued) -
     Answered { incoming, outcome, rest }
 }
 
+/// `queued` with its parameters filled in and checked against the connection's `writes` policy; a write the user did
+/// not confirm is refused here too.
+fn admit(queued: &Queued, writes: WritePolicy) -> anyhow::Result<Admitted> {
+    let admitted = params::admit(&queued.statement, &queued.input.given, &queued.input.specs, writes)?;
+    if admitted.write().is_some() && queued.confirmed.is_none() {
+        anyhow::bail!(UNCONFIRMED_WRITE);
+    }
+    Ok(admitted)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::model::Statement;
+    use crate::query::params::ParamInput;
+    use crate::tui::app::Confirmed;
     use tokio::sync::mpsc;
+
+    fn queued(sql: &str, confirmed: Option<Confirmed>) -> Queued {
+        Queued { run: RunId::FIRST, statement: Statement::new(sql), input: ParamInput::default(), confirmed }
+    }
+
+    #[test]
+    fn an_unconfirmed_write_is_refused() {
+        let refusal = admit(&queued("DELETE FROM orders", None), WritePolicy::Allowed).unwrap_err();
+        assert_eq!(refusal.to_string(), UNCONFIRMED_WRITE);
+    }
+
+    #[test]
+    fn a_confirmed_write_is_admitted() {
+        let admitted = admit(&queued("DELETE FROM orders", Some(Confirmed::FOR_TESTS)), WritePolicy::Allowed).unwrap();
+        assert!(admitted.write().is_some());
+    }
+
+    #[test]
+    fn an_unconfirmed_read_is_admitted() {
+        assert!(admit(&queued("SELECT * FROM orders", None), WritePolicy::Allowed).is_ok());
+    }
 
     #[tokio::test]
     async fn a_run_whose_cancel_was_heard_is_the_latest_cancelled() {

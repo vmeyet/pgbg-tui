@@ -1,4 +1,4 @@
-//! Bars, drawn across so a long text label stays readable: one row per bar, a group of rows per point.
+//! Bars, drawn horizontally so a long text label stays readable: one row per bar, a group of rows per point.
 use super::{colour, short_number};
 use crate::chart::Series;
 use crate::render::printable;
@@ -24,7 +24,7 @@ pub(super) fn draw(f: &mut Frame<'_>, series: &Series, theme: &Theme, area: Rect
     f.render_widget(chart, area);
 }
 
-/// The bars of one point, its label on the first.
+/// The bars of one point, with its label on the first bar.
 fn group<'a>(series: &'a Series, point: usize, longest: f64, theme: &Theme) -> BarGroup<'a> {
     let bars: Vec<Bar<'a>> = series.y.iter().enumerate().map(|(column, y)| bar(y.values[point], longest, theme, column)).collect();
     let labelled: Vec<Bar<'a>> = bars
@@ -35,7 +35,8 @@ fn group<'a>(series: &'a Series, point: usize, longest: f64, theme: &Theme) -> B
     BarGroup::new(labelled)
 }
 
-/// A bar as long as `value` against the longest; a negative value draws no bar, a gap draws nothing at all.
+/// A bar whose length is `value` relative to `longest`; a negative value draws no bar, and a missing value draws
+/// nothing at all.
 fn bar<'a>(value: Option<f64>, longest: f64, theme: &Theme, column: usize) -> Bar<'a> {
     let length = value.map_or(0, |value| (value.max(0.0) / longest * f64::from(FULL_BAR)) as u64);
     let fill = colour(theme, column);
