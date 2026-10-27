@@ -96,7 +96,25 @@ The MR that ships a step ticks its box.
 - [x] The grid draws its visible cells through them: `f` cycles the column under the cursor, `F` sets every column raw or readable
 - [x] `-- format: created_at=relative size=bytes` in the header, and a default in `config.toml`; raw when neither says
 
-## 15. Asking a command for SQL
+## 15. Craft
+
+Before more features land on top: the code keeps its own rules, and big results cost less.
+A performance step measures before and after, and the MR gives the numbers.
+
+- [ ] Doc comments, one MR per top-level module: drop the ones that restate the code, write the rest in plain English
+- [ ] `App` and `Form` keep their fields private; the views read them through methods, and `App::paste` is one `match` on the overlay
+- [ ] Newtypes where the rules want them: `Column.type_name` as `TypeName`, the column name and the parameter values; the form's `(Slot, String)` alias becomes a named struct, and stops sharing the `Refusal` name with `db::guard`
+- [ ] `db/mod.rs` and `tui/backend/session.rs` split under 800 lines, each along a concern
+- [ ] `Act::ALL` as a plain array; the `after` chain and its `const fn` loops go
+- [ ] The session task: an explicit state in place of the pending `Option<Woken>`, a `Notify` for schema asks, `Cancels.latest` private, no silent `self.session.as_mut()?`
+- [ ] A write statement knows whether the user's transaction is open without the `SAVEPOINT` probe's two round trips
+- [ ] `db::guard` lets `EXPLAIN ANALYZE` of a read through; `pgbg doctor` warns when the role can call what a read-only transaction does not stop (`pg_signal_backend`, `dblink`, `set_config`)
+- [ ] Performance: one `pg_settings` query reads both timeouts when a session opens
+- [ ] Performance: the SQL is lexed once per edit and shared by the guard, the statement under the cursor and completion; a word compares without an upper-case `String`, and the guard reads `Placed` without a second `Vec`
+- [ ] Performance: a result's cells cost less memory (`Box<str>` text, or rows stored by column), measured on 10 000 rows of 50 columns
+- [ ] Performance: a statement inside a transaction the user began reads its rows through a portal too, so the server sends nothing past the cap
+
+## 16. Asking a command for SQL
 
 Needs step 12: the lexer, the statement under the cursor and the schema's index.
 
