@@ -1,5 +1,6 @@
-//! Every action of the TUI in one table: its default keys, the pane they work in, its line in the `?` help and
-//! its hint in the footer. The key handling, the help and the footer all read it from here.
+//! Every action of the TUI in one table: its default keys, the pane they work in, its line in the `?` help and its
+//! hint in the footer.
+//! The key handling, the help and the footer all read it from here.
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use vtui::help::{Row as HelpRow, Section};
 
@@ -312,8 +313,8 @@ fn footer_rows(pane: Pane) -> impl Iterator<Item = &'static Row> {
     own.chain(anywhere).filter(|row| row.footer.is_some())
 }
 
-/// The footer's hints for `pane` that fit in `columns`, `width` saying what each takes, in the footer's order: the
-/// way out and the way to every other key are the last to go, then the others go from the end.
+/// The footer's hints for `pane` that fit in `columns`, in the footer's order; `width` says what each hint takes.
+/// The way out and the way to every other key are the last to go; the others go from the end.
 pub(crate) fn footer_within(pane: Pane, columns: usize, width: impl Fn(Hint) -> usize) -> Vec<Hint> {
     let rows: Vec<&Row> = footer_rows(pane).collect();
     let mut by_priority: Vec<usize> = (0..rows.len()).collect();

@@ -21,8 +21,8 @@ const PATH_VARIABLE: &str = "PGBG_DATA_DIR";
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
 const DIR_MODE: u32 = 0o700;
 const FILE_MODE: u32 = 0o600;
-/// How many times a writer opens the file again when another one rolled it over while it waited for the lock; a file
-/// system whose files never stay the same (some FUSE and SMB mounts) would loop forever otherwise.
+/// How many times a writer opens the file again when another one rolled it over while it waited for the lock.
+/// Without a cap, a file system whose files never stay the same (some FUSE and SMB mounts) would loop forever.
 const LOCK_ATTEMPTS: usize = 8;
 const KEPT_CHANGING: &str = "the history file kept changing while pgbg waited for its lock";
 const PASSWORD_WORD: &str = "password";
@@ -100,7 +100,7 @@ pub(crate) struct Store {
 }
 
 impl Store {
-    /// The `history` folder in `$PGBG_DATA_DIR`, else in pgbg's folder of the user data folder.
+    /// The `history` folder in `$PGBG_DATA_DIR`, else `pgbg/history` in the user's data folder.
     pub(crate) fn from_env() -> Option<Self> {
         dir_from(std::env::var_os(PATH_VARIABLE), dirs::data_dir()).map(|dir| Self { dir, max_bytes: MAX_BYTES })
     }

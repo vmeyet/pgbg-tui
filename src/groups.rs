@@ -20,8 +20,8 @@ pub(crate) fn register(group: Pid) {
     LIVE.lock().unwrap_or_else(PoisonError::into_inner).insert(group.as_raw_nonzero().get());
 }
 
-/// Kills `group` and forgets it, so neither a second kill nor a panic signals an id the system may reuse; a group
-/// the panic hook already killed is not signalled again.
+/// Kills `group` and forgets it, so neither a second kill nor a panic signals an id the system may reuse.
+/// A group the panic hook already killed is not signalled again.
 pub(crate) fn kill(group: Pid) -> rustix::io::Result<()> {
     let was_live = LIVE.lock().unwrap_or_else(PoisonError::into_inner).remove(&group.as_raw_nonzero().get());
     if !was_live {
