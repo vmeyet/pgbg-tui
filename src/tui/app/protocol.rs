@@ -1,4 +1,5 @@
 //! What the app and the backend say to each other: the actions it asks for and the answers that come back.
+use super::Confirmed;
 use crate::complete::Index;
 use crate::config::ConnectionChange;
 use crate::connection::{Connection, ConnectionName};
@@ -52,8 +53,8 @@ impl SessionId {
 pub(in crate::tui) enum Action {
     /// Open the session `session` on this connection; one already open stays as it is.
     Open { connection: Connection, session: SessionId },
-    /// Run this statement on the connection's session.
-    Run { connection: ConnectionName, run: RunId, statement: Statement, input: ParamInput },
+    /// Run this statement on the connection's session; a write only when `confirmed`.
+    Run { connection: ConnectionName, run: RunId, statement: Statement, input: ParamInput, confirmed: Option<Confirmed> },
     /// Fetch the next page of this run's result, if its portal is still open on the session `session`.
     NextPage { connection: ConnectionName, session: SessionId, run: RunId },
     /// Read the connection's schema on a second session along the route of `session`, once that one is open.

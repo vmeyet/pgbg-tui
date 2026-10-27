@@ -211,7 +211,7 @@ impl App {
     /// Runs `SELECT * FROM` `picked`, its first rows, as the editor's statements run; a read whatever the table's name,
     /// so it never asks as a write does.
     pub(super) fn preview_table(&mut self, picked: &PickedTable) -> Vec<Action> {
-        self.sheet_mut().run_statement(picked.preview(), None, ParamInput::default())
+        self.sheet_mut().run_statement(picked.preview(), None, ParamInput::default(), None)
     }
 
     /// Puts the name of `picked` in the editor at its cursor, and gives the editor the keys.
@@ -361,7 +361,7 @@ mod tests {
         let statement = Statement::new("SELECT * FROM public.orders LIMIT 100");
         assert_eq!(
             press(&mut on_orders(), KeyCode::Char('p')),
-            [Action::Run { connection: shop(), run: RunId::FIRST, statement, input: ParamInput::default() }]
+            [Action::Run { connection: shop(), run: RunId::FIRST, statement, input: ParamInput::default(), confirmed: None }]
         );
     }
 

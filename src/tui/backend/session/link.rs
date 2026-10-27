@@ -6,7 +6,7 @@ use crate::db::model::{CancelToken, Statement};
 use crate::history::Store;
 use crate::query::params::ParamInput;
 use crate::signal::STOP_WAIT;
-use crate::tui::app::{Answer, Incoming, RunId, SessionId};
+use crate::tui::app::{Answer, Confirmed, Incoming, RunId, SessionId};
 use crate::tui::backend::schema::SchemaReader;
 use crate::tui::backend::send;
 use std::sync::Arc;
@@ -54,13 +54,14 @@ pub(in crate::tui::backend) enum Job {
     Open,
 }
 
-/// A statement waiting for the session, and its run.
+/// A statement waiting for the session, its run, and whether the user confirmed it, which a write needs.
 #[derive(Debug)]
 pub(in crate::tui::backend) struct Queued {
     pub(in crate::tui::backend) run: RunId,
     /// As typed, `{{name}}` and all: the history keeps it so, never the values.
     pub(in crate::tui::backend) statement: Statement,
     pub(in crate::tui::backend) input: ParamInput,
+    pub(in crate::tui::backend) confirmed: Option<Confirmed>,
 }
 
 impl SessionLink {

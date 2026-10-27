@@ -10,18 +10,27 @@ pub(in crate::tui) struct WriteToSend {
     to_run: ToRun,
 }
 
+/// Says the user answered `y` to a write: only this module builds one, and the backend runs no write without it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::tui) struct Confirmed(());
+
+impl Confirmed {
+    #[cfg(test)]
+    pub(in crate::tui) const FOR_TESTS: Self = Self(());
+}
+
 impl App {
     /// Runs the statement under the cursor; a write asks first. Nothing while another one runs.
     pub(super) fn run_editor(&mut self) -> Vec<Action> {
         let sheet = self.sheet_mut();
         let Some(to_run) = sheet.editor_run().filter(|_| !sheet.is_running()) else { return vec![] };
-        let Some(write) = sheet.write_under_cursor() else { return sheet.run(to_run) };
+        let Some(write) = sheet.write_under_cursor() else { return sheet.run(to_run, None) };
         self.overlay = Some(Overlay::Prompt(Prompt::SendWrite(Box::new(WriteToSend { write, to_run }))));
         vec![]
     }
 
     pub(super) fn send_write(&mut self, waiting: WriteToSend) -> Vec<Action> {
-        self.sheet_mut().run(waiting.to_run)
+        self.sheet_mut().run(waiting.to_run, Some(Confirmed(())))
     }
 }
 
@@ -55,8 +64,16 @@ mod tests {
         let mut app = typed_on("allowed", "DELETE FROM orders");
         assert_eq!(press(&mut app, KeyCode::Enter), []);
         assert_eq!(app.sheet().run, Run::Idle);
-        assert_eq!(press(&mut app, KeyCode::Char('y')), [first_run(&shop(), "DELETE FROM orders")]);
+        let sent = press(&mut app, KeyCode::Char('y'));
+        assert!(matches!(&*sent, [Action::Run { confirmed: Some(Confirmed(())), .. }]), "{sent:?}");
         assert_eq!(app.overlay, None);
+    }
+
+    #[test]
+    fn a_read_is_sent_unconfirmed() {
+        let mut app = typed_on("allowed", "SELECT * FROM orders");
+        let sent = press(&mut app, KeyCode::Enter);
+        assert!(matches!(&*sent, [Action::Run { confirmed: None, .. }]), "{sent:?}");
     }
 
     #[test]
