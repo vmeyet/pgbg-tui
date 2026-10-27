@@ -1,13 +1,16 @@
-//! `config.toml`: the connections and how results show.
+//! `config.toml`: the connections, how results show, and the command `ctrl-g` asks.
 //! It is read once, with a warning for each key pgbg ignores.
 use crate::connection::{Connection, Entry};
 use crate::format::Mode;
+pub(crate) use ai::AiSettings;
+use ai::AiTable;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+mod ai;
 mod ignored;
 mod keychain;
 mod write;
@@ -23,6 +26,8 @@ struct ConfigFile {
     connections: BTreeMap<String, Entry>,
     #[serde(default)]
     display: Display,
+    #[serde(default)]
+    ai: AiTable,
 }
 
 /// The `[display]` table.
@@ -39,6 +44,9 @@ pub(crate) struct Config {
     pub(crate) connections: Vec<Connection>,
     /// How the TUI's results open: raw, or each column readable.
     pub(crate) format: Mode,
+    /// How `ctrl-g` asks for SQL; none when `[ai]` names no command.
+    #[cfg_attr(not(test), expect(dead_code, reason = "`ctrl-g` reads it, the next step"))]
+    pub(crate) ai: Option<AiSettings>,
 }
 
 /// A config as read from its file.
@@ -76,12 +84,14 @@ impl Config {
 
 fn parse(text: &str) -> Result<Loaded> {
     let ignored::Parsed { value: file, warnings } = ignored::parse::<ConfigFile>(text)?;
-    let connections = file
+    let connections: Vec<Connection> = file
         .connections
         .into_iter()
         .map(|(name, entry)| Connection::new(&name, entry).with_context(|| format!("connection `{name}`")))
         .collect::<Result<_>>()?;
-    Ok(Loaded { config: Config { connections, format: file.display.format }, warnings })
+    let ai = ai::read(file.ai, &connections)?;
+    let warnings = warnings.into_iter().chain(ai.warnings).collect();
+    Ok(Loaded { config: Config { connections, format: file.display.format, ai: ai.settings }, warnings })
 }
 
 #[cfg(test)]
@@ -111,6 +121,17 @@ url = "postgres://nina@localhost:5432/shop"
     fn results_open_raw_unless_the_display_table_says_readable() {
         assert_eq!(parse(SHOP).unwrap().config.format, Mode::Raw);
         assert_eq!(parse(&format!("[display]\nformat = \"readable\"\n{SHOP}")).unwrap().config.format, Mode::Readable);
+    }
+
+    #[test]
+    fn the_ai_table_is_read_beside_the_connections() {
+        let loaded = parse(&format!("[ai]\ncommand = [\"llm\"]\n{SHOP}")).unwrap();
+        assert_eq!(loaded.config.ai.map(|ai| ai.command), Some(vec!["llm".to_owned()]));
+    }
+
+    #[test]
+    fn a_refused_ai_table_fails_the_config() {
+        assert!(format!("{:#}", parse("[ai]\ncommand = []\n").unwrap_err()).contains("[ai] command"));
     }
 
     #[test]
