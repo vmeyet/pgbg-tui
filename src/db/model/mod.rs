@@ -18,6 +18,7 @@ mod route;
 mod schema;
 mod server;
 mod value;
+pub(crate) mod words;
 
 /// One SQL statement, as typed: the unit pgbg runs.
 #[derive(Clone, Debug, PartialEq, Eq)]

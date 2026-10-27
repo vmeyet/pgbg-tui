@@ -1,6 +1,6 @@
-//! Saving the editor's text as a query, and the prompts on the way: the path of a new query, and opening another
-//! query over unsaved text.
-use super::{Action, App, Overlay};
+//! Saving the editor's text as a query, and the prompts on the footer line: the path of a new query, opening another
+//! query over unsaved text, and sending a write.
+use super::{Action, App, Overlay, WriteToSend};
 use crate::act::{self, Act, Pane};
 use crate::connection::ConnectionName;
 use crate::query::{Query, QueryPath};
@@ -17,6 +17,18 @@ pub(in crate::tui) enum Prompt {
     SaveAs { path: Field, error: Option<String> },
     /// The query to open once the user agrees to drop the editor's unsaved text.
     OpenOverUnsaved(Query),
+    /// A write waiting for a `y`; any other key drops it.
+    SendWrite(Box<WriteToSend>),
+}
+
+impl Prompt {
+    /// The pane of the action table whose keys answer it.
+    pub(in crate::tui) const fn pane(&self) -> Pane {
+        match self {
+            Self::SaveAs { .. } | Self::OpenOverUnsaved(_) => Pane::Prompt,
+            Self::SendWrite(_) => Pane::Confirm,
+        }
+    }
 }
 
 /// `orders/daily` as `orders/daily.sql`; a path typed with its extension stays as it is.
@@ -67,9 +79,11 @@ impl App {
 
     /// The prompt after `key`, `None` once it closed, and what to do.
     pub(super) fn prompt_after(&mut self, prompt: Prompt, key: KeyEvent) -> (Option<Prompt>, Vec<Action>) {
-        match (act::act_for(key, Pane::Prompt), prompt) {
+        match (act::act_for(key, prompt.pane()), prompt) {
             (Some(Act::Quit), _) => (None, self.quit()),
             (Some(Act::Close), _) => (None, vec![]),
+            (Some(Act::Run), Prompt::SendWrite(waiting)) => (None, self.send_write(*waiting)),
+            (_, Prompt::SendWrite(_)) => (None, vec![]),
             (Some(Act::Open), Prompt::OpenOverUnsaved(query)) => (None, vec![self.open_query(query)]),
             (Some(Act::Open), Prompt::SaveAs { path, .. }) => self.save_as(path),
             (_, Prompt::SaveAs { mut path, error }) => {

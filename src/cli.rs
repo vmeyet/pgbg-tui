@@ -44,6 +44,9 @@ pub enum Command {
         /// A file of `name=value` lines, or `-` for stdin, so a value need not sit in the shell's history.
         #[arg(long, value_name = "FILE")]
         params_file: Option<PathBuf>,
+        /// Sends a write without asking; without it a write asks `y/N` at a terminal, and is refused where none can answer.
+        #[arg(long)]
+        yes: bool,
     },
     /// Checks a connection: its config, TLS, tunnel, login, timeout, and whether its role can write; exits 1 when a check fails.
     Doctor {

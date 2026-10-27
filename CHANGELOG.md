@@ -8,6 +8,9 @@ Each entry says what changed, then where, then how to use it.
 
 ### New
 
+- **A write asks before it is sent**, on a connection with `writes = "allowed"`, whatever its tier: the TUI's footer names it, as `DELETE from orders?`.
+  Press `y` to send it; any other key drops it and nothing reaches the server.
+  `pgbg run` asks `y/N` on the terminal; without a terminal, as in a script, it refuses the write unless you pass `--yes`.
 - **`EXPLAIN ANALYZE` of a read** on a read-only connection, in the TUI and `pgbg run`: the plan as the statement ran, with its times and rows.
   Write `EXPLAIN ANALYZE SELECT ...` or `EXPLAIN (ANALYZE, BUFFERS) SELECT ...`; the statement runs in the read-only transaction, so `EXPLAIN ANALYZE` of a write is still refused.
 - **`pgbg doctor` looks beyond read only**: on a read-only connection it warns when the role can do what a read-only transaction does not stop.
@@ -122,6 +125,8 @@ Each entry says what changed, then where, then how to use it.
 
 ### Fixed
 
+- **A table named like a write, as `delete` or `update`, previews again** with `p` and `^r` in the TUI's schema, and goes in quoted from `i`, `⇥` and completion.
+  pgbg quotes such a name, so its guard no longer takes the read for a write.
 - **Reading the schema no longer fails with `could not open relation with OID`** when another session drops a table during the read, in the TUI's sidebar and `pgbg schema`.
   pgbg names plain index columns from its own snapshot, and reads once more if an expression index still loses the race.
 - **A result read inside your own transaction never ends it**, on a connection that allows writes: pgbg reads the first 10 000 rows of a query through a cursor there, so a transaction that failed stays failed until your `COMMIT` or `ROLLBACK`, as in `psql`.

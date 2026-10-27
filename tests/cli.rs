@@ -208,6 +208,30 @@ fn run_through_a_tunnel_that_dies_says_why_before_connecting() {
     assert!(stderr(&output).contains("tunnel `sh` died") && stderr(&output).contains("no route"), "{}", stderr(&output));
 }
 
+/// A connection that allows writes, behind a tunnel that dies at once: a run that gets as far as connecting says so.
+const WRITABLE_BEHIND_A_DEAD_TUNNEL: &str = "[connections.shop]\ntier = \"production\"\nurl = \"postgres://nina@localhost/shop\"\n\
+    tls = \"off\"\nwrites = \"allowed\"\ntunnel = { command = [\"sh\", \"-c\", \"exit 255\", \"{port}\"] }\n";
+
+#[test]
+fn run_refuses_a_write_it_cannot_ask_about_without_a_terminal_before_connecting() {
+    let output = pgbg(WRITABLE_BEHIND_A_DEAD_TUNNEL, &["run", "shop", "DELETE FROM orders"]);
+    assert!(!output.status.success());
+    let err = stderr(&output);
+    assert!(err.contains("`DELETE from orders` is a write") && err.contains("--yes") && !err.contains("tunnel"), "{err}");
+}
+
+#[test]
+fn run_with_yes_sends_a_write_without_asking() {
+    let output = pgbg(WRITABLE_BEHIND_A_DEAD_TUNNEL, &["run", "shop", "DELETE FROM orders", "--yes"]);
+    assert!(stderr(&output).contains("tunnel `sh` died"), "{}", stderr(&output));
+}
+
+#[test]
+fn run_sends_a_read_without_asking_on_a_connection_that_allows_writes() {
+    let output = pgbg(WRITABLE_BEHIND_A_DEAD_TUNNEL, &["run", "shop", "SELECT * FROM orders"]);
+    assert!(stderr(&output).contains("tunnel `sh` died"), "{}", stderr(&output));
+}
+
 #[test]
 fn doctor_marks_a_refused_login_and_exits_with_a_failure() {
     let output = pgbg("[connections.shop]\ntier = \"local\"\nurl = \"postgres://nina@localhost:1/shop\"\n", &["doctor", "shop"]);
@@ -467,7 +491,7 @@ fn a_kill_of_pgbg_doctor_stops_its_tunnel_too() {
 fn schema_json_lists_the_tables_the_filter_keeps() {
     let url = std::env::var("PGBG_TEST_DATABASE_URL").unwrap();
     let config = format!("[connections.shop]\ntier = \"local\"\nurl = \"{url}\"\nwrites = \"allowed\"\n");
-    let created = pgbg(&config, &["run", "shop", "CREATE TABLE IF NOT EXISTS cli_schema_orders (id int PRIMARY KEY)"]);
+    let created = pgbg(&config, &["run", "shop", "CREATE TABLE IF NOT EXISTS cli_schema_orders (id int PRIMARY KEY)", "--yes"]);
     assert!(created.status.success(), "{}", stderr(&created));
     let output = pgbg(&config, &["schema", "shop", "cli_schema_ord", "--json"]);
     assert!(output.status.success(), "{}", stderr(&output));
@@ -536,14 +560,14 @@ fn ctrl_c_on_pgbg_run_cancels_its_write_even_where_the_server_cannot_see_pgbg_go
     let dir = tempfile::tempdir().unwrap();
     let direct = writable("shop", database.as_str());
     for sql in ["DROP TABLE IF EXISTS cli_cancelled_orders", "CREATE TABLE cli_cancelled_orders (id int)"] {
-        let output = pgbg_in(dir.path(), &direct, &["run", "shop", sql]);
+        let output = pgbg_in(dir.path(), &direct, &["run", "shop", sql, "--yes"]);
         assert!(output.status.success(), "{}", stderr(&output));
     }
     let (mut proxy, proxied) = hiding_hang_ups(dir.path(), &database);
     let config = dir.path().join("proxied.toml");
     std::fs::write(&config, writable("shop", proxied.as_str())).unwrap();
     let mut pgbg = Command::new(env!("CARGO_BIN_EXE_pgbg"))
-        .args(["run", "shop", SLOW_INSERT])
+        .args(["run", "shop", SLOW_INSERT, "--yes"])
         .env("PGBG_CONFIG", &config)
         .env("PGBG_LOG", "off")
         .env("PGBG_DATA_DIR", dir.path())

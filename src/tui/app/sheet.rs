@@ -6,8 +6,8 @@ use super::param_bar::{Direction, ParamBar};
 use super::{Action, Grid, Incoming, RunId, SessionId, TunnelState};
 use crate::chart::{self, ChartError, Series};
 use crate::complete::Index;
-use crate::connection::{Connection, ConnectionName, SchemaReading};
-use crate::db::guard;
+use crate::connection::{Connection, ConnectionName, SchemaReading, WritePolicy};
+use crate::db::guard::{self, Write};
 use crate::db::model::{Catalog, Extent, Page, ResultSet, Statement};
 use crate::format::{self, Format};
 use crate::query::params::{self, Numbering, ParamInput, ParamName};
@@ -31,6 +31,14 @@ struct Sent {
     statement: Statement,
     /// The `$n` the server got for each `{{name}}`, which its error position counts in.
     numbering: Numbering,
+}
+
+/// A statement to run, the editor's byte it starts at when it was cut from the editor, and the values of its parameters.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::tui) struct ToRun {
+    statement: Statement,
+    start: Option<usize>,
+    input: ParamInput,
 }
 
 /// Where the session stands, as the status line says it.
@@ -333,12 +341,26 @@ impl Sheet {
         }
     }
 
-    /// Runs the statement under the cursor with the values of the parameter bar, the editor's other statements left alone.
-    pub(super) fn run_editor(&mut self) -> Vec<Action> {
-        let Some((range, statement)) = self.statement_under_cursor() else { return vec![] };
+    /// The statement under the cursor with the values of the parameter bar, the editor's other statements left alone.
+    pub(super) fn editor_run(&self) -> Option<ToRun> {
+        let (range, statement) = self.statement_under_cursor()?;
         let names = params::names(self.editor.lexed().tokens_in(range.clone())).unwrap_or_default();
         let input = ParamInput { given: self.bar.given(&names), specs: self.header.params.clone() };
-        self.run_statement(statement, Some(range.start), input)
+        Some(ToRun { statement, start: Some(range.start), input })
+    }
+
+    /// What the statement under the cursor writes, on a connection that allows writes; a read-only one refuses a write
+    /// without asking.
+    pub(super) fn write_under_cursor(&self) -> Option<Write> {
+        if self.connection.writes() == WritePolicy::ReadOnly {
+            return None;
+        }
+        let range = self.range_under_cursor()?;
+        guard::write_in(self.editor.text(), self.editor.lexed().tokens_in(range))
+    }
+
+    pub(super) fn run(&mut self, to_run: ToRun) -> Vec<Action> {
+        self.run_statement(to_run.statement, to_run.start, to_run.input)
     }
 
     /// Runs `statement` with `input` for its parameters; it starts at the editor's byte `start` when it was cut from

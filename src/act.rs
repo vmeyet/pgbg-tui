@@ -148,6 +148,8 @@ pub(crate) enum Pane {
     Form,
     /// A question on the footer line, as the path of a new query: while open it takes every key.
     Prompt,
+    /// A question on the footer line, whether to send a write: `y` sends it, any other key drops it.
+    Confirm,
     /// The detail of the grid's row over the screen, a popup like the finder.
     Detail,
     /// A question on the footer line, the format to copy the result as: while open it takes every key.
@@ -294,6 +296,9 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Open, Pane::Prompt, &[key(KeyCode::Enter)]).help("⏎", "save, or open over the unsaved text").footer("⏎", "ok"),
     row(Act::Close, Pane::Prompt, &[key(KeyCode::Esc)]).help("esc", "keep editing").footer("esc", "cancel"),
     row(Act::Quit, Pane::Prompt, &[control('c')]).help("^c", "quit"),
+    row(Act::Run, Pane::Confirm, &[key(KeyCode::Char('y'))]).help("y", "send the write").footer("y", "sends"),
+    row(Act::Close, Pane::Confirm, &[key(KeyCode::Esc)]).help("esc", "send nothing, as any other key").footer("any other key", "cancels"),
+    row(Act::Quit, Pane::Confirm, &[control('c')]).help("^c", "quit, sending nothing"),
     row(Act::Down, Pane::Detail, &[key(KeyCode::Char('j')), key(KeyCode::Down)]).help("j k", "scroll down, up").footer("j/k", "scroll"),
     row(Act::Up, Pane::Detail, &[key(KeyCode::Char('k')), key(KeyCode::Up)]),
     row(Act::Close, Pane::Detail, &[key(KeyCode::Esc)]).help("esc", "back to the grid").footer("esc", "closes"),
@@ -332,6 +337,7 @@ fn works_in(row: &Row, pane: Pane) -> bool {
                     | Pane::Picker
                     | Pane::Form
                     | Pane::Prompt
+                    | Pane::Confirm
                     | Pane::Detail
                     | Pane::CopyAs
                     | Pane::SchemaFilter
@@ -389,6 +395,7 @@ pub(crate) fn sections(pane: Pane, every_key: bool) -> Vec<Section> {
         (Pane::Picker, "picker"),
         (Pane::Form, "form"),
         (Pane::Prompt, "prompt"),
+        (Pane::Confirm, "write"),
         (Pane::Detail, "row"),
         (Pane::CopyAs, "copy as"),
         (Pane::Completion, "names"),
@@ -512,6 +519,7 @@ mod tests {
             Pane::Picker,
             Pane::Form,
             Pane::Prompt,
+            Pane::Confirm,
             Pane::Detail,
             Pane::CopyAs,
             Pane::Completion,
@@ -557,6 +565,6 @@ mod tests {
     fn the_first_help_lists_the_focused_pane_and_what_works_anywhere() {
         let titles: Vec<&str> = sections(Pane::Result, false).iter().map(|section| section.title).collect();
         assert_eq!(titles, ["result", "anywhere"]);
-        assert_eq!(sections(Pane::Result, true).len(), 15);
+        assert_eq!(sections(Pane::Result, true).len(), 16);
     }
 }

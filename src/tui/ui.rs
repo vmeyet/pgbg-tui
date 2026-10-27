@@ -282,6 +282,14 @@ mod tests {
     }
 
     #[test]
+    fn a_write_asks_on_the_footer_line_before_it_is_sent() {
+        let mut app = app_on(&connection("production", "allowed"));
+        "DELETE FROM orders".chars().for_each(|c| _ = app.handle_key(KeyEvent::from(KeyCode::Char(c))));
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        insta::assert_snapshot!("send_write", render(&app, 60, 6).backend());
+    }
+
+    #[test]
     fn a_finder_with_more_matches_than_fit_scrolls_and_keeps_its_footer() {
         let mut app = with_queries();
         let many = (1..=20).map(|day| query(&format!("orders/day{day:02}.sql"))).collect();

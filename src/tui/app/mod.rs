@@ -7,6 +7,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use vtui::help::Help;
 
 pub(super) use completion::Completions;
+pub(super) use confirm::WriteToSend;
 pub(super) use detail::{Detail, DetailFit, DetailScroll, DrawnDetail, DrawnRow};
 pub(super) use form::{Form, PasswordFrom, Slot};
 use grid::Move;
@@ -26,6 +27,7 @@ pub(super) use sheet::{Run, SchemaState, SessionState, Sheet, View};
 pub(super) use table_finder::TableFinder;
 
 mod completion;
+mod confirm;
 mod copy;
 mod detail;
 mod editor;
@@ -350,7 +352,7 @@ impl App {
             return actions;
         }
         match act {
-            Act::Run => return self.sheet_mut().run_editor(),
+            Act::Run => return self.run_editor(),
             Act::TakeGhost => return self.sheet_mut().edit(KeyEvent::from(KeyCode::Right)),
             Act::Complete => return self.open_completions(),
             Act::Cancel if self.focus == Focus::Params && !self.sheet().is_running() => self.focus = Focus::Editor,

@@ -43,10 +43,12 @@ pgbg run local "SELECT id, total FROM orders LIMIT 5"
 pgbg run local "SELECT count(*) FROM orders" --json
 pgbg run local "SELECT * FROM orders WHERE day > {{since}}::date" --param since=2024-01-01
 pgbg run local --query orders/daily --param since=2024-01-01
+pgbg run staging "DELETE FROM orders WHERE id = 7" --yes
 pgbg history local --limit 5
 pgbg schema local orders
 ```
 
+On a connection that allows writes, a write asks `y/N` first; `--yes` sends it without asking, as a script without a terminal must.
 Each statement run goes in the connection's history under `pgbg/history/` in your data folder, or the folder `$PGBG_DATA_DIR` names: when, how long and what came of it, never a row.
 
 ## Saved queries
