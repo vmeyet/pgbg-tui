@@ -28,7 +28,7 @@ pub(crate) fn row_count(result: &ResultSet) -> String {
     }
 }
 
-/// `count` with its thousands apart: `1 732`, `12 000`.
+/// `count` grouped by thousands: `1 732`, `12 000`.
 pub(crate) fn grouped(count: usize) -> String {
     format::grouped_digits(&count.to_string())
 }

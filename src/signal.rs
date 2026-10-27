@@ -30,8 +30,9 @@ impl fmt::Display for Stopped {
 
 impl std::error::Error for Stopped {}
 
-/// Runs `work` to its end, or until a signal asks pgbg to stop: `work` then has `STOP_WAIT` to end on its own, as it
-/// hears the same signal, and is dropped past it or on a second signal, and with it any tunnel it holds.
+/// Runs `work` to its end, or until a signal asks pgbg to stop.
+/// `work` hears the same signal and has `STOP_WAIT` to end on its own; past it, or on a second signal, it is dropped,
+/// and with it any tunnel it holds.
 pub async fn until_stopped<T>(work: impl Future<Output = Result<T>>) -> Result<T> {
     let mut signals = Signals::listen()?;
     let mut work = Box::pin(work);
