@@ -304,7 +304,7 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Close, Pane::TableFinder, &[key(KeyCode::Esc)]).help("esc", "close the finder").footer("esc", "closes"),
     row(Act::Quit, Pane::TableFinder, &[control('c')]).help("^c", "quit"),
     row(Act::Cancel, Pane::Anywhere, &[key(KeyCode::Esc)]).help("esc", "cancel the running statement"),
-    row(Act::SwitchPane, Pane::Anywhere, &[key(KeyCode::Tab)]).help("tab", "next pane: editor, result, sidebar").footer("⇥", "pane"),
+    row(Act::SwitchPane, Pane::Anywhere, &[key(KeyCode::Tab)]).help("tab", "next pane: editor, bar, result, sidebar").footer("⇥", "pane"),
     row(Act::Help, Pane::Anywhere, &[key(KeyCode::F(1))]).help("F1", "these keys, from the editor too").footer("F1", "keys"),
     row(Act::Down, Pane::Picker, &[key(KeyCode::Down), control('n')]).help("↓ ^n", "next, previous connection").footer("↑↓", "pick"),
     row(Act::Up, Pane::Picker, &[key(KeyCode::Up), control('p')]),

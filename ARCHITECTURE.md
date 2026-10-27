@@ -103,8 +103,8 @@ Completing a name:
 
 1. Once the schema reader answers `Incoming::Schema`, it builds the `complete::Index` from that `Catalog` on a blocking thread and answers `Incoming::Index` with both; the sheet keeps the index behind an `Arc` while the catalog it was built from is still the one read.
 2. Only a key that types an identifier character or `.` asks for candidates, and only when the cursor ends the word; the first ask reads the schema while the session is open, and a failed or closed session stays so, and until the index comes the keywords alone complete; the context comes from the tokens of the statement under the cursor alone.
-3. The ghost is prefix only, a binary search in the index: the rest of the first candidate shows dimmed after the cursor, and `→` at the end of the word takes it, quoted when its name needs it; any other key drops it.
-4. `ctrl-space` opens the list in a popup at the cursor, where a fuzzy match joins the prefix ones: a prefix before a fuzzy match, a column of a table the statement names before any other, then shorter first; at most 50 are kept; `↑↓` pick, `⏎` or `⇥` take, `esc` closes, and typing on narrows it, while `⇥` outside it still switches panes.
+3. The ghost is prefix only, a binary search in the index: the rest of the first candidate shows dimmed after the cursor, and `→` at the end of the word takes it, quoted when its name needs it; any other key drops it, one that acts (`⏎`, `⇥`, `esc`, `ctrl-s`) too, and it shows only while the editor has the keys.
+4. `ctrl-space` opens the list in a popup at the cursor, where a fuzzy match joins the prefix ones: a prefix before a fuzzy match, a column of a table the statement names before any other, then shorter first; at most 50 are kept, the prefix ones by the index's binary search and fuzzy ones looked for only to fill the 50, the best kept as they come; `↑↓` pick, `⏎` or `⇥` take, `esc` closes, and typing on narrows it, while `⇥` outside it still switches panes.
    When no name fits, it opens or stays open saying `no match` and `⏎` and `⇥` do nothing, so a half-typed name never runs; a paste closes it and goes to the editor.
 5. A test holds the budget: 20 000 tables and 200 000 columns, one key, under a millisecond in a release build.
 
@@ -185,6 +185,7 @@ A parameter is always bound, never put in the statement's text: its value cannot
 
 The guard reads a backslash in a string as itself, and blanks as PostgreSQL does (` `, tab, newline, carriage return, form feed, vertical tab; any other character outside ASCII is part of a word).
 So the server reads strings the same way, every read-only transaction sets `SET LOCAL standard_conforming_strings = on` with its other limits, and a connection that allows writes sets it for its session.
+That session setting is the one gap, on `Mode::Writes` only: a transaction pooler keeps it on the server link it reached alone, and the user's own `SET standard_conforming_strings = off` turns it off, so there the server can read a backslash in a string as the guard does not.
 
 On a connection that allows writes, a statement runs as typed, except that one returning rows goes through a portal in its own committed transaction, unless the user's own `BEGIN` left one open (a `SAVEPOINT` probe tells).
 
