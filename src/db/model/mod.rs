@@ -6,7 +6,7 @@ pub(crate) use result::{Extent, Page, ResultSet};
 pub(crate) use route::{LocalPort, Route};
 pub(crate) use schema::{Catalog, Index, Schema, SchemaColumn, SchemaNode, Table, TableKind};
 use serde::Serialize;
-pub(crate) use server::{Named, RoleFlag, RolePowers, RoleRights, ServerFacts};
+pub(crate) use server::{Named, ReadOnlyGaps, RoleFlag, RolePowers, RoleRights, ServerFacts};
 use std::fmt;
 pub(crate) use value::Value;
 

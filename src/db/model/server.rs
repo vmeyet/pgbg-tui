@@ -52,3 +52,15 @@ pub(crate) struct Named {
     pub(crate) first: Vec<String>,
     pub(crate) count: u64,
 }
+
+/// What the session's role can do that a read-only transaction does not stop: through the login role or any role it
+/// may become with `SET ROLE`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ReadOnlyGaps {
+    /// It may cancel or end other sessions, through `pg_signal_backend`.
+    pub(crate) signals_sessions: bool,
+    /// The `dblink` functions it may call, as `dblink_exec(text,text)`: each opens a session of its own that may write.
+    pub(crate) dblink_functions: Vec<String>,
+    /// The settings only a superuser could set, granted it with `GRANT SET ON PARAMETER`.
+    pub(crate) granted_settings: Vec<String>,
+}

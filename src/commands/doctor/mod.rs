@@ -75,8 +75,12 @@ async fn read(connection: &Connection, session: &mut Session) -> Vec<Check> {
         Ok(rights) => verdicts::role(connection.writes(), &rights),
         Err(err) => verdicts::not_read("role", &err),
     };
+    let beyond = match session.read_only_gaps().await {
+        Ok(gaps) => verdicts::beyond_read_only(connection.writes(), &gaps),
+        Err(err) => verdicts::not_read("beyond read only", &err),
+    };
     let [login, server] = verdicts::server(&facts);
-    vec![login, server, verdicts::timeout(connection, &facts), role]
+    vec![login, server, verdicts::timeout(connection, &facts), role, beyond]
 }
 
 async fn stop(mut tunnel: Tunnel) -> Check {

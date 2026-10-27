@@ -10,6 +10,8 @@ Each entry says what changed, then where, then how to use it.
 
 - **`EXPLAIN ANALYZE` of a read** on a read-only connection, in the TUI and `pgbg run`: the plan as the statement ran, with its times and rows.
   Write `EXPLAIN ANALYZE SELECT ...` or `EXPLAIN (ANALYZE, BUFFERS) SELECT ...`; the statement runs in the read-only transaction, so `EXPLAIN ANALYZE` of a write is still refused.
+- **`pgbg doctor` looks beyond read only**: on a read-only connection it warns when the role can do what a read-only transaction does not stop.
+  It names membership in `pg_signal_backend`, the `dblink` functions the role may call, and the settings granted it with `GRANT SET ON PARAMETER`; run `pgbg doctor <connection>`.
 - **The parameter bar** in the TUI: when the statement under the cursor holds a `{{name}}`, a line above the editor shows a field for each, an empty one with what it runs with: its `-- param:` default, `NULL` when `optional`, or `required`.
   Press `⇥` from the editor to reach it, `⇥` and `⇧⇥` to move between fields, `⏎` to run, `esc` to cancel a running statement or go back to the editor; the values stay on the sheet until you quit, and are never written to disk.
 - **Completion** in the TUI's editor: as you type a name, the rest of the best table, column or keyword shows faded after the cursor, and `→` takes it.
