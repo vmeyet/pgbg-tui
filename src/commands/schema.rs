@@ -73,7 +73,8 @@ mod tests {
     use super::*;
 
     fn orders() -> Schema {
-        crate::fixtures::shop_schema().matching("public.orders")
+        let public = crate::fixtures::shop_schema().schemas.into_iter().find(|node| node.name == "public").unwrap();
+        Schema { schemas: vec![SchemaNode { tables: public.tables.into_iter().take(1).collect(), ..public }] }
     }
 
     #[test]

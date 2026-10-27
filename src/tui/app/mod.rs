@@ -65,7 +65,7 @@ impl Focus {
 pub(super) struct Fit {
     /// The grid rows, a page for `PgDn`, and the columns its cells had.
     pub(super) grid: Room,
-    /// Whether the sidebar of queries was drawn, which a narrow terminal or no query at all leaves out.
+    /// Whether the sidebar was drawn, which a terminal narrower than 80 columns leaves out.
     pub(super) has_sidebar: bool,
     /// Where the row's detail started and how far it scrolls.
     pub(super) detail: DetailFit,
@@ -187,6 +187,11 @@ impl App {
 
     /// Takes one key; returns what the runner should do about it.
     pub(super) fn handle_key(&mut self, key: KeyEvent) -> Vec<Action> {
+        let actions = self.take_key(key);
+        self.and_the_schema_shown(actions)
+    }
+
+    fn take_key(&mut self, key: KeyEvent) -> Vec<Action> {
         self.config_failure = None;
         self.note = None;
         if let Some(overlay) = self.overlay.take() {
@@ -307,7 +312,7 @@ impl App {
             Act::CopyCell => return self.copy_cell(),
             Act::CopyRow => return self.copy_row(),
             Act::CopyResult => self.ask_copy_format(),
-            Act::SwitchTab => return self.switch_tab(),
+            Act::SwitchTab => self.switch_tab(),
             Act::Close | Act::Delete | Act::CloseSession | Act::Add | Act::Edit | Act::CopyCsv | Act::CopyJson | Act::CopyMarkdown => {}
             Act::Filter | Act::ReadAgain => {}
         }
@@ -371,6 +376,11 @@ impl App {
     /// Applies one answer: a session's or a query read to the sheet of its connection, the list of queries to the app;
     /// returns what the runner should do about it.
     pub(super) fn apply(&mut self, answer: Answer) -> Vec<Action> {
+        let actions = self.take_answer(answer);
+        self.and_the_schema_shown(actions)
+    }
+
+    fn take_answer(&mut self, answer: Answer) -> Vec<Action> {
         match answer {
             Answer::Session { connection, session, incoming } => {
                 let reading = self.reading;

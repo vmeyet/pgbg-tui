@@ -67,21 +67,7 @@ pub(crate) struct Index {
     pub(crate) is_primary: bool,
 }
 
-impl Schema {
-    /// Only the tables whose name, or `schema.table`, holds `filter`, whatever its case.
-    pub(crate) fn matching(self, filter: &str) -> Self {
-        let filter = filter.to_lowercase();
-        let schemas = self.schemas.into_iter().map(|schema| schema.matching(&filter)).filter(|schema| !schema.tables.is_empty());
-        Self { schemas: schemas.collect() }
-    }
-}
-
 impl SchemaNode {
-    fn matching(self, filter: &str) -> Self {
-        let tables = self.tables.iter().filter(|table| self.holds(table, filter)).cloned().collect();
-        Self { name: self.name, tables }
-    }
-
     /// Whether `schema.table` holds `filter`, which is lowercase, whatever the name's case.
     pub(crate) fn holds(&self, table: &Table, filter: &str) -> bool {
         self.qualified(table).to_lowercase().contains(filter)
@@ -97,23 +83,10 @@ mod tests {
     use super::*;
     use crate::fixtures::shop_schema as shop;
 
-    fn tables_of(schema: &Schema) -> Vec<String> {
-        schema.schemas.iter().flat_map(|node| node.tables.iter().map(|table| node.qualified(table))).collect()
-    }
-
     #[test]
-    fn a_filter_keeps_the_tables_whose_name_holds_it_whatever_its_case() {
-        assert_eq!(tables_of(&shop().matching("ORD")), ["public.orders"]);
-    }
-
-    #[test]
-    fn a_filter_matches_the_schema_and_table_together() {
-        assert_eq!(tables_of(&shop().matching("billing.inv")), ["billing.invoices"]);
-    }
-
-    #[test]
-    fn a_filter_drops_the_schemas_it_empties() {
-        assert_eq!(shop().matching("customers").schemas.len(), 1);
+    fn a_table_holds_a_filter_on_its_schema_and_name_together() {
+        let billing = &shop().schemas[0];
+        assert!(billing.holds(&billing.tables[0], "billing.inv") && !billing.holds(&billing.tables[0], "public"));
     }
 
     #[test]

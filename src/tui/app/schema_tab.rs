@@ -59,13 +59,21 @@ impl App {
         }
     }
 
-    /// Shows the other tab of the sidebar; the schema is read the first time its tab shows.
-    pub(super) fn switch_tab(&mut self) -> Vec<Action> {
+    pub(super) fn switch_tab(&mut self) {
         self.sidebar = match self.sidebar {
             SidebarTab::Queries => SidebarTab::Schema,
             SidebarTab::Schema => SidebarTab::Queries,
         };
-        if self.sidebar == SidebarTab::Schema { self.sheet_mut().want_schema() } else { vec![] }
+    }
+
+    /// `actions`, then a read of the schema when its tab is drawn and the sheet on screen has none, read or asked for:
+    /// the schema is read the moment it shows, on whichever sheet.
+    pub(super) fn and_the_schema_shown(&mut self, mut actions: Vec<Action>) -> Vec<Action> {
+        let is_shown = self.sidebar == SidebarTab::Schema && self.fit.has_sidebar;
+        if is_shown {
+            actions.extend(self.sheet_mut().want_schema());
+        }
+        actions
     }
 
     /// What `act` does in the schema tab, when it does something there.
@@ -121,7 +129,7 @@ impl App {
 mod tests {
     use super::super::sheet::SchemaState;
     use super::super::tests::{app, app_on, shop, to_shop};
-    use super::super::{Fit, Incoming, SessionId};
+    use super::super::{Answer, Fit, Incoming, SessionId};
     use super::*;
     use crate::fixtures::{self, shop_schema};
     use crossterm::event::KeyCode;
@@ -167,6 +175,15 @@ mod tests {
         let mut app = on_the_schema_tab();
         press(&mut app, KeyCode::Char('['));
         assert_eq!((app.pane(), press(&mut app, KeyCode::Char(']'))), (Pane::Queries, vec![]));
+    }
+
+    #[test]
+    fn a_sheet_opened_again_under_the_schema_tab_reads_its_schema_at_once() {
+        let mut app = on_the_schema_tab();
+        let connection = app.sheet().connection.clone();
+        app.sheet_mut().reopen(connection, SessionId::FIRST.next());
+        let read = Action::ReadSchema { connection: shop(), session: SessionId::FIRST.next() };
+        assert_eq!(app.apply(Answer::Copied("1 cell".to_owned())), [read]);
     }
 
     #[test]

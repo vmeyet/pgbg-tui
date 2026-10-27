@@ -23,7 +23,7 @@ Each entry says what changed, then where, then how to use it.
   One file may serve several queries: a name in it the statement lacks is left alone, while a `--param` for one is refused as a typo.
   A name with no value, or a statement mixing its own `$1` with `{{name}}` stops the run before anything is sent; the history keeps `{{name}}`, never the value.
 - **The schema** in the TUI's sidebar: on the sidebar, `]` or `[` switches from the saved queries to the schema of the connection on screen, its schemas and their tables; `⏎` folds a schema, `/` keeps the tables whose name holds what you type, `r` reads it again.
-  It is read the first time the tab shows, on a second, short login along the same tunnel, so a running statement never waits on it; the first 20 000 tables by name are kept, and the status line says when there are more.
+  The sidebar shows on a terminal of 80 columns or more, saved queries or not; the schema is read the moment its tab shows, on a second, short login along the same tunnel, so a running statement never waits on it; the first 20 000 tables by name are kept, and the status line says when there are more.
   `schema = "off"` on a connection never reads it, for a pooler or a `CONNECTION LIMIT` with no login to spare.
 - **Big results page in** in the TUI: a result comes 500 rows at a time, and the next page is fetched as the grid's cursor nears the last row, with no cap.
   The title says `first 1 500 rows · more…` while rows wait on the server, and `all 1 732 rows` once they all came; a result left 5 minutes without a page asked stops there, so its open transaction does not hold up the server, and a page the server fails says why in the status line.

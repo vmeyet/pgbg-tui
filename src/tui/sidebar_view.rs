@@ -30,6 +30,11 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
 
 /// The tree of queries, scrolled so the cursor's row shows; the cursor is drawn while the sidebar has the keys.
 fn draw_queries(f: &mut Frame<'_>, app: &App, inside: Rect, focused: bool) {
+    if app.queries.all.is_empty() {
+        let none = Line::styled("no saved query under .pgbg/queries/", Style::default().fg(app.theme.faded));
+        f.render_widget(Paragraph::new(none).wrap(Wrap { trim: false }), inside);
+        return;
+    }
     let height = usize::from(inside.height);
     let scroll = app.queries.selected.saturating_sub(height.saturating_sub(1));
     let is_cursor = |at: usize| focused && at == app.queries.selected;

@@ -91,7 +91,7 @@ Switching connection:
 
 Reading the schema:
 
-1. The schema is read once it is first needed: the schema tab opened, `ctrl-t` (planned), or a first completion asked (planned); `schema = "off"` on a connection never reads it, and `r` in the schema tab reads it again.
+1. The schema is read once it is first needed: the schema tab drawn, for whichever sheet is on screen, `ctrl-t` (planned), or a first completion asked (planned); `schema = "off"` on a connection never reads it, and `r` in the schema tab reads it again.
    `Action::ReadSchema` asks the session task, which opens its session first unless it is open; its `SchemaReader` waits for the route that session took, opens a second session along it, reading the password again from its source (a command runs again), reads the schema and `current_schemas(false)`, closes it and answers `Incoming::Schema`; no password is kept between the two opens, and a failed read is a warning, never a lost session.
    A session that does not open, or is lost, fails a read waiting on it, so `r` asks again; asking on a failed session shows it opening again, since the ask opens it.
    The reader is a future of the session task polled beside its statements, so a statement never waits on it, nor it on a statement, and it goes when the task stops.
