@@ -1,6 +1,6 @@
 //! The way to one session task: jobs, cancels and schema asks in, and what it has on the server for an abort.
-use super::SessionTask;
 use super::run::{Cancels, OnServer, warn_if_still_running};
+use super::{Mailbox, SessionTask};
 use crate::connection::{Connection, ConnectionName};
 use crate::db::model::{CancelToken, Statement};
 use crate::history::Store;
@@ -81,8 +81,9 @@ impl SessionLink {
         let reader =
             SchemaReader { connection: connection.clone(), answers: answers.clone(), asks: Arc::clone(&schema_asks), route: open_route };
         let (cancelled, on_server) = (Cancels::new(cancelled), OnServer::new(on_server));
-        let task = SessionTask { connection, tunnel: None, session: None, route, cancelled, on_server, answers, history, idle_limit };
-        Self { session, jobs, cancels, schema_asks, running, task: tokio::spawn(task.serve(queue, reader)) }
+        let mailbox = Mailbox { queue, cancelled, on_server, answers };
+        let task = SessionTask { connection, tunnel: None, session: None, route, mailbox, history, idle_limit };
+        Self { session, jobs, cancels, schema_asks, running, task: tokio::spawn(task.serve(reader)) }
     }
 
     /// Queues `job` behind the one running.

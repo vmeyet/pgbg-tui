@@ -62,43 +62,61 @@ struct SessionTask {
     session: Option<Session>,
     /// The route of the open session, for the schema reader; none while it is not open.
     route: watch::Sender<Option<Route>>,
-    cancelled: Cancels,
-    on_server: OnServer,
-    answers: SessionAnswers,
+    mailbox: Mailbox,
     history: Option<Store>,
     idle_limit: Duration,
+}
+
+/// What the session task hears from the app and says to it: jobs and cancels in, answers out, and the statement on the
+/// server a cancel reaches.
+pub(super) struct Mailbox {
+    pub(super) queue: UnboundedReceiver<Job>,
+    pub(super) cancelled: Cancels,
+    pub(super) on_server: OnServer,
+    pub(super) answers: SessionAnswers,
+}
+
+impl Mailbox {
+    /// Fails every statement queued with `error`, so a later open never sends one.
+    fn fail_queued(&mut self, error: &str) {
+        while let Ok(job) = self.queue.try_recv() {
+            if let Job::Run(queued) = job {
+                self.answers.say(Incoming::Failed { run: queued.run, error: error.to_owned(), position: None });
+            }
+        }
+    }
 }
 
 impl SessionTask {
     /// Opens the session at once, and again before a statement when the last try failed or the session was lost;
     /// once pgbg quits, a statement still queued is never sent.
-    async fn serve(mut self, queue: UnboundedReceiver<Job>, reader: SchemaReader) {
+    async fn serve(mut self, reader: SchemaReader) {
         tokio::select! {
-            () = self.serve_jobs(queue) => {}
+            () = self.serve_jobs() => {}
             () = reader.serve() => {}
         }
         self.stop().await;
     }
 
-    async fn serve_jobs(&mut self, mut queue: UnboundedReceiver<Job>) {
-        self.open_or_fail_queued(&mut queue).await;
+    async fn serve_jobs(&mut self) {
+        self.open_or_fail_queued().await;
         let mut next = Next::Wait;
         loop {
             let woken = match next {
-                Next::Wait => self.woken(&mut queue).await,
+                Next::Wait => self.woken().await,
                 Next::Act(woken) => woken,
                 Next::Stop => break,
             };
-            next = self.act(woken, &mut queue).await;
+            next = self.act(woken).await;
         }
     }
 
-    async fn act(&mut self, woken: Woken, queue: &mut UnboundedReceiver<Job>) -> Next {
+    async fn act(&mut self, woken: Woken) -> Next {
         match woken {
-            Woken::Queued(Some(_)) if queue.is_closed() => {}
-            Woken::Queued(Some(Job::Run(queued))) => return self.run(queued, queue).await,
+            Woken::Queued(Some(_)) if self.mailbox.queue.is_closed() => {}
+            Woken::Queued(Some(Job::Run(queued))) => return self.run(queued).await,
             Woken::Queued(Some(Job::NextPage { .. })) => {}
-            Woken::Queued(Some(Job::Open)) if self.session.is_none() => self.open_or_fail_queued(queue).await,
+            Woken::Queued(Some(Job::Open)) if self.session.is_none() => self.open_or_fail_queued().await,
             Woken::Queued(Some(Job::Open)) => {}
             Woken::Queued(None) => return Next::Stop,
             Woken::Closed(why) => self.lose(why),
@@ -107,10 +125,10 @@ impl SessionTask {
         Next::Wait
     }
 
-    async fn woken(&mut self, queue: &mut UnboundedReceiver<Job>) -> Woken {
-        let Self { session, tunnel, .. } = self;
+    async fn woken(&mut self) -> Woken {
+        let Self { session, tunnel, mailbox, .. } = self;
         tokio::select! {
-            queued = queue.recv() => Woken::Queued(queued),
+            queued = mailbox.queue.recv() => Woken::Queued(queued),
             why = closed(session.as_ref()) => Woken::Closed(why),
             died = ended(tunnel.as_mut()) => Woken::TunnelEnded(died),
         }
@@ -139,7 +157,7 @@ impl SessionTask {
     /// Opens the session along the tunnel kept, or one started again, as `pgbg run` does; the tunnel stays for the
     /// next try when the login fails, and its state goes out as it changes.
     async fn connect(&mut self) -> Result<Session, String> {
-        let answers = &self.answers;
+        let answers = &self.mailbox.answers;
         let on_tunnel = |step| answers.say(Incoming::Tunnel(tunnel_state(step)));
         match open_along(&self.connection, self.tunnel.take(), on_tunnel).await {
             Ok(Opened { session, tunnel }) => {
@@ -158,23 +176,15 @@ impl SessionTask {
     }
 
     /// Opens the session; when it does not open, every statement sent meanwhile fails with it, so a later open never sends one.
-    async fn open_or_fail_queued(&mut self, queue: &mut UnboundedReceiver<Job>) {
+    async fn open_or_fail_queued(&mut self) {
         match self.open().await {
             Ok(session) => self.session = Some(session),
-            Err(error) => self.fail_queued(queue, &error),
-        }
-    }
-
-    fn fail_queued(&self, queue: &mut UnboundedReceiver<Job>, error: &str) {
-        while let Ok(job) = queue.try_recv() {
-            if let Job::Run(queued) = job {
-                self.send(Incoming::Failed { run: queued.run, error: error.to_owned(), position: None });
-            }
+            Err(error) => self.mailbox.fail_queued(&error),
         }
     }
 
     /// Runs `queued` on the open session, or one opened for it; says what the task does next.
-    async fn run(&mut self, queued: Queued, queue: &mut UnboundedReceiver<Job>) -> Next {
+    async fn run(&mut self, queued: Queued) -> Next {
         let start = RunStart::of(&queued);
         let mut session = match self.take_or_open().await {
             Ok(session) => session,
@@ -184,33 +194,26 @@ impl SessionTask {
                 return Next::Wait;
             }
         };
-        if self.cancelled.was_cancelled(queued.run) {
+        if self.mailbox.cancelled.was_cancelled(queued.run) {
             self.session = Some(session);
             self.send(Incoming::Failed { run: queued.run, error: CANCELLED_BEFORE_SENT.to_owned(), position: None });
             return Next::Wait;
         }
-        let next = self.answer_and_page(&mut session, queued, queue, start).await;
+        let next = self.answer_and_page(&mut session, queued, start).await;
         self.keep_unless_lost(session, next)
     }
 
     /// Answers `queued` on `session`, then serves the pages of its result while its portal is open.
-    async fn answer_and_page(
-        &mut self,
-        session: &mut Session,
-        queued: Queued,
-        queue: &mut UnboundedReceiver<Job>,
-        start: RunStart,
-    ) -> Next {
+    async fn answer_and_page(&mut self, session: &mut Session, queued: Queued, start: RunStart) -> Next {
         let (run, token) = (queued.run, session.cancel_token());
         let Answered { incoming, outcome, rest } =
-            run_until_answered(session, self.connection.writes(), queued, &mut self.cancelled, &self.on_server).await;
+            run_until_answered(session, self.connection.writes(), queued, &mut self.mailbox.cancelled, &self.mailbox.on_server).await;
         let took = start.clock.elapsed();
         self.record(start, took, outcome);
         self.send(incoming);
         let Some(pages) = rest else { return Next::Wait };
-        let (tunnel, cancelled) = (self.tunnel.as_mut(), &mut self.cancelled);
-        let (answers, idle_limit, on_server) = (&self.answers, self.idle_limit, &self.on_server);
-        serve_pages(Paging { pages, run, token, queue, cancelled, on_server, tunnel, answers, idle_limit }).await
+        let (tunnel, mailbox, idle_limit) = (self.tunnel.as_mut(), &mut self.mailbox, self.idle_limit);
+        serve_pages(Paging { pages, run, token, mailbox, tunnel, idle_limit }).await
     }
 
     /// Keeps `session` for the next run, or closes it when it can run no more statements, dropping a pending close
@@ -263,7 +266,7 @@ impl SessionTask {
     }
 
     fn send(&self, incoming: Incoming) {
-        self.answers.say(incoming);
+        self.mailbox.answers.say(incoming);
     }
 }
 
