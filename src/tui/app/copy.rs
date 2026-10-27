@@ -5,6 +5,15 @@ use crate::db::model::{ResultSet, Value};
 use crate::export::{self, Format};
 use crossterm::event::KeyEvent;
 
+/// What a copy's note adds when some of its cells pgbg cannot decode, which copy as `<unsupported>`.
+fn undecodable<'v>(values: impl IntoIterator<Item = &'v Value>) -> String {
+    match values.into_iter().filter(|value| matches!(value, Value::Unsupported)).count() {
+        0 => String::new(),
+        1 => " · 1 cell not decodable, copied as <unsupported>".to_owned(),
+        count => format!(" · {count} cells not decodable, copied as <unsupported>"),
+    }
+}
+
 impl App {
     fn shown_result(&self) -> Option<&ResultSet> {
         match &self.sheet().run {
@@ -23,14 +32,14 @@ impl App {
     pub(super) fn copy_cell(&self) -> Vec<Action> {
         let Run::Done { result, grid, .. } = &self.sheet().run else { return vec![] };
         let Some(value) = result.rows().get(grid.row).and_then(|values| values.get(grid.column)) else { return vec![] };
-        let done = format!("copied {} of row {}", result.columns()[grid.column].name, grid.row + 1);
+        let done = format!("copied {} of row {}{}", result.columns()[grid.column].name, grid.row + 1, undecodable([value]));
         vec![Action::Copy { text: export::cell(value), done }]
     }
 
     /// Copies the cursor's row as a CSV line.
     pub(super) fn copy_row(&self) -> Vec<Action> {
         let Some((number, values)) = self.current_row() else { return vec![] };
-        vec![Action::Copy { text: export::row(values), done: format!("copied row {number} as CSV") }]
+        vec![Action::Copy { text: export::row(values), done: format!("copied row {number} as CSV{}", undecodable(values)) }]
     }
 
     /// Asks on the footer line which format the whole result is copied as.
@@ -58,7 +67,8 @@ impl App {
 
     fn copy_result(&self, format: Format) -> Vec<Action> {
         let Some(result) = self.shown_result() else { return vec![] };
-        let done = format!("copied {} as {}", crate::render::row_count(result), format.name());
+        let cells = undecodable(result.rows().iter().flatten());
+        let done = format!("copied {} as {}{cells}", crate::render::row_count(result), format.name());
         vec![Action::Copy { text: export::result(result, format), done }]
     }
 
@@ -77,11 +87,50 @@ mod tests {
     use std::time::Duration;
 
     fn on_the_result() -> App {
+        on(orders())
+    }
+
+    fn on(result: ResultSet) -> App {
         let mut app = typed("SELECT 1");
         app.handle_key(KeyEvent::from(KeyCode::Enter));
-        app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result: orders(), took: Duration::from_millis(38) }));
+        app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result, took: Duration::from_millis(38) }));
         app.handle_key(KeyEvent::from(KeyCode::Tab));
         app
+    }
+
+    fn with_an_undecodable_name() -> App {
+        on(orders().with_cell(0, 2, Value::Unsupported))
+    }
+
+    #[test]
+    fn a_copied_cell_pgbg_cannot_decode_says_so() {
+        let mut app = with_an_undecodable_name();
+        press(&mut app, 'l');
+        press(&mut app, 'l');
+        assert_eq!(
+            press(&mut app, 'y'),
+            copied("<unsupported>", "copied customer of row 1 · 1 cell not decodable, copied as <unsupported>")
+        );
+    }
+
+    #[test]
+    fn a_copied_row_says_how_many_of_its_cells_pgbg_cannot_decode() {
+        let mut app = with_an_undecodable_name();
+        assert_eq!(
+            press(&mut app, 'Y'),
+            copied("7,12.50,<unsupported>\n", "copied row 1 as CSV · 1 cell not decodable, copied as <unsupported>")
+        );
+    }
+
+    #[test]
+    fn a_copied_result_says_how_many_of_its_cells_pgbg_cannot_decode() {
+        let mut app = on(orders().with_cell(0, 2, Value::Unsupported).with_cell(1, 2, Value::Unsupported));
+        press(&mut app, 'c');
+        let actions = press(&mut app, 'c');
+        assert!(
+            matches!(&*actions, [Action::Copy { done, .. }] if done.ends_with("· 2 cells not decodable, copied as <unsupported>")),
+            "{actions:?}"
+        );
     }
 
     fn press(app: &mut App, c: char) -> Vec<Action> {

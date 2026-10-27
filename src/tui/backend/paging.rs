@@ -78,12 +78,18 @@ impl Outbox<'_> {
     }
 }
 
+/// The idle limit, kept a tenth short of the server's, so pgbg closes the portal before the server ends the session.
+fn idle_limit_before_the_server(idle_limit: Duration, on_server: Duration) -> Duration {
+    idle_limit.min(on_server.saturating_sub(on_server / 10))
+}
+
 /// Serves the pages of `paging.run` until its portal closes: on its last page, a cancel of the run, a new run, the idle
 /// limit, the session closing or its link or tunnel ending; a close before the last page sends an empty `Cut` page.
 /// Returns what woke the task that the session task still has to act on.
 pub(super) async fn serve_pages(paging: Paging<'_, '_>) -> Option<Woken> {
     let Paging { mut pages, run, token, queue, cancelled, on_server, mut tunnel, connection, session, answers, idle_limit } = paging;
     let outbox = Outbox { connection, session, answers, run };
+    let idle_limit = idle_limit_before_the_server(idle_limit, pages.idle_limit_on_server());
     let mut deadline = Instant::now() + idle_limit;
     loop {
         let held = tokio::select! {
@@ -211,6 +217,16 @@ mod tests {
     use tokio::sync::mpsc;
 
     const SLOW_AFTER_THE_FIRST_PAGE: &str = "SELECT n, pg_sleep(CASE WHEN n > 500 THEN 30 ELSE 0 END) FROM generate_series(1, 1000) AS n";
+
+    #[test]
+    fn a_server_stricter_than_the_idle_limit_has_the_portal_close_before_it() {
+        assert_eq!(idle_limit_before_the_server(PAGES_IDLE_LIMIT, Duration::from_mins(1)), Duration::from_secs(54));
+    }
+
+    #[test]
+    fn a_server_more_patient_than_the_idle_limit_leaves_it_as_it_is() {
+        assert_eq!(idle_limit_before_the_server(PAGES_IDLE_LIMIT, Duration::from_mins(6)), PAGES_IDLE_LIMIT);
+    }
 
     fn shop() -> ConnectionName {
         fixtures::test_database_as("shop").name().clone()

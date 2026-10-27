@@ -39,7 +39,7 @@ const LINK_TASK_GONE: &str = "the link's task is gone";
 const SERVER_STATEMENT_TIMEOUT: &str = "SELECT setting::bigint FROM pg_settings WHERE name = 'statement_timeout'";
 const SERVER_IDLE_IN_TRANSACTION_TIMEOUT: &str =
     "SELECT setting::bigint FROM pg_settings WHERE name = 'idle_in_transaction_session_timeout'";
-/// The server ends a read-only session whose transaction stays idle this long, should pgbg not close a portal waiting for
+/// The server ends the session of a read-only transaction left idle this long, should pgbg not close a portal waiting for
 /// its next page itself, after 5 minutes.
 const IDLE_IN_TRANSACTION_BACKSTOP: Duration = Duration::from_mins(6);
 const PROBE_SAVEPOINT: &str = "SAVEPOINT pgbg_probe";
@@ -65,10 +65,49 @@ const CAPPED_FETCH: FetchSize = FetchSize::new(ROW_CAP as i32 + 1);
 pub(crate) struct Session {
     client: Client,
     tls: Tls,
+    limits: ReadLimits,
     /// Why the link ended, set by the task that drives it.
     ended: watch::Receiver<Option<String>>,
     link: AbortHandle,
     marks: Marks,
+}
+
+/// What every read-only transaction sets for itself with `SET LOCAL`: behind a pooler that hands each transaction any
+/// server link, a session-wide `SET` would miss the next transaction and reach other clients.
+#[derive(Debug)]
+struct ReadLimits {
+    statement_timeout: StatementTimeout,
+    idle: IdleTimeout,
+}
+
+/// How long the server lets a read-only transaction stay idle before it ends the whole session.
+#[derive(Clone, Copy, Debug)]
+enum IdleTimeout {
+    /// The server's own timeout, stricter than the backstop.
+    Server(Duration),
+    /// No stricter timeout on the server: pgbg sets `IDLE_IN_TRANSACTION_BACKSTOP`.
+    Backstop,
+}
+
+impl IdleTimeout {
+    fn on_server(self) -> Duration {
+        match self {
+            Self::Server(timeout) => timeout,
+            Self::Backstop => IDLE_IN_TRANSACTION_BACKSTOP,
+        }
+    }
+}
+
+impl ReadLimits {
+    fn sql(&self) -> String {
+        let statement = format!("SET LOCAL statement_timeout = {}", self.statement_timeout.as_millis());
+        match self.idle {
+            IdleTimeout::Server(_) => statement,
+            IdleTimeout::Backstop => {
+                format!("{statement}; SET LOCAL idle_in_transaction_session_timeout = {}", IDLE_IN_TRANSACTION_BACKSTOP.as_millis())
+            }
+        }
+    }
 }
 
 /// What the session's own statements left behind them.
@@ -95,10 +134,12 @@ impl Session {
         };
         let Connected { client, ended, link } = connected.with_context(|| format!("connecting to {}", connection.name()))?;
         stop_statements_when_client_gone(&client).await;
-        let timeout = statement_timeout_in_effect(&client, connection.statement_timeout()).await?;
-        set_statement_timeout(&client, timeout).await?;
-        end_idle_transactions(&client, connection.writes()).await?;
-        Ok(Self { client, tls, ended, link, marks: Marks::default() })
+        let statement_timeout = statement_timeout_in_effect(&client, connection.statement_timeout()).await?;
+        if connection.writes() == WritePolicy::Allowed {
+            set_statement_timeout(&client, statement_timeout).await?;
+        }
+        let limits = ReadLimits { statement_timeout, idle: idle_timeout(&client).await? };
+        Ok(Self { client, tls, limits, ended, link, marks: Marks::default() })
     }
 
     /// Waits until the link to the server ends, and says why.
@@ -165,7 +206,7 @@ impl Session {
 
     /// `read` inside `BEGIN READ ONLY`, always rolled back.
     async fn read_only<T>(&mut self, read: impl AsyncFnOnce(&Transaction<'_>) -> Result<T>) -> Result<T> {
-        let transaction = self.client.build_transaction().read_only(true).start().await.map_err(server_error)?;
+        let transaction = begin_read_only(&mut self.client, &self.limits).await?;
         let result = read(&transaction).await;
         roll_back(transaction, &mut self.marks).await?;
         result
@@ -277,24 +318,24 @@ async fn server_millis(client: &Client, sql: &str) -> Result<u64> {
     u64::try_from(ms).context("the setting is negative")
 }
 
-/// On a read-only connection the only transaction left open is a portal waiting for its next page, so the server may
-/// end one idle past the backstop; a `BEGIN` the user ran where writes are allowed waits as long as the user wants.
-/// A stricter timeout the server applies already stays.
-async fn end_idle_transactions(client: &Client, writes: WritePolicy) -> Result<()> {
-    if writes == WritePolicy::Allowed {
-        return Ok(());
-    }
+/// The idle timeout a read-only transaction runs with: the server's own when stricter than the backstop, which then
+/// ends a portal left waiting for its next page should pgbg not close it itself.
+async fn idle_timeout(client: &Client) -> Result<IdleTimeout> {
     let server = server_millis(client, SERVER_IDLE_IN_TRANSACTION_TIMEOUT).await.context("reading the server's idle timeout")?;
-    let backstop = IDLE_IN_TRANSACTION_BACKSTOP.as_millis() as u64;
-    let is_stricter_on_server = server != 0 && server <= backstop;
-    if is_stricter_on_server {
-        return Ok(());
-    }
-    let sql = format!("SET idle_in_transaction_session_timeout = {backstop}");
-    client.batch_execute(&sql).await.map_err(server_error).context("setting the idle transaction timeout")
+    let is_stricter_on_server = server != 0 && u128::from(server) <= IDLE_IN_TRANSACTION_BACKSTOP.as_millis();
+    Ok(if is_stricter_on_server { IdleTimeout::Server(Duration::from_millis(server)) } else { IdleTimeout::Backstop })
 }
 
-/// Not best effort: a production session never runs without its timeout.
+/// `BEGIN READ ONLY`, then the transaction's own limits.
+async fn begin_read_only<'c>(client: &'c mut Client, limits: &ReadLimits) -> Result<Transaction<'c>> {
+    let transaction = client.build_transaction().read_only(true).start().await.map_err(server_error)?;
+    transaction.batch_execute(&limits.sql()).await.map_err(server_error).context("setting the transaction's limits")?;
+    Ok(transaction)
+}
+
+/// Only where writes are allowed, whose own `BEGIN` and statements run outside pgbg's transactions; behind a
+/// transaction pooler it holds only on the server link it reached. Not best effort: a production session never runs
+/// without its timeout.
 async fn set_statement_timeout(client: &Client, timeout: StatementTimeout) -> Result<()> {
     let sql = format!("SET statement_timeout = {}", timeout.as_millis());
     client.batch_execute(&sql).await.map_err(server_error).context("setting the statement timeout")
@@ -597,8 +638,37 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
-    async fn a_session_that_allows_writes_leaves_an_idle_transaction_to_the_user() {
-        assert_eq!(shown_idle_timeout(fixtures::test_database_url(), "writes = \"allowed\"\n").await, [[Value::Text("0".into())]]);
+    async fn a_transaction_the_user_began_stays_idle_as_long_as_the_user_wants() {
+        let mut writer = session(WritePolicy::Allowed).await;
+        run_on(&mut writer, "BEGIN").await;
+        let shown = run_on(&mut writer, "SHOW idle_in_transaction_session_timeout").await;
+        assert_eq!(shown.rows(), [[Value::Text("0".into())]]);
+    }
+
+    /// `setting` as the link holds it outside any transaction pgbg begins, as a pooler hands it to its next client.
+    async fn shown_on_the_link(session: &Session, setting: &str) -> String {
+        session.client.query_one(&format!("SHOW {setting}"), &[]).await.unwrap().get(0)
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_read_only_session_leaves_the_idle_timeout_of_its_link_alone() {
+        let session = session_on("staging", "").await;
+        assert_eq!(shown_on_the_link(&session, "idle_in_transaction_session_timeout").await, "0");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_read_only_session_leaves_the_statement_timeout_of_its_link_alone() {
+        let session = session_on("staging", "").await;
+        assert_eq!(shown_on_the_link(&session, "statement_timeout").await, "0");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_session_that_allows_writes_sets_its_statement_timeout_on_its_link() {
+        let session = session_on("staging", "writes = \"allowed\"\n").await;
+        assert_eq!(shown_on_the_link(&session, "statement_timeout").await, "1min");
     }
 
     #[tokio::test]

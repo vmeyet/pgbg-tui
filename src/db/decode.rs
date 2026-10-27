@@ -65,7 +65,7 @@ fn cell(ty: &Type, raw: &[u8]) -> Value {
         ColumnKind::Int if *ty == Type::INT4 => typed(ty, raw, |int: i32| Value::Int(int.into())),
         ColumnKind::Int if *ty == Type::OID => typed(ty, raw, |oid: u32| Value::Int(oid.into())),
         ColumnKind::Int => typed(ty, raw, Value::Int),
-        ColumnKind::Float if *ty == Type::FLOAT4 => typed(ty, raw, |float: f32| Value::Float(float.into())),
+        ColumnKind::Float if *ty == Type::FLOAT4 => typed(ty, raw, real),
         ColumnKind::Float => typed(ty, raw, Value::Float),
         ColumnKind::Numeric => numeric_text(raw).map_or(Value::Unsupported, Value::Numeric),
         ColumnKind::Text => Value::Text(String::from_utf8_lossy(raw).into_owned()),
@@ -79,6 +79,11 @@ fn cell(ty: &Type, raw: &[u8]) -> Value {
         ColumnKind::Other if *ty == Type::VOID => Value::Null,
         ColumnKind::Other => Value::Unsupported,
     }
+}
+
+/// A `real` widened through its shortest text, so `0.1` stays `0.1` and does not become `0.10000000149011612`.
+fn real(float: f32) -> Value {
+    Value::Float(float.to_string().parse().unwrap_or(f64::from(float)))
 }
 
 fn typed<'a, T: FromSql<'a>>(ty: &Type, raw: &'a [u8], wrap: fn(T) -> Value) -> Value {
@@ -202,6 +207,11 @@ mod tests {
     #[test]
     fn a_timestamp_out_of_range_is_unsupported_and_the_row_still_decodes() {
         assert_eq!(cell(&Type::TIMESTAMP, &(i64::MAX - 1).to_be_bytes()), Value::Unsupported);
+    }
+
+    #[test]
+    fn a_real_keeps_the_digits_the_server_shows() {
+        assert_eq!(cell(&Type::FLOAT4, &0.1_f32.to_be_bytes()).to_string(), "0.1");
     }
 
     #[test]

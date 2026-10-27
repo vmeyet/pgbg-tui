@@ -103,7 +103,7 @@ impl Keychain {
     /// Saves `password` as the item `account`, over the one already there: safe to run twice.
     /// Written as hex through `security -i`, so it never shows in argv and is never read from the terminal.
     pub(crate) fn write(&self, account: &KeychainItem, password: &Secret) -> Result<()> {
-        let line = Zeroizing::new(format!("add-generic-password -a {account} -s {} -U -X {}\n", self.service, *hex(password.expose())));
+        let line = add_line(&format!("add-generic-password -a {account} -s {} -U -X ", self.service), &hex(password.expose()));
         ensure!(line.len() <= LINE_LIMIT_BYTES, "the password is too long for the keychain: {} bytes", password.expose().len());
         let mut child = Command::new(SECURITY)
             .arg("-i")
@@ -145,8 +145,24 @@ fn not_utf8(account: &KeychainItem) -> anyhow::Error {
     anyhow!("the keychain item `{account}` is not UTF-8")
 }
 
+/// `command` then the password's `digits` and a newline, in one buffer sized for them.
+fn add_line(command: &str, digits: &str) -> Zeroizing<String> {
+    let mut line = Zeroizing::new(String::with_capacity(command.len() + digits.len() + 1));
+    line.push_str(command);
+    line.push_str(digits);
+    line.push('\n');
+    line
+}
+
+/// Two lowercase digits per byte, written into one buffer sized for them, so no piece of the password is left behind.
 fn hex(text: &str) -> Zeroizing<String> {
-    Zeroizing::new(text.bytes().map(|b| format!("{b:02x}")).collect())
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut digits = Zeroizing::new(String::with_capacity(text.len() * 2));
+    for byte in text.bytes() {
+        digits.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        digits.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+    }
+    digits
 }
 
 fn from_hex(digits: &str) -> Option<Vec<u8>> {

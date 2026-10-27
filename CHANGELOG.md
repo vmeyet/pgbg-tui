@@ -96,6 +96,10 @@ Each entry says what changed, then where, then how to use it.
 - **The connection form scrolls** on a short terminal, so the line with the cursor, such as `timeout`, stays in view.
 - **A pasted password keeps its tabs and other control characters**; only its line end is dropped.
 - **The row's detail opens on a screen wider than 820 columns**, and no longer rebuilds its lines on every frame.
+- **pgbg no longer changes the session settings of a server link it shares through PgBouncer**: a read-only connection sets its statement timeout and its idle timeout inside each transaction, so other clients of a transaction pool keep theirs and pgbg's next transaction keeps its own.
+  A result left waiting for its next page closes before a stricter idle timeout on the server would end the whole session.
+- **A `real` value shows as the server prints it**: `0.1`, not `0.10000000149011612`.
+- **A copy says when some cells could not be decoded**: they are copied as `<unsupported>`, and the status line says how many.
 - **A `ctrl-c`, a `kill` or a closed terminal cancels the statement on the server** under `pgbg run`, `pgbg doctor` and `pgbg schema`, before the link and the tunnel go: a write on a connection that allows writes no longer commits after pgbg exits, even where the server cannot tell pgbg went (before PostgreSQL 14, off Linux, behind PgBouncer).
   Closing a session in the TUI sends the cancel again before it cuts the link, when the first one did not reach the server.
   A `before` or password command runs in a process group of its own, so what it started goes with it when pgbg stops waiting on it.
