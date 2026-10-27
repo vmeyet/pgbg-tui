@@ -6,33 +6,54 @@ use super::ghost::Ghost;
 use super::{Action, App, AskFailure, AskId, Focus, Sheet};
 use crate::ai::Instruction;
 use crate::config::AiSettings;
-use crate::connection::AiAsking;
+use crate::connection::{AiAsking, ConnectionName};
 use crate::db::model::Statement;
 
 const INSTRUCTION: &str = "Complete the statement under the cursor: answer with it whole, the text it holds kept exactly as \
                            it is, followed by the rest it needs.";
 
+/// One sheet's editor at one revision: each editor counts its own revisions, so the sheet tells two of them apart.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct EditorAt {
+    sheet: ConnectionName,
+    revision: Revision,
+}
+
 /// Where the idle ask stands, so one text is asked about once.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) enum IdleAsk {
     #[default]
     NotAsked,
-    /// The command runs on `ask`, asked about the editor at `revision`.
-    Waiting { ask: AskId, revision: Revision },
-    /// The editor at this revision was asked about, or could not be.
-    Asked(Revision),
+    /// The command runs on `ask`, asked about `editor`.
+    Waiting { ask: AskId, editor: EditorAt },
+    /// This editor was asked about, or could not be.
+    Asked(EditorAt),
 }
 
 impl IdleAsk {
-    pub(super) fn is_waiting_on(self, ask: AskId) -> bool {
-        matches!(self, Self::Waiting { ask: waiting, .. } if waiting == ask)
+    pub(super) fn is_waiting_on(&self, ask: AskId) -> bool {
+        matches!(self, Self::Waiting { ask: waiting, .. } if *waiting == ask)
     }
 
-    fn covers(self, revision: Revision) -> bool {
+    fn covers(&self, editor: &EditorAt) -> bool {
         match self {
             Self::NotAsked => false,
             Self::Waiting { .. } => true,
-            Self::Asked(asked) => asked == revision,
+            Self::Asked(asked) => asked == editor,
+        }
+    }
+
+    /// Marks the ask waited on as asked, and gives its id; nothing when none was waited on.
+    fn stop_waiting(&mut self) -> Option<AskId> {
+        match std::mem::take(self) {
+            Self::Waiting { ask, editor } => {
+                *self = Self::Asked(editor);
+                Some(ask)
+            }
+            other => {
+                *self = other;
+                None
+            }
         }
     }
 }
@@ -43,7 +64,7 @@ impl App {
     pub(in crate::tui) fn wants_idle_ghost(&self) -> bool {
         self.idle_settings().is_some()
             && self.shows_the_bare_editor()
-            && !self.asks.idle.covers(self.sheet().editor.revision())
+            && !self.asks.idle.covers(&self.editor_on_screen())
             && self.sheet().statement_before_cursor().is_some()
     }
 
@@ -51,32 +72,35 @@ impl App {
     pub(in crate::tui) fn ask_idle_ghost(&mut self) -> Vec<Action> {
         let Some(settings) = self.idle_settings().filter(|_| self.wants_idle_ghost()) else { return vec![] };
         let settings = settings.without_passwords_of(&self.connections);
-        let revision = self.sheet().editor.revision();
+        let editor = self.editor_on_screen();
         let Ok(prompt) = self.sheet().prompt(&Instruction::new(INSTRUCTION), settings.literals) else {
-            self.asks.idle = IdleAsk::Asked(revision);
+            self.asks.idle = IdleAsk::Asked(editor);
             return vec![];
         };
         let ask = self.asks.take_id();
-        self.asks.idle = IdleAsk::Waiting { ask, revision };
+        self.asks.idle = IdleAsk::Waiting { ask, editor };
         vec![Action::Ask { ask, prompt, settings }]
     }
 
     /// Kills the idle ask still running, since a key or a paste makes its answer stale.
     pub(super) fn drop_idle_ask(&mut self) -> Option<Action> {
-        let IdleAsk::Waiting { ask, revision } = self.asks.idle else { return None };
-        self.asks.idle = IdleAsk::Asked(revision);
-        Some(Action::DropAsk(ask))
+        self.asks.idle.stop_waiting().map(Action::DropAsk)
     }
 
     /// Shows the rest of the statement the idle ask's `answer` gives, while the editor is still the one it asked about;
     /// a failed ask shows nothing, since nobody asked for it.
     pub(super) fn show_idle_ghost(&mut self, answer: Result<Vec<Statement>, AskFailure>) {
-        let IdleAsk::Waiting { revision, .. } = self.asks.idle else { return };
-        self.asks.idle = IdleAsk::Asked(revision);
-        let is_current = revision == self.sheet().editor.revision() && self.shows_the_bare_editor() && self.idle_settings().is_some();
+        if self.asks.idle.stop_waiting().is_none() {
+            return;
+        }
+        let is_current = self.asks.idle.covers(&self.editor_on_screen()) && self.shows_the_bare_editor() && self.idle_settings().is_some();
         let Some(statements) = answer.ok().filter(|_| is_current) else { return };
         let ghost = self.sheet().rest_in(&statements);
         self.sheet_mut().ghost = ghost;
+    }
+
+    fn editor_on_screen(&self) -> EditorAt {
+        EditorAt { sheet: self.sheet().name().clone(), revision: self.sheet().editor.revision() }
     }
 
     fn idle_settings(&self) -> Option<&AiSettings> {
@@ -114,6 +138,7 @@ impl Sheet {
 pub(in crate::tui) mod tests {
     use super::super::ask::tests::ai_settings;
     use super::super::fixtures::{app_on, connection, to_shop};
+    use super::super::picker::tests::{ctrl, on_local, press};
     use super::super::{Answer, Incoming, Overlay};
     use super::*;
     use crate::complete::Index;
@@ -242,6 +267,19 @@ pub(in crate::tui) mod tests {
         app.handle_key(KeyEvent::from(KeyCode::Left));
         app.handle_key(KeyEvent::from(KeyCode::Right));
         assert_eq!(app.ask_idle_ghost(), []);
+    }
+
+    #[test]
+    fn another_sheet_at_the_same_revision_still_asks() {
+        let mut app = on_local().with_ai(Some(AiSettings { ghost: true, ..ai_settings() }));
+        type_in(&mut app, "SELECT * FROM orders WHERE ");
+        let [Action::Ask { ask, .. }] = &*app.ask_idle_ghost() else { panic!("no ask") };
+        app.apply(Answer::Asked { ask: *ask, answer: Ok(vec![]) });
+        ctrl(&mut app, 'o');
+        press(&mut app, "staging");
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        type_in(&mut app, "SELECT * FROM orders WHERE ");
+        assert!(app.wants_idle_ghost());
     }
 
     #[test]
