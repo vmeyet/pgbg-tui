@@ -12,7 +12,7 @@ mod rank;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::model::{Catalog, Schema, SchemaColumn, SchemaNode, Table, TableKind};
+    use crate::db::model::{Catalog, Schema, SchemaColumn, SchemaNode, Table, TableKind, TypeName};
     use std::time::{Duration, Instant};
 
     const TABLE_COUNT: usize = 20_000;
@@ -24,7 +24,7 @@ mod tests {
     const BUDGET: Duration = if cfg!(debug_assertions) { Duration::from_millis(20) } else { Duration::from_millis(1) };
 
     fn large_catalog() -> Catalog {
-        let column = |name: String| SchemaColumn { name, type_name: "integer".to_owned(), is_nullable: false, default: None };
+        let column = |name: String| SchemaColumn { name, type_name: TypeName::new("integer"), is_nullable: false, default: None };
         let table = |at: usize| Table {
             name: format!("{}_{at}", WORDS[at % WORDS.len()]),
             kind: TableKind::Table,

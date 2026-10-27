@@ -75,7 +75,7 @@ fn column_row(column: &SchemaColumn) -> Vec<Value> {
     let nullable = if column.is_nullable { None } else { Some("not null".to_owned()) };
     let default = column.default.as_ref().map(|default| format!("default {default}"));
     let detail = [nullable, default].into_iter().flatten().collect::<Vec<_>>().join(" ");
-    texts(["column", &column.name, &column.type_name, &detail])
+    texts(["column", &column.name, column.type_name.as_str(), &detail])
 }
 
 fn index_row(index: &Index) -> Vec<Value> {

@@ -1,3 +1,4 @@
+use super::TypeName;
 use serde::Serialize;
 
 /// Every schema the role can see, with its tables, their columns and their indexes.
@@ -53,7 +54,7 @@ pub(crate) struct SchemaColumn {
     pub(crate) name: String,
     /// The type as PostgreSQL writes it: `integer`, `character varying(80)`, `timestamp with time zone`.
     #[serde(rename = "type")]
-    pub(crate) type_name: String,
+    pub(crate) type_name: TypeName,
     pub(crate) is_nullable: bool,
     pub(crate) default: Option<String>,
 }

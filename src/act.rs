@@ -75,81 +75,52 @@ impl Act {
 
 #[cfg(test)]
 impl Act {
-    /// Every action, in the order [`Act::after`] chains them.
-    pub(crate) const ALL: [Self; Self::COUNT] = Self::chained();
-    const COUNT: usize = Self::chain_length();
-
-    /// The action listed after this one: the match makes a new action name its place before the crate builds.
-    const fn after(self) -> Option<Self> {
-        match self {
-            Self::Run => Some(Self::NewLine),
-            Self::NewLine => Some(Self::Cancel),
-            Self::Cancel => Some(Self::SwitchPane),
-            Self::SwitchPane => Some(Self::Help),
-            Self::Help => Some(Self::Connections),
-            Self::Connections => Some(Self::Quit),
-            Self::Quit => Some(Self::Down),
-            Self::Down => Some(Self::Up),
-            Self::Up => Some(Self::PageDown),
-            Self::PageDown => Some(Self::PageUp),
-            Self::PageUp => Some(Self::Top),
-            Self::Top => Some(Self::Bottom),
-            Self::Bottom => Some(Self::Left),
-            Self::Left => Some(Self::Right),
-            Self::Right => Some(Self::Find),
-            Self::Find => Some(Self::Open),
-            Self::Open => Some(Self::Close),
-            Self::Close => Some(Self::Chart),
-            Self::Chart => Some(Self::StepFormat),
-            Self::StepFormat => Some(Self::SwitchFormats),
-            Self::SwitchFormats => Some(Self::Delete),
-            Self::Delete => Some(Self::CloseSession),
-            Self::CloseSession => Some(Self::Add),
-            Self::Add => Some(Self::Edit),
-            Self::Edit => Some(Self::Save),
-            Self::Save => Some(Self::EditOutside),
-            Self::EditOutside => Some(Self::History),
-            Self::History => Some(Self::Detail),
-            Self::Detail => Some(Self::CopyCell),
-            Self::CopyCell => Some(Self::CopyRow),
-            Self::CopyRow => Some(Self::CopyResult),
-            Self::CopyResult => Some(Self::CopyCsv),
-            Self::CopyCsv => Some(Self::CopyJson),
-            Self::CopyJson => Some(Self::CopyMarkdown),
-            Self::CopyMarkdown => Some(Self::SwitchTab),
-            Self::SwitchTab => Some(Self::Filter),
-            Self::Filter => Some(Self::ReadAgain),
-            Self::ReadAgain => Some(Self::TakeGhost),
-            Self::TakeGhost => Some(Self::Complete),
-            Self::Complete => Some(Self::Preview),
-            Self::Preview => Some(Self::Insert),
-            Self::Insert => Some(Self::FindTable),
-            Self::FindTable => None,
-        }
-    }
-
-    const fn chain_length() -> usize {
-        let mut count = 1;
-        let mut act = Self::Run;
-        while let Some(next) = act.after() {
-            act = next;
-            count += 1;
-        }
-        count
-    }
-
-    const fn chained() -> [Self; Self::COUNT] {
-        let mut all = [Self::Run; Self::COUNT];
-        let mut at = 1;
-        while at < Self::COUNT {
-            all[at] = match all[at - 1].after() {
-                Some(next) => next,
-                None => Self::Run,
-            };
-            at += 1;
-        }
-        all
-    }
+    /// Every action, in the order the enum declares them.
+    const ALL: [Self; 43] = [
+        Self::Run,
+        Self::NewLine,
+        Self::Cancel,
+        Self::SwitchPane,
+        Self::Help,
+        Self::Connections,
+        Self::Quit,
+        Self::Down,
+        Self::Up,
+        Self::PageDown,
+        Self::PageUp,
+        Self::Top,
+        Self::Bottom,
+        Self::Left,
+        Self::Right,
+        Self::Find,
+        Self::Open,
+        Self::Close,
+        Self::Chart,
+        Self::StepFormat,
+        Self::SwitchFormats,
+        Self::Delete,
+        Self::CloseSession,
+        Self::Add,
+        Self::Edit,
+        Self::Save,
+        Self::EditOutside,
+        Self::History,
+        Self::Detail,
+        Self::CopyCell,
+        Self::CopyRow,
+        Self::CopyResult,
+        Self::CopyCsv,
+        Self::CopyJson,
+        Self::CopyMarkdown,
+        Self::SwitchTab,
+        Self::Filter,
+        Self::ReadAgain,
+        Self::TakeGhost,
+        Self::Complete,
+        Self::Preview,
+        Self::Insert,
+        Self::FindTable,
+    ];
 }
 
 /// Where an action's keys work.
@@ -464,11 +435,61 @@ mod tests {
         assert!(keys.contains(&"→".to_owned()) && keys.contains(&"^space".to_owned()), "{keys:?}");
     }
 
-    #[test]
-    fn every_action_is_listed_once() {
-        for (at, act) in Act::ALL.iter().enumerate() {
-            assert!(!Act::ALL[at + 1..].contains(act), "{act:?}");
+    /// Names every action, so a new one does not build until it is named here, next to its place in `Act::ALL`.
+    const fn listed(act: Act) -> Act {
+        match act {
+            Act::Run
+            | Act::NewLine
+            | Act::Cancel
+            | Act::SwitchPane
+            | Act::Help
+            | Act::Connections
+            | Act::Quit
+            | Act::Down
+            | Act::Up
+            | Act::PageDown
+            | Act::PageUp
+            | Act::Top
+            | Act::Bottom
+            | Act::Left
+            | Act::Right
+            | Act::Find
+            | Act::Open
+            | Act::Close
+            | Act::Chart
+            | Act::StepFormat
+            | Act::SwitchFormats
+            | Act::Delete
+            | Act::CloseSession
+            | Act::Add
+            | Act::Edit
+            | Act::Save
+            | Act::EditOutside
+            | Act::History
+            | Act::Detail
+            | Act::CopyCell
+            | Act::CopyRow
+            | Act::CopyResult
+            | Act::CopyCsv
+            | Act::CopyJson
+            | Act::CopyMarkdown
+            | Act::SwitchTab
+            | Act::Filter
+            | Act::ReadAgain
+            | Act::TakeGhost
+            | Act::Complete
+            | Act::Preview
+            | Act::Insert
+            | Act::FindTable => act,
         }
+    }
+
+    #[test]
+    fn every_action_is_listed_once_in_the_order_the_enum_declares_them() {
+        for (at, act) in Act::ALL.into_iter().enumerate() {
+            assert_eq!(listed(act) as usize, at, "{act:?}");
+        }
+        assert_eq!(Act::ALL.last(), Some(&Act::FindTable));
     }
 
     #[test]

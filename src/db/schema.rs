@@ -1,5 +1,5 @@
 //! The schema the role can see, read from the catalogs in one read-only transaction.
-use super::model::{Catalog, Index, Route, Schema, SchemaColumn, SchemaNode, Table, TableKind};
+use super::model::{Catalog, Index, Route, Schema, SchemaColumn, SchemaNode, Table, TableKind, TypeName};
 use super::{Isolation, Session, server_error};
 use crate::connection::Connection;
 use anyhow::{Result, bail};
@@ -108,7 +108,12 @@ fn estimated_rows(kind: TableKind, reltuples: f64) -> Option<u64> {
 }
 
 fn column(row: &Row) -> Result<(u32, SchemaColumn)> {
-    let column = SchemaColumn { name: row.try_get(1)?, type_name: row.try_get(2)?, is_nullable: row.try_get(3)?, default: row.try_get(4)? };
+    let column = SchemaColumn {
+        name: row.try_get(1)?,
+        type_name: TypeName::new(row.try_get::<_, String>(2)?),
+        is_nullable: row.try_get(3)?,
+        default: row.try_get(4)?,
+    };
     Ok((row.try_get(0)?, column))
 }
 
