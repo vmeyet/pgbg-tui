@@ -1,6 +1,6 @@
 //! The row's detail over the screen: each column's name and type, its whole value under it, wrapped, JSON indented
 //! and coloured; every piece of text drawn through `render::printable`.
-use super::app::{App, Overlay, Run};
+use super::app::{App, DetailFit, DetailScroll, Overlay, Run};
 use super::theme;
 use crate::act::{self, Pane};
 use crate::db::model::{Column, Value};
@@ -19,23 +19,30 @@ const VALUE_MAX_CHARS: usize = 64 * 1024;
 const INDENT: &str = "  ";
 const SHARE_OF_SCREEN_PCT: u16 = 80;
 
-/// The detail when it is open; returns how far it scrolls before its last line is at the bottom.
-pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> usize {
-    let Some(Overlay::Detail(detail)) = &app.overlay else { return 0 };
-    let Run::Done { result, grid, .. } = &app.sheet().run else { return 0 };
-    let Some(row) = result.rows().get(grid.row) else { return 0 };
+/// The detail when it is open; returns the line it started at and how far it scrolls.
+pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> DetailFit {
+    let Some(Overlay::Detail(detail)) = &app.overlay else { return DetailFit::default() };
+    let Run::Done { result, grid, .. } = &app.sheet().run else { return DetailFit::default() };
+    let Some(row) = result.rows().get(grid.row) else { return DetailFit::default() };
     let area = centred(f.area());
     let block = pane::framed(&app.theme, &format!("Row {} of {}", grid.row + 1, result.rows().len()), true);
     let [body, footer] = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(block.inner(area));
-    let lines: Vec<Line<'static>> =
-        result.columns().iter().zip(row).flat_map(|(column, value)| column_lines(&app.theme, column, value, body.width)).collect();
+    let columns: Vec<Vec<Line<'static>>> =
+        result.columns().iter().zip(row).map(|(column, value)| column_lines(&app.theme, column, value, body.width)).collect();
+    let column_starts: Vec<usize> = columns.iter().scan(0, |start, lines| Some(std::mem::replace(start, *start + lines.len()))).collect();
+    let lines: Vec<Line<'static>> = columns.into_iter().flatten().collect();
     let last_scroll = lines.len().saturating_sub(usize::from(body.height));
-    let shown: Vec<Line<'static>> = lines.into_iter().skip(detail.scroll.min(last_scroll)).take(usize::from(body.height)).collect();
+    let wanted = match detail.scroll {
+        DetailScroll::ToColumn(column) => column_starts.get(column).copied().unwrap_or_default(),
+        DetailScroll::Lines(line) => line,
+    };
+    let first_line = wanted.min(last_scroll);
+    let shown: Vec<Line<'static>> = lines.into_iter().skip(first_line).take(usize::from(body.height)).collect();
     f.render_widget(Clear, area);
     f.render_widget(block.style(Style::default().bg(app.theme.surface)), area);
     f.render_widget(Paragraph::new(shown), body);
     f.render_widget(Paragraph::new(Line::styled(hints(), Style::default().fg(app.theme.faded))), footer);
-    last_scroll
+    DetailFit { first_line, last_scroll }
 }
 
 fn centred(area: Rect) -> Rect {
@@ -136,11 +143,11 @@ mod tests {
         app
     }
 
-    fn render(app: &App, width: u16, height: u16) -> (Terminal<TestBackend>, usize) {
+    fn render(app: &App, width: u16, height: u16) -> (Terminal<TestBackend>, DetailFit) {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        let mut last_scroll = 0;
-        terminal.draw(|f| last_scroll = draw(f, app)).unwrap();
-        (terminal, last_scroll)
+        let mut fit = DetailFit::default();
+        terminal.draw(|f| fit = draw(f, app)).unwrap();
+        (terminal, fit)
     }
 
     fn a_note() -> ResultSet {
@@ -171,16 +178,28 @@ mod tests {
 
     #[test]
     fn a_detail_taller_than_the_popup_says_how_far_it_scrolls() {
-        let (_, last_scroll) = render(&detail_of(a_note()), 40, 10);
-        assert_eq!(last_scroll, 9);
+        let (_, fit) = render(&detail_of(a_note()), 40, 10);
+        assert_eq!(fit.last_scroll, 9);
     }
 
     #[test]
     fn a_scrolled_detail_starts_further_down() {
         let mut app = detail_of(a_note());
-        app.fit(Fit { detail_last_scroll: 9, ..Fit::default() });
+        app.fit(Fit { detail: DetailFit { first_line: 0, last_scroll: 9 }, ..Fit::default() });
         (0..3).for_each(|_| _ = app.handle_key(KeyEvent::from(KeyCode::Char('j'))));
         insta::assert_snapshot!("detail_scrolled", render(&app, 40, 10).0.backend());
+    }
+
+    #[test]
+    fn the_detail_opened_on_a_column_starts_at_it() {
+        let mut app = detail_of(a_note());
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        (0..3).for_each(|_| _ = app.handle_key(KeyEvent::from(KeyCode::Char('l'))));
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        let (_, fit) = render(&app, 40, 20);
+        assert_eq!(fit, DetailFit { first_line: 1, last_scroll: 1 });
+        let (terminal, fit) = render(&app, 40, 30);
+        assert_eq!(fit.first_line, 0, "{:?}", terminal.backend());
     }
 
     #[test]

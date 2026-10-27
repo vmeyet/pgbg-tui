@@ -5,10 +5,10 @@ use crossterm::event::{KeyCode, KeyEvent};
 use vtui::help::Help;
 use vtui::theme::Theme;
 
-pub(super) use detail::Detail;
+pub(super) use detail::{Detail, DetailFit, DetailScroll};
 pub(super) use form::{Form, PasswordFrom, Slot};
-pub(super) use grid::Grid;
 use grid::Move;
+pub(super) use grid::{GAP, Grid, Room};
 pub(super) use history::Recall;
 pub(super) use picker::{Note, Picker};
 pub(super) use protocol::{
@@ -58,12 +58,12 @@ impl Focus {
 /// What the frame just drawn had room for.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct Fit {
-    /// The grid rows: a page, for `PgDn`.
-    pub(super) grid_rows: usize,
+    /// The grid rows, a page for `PgDn`, and the columns its cells had.
+    pub(super) grid: Room,
     /// Whether the sidebar of queries was drawn, which a narrow terminal or no query at all leaves out.
     pub(super) has_sidebar: bool,
-    /// How far the row's detail scrolls before its last line is at the bottom.
-    pub(super) detail_last_scroll: usize,
+    /// Where the row's detail started and how far it scrolls.
+    pub(super) detail: DetailFit,
 }
 
 /// What lies over the panes and takes every key while it is open.
@@ -278,20 +278,20 @@ impl App {
     pub(super) fn fit(&mut self, fit: Fit) {
         self.fit = fit;
         if let Run::Done { grid, view: View::Grid, .. } = &mut self.sheet_mut().run {
-            grid.keep_in_view(fit.grid_rows);
+            grid.keep_in_view(fit.grid);
         }
         if !self.is_drawn(self.focus) {
             self.focus = Focus::Editor;
         }
         if let Some(Overlay::Detail(detail)) = &mut self.overlay {
-            detail.scroll = detail.scroll.min(fit.detail_last_scroll);
+            detail.scroll = DetailScroll::Lines(fit.detail.first_line);
         }
     }
 
     fn grid_step(&mut self, step: Move) {
-        let rows = self.fit.grid_rows;
+        let room = self.fit.grid;
         if let Run::Done { grid, result, .. } = &mut self.sheet_mut().run {
-            grid.step(step, result, rows);
+            grid.step(step, result, room);
         }
     }
 
@@ -442,7 +442,7 @@ pub(super) mod tests {
         app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result: orders(), took: Duration::from_millis(38) }));
         assert_eq!(
             app.sheet().run,
-            Run::Done { grid: Grid::new(&orders()), result: orders(), took: Duration::from_millis(38), view: View::Grid }
+            Run::Done { grid: Box::new(Grid::new(&orders())), result: orders(), took: Duration::from_millis(38), view: View::Grid }
         );
     }
 

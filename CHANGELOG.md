@@ -8,9 +8,9 @@ Each entry says what changed, then where, then how to use it.
 
 ### New
 
-- **Row detail** in the TUI: on the grid, press `⏎` or `space` to see the row under the cursor, one column after another with its type and its whole value, long ones wrapped.
+- **Row detail** in the TUI: on the grid, press `⏎` or `space` to see the row under the cursor, one column after another with its type and its whole value, long ones wrapped, starting at the cursor's column.
   JSON shows indented and coloured; `j`/`k` scroll, `esc` goes back to the grid.
-- **Copy** from the grid: `y` copies the value of the first column in view on the cursor's row, `Y` the row as a CSV line, and `c` then `c`, `j` or `m` the whole result as CSV, JSON or a Markdown table.
+- **Copy** from the grid: `h`/`l` move the grid's cursor from column to column, the grid scrolling only when it leaves the view; `y` copies the cell under it, `Y` the row as a CSV line, and `c` then `c`, `j` or `m` the whole result as CSV, JSON or a Markdown table.
   Values are copied whole and as the database gave them, NUMERIC with every digit; the status line says what was copied.
   It goes to your terminal's clipboard (OSC 52, so it works over ssh and in tmux with `set-clipboard on`) and to `pbcopy` on a Mac.
 - **`pgbg doctor <connection>`** checks a connection, one line per check: `✓` fine, `!` worth a look, `✗` broken, each with how to fix it.

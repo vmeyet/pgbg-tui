@@ -198,7 +198,7 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Detail, Pane::Result, &[key(KeyCode::Enter), key(KeyCode::Char(' '))])
         .help("⏎ space", "the row under the cursor, one column a line")
         .footer("⏎", "row"),
-    row(Act::CopyCell, Pane::Result, &[key(KeyCode::Char('y'))]).help("y", "copy the first column in view of the row").footer("y", "copy"),
+    row(Act::CopyCell, Pane::Result, &[key(KeyCode::Char('y'))]).help("y", "copy the cell under the cursor").footer("y", "copy"),
     row(Act::CopyRow, Pane::Result, &[key(KeyCode::Char('Y'))]).help("Y", "copy the row as CSV"),
     row(Act::CopyResult, Pane::Result, &[key(KeyCode::Char('c'))]).help("c", "copy the result as CSV, JSON or Markdown"),
     row(Act::Chart, Pane::Result, &[key(KeyCode::Char('v'))]).help("v", "the result as a grid or a chart").footer("v", "chart"),

@@ -35,15 +35,15 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> Fit {
         sidebar_view::draw(f, app, sidebar);
     }
     editor_view::draw(f, app, areas.editor);
-    let grid_rows = result_view::draw(f, app, areas.result);
+    let grid = result_view::draw(f, app, areas.result);
     footer(f, app, areas.footer);
     finder_view::draw(f, app);
     picker_view::draw(f, app);
     history_view::draw(f, app);
     form_view::draw(f, app);
-    let detail_last_scroll = detail_view::draw(f, app);
+    let detail = detail_view::draw(f, app);
     help_view::draw(f, app);
-    Fit { grid_rows, has_sidebar, detail_last_scroll }
+    Fit { grid, has_sidebar, detail }
 }
 
 /// The outer frame and its `● name · tier` pill in the tier's colour, so the tier reads without its colour; returns
