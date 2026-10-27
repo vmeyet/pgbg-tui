@@ -1,5 +1,5 @@
 //! Text for the terminal: aligned tables for the scriptable commands, and values escaped and cut for every view.
-use crate::db::model::{ResultSet, Value};
+use crate::db::model::{Extent, ResultSet, Value};
 use ratatui::text::Span;
 use std::borrow::Cow;
 
@@ -14,13 +14,17 @@ pub(crate) fn table(rows: &[Vec<String>]) -> String {
     rows.iter().map(|row| line(row, &widths)).collect()
 }
 
-/// `1 row`, `12 rows`, or `first 10000 rows` when the result does not hold every row.
+/// `1 row`, `12 rows`, `first 10 000 rows` when the result does not hold every row, `all 1 732 rows` once paged to its end.
 pub(crate) fn row_count(result: &ResultSet) -> String {
     let count = match result.rows().len() {
         1 => "1 row".to_owned(),
-        count => format!("{count} rows"),
+        count => format!("{} rows", grouped(count)),
     };
-    if result.is_whole() { count } else { format!("first {count}") }
+    match result.extent() {
+        Extent::Cut | Extent::More => format!("first {count}"),
+        Extent::All if result.is_paged() => format!("all {count}"),
+        Extent::All => count,
+    }
 }
 
 /// `count` with its thousands apart: `1 732`, `12 000`.
@@ -71,7 +75,8 @@ pub(crate) fn width(cell: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::model::{Extent, Page};
+
+    use crate::fixtures::page;
 
     fn row(cells: &[&str]) -> Vec<String> {
         cells.iter().map(|&cell| cell.to_owned()).collect()
@@ -84,7 +89,7 @@ mod tests {
     }
 
     fn numbers(count: usize, extent: Extent) -> ResultSet {
-        ResultSet::new(vec![], Page { rows: vec![vec![]; count], extent })
+        ResultSet::new(vec![], page(count, extent))
     }
 
     #[test]
@@ -96,6 +101,18 @@ mod tests {
     #[test]
     fn a_cut_result_says_its_rows_are_the_first_ones() {
         assert_eq!(row_count(&numbers(10, Extent::Cut)), "first 10 rows");
+    }
+
+    #[test]
+    fn a_result_waiting_on_more_pages_counts_its_first_rows_with_their_thousands_apart() {
+        assert_eq!(row_count(&numbers(1500, Extent::More)), "first 1 500 rows");
+    }
+
+    #[test]
+    fn a_result_paged_to_its_end_says_it_has_all_its_rows() {
+        let mut result = numbers(500, Extent::More);
+        result.push(page(1232, Extent::All));
+        assert_eq!(row_count(&result), "all 1 732 rows");
     }
 
     #[test]

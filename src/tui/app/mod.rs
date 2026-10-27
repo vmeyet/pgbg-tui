@@ -360,6 +360,7 @@ impl App {
             Answer::Config { id, answer: ConfigAnswer::Failed { why, password } } => self.config_failed(id, why, password),
             Answer::History { connection, entries } => self.history_read(&connection, entries),
             Answer::Copied(note) => self.copied(note),
+            Answer::Exported { text, done } => return vec![Action::Copy { text, done }],
         }
         vec![]
     }
@@ -371,7 +372,7 @@ pub(super) mod tests {
     use super::*;
     use crate::chart;
     use crate::connection::ConnectionName;
-    use crate::db::model::Statement;
+    use crate::db::model::{ResultSet, Statement};
     use crate::fixtures;
     use crossterm::event::KeyModifiers;
     use std::time::Duration;
@@ -396,6 +397,15 @@ pub(super) mod tests {
 
     pub(crate) fn to_shop(incoming: Incoming) -> Answer {
         Answer::Session { connection: shop(), session: SessionId::FIRST, incoming }
+    }
+
+    /// The app with `result` from `SELECT 1` on screen, the keys on it.
+    pub(crate) fn on_the_result(result: ResultSet) -> App {
+        let mut app = typed("SELECT 1");
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result, took: Duration::from_millis(38) }));
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        app
     }
 
     pub(crate) fn typed(text: &str) -> App {

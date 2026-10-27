@@ -65,11 +65,12 @@ impl App {
         self.copy_result(format)
     }
 
+    /// Hands a copy of the result to the backend, which builds its text off the loop: a clone is cheaper than the text.
     fn copy_result(&self, format: Format) -> Vec<Action> {
         let Some(result) = self.shown_result() else { return vec![] };
         let cells = undecodable(result.rows().iter().flatten());
         let done = format!("copied {} as {}{cells}", crate::render::row_count(result), format.name());
-        vec![Action::Copy { text: export::result(result, format), done }]
+        vec![Action::CopyResult { result: result.clone(), format, done }]
     }
 
     /// Takes what a copy came to, for the status line until the next key.
@@ -80,26 +81,13 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{orders, to_shop, typed};
-    use super::super::{Answer, Incoming, RunId};
+    use super::super::Answer;
+    use super::super::tests::{on_the_result, orders, typed};
     use super::*;
     use crossterm::event::{KeyCode, KeyModifiers};
-    use std::time::Duration;
-
-    fn on_the_result() -> App {
-        on(orders())
-    }
-
-    fn on(result: ResultSet) -> App {
-        let mut app = typed("SELECT 1");
-        app.handle_key(KeyEvent::from(KeyCode::Enter));
-        app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result, took: Duration::from_millis(38) }));
-        app.handle_key(KeyEvent::from(KeyCode::Tab));
-        app
-    }
 
     fn with_an_undecodable_name() -> App {
-        on(orders().with_cell(0, 2, Value::Unsupported))
+        on_the_result(orders().with_cell(0, 2, Value::Unsupported))
     }
 
     #[test]
@@ -124,11 +112,11 @@ mod tests {
 
     #[test]
     fn a_copied_result_says_how_many_of_its_cells_pgbg_cannot_decode() {
-        let mut app = on(orders().with_cell(0, 2, Value::Unsupported).with_cell(1, 2, Value::Unsupported));
+        let mut app = on_the_result(orders().with_cell(0, 2, Value::Unsupported).with_cell(1, 2, Value::Unsupported));
         press(&mut app, 'c');
         let actions = press(&mut app, 'c');
         assert!(
-            matches!(&*actions, [Action::Copy { done, .. }] if done.ends_with("· 2 cells not decodable, copied as <unsupported>")),
+            matches!(&*actions, [Action::CopyResult { done, .. }] if done.ends_with("· 2 cells not decodable, copied as <unsupported>")),
             "{actions:?}"
         );
     }
@@ -143,7 +131,7 @@ mod tests {
 
     #[test]
     fn y_copies_the_cell_under_the_cursor() {
-        let mut app = on_the_result();
+        let mut app = on_the_result(orders());
         press(&mut app, 'j');
         press(&mut app, 'l');
         assert_eq!(press(&mut app, 'y'), copied("1499.00", "copied total of row 2"));
@@ -151,22 +139,29 @@ mod tests {
 
     #[test]
     fn shift_y_copies_the_row_as_csv() {
-        let mut app = on_the_result();
+        let mut app = on_the_result(orders());
         assert_eq!(press(&mut app, 'Y'), copied("7,12.50,nina\n", "copied row 1 as CSV"));
     }
 
     #[test]
     fn c_then_a_letter_copies_the_whole_result_in_that_format() {
-        let mut app = on_the_result();
+        let mut app = on_the_result(orders());
         press(&mut app, 'c');
-        let actions = press(&mut app, 'm');
-        assert!(matches!(&*actions, [Action::Copy { text, done }] if text.starts_with("| id |") && done == "copied 4 rows as Markdown"));
+        let done = "copied 4 rows as Markdown".to_owned();
+        assert_eq!(press(&mut app, 'm'), [Action::CopyResult { result: orders(), format: Format::Markdown, done }]);
         assert_eq!(app.overlay, None);
     }
 
     #[test]
+    fn a_result_exported_off_the_loop_goes_to_the_clipboard() {
+        let mut app = on_the_result(orders());
+        let actions = app.apply(Answer::Exported { text: "id\n7\n".into(), done: "copied 4 rows as CSV".into() });
+        assert_eq!(actions, copied("id\n7\n", "copied 4 rows as CSV"));
+    }
+
+    #[test]
     fn esc_after_c_copies_nothing() {
-        let mut app = on_the_result();
+        let mut app = on_the_result(orders());
         press(&mut app, 'c');
         assert_eq!(app.handle_key(KeyEvent::from(KeyCode::Esc)), []);
         assert_eq!(app.overlay, None);
@@ -174,7 +169,7 @@ mod tests {
 
     #[test]
     fn another_key_after_c_asks_again() {
-        let mut app = on_the_result();
+        let mut app = on_the_result(orders());
         press(&mut app, 'c');
         assert_eq!(press(&mut app, 'x'), []);
         assert_eq!(app.overlay, Some(Overlay::CopyAs));
@@ -197,7 +192,7 @@ mod tests {
 
     #[test]
     fn the_note_of_a_copy_stays_until_the_next_key() {
-        let mut app = on_the_result();
+        let mut app = on_the_result(orders());
         app.apply(Answer::Copied("copied row 1 as CSV".into()));
         assert_eq!(app.note.as_deref(), Some("copied row 1 as CSV"));
         app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));

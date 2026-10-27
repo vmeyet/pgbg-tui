@@ -42,6 +42,7 @@ pub(crate) fn result(result: &ResultSet, format: Format) -> String {
 }
 
 /// A header line of the column names, then one line per row; a NULL is an empty field, as `COPY ... CSV` writes it.
+/// A value starting with `=`, `+`, `-` or `@` is copied as it is: a spreadsheet may read it as a formula.
 fn csv(result: &ResultSet) -> String {
     let header = csv_line(result.columns().iter().map(|column| csv_quoted(&column.name)));
     let rows = result.rows().iter().map(|values| row(values));
@@ -82,12 +83,15 @@ impl Serialize for Rows<'_> {
     }
 }
 
-/// Each column's name, `_2`, `_3` and on added to one already taken.
+/// Each column's name, its first use kept and a later one suffixed `_2`, `_3` and on, past any name a column already
+/// has: `count, count, count_2` gives `count, count_3, count_2`.
 fn unique_names(columns: &[Column]) -> Vec<String> {
+    let real: BTreeSet<&str> = columns.iter().map(|column| column.name.as_str()).collect();
     let mut taken = BTreeSet::new();
     let mut names = vec![];
     for column in columns {
-        let name = (1..=columns.len() + 1).map(|nth| nth_name(&column.name, nth)).find(|name| !taken.contains(name)).unwrap_or_default();
+        let is_free = |name: &String| !taken.contains(name) && (*name == column.name || !real.contains(name.as_str()));
+        let name = (1..=2 * columns.len()).map(|nth| nth_name(&column.name, nth)).find(is_free).unwrap_or_default();
         taken.insert(name.clone());
         names.push(name);
     }
@@ -126,7 +130,7 @@ fn markdown_line(cells: impl Iterator<Item = String>) -> String {
 }
 
 fn markdown_cell(text: &str) -> String {
-    text.replace('\\', "\\\\").replace('|', "\\|").replace("\r\n", "<br>").replace('\n', "<br>")
+    text.replace('\\', "\\\\").replace('|', "\\|").replace("\r\n", "<br>").replace(['\n', '\r'], "<br>")
 }
 
 #[cfg(test)]
@@ -175,7 +179,7 @@ mod tests {
         let counts =
             ResultSet::whole(vec![int("count"), int("count"), int("count_2")], vec![vec![Value::Int(1), Value::Int(2), Value::Int(3)]]);
         let copied: serde_json::Value = serde_json::from_str(&result(&counts, Format::Json)).unwrap();
-        assert_eq!(copied[0], serde_json::json!({"count": 1, "count_2": 2, "count_2_2": 3}));
+        assert_eq!(copied[0], serde_json::json!({"count": 1, "count_3": 2, "count_2": 3}));
     }
 
     #[test]
@@ -188,5 +192,10 @@ mod tests {
     #[test]
     fn a_pipe_or_a_line_end_in_a_markdown_cell_keeps_the_row_on_one_line() {
         assert_eq!(markdown_cell("a|b\nc\\d"), "a\\|b<br>c\\\\d");
+    }
+
+    #[test]
+    fn a_lone_carriage_return_in_a_markdown_cell_is_a_line_break_too() {
+        assert_eq!(markdown_cell("a\rb\r\nc"), "a<br>b<br>c");
     }
 }

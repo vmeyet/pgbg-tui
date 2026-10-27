@@ -1,6 +1,6 @@
 //! Invented fixtures the tests share: the connection `shop`, the test database, tunnels to it, and results of `orders`.
 use crate::connection::{Connection, Entry, WritePolicy};
-use crate::db::model::{Column, ColumnKind, Index, ResultSet, Schema, SchemaColumn, SchemaNode, Table, TableKind, Value};
+use crate::db::model::{Column, ColumnKind, Extent, Index, Page, ResultSet, Schema, SchemaColumn, SchemaNode, Table, TableKind, Value};
 use rustix::process::{Pid, test_kill_process};
 use std::path::Path;
 use std::time::Duration;
@@ -113,6 +113,16 @@ pub(crate) fn column(name: &str, kind: ColumnKind) -> Column {
 }
 
 /// Four orders: an id, a total and the customer, one of them `NULL`, one with a name past ASCII.
+/// `count` rows of one integer each, `0` and on.
+pub(crate) fn numbers(count: usize) -> Vec<Vec<Value>> {
+    (0..count).map(|n| vec![Value::Int(n as i64)]).collect()
+}
+
+/// A page of `count` rows of `numbers`, as much of the result as `extent` says.
+pub(crate) fn page(count: usize, extent: Extent) -> Page {
+    Page { rows: numbers(count), extent }
+}
+
 pub(crate) fn orders() -> ResultSet {
     let row = |id: i64, total: &str, customer: Value| vec![Value::Int(id), Value::Numeric(total.into()), customer];
     ResultSet::whole(
