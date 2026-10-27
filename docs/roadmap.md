@@ -94,6 +94,15 @@ The MR that ships a step ticks its box.
 - [ ] The grid draws its visible cells through them: `f` cycles the column under the cursor, `F` sets every column raw or readable
 - [ ] `-- format: created_at=relative size=bytes` in the header, and a default in `config.toml`
 
+## 15. Asking a command for SQL
+
+Needs step 12: the lexer, the statement under the cursor and the schema's index.
+
+- [ ] `ai/`: the prompt built from the instruction, the statement under the cursor, the schema slice and the tier, capped at 16 KiB; the answer read back as SQL statements; pure, tested
+- [ ] `[ai] command` in `config.toml`, `ai = "on"` or `"off"` on a connection (off on production unless it says on); the command run in its own process group with the prompt on stdin, 60 s at most, `Esc` kills it; tested with a fake command
+- [ ] `ctrl-g` asks: an instruction on the footer line, then the answer shown as a diff of the statement under the cursor; `⏎` replaces it, `esc` drops it; nothing runs by itself
+- [ ] The idle ghost, off by default (`[ai] ghost = true`): after 1 s without a key, the rest of the statement asked for and dimmed after the cursor, the local ghost first; a key kills the command
+
 ## Later
 
 - Writes on connections that allow them, with a preview and a typed confirmation
