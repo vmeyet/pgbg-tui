@@ -1,3 +1,4 @@
+use super::JsonText;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use serde::{Serialize, Serializer};
 use std::fmt;
@@ -38,7 +39,7 @@ impl fmt::Display for Value {
                 None => write!(f, "{value}"),
             },
             Self::Numeric(text) | Self::Text(text) => f.write_str(text),
-            Self::Json(json) => f.write_str(&json.0),
+            Self::Json(json) => f.write_str(json.as_str()),
             Self::Uuid(value) => write!(f, "{value}"),
             Self::Date(value) => write!(f, "{value}"),
             Self::Time(value) => write!(f, "{value}"),
@@ -70,40 +71,7 @@ impl Value {
     }
 }
 
-/// A JSON value kept as its compact text, keys in order: one string per cell instead of a tree of nodes.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct JsonText(Box<str>);
-
-impl JsonText {
-    pub(crate) fn of(json: &serde_json::Value) -> Self {
-        Self(json.to_string().into_boxed_str())
-    }
-
-    /// The tree it was made from, read back from its text.
-    fn tree(&self) -> serde_json::Result<serde_json::Value> {
-        serde_json::from_str(&self.0)
-    }
-
-    /// The first `chars` characters of it indented over several lines, so a row's detail can show its shape.
-    fn pretty_prefix(&self, chars: usize) -> String {
-        match self.tree() {
-            Ok(tree) => prefixed(chars, format_args!("{tree:#}")),
-            Err(err) => {
-                tracing::warn!("a JSON cell did not read back, so it shows compact: {err}");
-                prefixed(chars, format_args!("{}", self.0))
-            }
-        }
-    }
-}
-
-/// As the tree it holds, not as a string of it, so a pretty printer indents it too.
-impl Serialize for JsonText {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.tree().map_err(serde::ser::Error::custom)?.serialize(serializer)
-    }
-}
-
-fn prefixed(chars: usize, formatted: fmt::Arguments<'_>) -> String {
+pub(super) fn prefixed(chars: usize, formatted: fmt::Arguments<'_>) -> String {
     let mut prefix = Prefix { text: String::new(), room: chars };
     // The only error is `Prefix` running out of room, which is the point.
     _ = fmt::write(&mut prefix, formatted);
@@ -169,13 +137,6 @@ mod tests {
     fn json_prints_compact_with_its_keys_in_order() {
         let json = Value::Json(JsonText::of(&serde_json::json!({"paid": true, "id": 7})));
         assert_eq!(json.to_string(), r#"{"id":7,"paid":true}"#);
-    }
-
-    #[test]
-    fn json_pretty_printed_is_indented_as_the_tree_it_holds() {
-        let tree = serde_json::json!({"id": 7, "tags": ["tea"]});
-        let pretty = serde_json::to_string_pretty(&Value::Json(JsonText::of(&tree))).unwrap();
-        assert_eq!(pretty, serde_json::to_string_pretty(&tree).unwrap());
     }
 
     #[test]
