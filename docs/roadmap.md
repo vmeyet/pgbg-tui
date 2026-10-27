@@ -128,6 +128,18 @@ Needs step 12: the lexer, the statement under the cursor and the schema's index.
 - [ ] `ctrl-g` asks: an instruction on the footer line, then the answer shown as a diff of the statement under the cursor, a write said so in the failure colour and confirmed as step 16 says when it runs; `tab` takes it through the editor's paste, `esc` drops it, `⏎` does nothing; nothing runs by itself
 - [ ] The idle ghost, off by default (`[ai] ghost = true`): after 1 s without a key, the rest of the statement asked for and dimmed after the cursor, the local ghost first; a key kills the command
 
+## 18. Engineering pass
+
+The code keeps its own rules where they slipped, one MR per step.
+
+- [ ] One failure type crosses from `db/` to the app, in place of strings and a parallel `history::Outcome`
+- [ ] Newtypes where the rules already ask for them, parsed at the boundary
+- [ ] Bounded channels between the session task and the app
+- [ ] The session task split by concern
+- [ ] Test helpers several modules share live in `fixtures`
+- [ ] `ResultSet` storage reworked, measured before and after
+- [x] `[lints]` keeps only the lints that guard a house rule or a real hazard
+
 ## Later
 
 - A preview of what a write would change, before its confirmation
