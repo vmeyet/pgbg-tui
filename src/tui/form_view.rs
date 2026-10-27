@@ -1,4 +1,5 @@
-//! The connection form over the screen: one line per key, the one with the cursor marked, each refusal under its line.
+//! The connection form over the screen: one line per key, a mark on the line with the cursor, and each refusal below its
+//! line.
 use super::app::{App, Form, Overlay, PasswordFrom, Saving, Slot};
 use crate::connection::{Tls, WritePolicy};
 use ratatui::Frame;
@@ -51,7 +52,7 @@ fn centred(area: Rect, width: u16, height: u16) -> Rect {
     Rect { x: area.x + (area.width - width) / 2, y: area.y + (area.height - height) / 3, width, height }
 }
 
-/// The line of `slot`, its text in `room` columns, then why it was refused when it was.
+/// The line of `slot`, its text in `room` columns, then why it was refused, if it was.
 fn slot_lines(app: &App, form: &Form, slot: Slot, room: usize) -> Vec<Line<'static>> {
     let is_here = form.at() == slot;
     let mark = Span::styled(if is_here { "▎" } else { " " }, Style::default().fg(app.theme().accent));
@@ -94,7 +95,7 @@ fn value(form: &Form, slot: Slot, room: usize) -> String {
     }
 }
 
-/// The text of a text line; an empty timeout away from the cursor says what applies instead.
+/// The text of a text line; an empty timeout line without the cursor says which timeout applies instead.
 fn text_value(form: &Form, slot: Slot, field: &Field, room: usize) -> String {
     let is_tier_timeout = slot == Slot::StatementTimeout && field.text().is_empty() && form.at() != slot;
     if is_tier_timeout {
@@ -103,13 +104,13 @@ fn text_value(form: &Form, slot: Slot, field: &Field, room: usize) -> String {
     shown(form, slot, field, room)
 }
 
-/// The text of `field`, from where it scrolled to on the line with the cursor.
+/// The text of `field`, scrolled when it is on the line with the cursor.
 fn shown(form: &Form, slot: Slot, field: &Field, room: usize) -> String {
     let start = if form.at() == slot { scrolled(field, room) } else { 0 };
     field.text()[start..].to_owned()
 }
 
-/// Where the text in view starts, so that the cursor stays within `room` columns.
+/// Where the text in view starts, so the cursor stays within `room` columns.
 fn scrolled(field: &Field, room: usize) -> usize {
     let (before, _, _) = field.split();
     let fits = |at: &usize| Line::from(&before[*at..]).width() < room;
@@ -139,12 +140,12 @@ fn line_of_cursor(form: &Form) -> u16 {
     above.map(|slot| 1 + u16::from(form.error(slot).is_some())).sum()
 }
 
-/// The lines the form scrolls by, so the line with the cursor stays among the `height` in view.
+/// How many lines the form scrolls by, so the line with the cursor stays within the `height` lines in view.
 fn scroll(cursor_line: u16, height: u16) -> u16 {
     cursor_line.saturating_sub(height.saturating_sub(1))
 }
 
-/// Where the terminal's cursor goes: after the text before it in view, on a text line that has the keys.
+/// Where the terminal's cursor goes on a text line that has the keys: after the visible text that comes before it.
 fn cursor(form: &Form, inside: Rect, room: usize, scroll: u16) -> Option<Position> {
     let field = form.field()?;
     let (before, _, _) = field.split();

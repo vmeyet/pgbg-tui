@@ -1,5 +1,5 @@
-//! The results grid: the header, then only the rows and columns in view, numbers right-aligned, `▶` on the cursor's row
-//! and its cell lit, each cell in its column's format.
+//! The results grid: the header, then only the rows and columns in view, with numbers right-aligned.
+//! `▶` marks the cursor's row and its cell is highlighted; each cell shows in its column's format.
 use super::app::{Clock, GAP, Grid, Room};
 use crate::db::model::{Column, ColumnKind, ResultSet, Value};
 use crate::format::{self, Format};
@@ -32,7 +32,7 @@ struct Shown {
     width: usize,
 }
 
-/// The columns from `first` on that fit in `room`, each after its gap; the last one is cut to what is left.
+/// The columns from `first` onward that fit in `room`, each after its gap; the last one is cut to the space left.
 fn in_view(widths: &[usize], first: usize, room: usize) -> Vec<Shown> {
     let mut left = room;
     let mut shown = vec![];
@@ -48,7 +48,7 @@ fn in_view(widths: &[usize], first: usize, room: usize) -> Vec<Shown> {
     shown
 }
 
-/// The grid in `area`; returns the room it had under its header and beside the cursor's mark.
+/// The grid in `area`; returns the room it had below its header and next to the cursor's mark.
 pub(super) fn draw(f: &mut Frame<'_>, view: GridView<'_>, area: Rect) -> Room {
     let room = usize::from(area.width).saturating_sub(CURSOR.chars().count());
     let shown = in_view(&view.grid.widths, view.grid.left, room);
@@ -92,12 +92,12 @@ fn line(marker: Span<'static>, cells: Vec<(String, Style)>) -> Line<'static> {
     Line::from(std::iter::once(marker).chain(spans).collect::<Vec<_>>())
 }
 
-/// Enough of `value` in `format` to fill `width` and show that it goes on.
+/// Enough of `value` in `format` to fill `width`, and show that it continues past it.
 fn cell(value: &Value, format: Format, clock: &Clock, width: usize) -> String {
     format::cell(value, format, clock, width + 1)
 }
 
-/// `text` cut to `width` and padded to it: numbers on the right, so their digits line up, the rest on the left.
+/// `text` cut and padded to `width`: numbers on the right, so their digits line up, and other values on the left.
 fn aligned(text: &str, column: &Column, width: usize) -> String {
     let cut = truncate(text, width);
     let padding = " ".repeat(width.saturating_sub(Span::raw(cut.as_str()).width()));

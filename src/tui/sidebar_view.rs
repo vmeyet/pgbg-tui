@@ -1,5 +1,5 @@
-//! The sidebar: the saved queries, `▾` and `▸` folders, the queries under them, `●` on the one in the editor; or the
-//! schema of the sheet on screen, its schemas and their tables.
+//! The sidebar: the saved queries with `▾` and `▸` folders and `●` on the one in the editor, or the schemas and tables
+//! of the sheet on screen.
 use super::app::{App, Focus, Overlay, SchemaRow, SchemaState, SidebarTab};
 use crate::connection::SchemaReading;
 use crate::query::TreeRow;
@@ -12,7 +12,7 @@ use ratatui::widgets::{Paragraph, Wrap};
 use vtui::pane;
 use vtui::text::truncate;
 
-/// The tab shown in `area`, its title naming both, the shown one in brackets.
+/// The tab shown in `area`, with a title naming both tabs and the shown one in brackets.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
     let focused = app.focus() == Focus::Queries;
     let title = match app.sidebar() {
@@ -72,7 +72,7 @@ fn line(app: &App, row: &TreeRow, is_cursor: bool, width: usize) -> Line<'static
     ])
 }
 
-/// The schema's tables under the filter line, scrolled so the cursor's row shows, or where the read stands.
+/// The schema's tables below the filter line, scrolled so the cursor's row shows, or the state of the read.
 fn draw_schema(f: &mut Frame<'_>, app: &App, inside: Rect, focused: bool) {
     let Some(catalog) = app.sheet().catalog() else {
         f.render_widget(Paragraph::new(schema_state(app)).wrap(Wrap { trim: false }), inside);
@@ -108,7 +108,7 @@ fn draw_schema(f: &mut Frame<'_>, app: &App, inside: Rect, focused: bool) {
     f.render_widget(Paragraph::new(lines), rows_area);
 }
 
-/// What the tab says before a schema is read: off, not read yet, being read, or why the read failed.
+/// What the tab shows before a schema is read: off, not read yet, being read, or why the read failed.
 fn schema_state(app: &App) -> Line<'static> {
     let sheet = app.sheet();
     let faded = Style::default().fg(app.theme().faded);

@@ -10,7 +10,7 @@ use vtui::palette::view::{self, Pick, Popup};
 
 const NO_QUERY: &str = "  no saved query yet: add .sql files under .pgbg/queries/";
 
-/// A query as the finder lists it, `user` beside one of your own.
+/// A query as the finder lists it, marked `user` when it is one of your own.
 fn pick<'a>(app: &App, query: &Query, label: &'a str) -> Pick<'a> {
     let detail = if query.source == Source::User { "user" } else { "" };
     Pick { icon: "◆", colour: app.theme().accent, label, detail: view::faded(app.theme(), detail) }

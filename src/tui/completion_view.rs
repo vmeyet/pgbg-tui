@@ -1,4 +1,4 @@
-//! The `ctrl-space` list in a popup at the editor's cursor: each name and what it names, the pick highlighted.
+//! The `ctrl-space` list in a popup at the editor's cursor: each name and its kind, with the pick highlighted.
 use super::app::{App, Completions, Overlay};
 use super::editor_view;
 use crate::complete::Kind;
@@ -15,7 +15,7 @@ const FRAME_COLUMNS: usize = 3;
 const BORDER_ROWS: usize = 2;
 const NO_MATCH: &str = "no match";
 
-/// The list when it is open, under the cursor of the editor drawn in `editor`, or over it when no room is left below.
+/// The list when it is open, below the cursor of the editor drawn in `editor`, or above it when there is no room below.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App, editor: Rect) {
     let Some(Overlay::Completion(completions)) = app.overlay() else { return };
     let area = popup_area(f.area(), editor_view::cursor_at(app, editor), completions);
@@ -36,7 +36,7 @@ fn popup_area(screen: Rect, cursor: Position, completions: &Completions) -> Rect
     Rect { x, y, width, height }
 }
 
-/// The names in view, each with its kind pushed to the right, the pick reversed; `no match` when none are left.
+/// The names in view, each with its kind on the right and the pick in reverse colours; `no match` when none are left.
 fn lines(app: &App, completions: &Completions, room: usize) -> Vec<Line<'static>> {
     if completions.candidates.is_empty() {
         return vec![Line::styled(NO_MATCH, Style::default().fg(app.theme().faded))];

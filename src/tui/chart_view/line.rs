@@ -1,4 +1,4 @@
-//! A line in braille dots, x and y labelled at their ends and between, a gap where a value is missing.
+//! A line drawn in braille dots, with x and y labels at their ends and in between, and a gap where a value is missing.
 use super::{colour, short_number};
 use crate::chart::{Series, YColumn};
 use crate::render::printable;
@@ -11,10 +11,10 @@ use ratatui::widgets::{Axis, Chart, Dataset, GraphType};
 use vtui::theme::Theme;
 
 const Y_LABELS: u16 = 3;
-/// The fewest x labels: the two ends.
+/// The fewest x labels: one at each end.
 const MIN_X_LABELS: u16 = 2;
 const MAX_X_LABELS: u16 = 6;
-/// The columns between two x labels.
+/// The empty columns between two x labels.
 const X_LABEL_GAP: u16 = 3;
 
 pub(super) fn draw(f: &mut Frame<'_>, series: &Series, theme: &Theme, area: Rect) {
@@ -39,20 +39,20 @@ fn segments(positions: &[f64], y: &YColumn) -> Vec<Vec<(f64, f64)>> {
     runs.split(Option::is_none).map(|run| run.iter().flatten().copied().collect::<Vec<_>>()).filter(|run| !run.is_empty()).collect()
 }
 
-/// The lowest and highest value, widened by one each way when they are the same.
+/// The lowest and highest value, each moved out by one when they are equal.
 fn bounds(values: impl Iterator<Item = f64>) -> [f64; 2] {
     let [low, high] = values.fold([f64::INFINITY, f64::NEG_INFINITY], |[low, high], value| [low.min(value), high.max(value)]);
     let is_flat = high <= low;
     if is_flat { [low - 1.0, low + 1.0] } else { [low, high] }
 }
 
-/// `count` values from one bound to the other, evenly apart.
+/// `count` values from one bound to the other, evenly spaced.
 fn spread([low, high]: [f64; 2], count: u16) -> impl Iterator<Item = f64> {
     let step = (high - low) / f64::from(count - 1);
     (0..count).map(move |at| low + step * f64::from(at))
 }
 
-/// As many x labels as fit side by side, written as the x column shows its values.
+/// As many x labels as fit side by side, written in the format of the x column.
 fn x_labels(series: &Series, x: [f64; 2], width: u16) -> Vec<Line<'static>> {
     let widest = series.x_label_at(x[0]).chars().count().max(series.x_label_at(x[1]).chars().count()) as u16;
     let count = (width / (widest + X_LABEL_GAP)).clamp(MIN_X_LABELS, MAX_X_LABELS);
