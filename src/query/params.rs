@@ -66,6 +66,19 @@ pub(crate) struct Filled {
     pub(crate) params: Params,
 }
 
+/// Where each `{{name}}` of a template stands and the `$n` it becomes, to read a place in the filled text back in the template.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Numbering {
+    placed: Vec<Numbered>,
+}
+
+/// One `{{name}}`: the template's bytes it spans and its `$n`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Numbered {
+    range: Range<usize>,
+    number: usize,
+}
+
 /// Why a statement's parameters cannot be filled.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ParamError {
@@ -121,7 +134,13 @@ pub(crate) fn fill(template: &Statement, given: &Given, specs: &[ParamSpec]) -> 
     let specs: Vec<Option<&ParamSpec>> = names.iter().map(|name| specs.iter().rev().find(|spec| spec.name == *name)).collect();
     let values = names.iter().zip(&specs).map(|(name, spec)| value_of(given, name, *spec)).collect::<Result<_, _>>()?;
     let types = specs.iter().map(|spec| spec.and_then(|spec| spec.type_name.clone())).collect();
-    Ok(Filled { statement: Statement::new(numbered(text, &placed, &names)), params: Params::new(values, types) })
+    Ok(Filled { statement: Statement::new(Numbering::of(&placed, &names).apply(text)), params: Params::new(values, types) })
+}
+
+/// How `fill` numbers `template`'s `{{name}}`; an empty numbering when it cannot read them.
+pub(crate) fn numbering(template: &Statement) -> Numbering {
+    let placed = named_params(template.as_str()).unwrap_or_default();
+    Numbering::of(&placed, &distinct(&placed))
 }
 
 /// `template` filled with `given` and `specs`, then cleared for a connection of policy `writes`, or why it is not.
@@ -185,17 +204,56 @@ fn value_of(given: &Given, name: &ParamName, spec: Option<&ParamSpec>) -> Result
     }
 }
 
-/// `text` with each of `placed` replaced by `$n`, `n` its name's place in `names` from 1.
-fn numbered(text: &str, placed: &[NamedParam], names: &[ParamName]) -> String {
-    let mut sql = String::with_capacity(text.len());
-    let mut from = 0;
-    for param in placed {
-        let number = names.iter().position(|name| *name == param.name).map_or(0, |at| at + 1);
-        sql.push_str(&text[from..param.range.start]);
-        sql.push_str(&format!("${number}"));
-        from = param.range.end;
+impl Numbering {
+    fn of(placed: &[NamedParam], names: &[ParamName]) -> Self {
+        let number = |param: &NamedParam| names.iter().position(|name| *name == param.name).map_or(0, |at| at + 1);
+        Self { placed: placed.iter().map(|param| Numbered { range: param.range.clone(), number: number(param) }).collect() }
     }
-    sql + &text[from..]
+
+    /// `template` with each `{{name}}` replaced by its `$n`.
+    fn apply(&self, template: &str) -> String {
+        let mut sql = String::with_capacity(template.len());
+        let mut from = 0;
+        for param in &self.placed {
+            sql.push_str(&template[from..param.range.start]);
+            sql.push_str(&param.dollar());
+            from = param.range.end;
+        }
+        sql + &template[from..]
+    }
+
+    /// The byte of `template` at character `filled` of its filled text, from 0: a `$n` points at its `{{name}}`, the end
+    /// of the filled text at the end of the template.
+    pub(crate) fn template_byte(&self, template: &str, filled: usize) -> Option<usize> {
+        let mut left = filled;
+        let mut from = 0;
+        for param in &self.placed {
+            let between = &template[from..param.range.start];
+            let between_chars = between.chars().count();
+            if left < between_chars {
+                return byte_of_char(between, left).map(|at| from + at);
+            }
+            left -= between_chars;
+            let dollar_chars = param.dollar().len();
+            if left < dollar_chars {
+                return Some(param.range.start);
+            }
+            left -= dollar_chars;
+            from = param.range.end;
+        }
+        byte_of_char(&template[from..], left).map(|at| from + at)
+    }
+}
+
+impl Numbered {
+    fn dollar(&self) -> String {
+        format!("${}", self.number)
+    }
+}
+
+/// The byte character `nth` of `text` starts at, from 0; its length just past the last one.
+fn byte_of_char(text: &str, nth: usize) -> Option<usize> {
+    text.char_indices().map(|(at, _)| at).chain(std::iter::once(text.len())).nth(nth)
 }
 
 impl FromStr for ParamName {
@@ -303,6 +361,12 @@ mod tests {
     fn names_come_once_each_in_the_order_they_first_come() {
         let names = names(&Statement::new("SELECT {{owner}}, {{since}}, {{owner}}")).unwrap();
         assert_eq!(names, [name("owner"), name("since")]);
+    }
+
+    #[test]
+    fn a_place_on_a_dollar_number_points_at_its_name_in_the_template() {
+        let template = "SELECT {{since}}, {{owner}}";
+        assert_eq!(numbering(&Statement::new(template)).template_byte(template, 12), Some(18));
     }
 
     #[test]

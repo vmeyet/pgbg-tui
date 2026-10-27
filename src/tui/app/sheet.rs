@@ -10,7 +10,7 @@ use crate::connection::{Connection, ConnectionName, SchemaReading};
 use crate::db::guard;
 use crate::db::model::{Catalog, Extent, Page, ResultSet, Statement};
 use crate::format::{self, Format};
-use crate::query::params::{self, ParamInput, ParamName};
+use crate::query::params::{self, Numbering, ParamInput, ParamName};
 use crate::query::{Header, Query};
 use crossterm::event::KeyEvent;
 use std::ops::Range;
@@ -29,6 +29,8 @@ const NEAR_END_ROWS: usize = 100;
 struct Sent {
     start: Option<usize>,
     statement: Statement,
+    /// The `$n` the server got for each `{{name}}`, which its error position counts in.
+    numbering: Numbering,
 }
 
 /// Where the session stands, as the status line says it.
@@ -343,7 +345,7 @@ impl Sheet {
         }
         let run = self.next_run();
         self.run = Run::Running { run };
-        self.sent = Some(Sent { start, statement: statement.clone() });
+        self.sent = Some(Sent { start, numbering: params::numbering(&statement), statement: statement.clone() });
         vec![Action::Run { connection: self.name().clone(), run, statement, input }]
     }
 
@@ -369,12 +371,11 @@ impl Sheet {
         run
     }
 
-    /// The editor's byte at character `position` of the statement sent; the end of it when the server
-    /// points just past its last character.
+    /// The editor's byte at character `position` of the statement the server got, counted from 1; the end of it when the
+    /// server points just past its last character.
     fn editor_byte(&self, position: usize) -> Option<usize> {
         let sent = self.sent.as_ref()?;
-        let text = sent.statement.as_str();
-        let offset = text.char_indices().map(|(at, _)| at).chain(std::iter::once(text.len())).nth(position.checked_sub(1)?)?;
+        let offset = sent.numbering.template_byte(sent.statement.as_str(), position.checked_sub(1)?)?;
         Some(sent.start? + offset)
     }
 

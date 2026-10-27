@@ -210,7 +210,12 @@ impl App {
         if let Some(overlay) = self.overlay.take() {
             return self.overlay_key(overlay, key);
         }
+        let ghost = self.sheet_mut().ghost.take();
         if let Some(act) = act::act_for(key, self.pane()) {
+            if let (Act::TakeGhost, Some(ghost)) = (act, ghost) {
+                self.sheet_mut().take_ghost(ghost);
+                return vec![];
+            }
             return self.act(act);
         }
         match self.focus {
@@ -241,6 +246,10 @@ impl App {
         }
         if self.overlay == Some(Overlay::SchemaFilter) {
             self.schema_tab.filter.paste(text);
+            return vec![];
+        }
+        if let Some(Overlay::Completion(_)) = self.overlay {
+            self.paste_past_completions(text);
             return vec![];
         }
         if self.overlay.is_some() {
@@ -304,6 +313,7 @@ impl App {
             Act::Run => return self.sheet_mut().run_editor(),
             Act::TakeGhost => return self.sheet_mut().edit(KeyEvent::from(KeyCode::Right)),
             Act::Complete => return self.open_completions(),
+            Act::Cancel if self.focus == Focus::Params && !self.sheet().is_running() => self.focus = Focus::Editor,
             Act::Cancel => return self.sheet_mut().cancel(),
             Act::NewLine => return self.sheet_mut().edit(KeyEvent::from(KeyCode::Enter)),
             Act::SwitchPane => self.switch_pane(),
@@ -311,7 +321,6 @@ impl App {
             Act::Quit => return self.quit(),
             Act::Down if self.focus == Focus::Params => self.step_bar(Direction::Forward),
             Act::Up if self.focus == Focus::Params => self.step_bar(Direction::Back),
-            Act::Close if self.focus == Focus::Params => self.focus = Focus::Editor,
             Act::Down if self.focus == Focus::Queries => self.step_sidebar(1),
             Act::Up if self.focus == Focus::Queries => self.step_sidebar(-1),
             act if act.is_grid() && self.sheet().is_chart_shown() => {}
@@ -343,7 +352,7 @@ impl App {
             Act::CopyCell => return self.copy_cell(),
             Act::CopyRow => return self.copy_row(),
             Act::CopyResult => self.ask_copy_format(),
-            Act::SwitchTab => self.switch_tab(),
+            Act::SwitchTab => return self.switch_tab(),
             Act::Close | Act::Delete | Act::CloseSession | Act::Add | Act::Edit | Act::CopyCsv | Act::CopyJson | Act::CopyMarkdown => {}
             Act::Filter | Act::ReadAgain | Act::Preview | Act::Insert => {}
         }
@@ -739,6 +748,14 @@ pub(super) mod tests {
         enter(&mut app);
         failed_at(&mut app, 15);
         assert_eq!(app.sheet().error_mark.map(|at| &app.sheet().editor.text()[at..]), Some("x"));
+    }
+
+    #[test]
+    fn the_mark_counts_in_the_text_the_server_got_and_lands_in_the_template() {
+        let mut app = typed("SELECT {{a}}, nope");
+        enter(&mut app);
+        failed_at(&mut app, 12);
+        assert_eq!(app.sheet().error_mark.map(|at| &app.sheet().editor.text()[at..]), Some("nope"));
     }
 
     #[test]

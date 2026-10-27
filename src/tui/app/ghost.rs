@@ -21,11 +21,6 @@ pub(super) fn is_name_key(key: KeyEvent) -> bool {
     is_plain && matches!(key.code, KeyCode::Char(c) if is_name_char(c) || c == '.')
 }
 
-/// Whether `key` takes the ghost: `→` alone.
-pub(super) fn is_take(key: KeyEvent) -> bool {
-    key.code == KeyCode::Right && key.modifiers.is_empty()
-}
-
 fn is_name_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_' || c == '$'
 }
@@ -144,6 +139,16 @@ mod tests {
         assert_eq!(rest(&app), None);
         app.handle_key(KeyEvent::from(KeyCode::Right));
         assert_eq!(app.sheet().editor.text(), "SELECT * FROM cu");
+    }
+
+    #[test]
+    fn a_key_that_acts_drops_the_ghost() {
+        for key in [KeyEvent::from(KeyCode::Enter), KeyEvent::from(KeyCode::Esc), KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)]
+        {
+            let mut app = typed_on_shop("SELECT * FROM cu");
+            app.handle_key(key);
+            assert_eq!(rest(&app), None, "{key:?}");
+        }
     }
 
     #[test]

@@ -13,6 +13,7 @@ const SHOWN_ROWS: usize = 8;
 /// Two borders and a column between a name and its kind.
 const FRAME_COLUMNS: usize = 3;
 const BORDER_ROWS: usize = 2;
+const NO_MATCH: &str = "no match";
 
 /// The list when it is open, under the cursor of the editor drawn in `editor`, or over it when no room is left below.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App, editor: Rect) {
@@ -27,16 +28,19 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, editor: Rect) {
 
 fn popup_area(screen: Rect, cursor: Position, completions: &Completions) -> Rect {
     let widest = completions.candidates.iter().map(|candidate| Span::raw(&candidate.name).width() + kind_word(candidate.kind).len());
-    let width = to_cells(widest.max().unwrap_or(0) + FRAME_COLUMNS).min(screen.width);
-    let height = to_cells(completions.candidates.len().min(SHOWN_ROWS) + BORDER_ROWS).min(screen.height);
+    let width = to_cells(widest.max().unwrap_or(NO_MATCH.len()) + FRAME_COLUMNS).min(screen.width);
+    let height = to_cells(completions.candidates.len().clamp(1, SHOWN_ROWS) + BORDER_ROWS).min(screen.height);
     let below = cursor.y.saturating_add(1);
     let y = if below.saturating_add(height) <= screen.bottom() { below } else { cursor.y.saturating_sub(height) };
     let x = cursor.x.min(screen.right().saturating_sub(width));
     Rect { x, y, width, height }
 }
 
-/// The names in view, each with its kind pushed to the right, the pick reversed.
+/// The names in view, each with its kind pushed to the right, the pick reversed; `no match` when none are left.
 fn lines(app: &App, completions: &Completions, room: usize) -> Vec<Line<'static>> {
+    if completions.candidates.is_empty() {
+        return vec![Line::styled(NO_MATCH, Style::default().fg(app.theme.faded))];
+    }
     let first = completions.selected.saturating_sub(SHOWN_ROWS - 1);
     let shown = completions.candidates.iter().enumerate().skip(first).take(SHOWN_ROWS);
     let line = |(at, candidate): (usize, &crate::complete::Candidate)| {
@@ -76,5 +80,14 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(60, 20)).unwrap();
         terminal.draw(|f| _ = ui::draw(f, &app)).unwrap();
         insta::assert_snapshot!("completion_list", terminal.backend());
+    }
+
+    #[test]
+    fn an_empty_list_says_nothing_matches() {
+        let mut app = typed("SELECT zz");
+        app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL));
+        let mut terminal = Terminal::new(TestBackend::new(60, 20)).unwrap();
+        terminal.draw(|f| _ = ui::draw(f, &app)).unwrap();
+        assert!(terminal.backend().to_string().contains("no match"), "{}", terminal.backend());
     }
 }

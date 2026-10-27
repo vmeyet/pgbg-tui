@@ -22,7 +22,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
     let Place { row, column, scroll } = place(app, inside);
     let mark = Style::default().fg(app.theme.danger).add_modifier(Modifier::REVERSED);
     let window = Window { first: scroll, rows: usize::from(inside.height) };
-    let ghost = sheet.ghost.as_ref().map(|ghost| Ghost { at: before.len(), rest: &ghost.rest });
+    let ghost = sheet.ghost.as_ref().filter(|_| focused).map(|ghost| Ghost { at: before.len(), rest: &ghost.rest });
     let text = coloured(
         sheet.editor.text(),
         Paint { colours: sheet.editor.colours(), mark: sheet.error_mark, mark_style: mark, ghost, theme: &app.theme },
@@ -284,6 +284,15 @@ mod tests {
     fn the_ghost_draws_faded_at_the_cursor_on_its_line_only() {
         assert_eq!(ghosted("SELECT *\nFROM cu\nLIMIT 1", 16, "stomers"), ["SELECT *", "FROM cu<stomers>", "LIMIT 1"]);
         assert_eq!(ghosted("SELECT o. FROM orders o", 9, "id"), ["SELECT o.<id> FROM orders o"]);
+    }
+
+    #[test]
+    fn the_ghost_shows_only_while_the_editor_has_the_keys() {
+        let mut app = typed("sel");
+        app.focus = Focus::Result;
+        let mut terminal = Terminal::new(TestBackend::new(30, 5)).unwrap();
+        terminal.draw(|f| draw(f, &app, f.area())).unwrap();
+        assert!(!terminal.backend().to_string().contains("select"), "{}", terminal.backend());
     }
 
     #[test]
