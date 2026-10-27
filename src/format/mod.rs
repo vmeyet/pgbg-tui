@@ -201,6 +201,13 @@ mod tests {
     }
 
     #[test]
+    fn a_relative_time_up_to_a_thousand_years_either_way_fits_a_relative_column() {
+        let now = paris_summer().now;
+        let years = (1..=1000).flat_map(|years| [now - chrono::Months::new(12 * years), now + chrono::Months::new(12 * years)]);
+        assert!(years.map(|at| time::relative(at, now).len()).all(|width| width <= least_width(Format::Relative)));
+    }
+
+    #[test]
     fn a_kind_with_no_readable_form_reads_raw() {
         assert_eq!(readable(&ColumnKind::Json), Format::Raw);
     }
