@@ -5,6 +5,7 @@ use crate::config::ConnectionChange;
 use crate::connection::{Connection, ConnectionName};
 use crate::db::model::{Catalog, LocalPort, Page, ResultSet, Statement};
 use crate::export::Format;
+use crate::failure::{Failure, Lost};
 use crate::history::Entry;
 use crate::query::params::ParamInput;
 use crate::query::{Query, QueryPath};
@@ -175,13 +176,12 @@ pub(in crate::tui) enum QueryAnswer {
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::tui) enum Incoming {
     Opened,
-    /// The session could not open, with the error's message.
-    NotOpened(String),
+    NotOpened(Failure),
     /// The open session was lost, and why; the next run opens a new one.
-    Closed(String),
+    Closed(Lost),
     Tunnel(TunnelState),
     /// The schema a second session read, or why it could not read it.
-    Schema(Result<Arc<Catalog>, String>),
+    Schema(Result<Arc<Catalog>, Failure>),
     /// The completion index built from `catalog`, which a later schema read may have replaced.
     Index {
         catalog: Arc<Catalog>,
@@ -197,26 +197,15 @@ pub(in crate::tui) enum Incoming {
         run: RunId,
         page: Page,
     },
-    /// The server failed to send the next page of the run's result, with its message; the result keeps the rows it has.
+    /// The server failed to send the next page of the run's result; the result keeps the rows it has.
     PageFailed {
         run: RunId,
-        error: String,
+        failure: Failure,
     },
-    /// The guard stopped the statement before it reached the server, and why.
-    Refused {
-        run: RunId,
-        why: String,
-    },
-    /// The statement, which the guard read as a read, tried to write: the server refused it, so nothing of it ran.
-    TriedToWrite {
-        run: RunId,
-    },
-    /// The statement failed on the server or on the link to it; the server may say where in the statement.
+    /// The statement gave no result: pgbg kept it from the server, or it failed on the server or on the link to it.
     Failed {
         run: RunId,
-        error: String,
-        /// A character position in the statement sent, counted from 1 as PostgreSQL counts.
-        position: Option<usize>,
+        failure: Failure,
     },
 }
 

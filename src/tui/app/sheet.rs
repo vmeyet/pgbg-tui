@@ -8,7 +8,8 @@ use crate::chart::{self, ChartError, Series};
 use crate::complete::Index;
 use crate::connection::{Connection, ConnectionName, SchemaReading, WritePolicy};
 use crate::db::guard::{self, Write};
-use crate::db::model::{Catalog, Extent, Page, ResultSet, Statement, TriedToWrite};
+use crate::db::model::{Catalog, Extent, Page, ResultSet, Statement};
+use crate::failure::Failure;
 use crate::format::{self, Format};
 use crate::query::params::{self, Numbering, ParamInput, ParamName};
 use crate::query::{Header, Query};
@@ -420,7 +421,7 @@ impl Sheet {
     /// Takes an answer from the session; a result opens in the formats its header and `reading` give it.
     /// Gives the statement the server found a write in, to ask about before it runs again.
     pub(super) fn apply(&mut self, incoming: Incoming, reading: &Reading) -> Option<ToRun> {
-        if let Incoming::TriedToWrite { run } = incoming {
+        if let Incoming::Failed { run, failure: Failure::TriedToWrite } = incoming {
             return self.tried_to_write(run);
         }
         let is_closed = self.session == SessionState::Closed;
@@ -433,22 +434,23 @@ impl Sheet {
             | Incoming::Index { .. }
                 if is_closed => {}
             Incoming::Opened => self.session = SessionState::Open,
-            Incoming::NotOpened(err) => {
-                self.fail_schema_read(&err);
-                self.session = SessionState::Failed(err);
+            Incoming::NotOpened(failure) => {
+                let why = failure.to_string();
+                self.fail_schema_read(&why);
+                self.session = SessionState::Failed(why);
             }
-            Incoming::Closed(why) => {
+            Incoming::Closed(lost) => {
+                let why = lost.to_string();
                 self.fail_schema_read(&why);
                 self.session = SessionState::Failed(format!("{LOST_SESSION}: {why}"));
             }
             Incoming::Tunnel(state) => self.tunnel = Some(state),
             Incoming::Schema(read) => {
-                self.schema = read.map_or_else(SchemaState::Failed, SchemaState::Read);
+                self.schema = read.map_or_else(|failure| SchemaState::Failed(failure.to_string()), SchemaState::Read);
                 self.index = None;
             }
             Incoming::Index { catalog, index } => self.take_index(&catalog, index),
-            Incoming::Result { run, .. } | Incoming::Refused { run, .. } | Incoming::Failed { run, .. }
-                if !self.is_answer_to_running(run) => {}
+            Incoming::Result { run, .. } | Incoming::Failed { run, .. } if !self.is_answer_to_running(run) => {}
             Incoming::Result { run, result, took } => {
                 let header_chart = self.header.chart.as_ref().and_then(|spec| Series::from_result(&result, spec).ok());
                 let view = header_chart.map_or(View::Grid, |series| View::Chart(Ok(series)));
@@ -458,16 +460,14 @@ impl Sheet {
             }
             Incoming::Page { run, .. } | Incoming::PageFailed { run, .. } if !self.is_waiting_on_page(run) => {}
             Incoming::Page { page, .. } => self.push_page(page),
-            Incoming::PageFailed { error, .. } => {
+            Incoming::PageFailed { failure, .. } => {
                 self.push_page(Page { rows: vec![], extent: Extent::Cut });
-                self.page_failure = Some(format!("the next page failed: {error}"));
+                self.page_failure = Some(format!("the next page failed: {failure}"));
             }
-            Incoming::Refused { why, .. } => self.run = Run::Failed(format!("not sent: {why}")),
-            Incoming::Failed { error, position, .. } => {
-                self.error_mark = position.and_then(|position| self.editor_byte(position));
-                self.run = Run::Failed(error);
+            Incoming::Failed { failure, .. } => {
+                self.error_mark = failure.position().and_then(|position| self.editor_byte(position));
+                self.run = Run::Failed(failure.to_string());
             }
-            Incoming::TriedToWrite { .. } => {}
         }
         None
     }
@@ -478,7 +478,7 @@ impl Sheet {
         if !self.is_answer_to_running(run) {
             return None;
         }
-        self.run = Run::Failed(TriedToWrite.to_string());
+        self.run = Run::Failed(Failure::TriedToWrite.to_string());
         let Sent { statement, start, input, .. } = self.sent.clone()?;
         Some(ToRun { statement, start, input })
     }
@@ -542,6 +542,7 @@ mod tests {
     use super::super::tests::{app, app_on, on_the_result, shop, to_shop};
     use super::*;
     use crate::db::model::{ColumnKind, Value};
+    use crate::failure::{Failure, Lost};
     use crate::fixtures::{self, column, orders, page, shop_catalog};
     use crate::format::Mode;
     use crossterm::event::{KeyCode, KeyEvent};
@@ -608,7 +609,7 @@ mod tests {
     #[test]
     fn a_failed_page_leaves_the_result_cut_and_says_why() {
         let mut app = first_page();
-        app.apply(to_shop(Incoming::PageFailed { run: RunId::FIRST, error: "ERROR: division by zero".into() }));
+        app.apply(to_shop(Incoming::PageFailed { run: RunId::FIRST, failure: Failure::Link("ERROR: division by zero".into()) }));
         let Run::Done { result, .. } = &app.sheet().run else { panic!("no result") };
         assert_eq!(result.extent(), Extent::Cut);
         assert_eq!(app.sheet().page_failure.as_deref(), Some("the next page failed: ERROR: division by zero"));
@@ -649,7 +650,7 @@ mod tests {
         let mut app = first_page();
         press(&mut app, 'G');
         app.sheet_mut().close();
-        app.apply(to_shop(Incoming::PageFailed { run: RunId::FIRST, error: "ERROR: canceling statement".into() }));
+        app.apply(to_shop(Incoming::PageFailed { run: RunId::FIRST, failure: Failure::Link("ERROR: canceling statement".into()) }));
         assert_eq!(app.sheet().page_failure, None);
     }
 
@@ -691,7 +692,10 @@ mod tests {
     fn a_schema_that_could_not_be_read_says_why() {
         let mut app = app();
         app.sheet_mut().want_schema();
-        app.apply(to_shop(Incoming::Schema(Err("permission denied for table pg_class".to_owned()))));
+        app.apply(to_shop(Incoming::Schema(Err(Failure::Server {
+            message: "permission denied for table pg_class".into(),
+            position: None,
+        }))));
         assert_eq!(app.sheet().schema, SchemaState::Failed("permission denied for table pg_class".to_owned()));
     }
 
@@ -734,7 +738,7 @@ mod tests {
     fn a_session_that_does_not_open_fails_the_schema_waiting_on_it() {
         let mut app = app();
         app.sheet_mut().want_schema();
-        app.apply(to_shop(Incoming::NotOpened("password authentication failed for user \"nina\"".to_owned())));
+        app.apply(to_shop(Incoming::NotOpened(Failure::Login("password authentication failed for user \"nina\"".into()))));
         assert_eq!(app.sheet().schema, SchemaState::Failed("password authentication failed for user \"nina\"".to_owned()));
     }
 
@@ -742,14 +746,14 @@ mod tests {
     fn a_session_lost_while_its_schema_is_read_fails_the_read_so_it_can_be_asked_again() {
         let mut app = app();
         app.sheet_mut().want_schema();
-        app.apply(to_shop(Incoming::Closed("terminating connection".to_owned())));
+        app.apply(to_shop(Incoming::Closed(Lost::LinkFailed("terminating connection".into()))));
         assert_eq!(app.sheet_mut().read_schema_again(), read_schema());
     }
 
     #[test]
     fn asking_for_the_schema_on_a_failed_session_opens_it_again() {
         let mut app = app();
-        app.apply(to_shop(Incoming::NotOpened("connection refused".to_owned())));
+        app.apply(to_shop(Incoming::NotOpened(Failure::Login("connection refused".into()))));
         app.sheet_mut().want_schema();
         assert_eq!(app.sheet().session, SessionState::Opening);
     }

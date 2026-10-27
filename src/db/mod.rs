@@ -1,5 +1,6 @@
 //! The only module that sees `tokio_postgres`: connect, run one statement, decode its rows, cancel it.
 use crate::connection::Tls;
+use crate::failure::Lost;
 use anyhow::Result;
 use limits::ReadLimits;
 use model::{CancelToken, ServerError};
@@ -29,10 +30,6 @@ pub(crate) use open::{Attempt, NotOpened, Opened, TunnelStep, open_along, open_o
 pub(crate) use pages::{Fetched, Pages, Started};
 pub(crate) use schema::read_schema_along;
 
-const SERVER_CLOSED: &str = "the server closed the link";
-const LINK_TASK_GONE: &str = "the link's task is gone";
-const ROLLBACK_FAILED: &str = "a rollback failed, so the server may still hold its transaction";
-
 /// An open link to one connection.
 #[derive(Debug)]
 pub(crate) struct Session {
@@ -40,7 +37,7 @@ pub(crate) struct Session {
     tls: Tls,
     limits: ReadLimits,
     /// Why the link ended, set by the task that drives it.
-    ended: watch::Receiver<Option<String>>,
+    ended: watch::Receiver<Option<Lost>>,
     link: AbortHandle,
     marks: Marks,
 }
@@ -65,16 +62,16 @@ struct Marks {
 
 impl Session {
     /// Waits until the link to the server ends, and says why.
-    pub(crate) async fn closed(&self) -> String {
+    pub(crate) async fn closed(&self) -> Lost {
         why_ended(&self.ended).await
     }
 
     /// Why this session can run no more statements, when it cannot: its link is gone, or a rollback failed.
-    pub(crate) fn lost(&self) -> Option<String> {
+    pub(crate) fn lost(&self) -> Option<Lost> {
         let ended = self.ended.borrow().clone();
         let is_link_gone = self.client.is_closed();
-        let lost = ended.or_else(|| is_link_gone.then(|| SERVER_CLOSED.to_owned()));
-        lost.or_else(|| self.marks.has_failed_rollback.then(|| ROLLBACK_FAILED.to_owned()))
+        let lost = ended.or_else(|| is_link_gone.then_some(Lost::ServerClosed));
+        lost.or_else(|| self.marks.has_failed_rollback.then_some(Lost::RollbackFailed))
     }
 
     /// What cancels the statement this session is running, usable while `run` waits.
@@ -92,11 +89,11 @@ impl Drop for Session {
 }
 
 /// Waits until the link that `ended` watches ends, and says why.
-async fn why_ended(ended: &watch::Receiver<Option<String>>) -> String {
+async fn why_ended(ended: &watch::Receiver<Option<Lost>>) -> Lost {
     let mut ended = ended.clone();
     match ended.wait_for(Option::is_some).await {
-        Ok(reason) => reason.clone().unwrap_or_default(),
-        Err(_) => LINK_TASK_GONE.to_owned(),
+        Ok(lost) => lost.clone().unwrap_or(Lost::LinkTaskGone),
+        Err(_) => Lost::LinkTaskGone,
     }
 }
 
@@ -154,7 +151,7 @@ mod tests {
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_session_whose_server_side_ended_says_why() {
         let doomed = ended_on_the_server().await;
-        assert!(doomed.closed().await.contains("terminating connection"));
+        assert!(doomed.closed().await.to_string().contains("terminating connection"));
     }
 
     #[tokio::test]

@@ -66,6 +66,7 @@ mod tests {
     use super::super::{Incoming, SchemaState};
     use super::*;
     use crate::db::model::Catalog;
+    use crate::failure::Failure;
     use crate::fixtures::shop_catalog;
     use std::sync::Arc;
 
@@ -116,7 +117,7 @@ mod tests {
     #[test]
     fn typing_never_opens_a_failed_session_again() {
         let mut app = typed("");
-        app.apply(to_shop(Incoming::NotOpened("connection refused".to_owned())));
+        app.apply(to_shop(Incoming::NotOpened(Failure::Login("connection refused".into()))));
         assert_eq!(app.handle_key(KeyEvent::from(KeyCode::Char('s'))), []);
         assert_eq!((&app.sheet().schema, rest(&app)), (&SchemaState::NotRead, Some("how")));
     }

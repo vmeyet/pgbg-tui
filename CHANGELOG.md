@@ -233,3 +233,4 @@ Each entry says what changed, then where, then how to use it.
 - **A column of a domain type shows its values**, decoded like the type the domain is built on, and a `void` result such as `pg_sleep` shows `NULL`.
 - **Wide characters keep `pgbg run` columns aligned**: a cell with `日本` or an emoji takes the room it takes on screen.
 - **A `--` comment ends at a carriage return**, as PostgreSQL ends it, so text after it is checked like the rest of the statement.
+- **A statement sent while its tunnel fails to start says how the tunnel ended**, in the TUI's result pane: its exit and its last lines of stderr follow `its tunnel did not start`.

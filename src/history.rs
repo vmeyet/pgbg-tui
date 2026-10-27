@@ -2,9 +2,8 @@
 //! A line never holds a password or a row.
 use crate::config;
 use crate::connection::ConnectionName;
-use crate::db::guard::Refusal;
-use crate::db::model::{ResultSet, ServerError, Statement, TriedToWrite, UnknownType};
-use crate::query::params::ParamError;
+use crate::db::model::{ResultSet, Statement};
+use crate::failure::Failure;
 use chrono::{DateTime, Utc};
 use rustix::fs::{FlockOperation, flock};
 use serde::{Deserialize, Serialize};
@@ -48,12 +47,22 @@ pub(crate) enum Outcome {
 impl Outcome {
     pub(crate) fn of(result: &anyhow::Result<ResultSet>) -> Self {
         match result {
-            Ok(result) => Self::Rows { count: result.rows().len(), is_cut: !result.is_whole() },
-            Err(err) if err.is::<Refusal>() || err.is::<ParamError>() || err.is::<UnknownType>() || err.is::<TriedToWrite>() => {
-                Self::Refused
-            }
-            Err(err) if err.is::<ServerError>() => Self::ServerError,
-            Err(_) => Self::LinkError,
+            Ok(result) => Self::rows(result),
+            Err(err) => Self::from(&Failure::from(err)),
+        }
+    }
+
+    pub(crate) fn rows(result: &ResultSet) -> Self {
+        Self::Rows { count: result.rows().len(), is_cut: !result.is_whole() }
+    }
+}
+
+impl From<&Failure> for Outcome {
+    fn from(failure: &Failure) -> Self {
+        match failure {
+            Failure::Refused(_) | Failure::TriedToWrite | Failure::CancelledBeforeSent => Self::Refused,
+            Failure::Server { .. } => Self::ServerError,
+            Failure::TunnelNotStarted(_) | Failure::Login(_) | Failure::Link(_) | Failure::StoppedWithItsSession => Self::LinkError,
         }
     }
 }
@@ -226,7 +235,9 @@ fn parsed(line: &str) -> Option<Entry> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::model::{Extent, Page, TypeName};
+    use crate::db::guard::Refusal;
+    use crate::db::model::{Extent, Page, ServerError, TriedToWrite, TypeName, UnknownType};
+    use crate::query::params::ParamError;
     use std::os::unix::fs::PermissionsExt;
 
     fn store(dir: &tempfile::TempDir) -> Store {
@@ -403,6 +414,11 @@ mod tests {
     fn a_parameter_that_cannot_be_filled_or_typed_is_refused() {
         assert_eq!(Outcome::of(&Err(ParamError::Mixed.into())), Outcome::Refused);
         assert_eq!(Outcome::of(&Err(UnknownType(TypeName::new("dat")).into())), Outcome::Refused);
+    }
+
+    #[test]
+    fn a_run_whose_tunnel_did_not_start_is_a_link_error() {
+        assert_eq!(Outcome::from(&Failure::TunnelNotStarted("exit status: 255".into())), Outcome::LinkError);
     }
 
     #[test]

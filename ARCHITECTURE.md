@@ -50,6 +50,7 @@ When a boundary or a flow changes, change this page in the same MR.
 | `tui/chart_view/` | Draws a `Series` with ratatui's `BarChart` (bars across, so text labels stay readable) and `Chart` (braille line), one file per kind; a legend in vtui's user colours |
 | `tui/theme.rs` | pgbg's `Theme`: vtui's palette, read through `Deref`, with the tier colours and a production colour of its own (`danger` leaning to magenta), so a production frame never reads as an error drawn in `danger`; the SQL token colours are vtui's `Syntax` |
 | `vtui` (git dependency) | Shared with the sibling TUIs: the terminal in raw mode (`Screen`), the palette (`Theme`) and its code colours (`Syntax`), the input box (`Field`, its cleaned paste, and the secret one whose `Debug` hides its text), styled lines wrapped to a width (`text::wrap_line`), the completion index (`complete::Index`), the `ctrl-k` palette and its `Pick` rows, the `?` overlay, fzf-style matching |
+| `failure.rs` | Why a session did not open or was lost (`Lost`), or why a run, a page or a schema read gave no result (`Failure`): one kind per reason, from the session task to the app, drawn or logged only there; the history's `Outcome` is derived from it |
 | `log.rs` | The log file; never a secret, never a row |
 | `signal.rs` | The signals that stop pgbg (`SIGINT`, `SIGTERM`, `SIGHUP`) and the exit code each gives |
 
@@ -93,7 +94,7 @@ Switching connection:
    A close or a reopen cuts a result still paging at the rows it has, since its portal closes with the old session.
    Each sheet keeps its editor text and its result while another one is shown, and the answers of its session land on it alone.
 5. A session whose link is gone, or whose rollback failed, is opened again before the next statement; it is never retried on its own.
-   A statement sent while its session fails to open fails with it, and is never sent on a later open; once pgbg quits, one still queued is never sent.
+   A statement sent while its session fails to open fails with it, and why, the tunnel's own words included, and is never sent on a later open; once pgbg quits, one still queued is never sent.
 6. Opening picks `statement_timeout`: the connection's own, else the stricter of its tier's (none on local, 60 s on staging, 30 s on production) and the one the server already applies, read from `pg_settings`.
    Each read-only transaction sets it with `SET LOCAL` right after `BEGIN READ ONLY`, as it sets its idle timeout, so behind PgBouncer in transaction pooling both follow every transaction and never reach another client.
    A connection that allows writes also sets it on the session, since its statements run outside pgbg's transactions: behind a transaction pooler that holds only on the server link it reached, so give the role its own `statement_timeout` there.

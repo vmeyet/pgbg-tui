@@ -2,8 +2,9 @@
 use super::link::Queued;
 use crate::connection::WritePolicy;
 use crate::db::guard::Admitted;
-use crate::db::model::{CancelToken, ServerError, TriedToWrite};
+use crate::db::model::CancelToken;
 use crate::db::{Interrupted, Pages, Session, Started};
+use crate::failure::Failure;
 use crate::history::Outcome;
 use crate::query::params;
 use crate::tui::app::{Incoming, RunId};
@@ -12,8 +13,6 @@ use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::watch;
 use tokio::time::Instant;
 
-pub(super) const CANCELLED_BEFORE_SENT: &str = "cancelled before it was sent";
-pub(super) const STOPPED_WITH_ITS_SESSION: &str = "cancelled: its session stopped";
 const UNCONFIRMED_WRITE: &str = "a write runs only once confirmed";
 
 /// Holds the cancel token of what a session task runs on the server, a statement or a page, for its link's abort.
@@ -91,8 +90,11 @@ impl Answered<'_> {
     /// The answer to `run`, stopped with its session before the server answered.
     fn stopped(run: RunId, interrupted: &Interrupted<()>) -> Self {
         warn_if_still_running(&interrupted.cancel);
-        let incoming = Incoming::Failed { run, error: STOPPED_WITH_ITS_SESSION.to_owned(), position: None };
-        Self { incoming, outcome: Outcome::LinkError, rest: None }
+        Self::failed(run, Failure::StoppedWithItsSession)
+    }
+
+    fn failed(run: RunId, failure: Failure) -> Self {
+        Self { outcome: Outcome::from(&failure), incoming: Incoming::Failed { run, failure }, rest: None }
     }
 }
 
@@ -132,25 +134,15 @@ async fn answer_to(session: &mut Session, writes: WritePolicy, queued: Queued) -
     let run = queued.run;
     let admitted = match admit(&queued, writes) {
         Ok(admitted) => admitted,
-        Err(refusal) => {
-            return Answered { incoming: Incoming::Refused { run, why: refusal.to_string() }, outcome: Outcome::Refused, rest: None };
-        }
+        Err(refusal) => return Answered::failed(run, Failure::Refused(refusal.to_string())),
     };
     let started = Instant::now();
-    let (result, rest) = match session.start(&admitted).await {
-        Ok(Started { result, rest }) => (Ok(result), rest),
-        Err(err) => (Err(err), None),
-    };
-    let outcome = Outcome::of(&result);
-    let incoming = match result {
-        Ok(result) => Incoming::Result { run, result, took: started.elapsed() },
-        Err(err) if err.is::<TriedToWrite>() => Incoming::TriedToWrite { run },
-        Err(err) => {
-            let position = err.downcast_ref::<ServerError>().and_then(|server| server.position);
-            Incoming::Failed { run, position, error: format!("{err:#}") }
+    match session.start(&admitted).await {
+        Ok(Started { result, rest }) => {
+            Answered { outcome: Outcome::rows(&result), incoming: Incoming::Result { run, result, took: started.elapsed() }, rest }
         }
-    };
-    Answered { incoming, outcome, rest }
+        Err(err) => Answered::failed(run, Failure::from(&err)),
+    }
 }
 
 /// `queued` with its parameters filled in and checked against the connection's `writes` policy; a write the user did

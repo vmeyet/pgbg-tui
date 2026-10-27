@@ -228,6 +228,7 @@ pub(in crate::tui) mod tests {
     use super::super::{Answer, ConfigAnswer, Incoming, QueryAnswer, Run, RunId, SessionId, SessionState};
     use super::*;
     use crate::connection::WritePolicy;
+    use crate::failure::{Failure, Lost};
     use crate::fixtures::named;
     use crate::tui::theme::Theme;
     use crossterm::event::KeyModifiers;
@@ -400,7 +401,7 @@ pub(in crate::tui) mod tests {
         let mut app = on_local();
         switch_to(&mut app, "prod");
         let session = app.sheet().session_id;
-        app.apply(Answer::Session { connection: name("prod"), session, incoming: Incoming::NotOpened("no route".into()) });
+        app.apply(Answer::Session { connection: name("prod"), session, incoming: Incoming::NotOpened(Failure::Login("no route".into())) });
         switch_to(&mut app, "local");
         let actions = switch_to(&mut app, "prod");
         assert!(matches!(&*actions, [Action::Open { connection: prod, .. }] if prod.name() == &name("prod")), "{actions:?}");
@@ -519,7 +520,11 @@ pub(in crate::tui) mod tests {
         ctrl(&mut app, 'x');
         key(&mut app, KeyCode::Enter);
         app.apply(Answer::Session { connection: name("local"), session: closed, incoming: Incoming::Opened });
-        app.apply(Answer::Session { connection: name("local"), session: closed, incoming: Incoming::Closed("gone".into()) });
+        app.apply(Answer::Session {
+            connection: name("local"),
+            session: closed,
+            incoming: Incoming::Closed(Lost::LinkFailed("gone".into())),
+        });
         assert_eq!(app.sheet().session, SessionState::Opening);
     }
 

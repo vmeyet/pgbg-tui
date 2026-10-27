@@ -5,11 +5,12 @@ use super::schema::SchemaReader;
 use crate::connection::Connection;
 use crate::db::model::{Route, Statement};
 use crate::db::{NotOpened, Opened, Session, TunnelStep, open_along};
+use crate::failure::{Failure, Lost};
 use crate::history::{Entry, Outcome, Store};
 use crate::tui::app::{Incoming, TunnelState};
 use crate::tunnel::{Died, Tunnel};
 use chrono::{DateTime, Utc};
-use run::{Answered, CANCELLED_BEFORE_SENT, run_until_answered};
+use run::{Answered, run_until_answered};
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::watch;
@@ -21,13 +22,10 @@ mod run;
 pub(super) use link::{Job, Queued, SessionAnswers, SessionLink};
 pub(super) use run::{Cancels, OnServer, warn_if_still_running};
 
-const TUNNEL_NOT_STARTED: &str = "its tunnel did not start";
-const TUNNEL_DIED: &str = "its tunnel died";
-
 /// What woke the session task.
 pub(super) enum Woken {
     Queued(Option<Job>),
-    Closed(String),
+    Closed(Lost),
     TunnelEnded(Died),
 }
 
@@ -78,11 +76,11 @@ pub(super) struct Mailbox {
 }
 
 impl Mailbox {
-    /// Fails every statement queued with `error`, so a later open never sends one.
-    fn fail_queued(&mut self, error: &str) {
+    /// Fails every statement queued with `failure`, so a later open never sends one.
+    fn fail_queued(&mut self, failure: &Failure) {
         while let Ok(job) = self.queue.try_recv() {
             if let Job::Run(queued) = job {
-                self.answers.say(Incoming::Failed { run: queued.run, error: error.to_owned(), position: None });
+                self.answers.say(Incoming::Failed { run: queued.run, failure: failure.clone() });
             }
         }
     }
@@ -135,21 +133,20 @@ impl SessionTask {
         }
     }
 
-    /// Opens a session, gives the schema reader its route and reports the outcome; returns the error when it did not
-    /// open.
-    async fn open(&mut self) -> Result<Session, String> {
+    /// Opens a session, gives the schema reader its route and reports the outcome; returns why when it did not open.
+    async fn open(&mut self) -> Result<Session, Failure> {
         let opened = self.connect().await;
         let route = opened.as_ref().ok().map(|_| self.tunnel.as_ref().map_or(Route::Direct, Tunnel::route));
         self.route.send_replace(route);
         match &opened {
             Ok(_) => self.send(Incoming::Opened),
-            Err(error) => self.send(Incoming::NotOpened(error.clone())),
+            Err(failure) => self.send(Incoming::NotOpened(failure.clone())),
         }
         opened
     }
 
     /// The open session, taken out for a run, or one opened for it.
-    async fn take_or_open(&mut self) -> Result<Session, String> {
+    async fn take_or_open(&mut self) -> Result<Session, Failure> {
         match self.session.take() {
             Some(session) => Ok(session),
             None => self.open().await,
@@ -158,7 +155,7 @@ impl SessionTask {
 
     /// Opens the session through the kept tunnel, or a restarted one, as `pgbg run` does.
     /// The tunnel stays for the next try when the login fails, and its state is sent each time it changes.
-    async fn connect(&mut self) -> Result<Session, String> {
+    async fn connect(&mut self) -> Result<Session, Failure> {
         let answers = &self.mailbox.answers;
         let on_tunnel = |step| answers.say(Incoming::Tunnel(tunnel_state(step)));
         match open_along(&self.connection, self.tunnel.take(), on_tunnel).await {
@@ -167,12 +164,13 @@ impl SessionTask {
                 Ok(session)
             }
             Err(NotOpened::Tunnel(err)) => {
-                self.send(Incoming::Tunnel(TunnelState::Died(format!("{err:#}"))));
-                Err(TUNNEL_NOT_STARTED.to_owned())
+                let how = format!("{err:#}");
+                self.send(Incoming::Tunnel(TunnelState::Died(how.clone())));
+                Err(Failure::TunnelNotStarted(how))
             }
             Err(NotOpened::Login { error, tunnel }) => {
                 self.tunnel = tunnel.map(|tunnel| *tunnel);
-                Err(format!("{error:#}"))
+                Err(Failure::Login(format!("{error:#}")))
             }
         }
     }
@@ -182,7 +180,7 @@ impl SessionTask {
     async fn open_or_fail_queued(&mut self) {
         match self.open().await {
             Ok(session) => self.session = Some(session),
-            Err(error) => self.mailbox.fail_queued(&error),
+            Err(failure) => self.mailbox.fail_queued(&failure),
         }
     }
 
@@ -191,15 +189,15 @@ impl SessionTask {
         let start = RunStart::of(&queued);
         let mut session = match self.take_or_open().await {
             Ok(session) => session,
-            Err(error) => {
-                self.send(Incoming::Failed { run: queued.run, error, position: None });
-                self.record(start, Duration::ZERO, Outcome::LinkError);
+            Err(failure) => {
+                self.record(start, Duration::ZERO, Outcome::from(&failure));
+                self.send(Incoming::Failed { run: queued.run, failure });
                 return Next::Wait;
             }
         };
         if self.mailbox.cancelled.was_cancelled(queued.run) {
             self.session = Some(session);
-            self.send(Incoming::Failed { run: queued.run, error: CANCELLED_BEFORE_SENT.to_owned(), position: None });
+            self.send(Incoming::Failed { run: queued.run, failure: Failure::CancelledBeforeSent });
             return Next::Wait;
         }
         let next = self.answer_and_page(&mut session, queued, start).await;
@@ -222,12 +220,12 @@ impl SessionTask {
     /// Keeps `session` for the next run, or closes it when it can run no more statements.
     /// Closing it already reports the loss, so a pending `Closed` wake is then dropped.
     fn keep_unless_lost(&mut self, session: Session, next: Next) -> Next {
-        let Some(why) = session.lost() else {
+        let Some(lost) = session.lost() else {
             self.session = Some(session);
             return next;
         };
         drop(session);
-        self.lose(why);
+        self.lose(lost);
         match next {
             Next::Act(Woken::Closed(_)) => Next::Wait,
             next => next,
@@ -239,7 +237,7 @@ impl SessionTask {
         self.tunnel = None;
         self.send(Incoming::Tunnel(TunnelState::Died(died.to_string())));
         if self.session.is_some() {
-            self.lose(TUNNEL_DIED.to_owned());
+            self.lose(Lost::TunnelDied);
         }
     }
 
@@ -254,10 +252,10 @@ impl SessionTask {
     }
 
     /// Closes the session, and tells the schema reader there is no route.
-    fn lose(&mut self, why: String) {
+    fn lose(&mut self, lost: Lost) {
         self.session = None;
         self.route.send_replace(None);
-        self.send(Incoming::Closed(why));
+        self.send(Incoming::Closed(lost));
     }
 
     /// Records the run that `start` began in the history, in the background: the next statement never waits on the disk.
@@ -281,7 +279,7 @@ fn tunnel_state(step: TunnelStep) -> TunnelState {
 }
 
 /// Why `session` ended, once it has; never resolves when there is no session.
-async fn closed(session: Option<&Session>) -> String {
+async fn closed(session: Option<&Session>) -> Lost {
     match session {
         Some(session) => session.closed().await,
         None => std::future::pending().await,
@@ -299,7 +297,6 @@ pub(super) async fn ended(tunnel: Option<&mut Tunnel>) -> Died {
 #[cfg(test)]
 mod tests {
     use super::super::Backend;
-    use super::run::STOPPED_WITH_ITS_SESSION;
     use super::*;
     use crate::connection::{ConnectionName, WritePolicy};
     use crate::db::guard;
@@ -356,9 +353,7 @@ mod tests {
         matches!(
             answer,
             Incoming::Result { run: of, .. }
-                | Incoming::Refused { run: of, .. }
                 | Incoming::Failed { run: of, .. }
-                | Incoming::TriedToWrite { run: of }
                 if *of == run
         )
     }
@@ -419,7 +414,7 @@ mod tests {
         let call = table_and_writing_function("pgbg_hidden_write").await;
         let (backend, mut answers) = started_on(fixtures::test_database("local", "writes = \"allowed\"\n"));
         backend.run(&shop(), RunId::FIRST, call, ParamInput::default(), None);
-        assert_eq!(next_answer(&mut answers).await, Incoming::TriedToWrite { run: RunId::FIRST });
+        assert_eq!(next_answer(&mut answers).await, Incoming::Failed { run: RunId::FIRST, failure: Failure::TriedToWrite });
     }
 
     #[tokio::test]
@@ -459,7 +454,7 @@ mod tests {
         let seen = answers_until(&mut answers, |answer| matches!(answer, Incoming::NotOpened(_))).await;
         assert_eq!(seen[0], Incoming::Tunnel(TunnelState::Starting));
         assert!(matches!(&seen[1], Incoming::Tunnel(TunnelState::Died(how)) if how.contains("no route")), "{seen:?}");
-        assert_eq!(seen[2], Incoming::NotOpened(TUNNEL_NOT_STARTED.to_owned()));
+        assert!(matches!(&seen[2], Incoming::NotOpened(Failure::TunnelNotStarted(how)) if how.contains("no route")), "{seen:?}");
     }
 
     #[tokio::test]
@@ -479,18 +474,18 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "starts a tunnel"]
-    async fn a_statement_sent_while_the_tunnel_fails_to_start_fails_with_it() {
+    async fn a_statement_sent_while_the_tunnel_fails_to_start_fails_with_how_it_ended() {
         let _ports = fixtures::TUNNEL_PORTS.lock().await;
         let shop = fixtures::connection(
             "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\ntls = \"off\"\n\
-             tunnel = { command = [\"sh\", \"-c\", \"exit 255\", \"{port}\"] }\n",
+             tunnel = { command = [\"sh\", \"-c\", \"echo 'bastion.example.com: no route' >&2; exit 255\", \"{port}\"] }\n",
         );
         let name = shop.name().clone();
         let (backend, mut answers) = started_on(shop);
         backend.run(&name, RunId::FIRST, Statement::new("SELECT 1"), ParamInput::default(), None);
         let seen = answers_until(&mut answers, |answer| is_answer_to(RunId::FIRST, answer)).await;
-        let failed = Incoming::Failed { run: RunId::FIRST, error: TUNNEL_NOT_STARTED.to_owned(), position: None };
-        assert_eq!(seen.last(), Some(&failed));
+        let is_how_it_ended = |failure: &Failure| matches!(failure, Failure::TunnelNotStarted(how) if how.contains("no route"));
+        assert!(matches!(seen.last(), Some(Incoming::Failed { failure, .. }) if is_how_it_ended(failure)), "{seen:?}");
     }
 
     #[tokio::test]
@@ -602,7 +597,7 @@ mod tests {
         let pid = backend_pid(&backend, &mut answers).await;
         on_a_side_session(&format!("SELECT pg_terminate_backend({pid}, 5000)")).await;
         let answer = next_answer(&mut answers).await;
-        assert!(matches!(&answer, Incoming::Closed(why) if why.contains("terminating connection")), "{answer:?}");
+        assert!(matches!(&answer, Incoming::Closed(lost) if lost.to_string().contains("terminating connection")), "{answer:?}");
     }
 
     #[tokio::test]
@@ -612,7 +607,7 @@ mod tests {
         backend.run(&shop(), RunId::FIRST, Statement::new(SLEEP), ParamInput::default(), None);
         backend.cancel(&shop(), RunId::FIRST);
         let answer = next_answer(&mut answers).await;
-        assert_eq!(answer, Incoming::Failed { run: RunId::FIRST, error: CANCELLED_BEFORE_SENT.to_owned(), position: None });
+        assert_eq!(answer, Incoming::Failed { run: RunId::FIRST, failure: Failure::CancelledBeforeSent });
     }
 
     #[tokio::test]
@@ -649,7 +644,7 @@ mod tests {
         backend.run(&shop(), RunId::FIRST, Statement::new(SLEEP), ParamInput::default(), None);
         until_sleeping().await;
         backend.stop().await;
-        let failed = Incoming::Failed { run: RunId::FIRST, error: STOPPED_WITH_ITS_SESSION.to_owned(), position: None };
+        let failed = Incoming::Failed { run: RunId::FIRST, failure: Failure::StoppedWithItsSession };
         assert_eq!(next_answer(&mut answers).await, failed);
     }
 

@@ -328,6 +328,7 @@ pub(super) mod tests {
     use super::*;
     use crate::connection::ConnectionName;
     use crate::db::model::{ResultSet, Statement};
+    use crate::failure::{Failure, Lost};
     use crate::fixtures;
     use crate::query::params::ParamInput;
     use crossterm::event::{KeyCode, KeyEvent};
@@ -491,12 +492,15 @@ pub(super) mod tests {
     fn a_refused_statement_says_it_was_not_sent() {
         let mut app = typed("DELETE FROM orders");
         enter(&mut app);
-        app.apply(to_shop(Incoming::Refused { run: RunId::FIRST, why: "`DELETE` is not a read".into() }));
+        app.apply(to_shop(Incoming::Failed { run: RunId::FIRST, failure: Failure::Refused("`DELETE` is not a read".into()) }));
         assert_eq!(app.sheet().run, Run::Failed("not sent: `DELETE` is not a read".into()));
     }
 
     fn failed_at(app: &mut App, position: usize) {
-        app.apply(to_shop(Incoming::Failed { run: RunId::FIRST, error: "ERROR: syntax error".into(), position: Some(position) }));
+        app.apply(to_shop(Incoming::Failed {
+            run: RunId::FIRST,
+            failure: Failure::Server { message: "ERROR: syntax error".into(), position: Some(position) },
+        }));
     }
 
     #[test]
@@ -556,7 +560,7 @@ pub(super) mod tests {
     fn a_session_that_cannot_open_leaves_the_statement_waiting_on_it_to_its_own_answer() {
         let mut app = typed("SELECT 1");
         enter(&mut app);
-        app.apply(to_shop(Incoming::NotOpened("connection refused".into())));
+        app.apply(to_shop(Incoming::NotOpened(Failure::Login("connection refused".into()))));
         assert_eq!(app.sheet().session, SessionState::Failed("connection refused".into()));
         assert_eq!(app.sheet().run, Run::Running { run: RunId::FIRST });
     }
@@ -564,7 +568,7 @@ pub(super) mod tests {
     #[test]
     fn a_session_that_cannot_open_leaves_an_idle_editor_idle() {
         let mut app = app();
-        app.apply(to_shop(Incoming::NotOpened("connection refused".into())));
+        app.apply(to_shop(Incoming::NotOpened(Failure::Login("connection refused".into()))));
         assert_eq!(app.sheet().run, Run::Idle);
     }
 
@@ -582,7 +586,7 @@ pub(super) mod tests {
         let other = Answer::Session {
             connection: "prod".parse().unwrap(),
             session: SessionId::FIRST,
-            incoming: Incoming::Refused { run: RunId::FIRST, why: "no".into() },
+            incoming: Incoming::Failed { run: RunId::FIRST, failure: Failure::Refused("no".into()) },
         };
         app.apply(other);
         assert_eq!(app.sheet().run, Run::Running { run: RunId::FIRST });
@@ -592,7 +596,7 @@ pub(super) mod tests {
     fn a_late_answer_to_an_earlier_run_is_dropped() {
         let mut app = with_result();
         enter(&mut app);
-        app.apply(to_shop(Incoming::Failed { run: RunId::FIRST, error: "ERROR: canceling statement".into(), position: None }));
+        app.apply(to_shop(Incoming::Failed { run: RunId::FIRST, failure: Failure::Link("ERROR: canceling statement".into()) }));
         assert_eq!(app.sheet().run, Run::Running { run: RunId::FIRST.next() });
     }
 
@@ -600,7 +604,7 @@ pub(super) mod tests {
     fn a_lost_session_says_so_in_the_status_line() {
         let mut app = app();
         app.apply(to_shop(Incoming::Opened));
-        app.apply(to_shop(Incoming::Closed("terminating connection".into())));
+        app.apply(to_shop(Incoming::Closed(Lost::LinkFailed("terminating connection".into()))));
         assert_eq!(app.sheet().session, SessionState::Failed(format!("{LOST_SESSION}: terminating connection")));
     }
 
