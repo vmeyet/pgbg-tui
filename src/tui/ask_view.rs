@@ -1,5 +1,5 @@
 //! `ctrl-g` as drawn: the instruction and the wait on the footer line, and the answer over the result pane as a diff of
-//! the statement it would replace, a write named first in the failure colour.
+//! the statement it would replace, each write named first in the failure colour.
 use super::app::{App, AskStep, Change, Overlay, Suggestion};
 use crate::act;
 use crate::render::printable;
@@ -37,13 +37,14 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
     let inside = block.inner(area);
     f.render_widget(Clear, area);
     f.render_widget(block, area);
-    f.render_widget(Paragraph::new(lines(app, suggestion)), inside);
+    f.render_widget(Paragraph::new(lines(app, suggestion, usize::from(inside.height))), inside);
 }
 
-/// The write the answer holds, then each line of the diff after its mark.
-fn lines(app: &App, suggestion: &Suggestion) -> Vec<Line<'static>> {
+/// Each write the answer holds, then the lines of the diff after their mark, cut to `height` lines with the last one
+/// saying how many more there are.
+fn lines(app: &App, suggestion: &Suggestion, height: usize) -> Vec<Line<'static>> {
     let theme = app.theme();
-    let write = suggestion.write.as_ref().map(|write| {
+    let writes = suggestion.writes.iter().map(|write| {
         let text = format!("writes: {write}");
         Line::styled(printable(&text).into_owned(), Style::default().fg(theme.danger).add_modifier(Modifier::BOLD))
     });
@@ -55,7 +56,20 @@ fn lines(app: &App, suggestion: &Suggestion) -> Vec<Line<'static>> {
         };
         Line::styled(format!("{mark} {}", printable(&line.text)), style)
     });
-    write.into_iter().chain(diff).collect()
+    let all: Vec<Line<'static>> = writes.chain(diff).collect();
+    cut_to(all, height, Style::default().fg(theme.muted))
+}
+
+/// `lines` when they fit in `height`, else the first ones and a last line, in `style`, saying how many are not shown.
+fn cut_to(mut lines: Vec<Line<'static>>, height: usize, style: Style) -> Vec<Line<'static>> {
+    if lines.len() <= height {
+        return lines;
+    }
+    let shown = height.saturating_sub(1);
+    let hidden = lines.len() - shown;
+    lines.truncate(shown);
+    lines.push(Line::styled(format!("… {hidden} more lines"), style));
+    lines
 }
 
 #[cfg(test)]
@@ -97,6 +111,12 @@ mod tests {
     fn an_answer_that_writes_says_so_in_the_failure_colour() {
         let app = answered("SELECT * FROM orders", "DELETE FROM orders WHERE id = 7");
         insta::assert_snapshot!("ask_write_styled", styled::runs(render(&app, 60, 14).backend().buffer()));
+    }
+
+    #[test]
+    fn an_answer_taller_than_its_pane_says_how_many_lines_are_not_shown() {
+        let answer = (1..=20).map(|n| format!("SELECT {n}")).collect::<Vec<_>>().join("\n");
+        insta::assert_snapshot!("ask_cut", render(&answered("SELECT 1", &answer), 60, 14).backend());
     }
 
     #[test]
