@@ -1,7 +1,7 @@
 //! What the app and the backend say to each other: the actions it asks for and the answers that come back.
 use crate::config::ConnectionChange;
 use crate::connection::{Connection, ConnectionName};
-use crate::db::model::{LocalPort, ResultSet, Statement};
+use crate::db::model::{LocalPort, Page, ResultSet, Statement};
 use crate::history::Entry;
 use crate::query::{Query, QueryPath};
 use crate::secret::{KeychainItem, Secret};
@@ -38,6 +38,8 @@ pub(in crate::tui) enum Action {
     Open(Connection),
     /// Run this statement on the connection's session.
     Run { connection: ConnectionName, run: RunId, statement: Statement },
+    /// Fetch the next page of this run's result, if its portal is still open.
+    NextPage { connection: ConnectionName, run: RunId },
     /// Cancel this run if the connection's session is still on it.
     Cancel { connection: ConnectionName, run: RunId },
     /// List every saved query.
@@ -157,6 +159,12 @@ pub(in crate::tui) enum Incoming {
         run: RunId,
         result: ResultSet,
         took: Duration,
+    },
+    /// The next page of the run's result; an empty one that is `Cut` says its portal closed before the last page.
+    #[cfg_attr(not(test), expect(dead_code, reason = "the session task serves the pages of a result in the next step"))]
+    Page {
+        run: RunId,
+        page: Page,
     },
     /// The guard kept the statement from the server, and why.
     Refused {

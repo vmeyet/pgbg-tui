@@ -26,12 +26,14 @@ pub(crate) struct ResultSet {
     columns: Vec<Column>,
     rows: Vec<Vec<Value>>,
     extent: Extent,
+    /// The pages its rows came in.
+    pages: usize,
 }
 
 impl ResultSet {
     /// The result of a statement returning `columns`, from its first page.
     pub(crate) fn new(columns: Vec<Column>, first: Page) -> Self {
-        Self { columns, rows: first.rows, extent: first.extent }
+        Self { columns, rows: first.rows, extent: first.extent, pages: 1 }
     }
 
     /// A result of every row the statement returned.
@@ -55,21 +57,30 @@ impl ResultSet {
         &self.rows
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "the TUI's session task pages through results in the next step"))]
     pub(crate) fn extent(&self) -> Extent {
         self.extent
     }
 
-    /// Whether the statement returned rows this result does not hold, and never will.
-    pub(crate) fn is_cut(&self) -> bool {
-        self.extent == Extent::Cut
+    /// Whether its rows came in more than one page.
+    pub(crate) fn is_paged(&self) -> bool {
+        self.pages > 1
     }
 
-    /// Adds the next page's rows; the result then holds as much as that page says.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the TUI's session task pages through results in the next step"))]
+    /// Whether it holds every row the statement returned: not cut, and no more waiting in the portal.
+    pub(crate) fn is_whole(&self) -> bool {
+        self.extent == Extent::All
+    }
+
+    /// Adds the next page's rows; the result then holds as much as that page says. Only a result waiting on more pages
+    /// takes one: a page pushed on a whole or cut result is dropped.
     pub(crate) fn push(&mut self, page: Page) {
+        debug_assert_eq!(self.extent, Extent::More, "a page pushed on a result that waits on none");
+        if self.extent != Extent::More {
+            return;
+        }
         self.rows.extend(page.rows);
         self.extent = page.extent;
+        self.pages += 1;
     }
 }
 
@@ -79,7 +90,7 @@ impl Serialize for ResultSet {
         let mut json = serializer.serialize_struct("ResultSet", 3)?;
         json.serialize_field("columns", &self.columns)?;
         json.serialize_field("rows", &self.rows)?;
-        json.serialize_field("is_cut", &(self.extent != Extent::All))?;
+        json.serialize_field("is_cut", &!self.is_whole())?;
         json.end()
     }
 }
@@ -110,6 +121,14 @@ mod tests {
         let mut result = first_page_of_more();
         result.push(Page { rows: ids(&[3]), extent: Extent::All });
         assert_eq!(result.extent(), Extent::All);
+    }
+
+    #[test]
+    fn a_result_with_a_page_pushed_is_paged() {
+        let mut result = first_page_of_more();
+        assert!(!result.is_paged());
+        result.push(Page { rows: ids(&[3]), extent: Extent::All });
+        assert!(result.is_paged());
     }
 
     #[test]

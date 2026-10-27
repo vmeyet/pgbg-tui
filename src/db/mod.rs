@@ -46,6 +46,20 @@ const PROBE_SAVEPOINT: &str = "SAVEPOINT pgbg_probe";
 const RELEASE_PROBE: &str = "RELEASE SAVEPOINT pgbg_probe";
 const ROLLBACK_FAILED: &str = "a rollback failed, so the server may still hold its transaction";
 
+/// How many rows one fetch from a portal asks for: never 0, which the protocol reads as every row.
+#[derive(Clone, Copy, Debug)]
+struct FetchSize(i32);
+
+impl FetchSize {
+    const fn new(rows: i32) -> Self {
+        assert!(rows > 0, "a fetch asks for at least one row");
+        Self(rows)
+    }
+}
+
+/// One row past the cap, so a result that has more says it is cut.
+const CAPPED_FETCH: FetchSize = FetchSize::new(ROW_CAP as i32 + 1);
+
 /// An open link to one connection.
 #[derive(Debug)]
 pub(crate) struct Session {
@@ -286,9 +300,9 @@ fn columns(statement: &Prepared) -> Vec<Column> {
     statement.columns().iter().map(decode::column).collect()
 }
 
-/// The next `count` rows of `portal`, decoded: all of them when the portal ran to its end, else more wait in it.
-async fn fetch_page(transaction: &Transaction<'_>, portal: &Portal, count: usize) -> Result<Page> {
-    let mut stream = pin!(transaction.query_portal_raw(portal, count as i32).await.map_err(server_error)?);
+/// The next `size` rows of `portal`, decoded: all of them when the portal ran to its end, else more wait in it.
+async fn fetch_page(transaction: &Transaction<'_>, portal: &Portal, size: FetchSize) -> Result<Page> {
+    let mut stream = pin!(transaction.query_portal_raw(portal, size.0).await.map_err(server_error)?);
     let rows = stream.as_mut().and_then(|row| future::ready(decode::row(&row))).try_collect().await.map_err(server_error)?;
     let has_ended = stream.rows_affected().is_some();
     Ok(Page { rows, extent: if has_ended { Extent::All } else { Extent::More } })
@@ -297,7 +311,7 @@ async fn fetch_page(transaction: &Transaction<'_>, portal: &Portal, count: usize
 /// The first `ROW_CAP` rows of `portal`; one more says the result is cut, and the server sends no row past it, so
 /// ending the transaction does not wait on them.
 async fn fetch_capped(transaction: &Transaction<'_>, portal: &Portal) -> Result<Page> {
-    let Page { rows, .. } = fetch_page(transaction, portal, ROW_CAP + 1).await?;
+    let Page { rows, .. } = fetch_page(transaction, portal, CAPPED_FETCH).await?;
     Ok(capped(rows))
 }
 
@@ -445,21 +459,21 @@ mod tests {
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_result_past_the_row_cap_keeps_its_first_rows_and_says_it_is_cut() {
         let result = run(WritePolicy::ReadOnly, &numbers_up_to(ROW_CAP + 1)).await.unwrap();
-        assert_eq!((result.rows().len(), result.is_cut()), (ROW_CAP, true));
+        assert_eq!((result.rows().len(), result.is_whole()), (ROW_CAP, false));
     }
 
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_result_of_exactly_the_row_cap_is_whole() {
         let result = run(WritePolicy::ReadOnly, &numbers_up_to(ROW_CAP)).await.unwrap();
-        assert_eq!((result.rows().len(), result.is_cut()), (ROW_CAP, false));
+        assert_eq!((result.rows().len(), result.is_whole()), (ROW_CAP, true));
     }
 
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_result_on_a_connection_that_allows_writes_is_cut_too() {
         let result = run(WritePolicy::Allowed, &numbers_up_to(ROW_CAP + 1)).await.unwrap();
-        assert_eq!((result.rows().len(), result.is_cut()), (ROW_CAP, true));
+        assert_eq!((result.rows().len(), result.is_whole()), (ROW_CAP, false));
     }
 
     async fn run_on(session: &mut Session, sql: &str) -> ResultSet {

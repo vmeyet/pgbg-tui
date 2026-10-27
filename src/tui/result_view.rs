@@ -3,6 +3,7 @@ use super::app::{App, Focus, Room, Run, View};
 use super::chart_view;
 use super::grid_view::{self, GridView};
 use super::theme;
+use crate::db::model::{Extent, ResultSet};
 use crate::render;
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -43,9 +44,19 @@ fn printable_lines(text: &str) -> Text<'static> {
 fn title(run: &Run) -> String {
     match run {
         Run::Done { result, took, view, .. } => {
-            format!("Result ─ {} · {} ms ─ {}", render::row_count(result), took.as_millis(), view_switch(view))
+            format!("Result ─ {} · {} ms ─ {}", row_count(result), took.as_millis(), view_switch(view))
         }
         _ => "Result".to_owned(),
+    }
+}
+
+/// `1 500 rows · more…` while more pages wait in the portal, `all 1 732 rows` once paged to the end.
+fn row_count(result: &ResultSet) -> String {
+    let count = render::grouped(result.rows().len());
+    match result.extent() {
+        Extent::More => format!("{count} rows · more…"),
+        Extent::All if result.is_paged() => format!("all {count} rows"),
+        Extent::All | Extent::Cut => render::row_count(result),
     }
 }
 
@@ -61,6 +72,37 @@ const fn view_switch(view: &View) -> &'static str {
 mod tests {
     use super::*;
     use crate::chart::ChartError;
+    use crate::db::model::{Page, Value};
+
+    fn page(count: usize, extent: Extent) -> Page {
+        Page { rows: vec![vec![Value::Int(7)]; count], extent }
+    }
+
+    #[test]
+    fn a_result_waiting_on_more_pages_says_so() {
+        let mut result = ResultSet::new(vec![], page(500, Extent::More));
+        result.push(page(1000, Extent::More));
+        assert_eq!(row_count(&result), "1 500 rows · more…");
+    }
+
+    #[test]
+    fn a_result_paged_to_its_end_says_it_has_all_its_rows() {
+        let mut result = ResultSet::new(vec![], page(500, Extent::More));
+        result.push(page(1232, Extent::All));
+        assert_eq!(row_count(&result), "all 1 732 rows");
+    }
+
+    #[test]
+    fn a_result_of_one_page_counts_its_rows() {
+        assert_eq!(row_count(&ResultSet::new(vec![], page(12, Extent::All))), "12 rows");
+    }
+
+    #[test]
+    fn a_result_whose_portal_closed_early_says_its_rows_are_the_first_ones() {
+        let mut result = ResultSet::new(vec![], page(500, Extent::More));
+        result.push(page(0, Extent::Cut));
+        assert_eq!(row_count(&result), "first 500 rows");
+    }
 
     #[test]
     fn the_title_brackets_the_view_shown() {

@@ -1,12 +1,12 @@
 //! A result shown a page at a time: its portal stays open between pages, in its `BEGIN READ ONLY` transaction.
 use super::guard::{Admitted, Mode};
 use super::model::{Column, Extent, Page, ResultSet};
-use super::{Marks, Session, columns, fetch_page, roll_back, server_error};
+use super::{FetchSize, Marks, Session, columns, fetch_page, roll_back, server_error};
 use anyhow::Result;
 use tokio_postgres::{Portal, Transaction};
 
 /// The rows of one page: the grid asks for the next page as it nears the end of the rows it has.
-const PAGE_ROWS: usize = 500;
+const PAGE_ROWS: FetchSize = FetchSize::new(500);
 
 /// A statement's first page, and its portal when more rows wait in it.
 pub(crate) struct Started<'s> {
@@ -121,7 +121,7 @@ mod tests {
     async fn a_read_only_result_starts_with_its_first_page_and_keeps_its_portal_open() {
         let mut session = session("").await;
         let Started { result, rest } = session.start(&read_only(&numbers_up_to(1200))).await.unwrap();
-        assert_eq!((result.rows().len(), result.extent()), (PAGE_ROWS, Extent::More));
+        assert_eq!((result.rows().len(), result.extent()), (PAGE_ROWS.0 as usize, Extent::More));
         assert!(rest.is_some());
     }
 

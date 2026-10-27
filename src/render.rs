@@ -14,13 +14,21 @@ pub(crate) fn table(rows: &[Vec<String>]) -> String {
     rows.iter().map(|row| line(row, &widths)).collect()
 }
 
-/// `1 row`, `12 rows`, or `first 10000 rows` when the result is cut.
+/// `1 row`, `12 rows`, or `first 10000 rows` when the result does not hold every row.
 pub(crate) fn row_count(result: &ResultSet) -> String {
     let count = match result.rows().len() {
         1 => "1 row".to_owned(),
         count => format!("{count} rows"),
     };
-    if result.is_cut() { format!("first {count}") } else { count }
+    if result.is_whole() { count } else { format!("first {count}") }
+}
+
+/// `count` with its thousands apart: `1 732`, `12 000`.
+pub(crate) fn grouped(count: usize) -> String {
+    let digits = count.to_string();
+    let first = digits.len() % 3;
+    let groups = std::iter::once(&digits[..first]).chain((first..digits.len()).step_by(3).map(|at| &digits[at..at + 3]));
+    groups.filter(|group| !group.is_empty()).collect::<Vec<_>>().join(" ")
 }
 
 /// The first `chars` characters `value` prints, control characters escaped.
@@ -88,6 +96,14 @@ mod tests {
     #[test]
     fn a_cut_result_says_its_rows_are_the_first_ones() {
         assert_eq!(row_count(&numbers(10, Extent::Cut)), "first 10 rows");
+    }
+
+    #[test]
+    fn a_count_shows_its_thousands_apart() {
+        assert_eq!(
+            [grouped(7), grouped(500), grouped(1732), grouped(120_000), grouped(1_000_000)],
+            ["7", "500", "1 732", "120 000", "1 000 000"]
+        );
     }
 
     #[test]

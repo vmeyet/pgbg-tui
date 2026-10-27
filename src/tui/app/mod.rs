@@ -238,14 +238,14 @@ impl App {
             Act::Quit => return self.quit(),
             Act::Down if self.focus == Focus::Queries => self.step_sidebar(1),
             Act::Up if self.focus == Focus::Queries => self.step_sidebar(-1),
-            Act::Down => self.grid_step(Move::Down),
-            Act::Up => self.grid_step(Move::Up),
-            Act::PageDown => self.grid_step(Move::PageDown),
-            Act::PageUp => self.grid_step(Move::PageUp),
-            Act::Top => self.grid_step(Move::First),
-            Act::Bottom => self.grid_step(Move::Last),
-            Act::Left => self.grid_step(Move::Left),
-            Act::Right => self.grid_step(Move::Right),
+            Act::Down => return self.grid_step(Move::Down),
+            Act::Up => return self.grid_step(Move::Up),
+            Act::PageDown => return self.grid_step(Move::PageDown),
+            Act::PageUp => return self.grid_step(Move::PageUp),
+            Act::Top => return self.grid_step(Move::First),
+            Act::Bottom => return self.grid_step(Move::Last),
+            Act::Left => return self.grid_step(Move::Left),
+            Act::Right => return self.grid_step(Move::Right),
             Act::Find => return self.find(),
             Act::Connections => self.open_picker(),
             Act::Chart => self.sheet_mut().switch_view(),
@@ -288,11 +288,9 @@ impl App {
         }
     }
 
-    fn grid_step(&mut self, step: Move) {
+    fn grid_step(&mut self, step: Move) -> Vec<Action> {
         let room = self.fit.grid;
-        if let Run::Done { grid, result, .. } = &mut self.sheet_mut().run {
-            grid.step(step, result, room);
-        }
+        self.sheet_mut().step_grid(step, room)
     }
 
     /// A new id for a change to the config, so its answer reaches only what asked for it.
@@ -442,7 +440,14 @@ pub(super) mod tests {
         app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result: orders(), took: Duration::from_millis(38) }));
         assert_eq!(
             app.sheet().run,
-            Run::Done { grid: Box::new(Grid::new(&orders())), result: orders(), took: Duration::from_millis(38), view: View::Grid }
+            Run::Done {
+                run: RunId::FIRST,
+                grid: Box::new(Grid::new(&orders())),
+                result: orders(),
+                took: Duration::from_millis(38),
+                view: View::Grid,
+                is_page_asked: false
+            }
         );
     }
 
