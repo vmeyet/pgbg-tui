@@ -1,7 +1,6 @@
 //! The statement as a prompt shows it: each string and number literal a numbered marker, its comments gone.
-use crate::db::lex::{self, Placed, Token};
+use crate::db::lex::{self, Token};
 use std::fmt;
-use std::ops::Range;
 
 /// The literals a masked statement left out, marker `n` at place `n - 1`.
 pub(super) struct Literals(Vec<Literal>);
@@ -40,19 +39,16 @@ pub(super) fn masked(sql: &str) -> Masked {
     let mut literals = vec![];
     let mut end = 0;
     for placed in lex::tokens(sql) {
-        if placed.range.start < end {
-            continue;
-        }
         text.push_str(without_comments(&sql[end..placed.range.start]));
-        let (range, kind) = literal_at(sql, &placed);
-        end = range.end;
-        match kind {
+        let token = &sql[placed.range.clone()];
+        match literal_kind(token, &placed.token) {
             Some(kind) => {
-                literals.push(Literal { kind, text: sql[range].to_owned() });
+                literals.push(Literal { kind, text: token.to_owned() });
                 text.push_str(&kind.marker(literals.len()));
             }
-            None => text.push_str(&sql[range]),
+            None => text.push_str(token),
         }
+        end = placed.range.end;
     }
     Masked { text: text.trim_matches(lex::is_blank).to_owned(), literals: Literals(literals) }
 }
@@ -66,31 +62,15 @@ fn without_comments(gap: &str) -> &str {
     }
 }
 
-/// The bytes of the token `placed` and of the number it opens, and the kind of literal they are, if any.
-fn literal_at(sql: &str, placed: &Placed) -> (Range<usize>, Option<LiteralKind>) {
-    let text = &sql[placed.range.clone()];
-    let is_escape_string = placed.token == Token::Word && text.starts_with(['E', 'e']) && text[1..].starts_with('\'');
-    let is_string = placed.token == Token::Other && (text.starts_with('\'') || (text.starts_with('$') && text.len() > 1));
-    let after = &sql[placed.range.start..];
-    let opens_number = placed.token == Token::Other && (after.starts_with(|c: char| c.is_ascii_digit()) || is_fraction(after));
-    match () {
-        () if is_escape_string || is_string => (placed.range.clone(), Some(LiteralKind::String)),
-        () if opens_number => (placed.range.start..placed.range.start + number_len(after), Some(LiteralKind::Number)),
-        () => (placed.range.clone(), None),
+/// The kind of literal the token `text` of kind `token` is, if it is one.
+fn literal_kind(text: &str, token: &Token) -> Option<LiteralKind> {
+    let is_escape_string = *token == Token::Word && text.starts_with(['E', 'e']) && text[1..].starts_with('\'');
+    let is_string = *token == Token::Other && (text.starts_with('\'') || (text.starts_with('$') && text.len() > 1));
+    match token {
+        Token::Number => Some(LiteralKind::Number),
+        _ if is_escape_string || is_string => Some(LiteralKind::String),
+        _ => None,
     }
-}
-
-fn is_fraction(text: &str) -> bool {
-    text.strip_prefix('.').is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
-}
-
-/// The bytes of the number that opens `text`: `42`, `1.5`, `.5`, `1e-3`, `0x1F`, `1_000`; the lexer reads a digit as a
-/// token alone, so the number is read here from its first one.
-fn number_len(text: &str) -> usize {
-    let is_hex = text.starts_with("0x") || text.starts_with("0X");
-    let is_exponent_sign = |at: usize, c: char| matches!(c, '+' | '-') && text[..at].ends_with(['e', 'E']) && !is_hex;
-    let is_part = |at: usize, c: char| c.is_ascii_alphanumeric() || c == '_' || c == '.' || is_exponent_sign(at, c);
-    text.char_indices().find(|&(at, c)| !is_part(at, c)).map_or(text.len(), |(at, _)| at)
 }
 
 impl LiteralKind {
@@ -208,6 +188,11 @@ mod tests {
     #[test]
     fn comments_are_stripped_nested_ones_whole() {
         assert_eq!(text("-- nina\nSELECT /* a /* 'b' */ c */ 1 -- 2\nFROM orders /* open"), "SELECT <number 1>\nFROM orders");
+    }
+
+    #[test]
+    fn what_follows_a_number_stays() {
+        assert_eq!(text("SELECT 1::int, 1.2.3"), "SELECT <number 1>::int, <number 2>.<number 3>");
     }
 
     #[test]

@@ -23,6 +23,8 @@ pub(crate) enum Token {
     Unreadable,
     /// `$1`, `$2`: a parameter the statement numbers itself.
     Numbered(u32),
+    /// A number as PostgreSQL reads one: `42`, `1.5`, `.5`, `1e-3`, `0x1F`, `1_000`.
+    Number,
     Other,
 }
 
@@ -132,6 +134,8 @@ fn lexemes(sql: &str) -> Vec<Lexeme> {
             c if is_blank(c) => (Kind::Blank, Some(after)),
             ';' => (Kind::Token(Token::End), Some(after)),
             c if is_word_start(c) => word(rest),
+            c if c.is_ascii_digit() => (Kind::Token(Token::Number), Some(after_number(rest))),
+            '.' if opens_fraction(&sql[..at], after) => (Kind::Token(Token::Number), Some(after_number(rest))),
             '\'' | '"' => (Kind::Token(Token::Other), after_quoted(after, c)),
             '$' => dollar(rest),
             '{' if after.starts_with('{') => param(sql, at),
@@ -196,6 +200,29 @@ pub(crate) fn is_param_name(name: &str) -> bool {
     let mut chars = name.chars();
     let starts_well = chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
     starts_well && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Whether a `.` after `before` and before `after` opens a number such as `.5`, rather than a dot between two names.
+fn opens_fraction(before: &str, after: &str) -> bool {
+    after.starts_with(|c: char| c.is_ascii_digit()) && !before.ends_with(|c: char| is_word_char(c) || c == '"' || c == '.')
+}
+
+/// The text after the number at the start of `rest`; what follows it, `::int` or a second `.`, is left to the next token.
+fn after_number(rest: &str) -> &str {
+    let radix_digits = ["0x", "0X", "0o", "0O", "0b", "0B"]
+        .into_iter()
+        .find_map(|prefix| rest.strip_prefix(prefix).filter(|digits| digits.starts_with(|c: char| c.is_ascii_hexdigit())));
+    if let Some(digits) = radix_digits {
+        return digits.trim_start_matches(|c: char| c.is_ascii_hexdigit() || c == '_');
+    }
+    let whole = after_digits(rest);
+    let fraction = whole.strip_prefix('.').filter(|fraction| !fraction.starts_with('.')).map_or(whole, after_digits);
+    let exponent = fraction.strip_prefix(['e', 'E']).map(|exponent| exponent.strip_prefix(['+', '-']).unwrap_or(exponent));
+    exponent.filter(|digits| digits.starts_with(|c: char| c.is_ascii_digit())).map_or(fraction, after_digits)
+}
+
+fn after_digits(text: &str) -> &str {
+    text.trim_start_matches(|c: char| c.is_ascii_digit() || c == '_')
 }
 
 fn after_block_comment(body: &str) -> Option<&str> {
@@ -394,6 +421,56 @@ mod tests {
         assert_eq!(span("SELECT or|"), Span::Code);
         assert_eq!(span("SELECT $1|"), Span::Code);
         assert_eq!(span("SELECT |"), Span::Code);
+    }
+
+    fn numbers(sql: &str) -> Vec<&str> {
+        tokens(sql).into_iter().filter(|placed| placed.token == Token::Number).map(|placed| &sql[placed.range]).collect()
+    }
+
+    #[test]
+    fn an_integer_is_one_number() {
+        assert_eq!(numbers("SELECT 42"), ["42"]);
+    }
+
+    #[test]
+    fn a_decimal_is_one_number() {
+        assert_eq!(numbers("SELECT 1.5, 1."), ["1.5", "1."]);
+    }
+
+    #[test]
+    fn a_fraction_without_its_integer_part_is_one_number() {
+        assert_eq!(numbers("SELECT .5"), [".5"]);
+    }
+
+    #[test]
+    fn an_exponent_belongs_to_its_number() {
+        assert_eq!(numbers("SELECT 1e-3, 2E+4, 2.5e3"), ["1e-3", "2E+4", "2.5e3"]);
+    }
+
+    #[test]
+    fn a_hexadecimal_octal_or_binary_integer_is_one_number() {
+        assert_eq!(numbers("SELECT 0x1F, 0o17, 0b101"), ["0x1F", "0o17", "0b101"]);
+    }
+
+    #[test]
+    fn underscores_between_digits_belong_to_the_number() {
+        assert_eq!(numbers("SELECT 1_000"), ["1_000"]);
+    }
+
+    #[test]
+    fn what_follows_a_number_is_a_token_of_its_own() {
+        assert_eq!(numbers("SELECT 1::int, 5e, 1..10"), ["1", "5", "1", "10"]);
+        assert_eq!(words("SELECT 1::int, 5e"), ["SELECT", "int", "e"]);
+    }
+
+    #[test]
+    fn a_dot_between_names_or_after_a_number_opens_no_number() {
+        assert_eq!(numbers("SELECT t.5, \"t\".5, 1.2.3"), ["5", "5", "1.2", "3"]);
+    }
+
+    #[test]
+    fn digits_inside_a_word_or_a_numbered_parameter_are_no_number() {
+        assert_eq!(numbers("SELECT col1, $1"), Vec::<&str>::new());
     }
 
     #[test]
