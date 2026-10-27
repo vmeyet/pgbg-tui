@@ -1,6 +1,7 @@
 //! The `ctrl-r` search over the screen: a vtui palette over the statements run on the connection, newest first.
 use super::app::{App, Overlay};
-use crate::act::{self, Pane};
+use super::palette_footer;
+use crate::act::Pane;
 use crate::history::Entry;
 use ratatui::Frame;
 use ratatui::style::Style;
@@ -32,8 +33,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) {
     let details: Vec<String> = in_view.iter().map(detail).collect();
     let picks: Vec<Pick<'_>> = labels.iter().zip(&details).map(|(label, detail)| pick(app, label, detail)).collect();
     let selected = recall.search.palette.selected - recall.search.first_in_view(MAX_SHOWN);
-    let hints: Vec<String> = act::footer(Pane::Finder).map(|hint| format!("{} {}", hint.keys, hint.does)).collect();
-    let footer = format!("  {}", hints.join(" · "));
+    let footer = palette_footer::text(Pane::Finder, f.area());
     let title = format!("History of {}", recall.connection);
     let popup = Popup { title: &title, prompt: view::prompt(theme, &recall.search.palette, "", |_| vec![]), footer: &footer };
     view::draw(f, theme, f.area(), popup, |room| {

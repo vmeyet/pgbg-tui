@@ -377,6 +377,14 @@ mod tests {
     }
 
     #[test]
+    fn the_table_finder_footer_at_sixty_columns_drops_whole_hints_and_keeps_esc() {
+        let mut app = app();
+        app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+        let screen = format!("{}", render(&app, 60, 16).backend());
+        assert!(screen.contains("   ⏎ opens · ^r preview · esc closes  │"), "{screen}");
+    }
+
+    #[test]
     fn a_cut_schema_says_so_in_the_status_line() {
         let screen = format!("{:?}", render(&on_the_schema_tab(true), 100, 10).backend());
         assert!(screen.contains("first 20 000 tables · connected"), "{screen}");
