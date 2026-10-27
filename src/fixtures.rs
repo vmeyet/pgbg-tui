@@ -63,6 +63,15 @@ pub(crate) fn leaving_a_sleep(pid_file: &Path) -> Vec<String> {
 
 /// Drops `work` once the command it runs wrote its `sleep`'s pid to `pid_file`, then says whether that `sleep` went too.
 pub(crate) async fn sleep_goes_when_dropped<T>(work: impl Future<Output = T>, pid_file: &Path) -> bool {
+    let pid = tokio::select! {
+        _ = work => panic!("the command ended on its own"),
+        pid = written_pid(pid_file) => pid,
+    };
+    is_gone(pid).await
+}
+
+/// The pid a command wrote to `pid_file`, once it did.
+pub(crate) async fn written_pid(pid_file: &Path) -> Pid {
     let written = async {
         loop {
             if let Some(pid) = std::fs::read_to_string(pid_file).ok().and_then(|pid| pid.trim().parse().ok()).and_then(Pid::from_raw) {
@@ -71,10 +80,11 @@ pub(crate) async fn sleep_goes_when_dropped<T>(work: impl Future<Output = T>, pi
             tokio::time::sleep(PROCESS_POLL).await;
         }
     };
-    let pid = tokio::select! {
-        _ = work => panic!("the command ended on its own"),
-        pid = tokio::time::timeout(PROCESS_WAIT, written) => pid.unwrap(),
-    };
+    tokio::time::timeout(PROCESS_WAIT, written).await.unwrap()
+}
+
+/// Whether the process `pid` is gone within `PROCESS_WAIT`.
+pub(crate) async fn is_gone(pid: Pid) -> bool {
     let gone = async {
         while test_kill_process(pid).is_ok() {
             tokio::time::sleep(PROCESS_POLL).await;
