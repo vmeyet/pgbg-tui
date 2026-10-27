@@ -1,12 +1,11 @@
 //! A result's portal held open across jobs: the session task serves its pages here until the portal closes.
-use super::{Cancels, Job, OnServer, Woken, ended, send, warn_if_still_running};
-use crate::connection::ConnectionName;
+use super::session::{Cancels, Job, OnServer, SessionAnswers, Woken, ended, warn_if_still_running};
 use crate::db::model::{CancelToken, Extent, Page};
 use crate::db::{Fetched, Pages};
-use crate::tui::app::{Answer, Incoming, RunId, SessionId};
+use crate::tui::app::{Incoming, RunId};
 use crate::tunnel::{Died, Tunnel};
 use std::time::Duration;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{Instant, sleep_until};
 
 /// How long a portal waits for the grid to ask for its next page before it is closed: its transaction holds a snapshot,
@@ -22,9 +21,7 @@ pub(super) struct Paging<'a, 's> {
     pub(super) cancelled: &'a mut Cancels,
     pub(super) on_server: &'a OnServer,
     pub(super) tunnel: Option<&'a mut Tunnel>,
-    pub(super) connection: &'a ConnectionName,
-    pub(super) session: SessionId,
-    pub(super) answers: &'a UnboundedSender<Answer>,
+    pub(super) answers: &'a SessionAnswers,
     pub(super) idle_limit: Duration,
 }
 
@@ -51,9 +48,7 @@ enum Fetch<'s> {
 
 /// Where the pages of one run go.
 struct Outbox<'a> {
-    connection: &'a ConnectionName,
-    session: SessionId,
-    answers: &'a UnboundedSender<Answer>,
+    answers: &'a SessionAnswers,
     run: RunId,
 }
 
@@ -68,7 +63,7 @@ impl Outbox<'_> {
     }
 
     fn say(&self, incoming: Incoming) {
-        send(self.answers, Answer::Session { connection: self.connection.clone(), session: self.session, incoming });
+        self.answers.say(incoming);
     }
 
     /// Says the portal closed before its last page, so the result is cut.
@@ -86,8 +81,8 @@ fn idle_limit_before_the_server(idle_limit: Duration, on_server: Duration) -> Du
 /// limit, the session closing or its link or tunnel ending; a close before the last page sends an empty `Cut` page.
 /// Returns what woke the task that the session task still has to act on.
 pub(super) async fn serve_pages(paging: Paging<'_, '_>) -> Option<Woken> {
-    let Paging { mut pages, run, token, queue, cancelled, on_server, mut tunnel, connection, session, answers, idle_limit } = paging;
-    let outbox = Outbox { connection, session, answers, run };
+    let Paging { mut pages, run, token, queue, cancelled, on_server, mut tunnel, answers, idle_limit } = paging;
+    let outbox = Outbox { answers, run };
     let idle_limit = idle_limit_before_the_server(idle_limit, pages.idle_limit_on_server());
     let mut deadline = Instant::now() + idle_limit;
     loop {
@@ -184,11 +179,13 @@ async fn close(pages: Pages<'_>) {
 mod tests {
     use super::super::Backend;
     use super::*;
+    use crate::connection::ConnectionName;
     use crate::connection::WritePolicy;
     use crate::db::model::{Route, Statement, Value};
     use crate::db::{Session, guard};
     use crate::fixtures;
     use crate::query::Roots;
+    use crate::tui::app::{Answer, SessionId};
     use std::path::PathBuf;
     use tokio::sync::mpsc;
 

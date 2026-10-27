@@ -43,7 +43,7 @@ const RECOLOUR_DELAY: Duration = Duration::from_millis(40);
 static PASTE_OFF_ON_PANIC: Once = Once::new();
 
 /// Runs the TUI on `first` until the user quits, with `connections` to switch to and the `config` file they come from,
-/// giving the terminal back on the way out.
+/// giving the terminal back on the way out; a signal while its sessions stop drops them at once, as a command does.
 pub(crate) async fn run(connections: Vec<Connection>, first: Connection, config: PathBuf) -> Result<()> {
     let mut signals = Signals::listen()?;
     let theme = vtui::ground::ask().map_or_else(Theme::default, |ground| Theme::default().with_ground(ground));
@@ -59,8 +59,8 @@ pub(crate) async fn run(connections: Vec<Connection>, first: Connection, config:
     let outcome = event_loop(screens, &mut app, &mut backend, &mut incoming, &mut signals).await;
     give_pastes_back();
     screen.leave();
-    backend.stop().await;
-    outcome
+    let stopped = signals.or_stopped(backend.stop()).await;
+    outcome.and(stopped.map_err(Into::into))
 }
 
 /// Has the terminal send a paste as one event, so its line ends never reach the editor as `⏎`; a panic gives it back.

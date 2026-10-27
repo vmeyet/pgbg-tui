@@ -41,6 +41,26 @@ pub(crate) enum Act {
     CopyMarkdown,
 }
 
+impl Act {
+    /// Whether this act works on the grid's cursor, so it does nothing while the result pane shows a chart.
+    pub(crate) const fn is_grid(self) -> bool {
+        matches!(
+            self,
+            Self::Down
+                | Self::Up
+                | Self::PageDown
+                | Self::PageUp
+                | Self::Top
+                | Self::Bottom
+                | Self::Left
+                | Self::Right
+                | Self::Detail
+                | Self::CopyCell
+                | Self::CopyRow
+        )
+    }
+}
+
 #[cfg(test)]
 impl Act {
     /// Every action, in the order [`Act::after`] chains them.
@@ -339,6 +359,11 @@ mod tests {
     #[test]
     fn a_wide_footer_keeps_every_hint_in_order() {
         assert_eq!(footer_within(Pane::Editor, 500, hint_width), footer(Pane::Editor).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn copying_the_whole_result_works_on_a_chart_too() {
+        assert!(Act::CopyCell.is_grid() && !Act::CopyResult.is_grid());
     }
 
     #[test]
