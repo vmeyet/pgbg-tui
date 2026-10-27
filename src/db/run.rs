@@ -5,6 +5,7 @@ use super::model::{Column, Extent, InsideUserTransaction, Page, Params, ResultSe
 use super::{Isolation, Session, bind, decode, roll_back, server_error};
 use anyhow::{Context, Result};
 use futures_util::{StreamExt, TryStreamExt, future};
+use std::mem::ManuallyDrop;
 use std::pin::pin;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, IsolationLevel, Portal, RowStream, Statement as Prepared, Transaction};
@@ -79,18 +80,29 @@ impl Session {
         result
     }
 
-    /// A statement that returns rows goes through a portal in its own committed transaction, so the
-    /// server sends no row past the cap; one inside a transaction the user began, or one without rows, runs as is.
+    /// A statement that returns rows goes through a portal, so the server sends no row past the cap: in its own
+    /// committed transaction, or in the one the user began; one without rows runs as is.
     async fn run_writes_alone(&mut self, admitted: &Admitted) -> Result<ResultSet> {
         let statement = bind::prepare(&self.client, admitted).await?;
-        if statement.columns().is_empty() || self.is_in_user_transaction().await? {
+        if statement.columns().is_empty() {
             return fetch(&self.client, &statement, &admitted.params).await;
+        }
+        if self.is_in_user_transaction().await? {
+            return self.fetch_in_user_transaction(&statement, &admitted.params).await;
         }
         let transaction = self.client.transaction().await.map_err(server_error)?;
         let portal = bind_portal(&transaction, &statement, &admitted.params).await?;
         let first = fetch_capped(&transaction, &portal).await?;
         transaction.commit().await.map_err(server_error)?;
         Ok(ResultSet::new(columns(&statement), first))
+    }
+
+    /// The driver binds a portal only in a transaction handle; the `BEGIN` it sends for one inside the user's only
+    /// warns, and the handle is never dropped, since its drop would send `ROLLBACK`: the user's transaction stays theirs.
+    async fn fetch_in_user_transaction(&mut self, statement: &Prepared, params: &Params) -> Result<ResultSet> {
+        let users = ManuallyDrop::new(self.client.transaction().await.map_err(server_error)?);
+        let portal = bind_portal(&users, statement, params).await?;
+        Ok(ResultSet::new(columns(statement), fetch_capped(&users, &portal).await?))
     }
 
     /// Whether a `BEGIN` the user ran left a transaction open, asking the server only when the session is unsure.
@@ -267,6 +279,43 @@ mod tests {
         let state = format!("SELECT state FROM pg_stat_activity WHERE pid = {pid}");
         let watched = run(WritePolicy::ReadOnly, &state).await.unwrap();
         assert_eq!(watched.rows(), [[Value::Text("idle".into())]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_cut_result_inside_a_transaction_the_user_began_leaves_the_server_idle_in_it() {
+        let mut writer = session(WritePolicy::Allowed).await;
+        let pid = run_on(&mut writer, "SELECT pg_backend_pid()").await.rows()[0][0].to_string();
+        run_on(&mut writer, "BEGIN").await;
+        let result = run_on(&mut writer, &numbers_up_to(100_000_000)).await;
+        let state = format!("SELECT state FROM pg_stat_activity WHERE pid = {pid}");
+        let watched = run(WritePolicy::ReadOnly, &state).await.unwrap();
+        assert!(!result.is_whole());
+        assert_eq!(watched.rows(), [[Value::Text("idle in transaction".into())]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_write_that_returns_rows_inside_a_transaction_the_user_began_is_left_to_the_user() {
+        run(WritePolicy::Allowed, "DROP TABLE IF EXISTS orders_returned_undone").await.unwrap();
+        run(WritePolicy::Allowed, "CREATE TABLE orders_returned_undone (id int)").await.unwrap();
+        let mut writer = session(WritePolicy::Allowed).await;
+        run_on(&mut writer, "BEGIN").await;
+        assert_eq!(run_on(&mut writer, "INSERT INTO orders_returned_undone VALUES (41) RETURNING id").await.rows(), [[Value::Int(41)]]);
+        run_on(&mut writer, "ROLLBACK").await;
+        let seen = run(WritePolicy::ReadOnly, "SELECT count(*)::int4 FROM orders_returned_undone").await.unwrap();
+        assert_eq!(seen.rows(), [[Value::Int(0)]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_read_that_fails_inside_a_transaction_the_user_began_leaves_it_to_the_user() {
+        let mut writer = session(WritePolicy::Allowed).await;
+        run_on(&mut writer, "BEGIN").await;
+        let failed = writer.run(&guard::admit(Statement::new("SELECT 1 / 0"), Params::default(), WritePolicy::Allowed).unwrap()).await;
+        assert!(failed.is_err());
+        run_on(&mut writer, "ROLLBACK").await;
+        assert_eq!(writer.marks.user_transaction, UserTransaction::None);
     }
 
     #[tokio::test]

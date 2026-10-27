@@ -113,7 +113,7 @@ A performance step measures before and after, and the MR gives the numbers.
 - [x] Performance: one `pg_settings` query reads both timeouts when a session opens
 - [ ] Performance: the SQL is lexed once per edit and shared by the guard, the statement under the cursor and completion; a word compares without an upper-case `String`, and the guard reads `Placed` without a second `Vec`
 - [x] Performance: a result's cells cost less memory (`Box<str>` text, or rows stored by column), measured on 10 000 rows of 50 columns
-- [ ] Performance: a statement inside a transaction the user began reads its rows through a portal too, so the server sends nothing past the cap
+- [x] Performance: a statement inside a transaction the user began reads its rows through a portal too, so the server sends nothing past the cap
 
 ## 16. Asking a command for SQL
 
