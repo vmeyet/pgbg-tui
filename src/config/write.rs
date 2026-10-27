@@ -1,6 +1,6 @@
-//! Rewrites `config.toml` key by key, so the user's comments and order stay; the result must load
-//! as `Config::read` loads it before it replaces the file, so an edit may fix a config that does not load.
-//! The helpers below change the `toml_edit` document through `&mut`, the way its API works.
+//! Rewrites `config.toml` key by key, so the user's comments and order stay.
+//! Only the new text has to load, as `Config::read` loads it, before it replaces the file: so an edit can fix a config that does not load.
+//! The helpers below change the `toml_edit` document through `&mut`, since its API only edits in place.
 use super::parse;
 use crate::connection::{ConnectionName, StatementTimeout, Target, Tier, Tls, TunnelSpec, WritePolicy};
 use crate::secret::SecretSource;
@@ -11,8 +11,9 @@ use std::path::{Path, PathBuf};
 use toml_edit::ser::ValueSerializer;
 use toml_edit::{DocumentMut, InlineTable, Item, Table, TableLike, Value};
 
-/// The keys of a connection to set, each left as it is when `None`, each already checked on its own;
-/// the load that follows checks them together. It serializes as the keys it sets, in the config's spelling and order.
+/// The keys of a connection to set; a `None` key is left as it is.
+/// Each key is already checked on its own; the load that follows checks them together.
+/// It serializes as the keys it sets, in the config's spelling and order.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub(crate) struct ConnectionChange {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -151,7 +152,8 @@ fn read_kept(path: &Path) -> Result<String> {
     }
 }
 
-/// Through a temp file only its owner reads, on disk before a rename: the file is always the old one or the new one.
+/// Writes `text` to `path` through a temp file only its owner reads, synced to disk before a rename,
+/// so the file is always the old one or the new one.
 fn write_whole(path: &Path, text: &str) -> Result<()> {
     let dir = path.parent().context("the config path has no folder")?;
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
