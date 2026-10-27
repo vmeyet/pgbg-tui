@@ -17,7 +17,7 @@ pub(super) use protocol::{
 };
 pub(super) use queries::{Finder, Queries};
 pub(super) use save::Prompt;
-pub(super) use search::{ROWS_SHOWN, Search};
+pub(super) use search::Search;
 pub(super) use sheet::{Run, SessionState, Sheet, View};
 
 mod copy;

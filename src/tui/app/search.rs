@@ -6,11 +6,7 @@ use crate::history::Entry;
 use crate::query::Query;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use vtui::fuzzy;
-use vtui::palette::{MAX_SHOWN, Mode, Palette};
-
-/// The matches a popup lists at once: vtui sizes its popup for `MAX_SHOWN` without the blank line under the prompt,
-/// so that many would hide its footer.
-pub(in crate::tui) const ROWS_SHOWN: usize = MAX_SHOWN - 1;
+use vtui::palette::{Mode, Palette};
 
 /// The only mode of a search: what is typed is matched, never a command.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -80,9 +76,9 @@ impl<T: Searched> Search<T> {
         self.palette.move_by(0, self.shown.len());
     }
 
-    /// Types the printable characters of `text`, then ranks once.
+    /// Types `text` on the line as vtui cleans a paste, without the blank around it a copy often carries, then ranks once.
     pub(super) fn paste(&mut self, text: &str, all: &[T]) {
-        text.chars().filter(|c| !c.is_control()).for_each(|c| self.palette.type_char(c));
+        self.palette.type_str(text.trim());
         self.rank(all);
     }
 

@@ -4,22 +4,11 @@ use std::ops::Range;
 use std::sync::OnceLock;
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
+pub(crate) use vtui::theme::Token;
+
 pub(crate) use json::highlight_json_line;
 
 mod json;
-
-/// What a piece of SQL is, as far as colour goes; the theme gives every token a colour.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Token {
-    Keyword,
-    String,
-    Comment,
-    Number,
-    Type,
-    Function,
-    Constant,
-    Punctuation,
-}
 
 /// A coloured piece of one line: its bytes, counted from the line's start, and what it is.
 #[derive(Clone, Debug, PartialEq, Eq)]

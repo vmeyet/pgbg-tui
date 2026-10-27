@@ -124,7 +124,7 @@ fn token_runs(line: &str, spans: &[Painted], theme: &Theme) -> Vec<Run> {
             continue;
         }
         runs.push(Run { bytes: at..painted.bytes.start, style: Style::default() });
-        runs.push(Run { bytes: painted.bytes.clone(), style: Style::default().fg(theme::token(theme, painted.token)) });
+        runs.push(Run { bytes: painted.bytes.clone(), style: Style::default().fg(theme.syntax.colour(painted.token)) });
         at = painted.bytes.end;
     }
     runs.push(Run { bytes: at..line.len(), style: Style::default() });

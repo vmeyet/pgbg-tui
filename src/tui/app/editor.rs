@@ -1,13 +1,9 @@
 //! The SQL editor: its text, the editing keys and pastes that change it, and the syntax colours that follow it.
 use super::Sheet;
 use crate::query::Header;
-use crate::render;
 use crate::syntax::{self, Spans};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use vtui::field::Field;
-
-/// A tab is drawn as nothing by the terminal widgets, so a pasted one becomes spaces.
-const PASTED_TAB: &str = "    ";
 
 /// Whether an edit changed the text, or only moved the cursor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,25 +55,21 @@ impl Editor {
 
     /// Applies one editing key.
     pub(super) fn edit(&mut self, key: KeyEvent) -> Edited {
-        // A key either inserts or deletes, never both, so the length says whether the text changed.
-        let length_before = self.field.text().len();
-        apply(&mut self.field, key);
-        let edited = if self.field.text().len() == length_before { Edited::Cursor } else { Edited::Text };
-        self.has_stale_colours |= edited == Edited::Text;
-        edited
+        self.change(|field| apply(field, key))
     }
 
-    /// Inserts `text` at the cursor as typed, its line ends as `\n`, its tabs as spaces, without other control characters
-    /// or marks that reverse text.
+    /// Inserts `text` at the cursor as vtui cleans a paste: its line ends as `\n`, its tabs as spaces, without other
+    /// control characters or marks that reverse text.
     pub(super) fn paste(&mut self, text: &str) -> Edited {
-        let typed = text.replace("\r\n", "\n").replace('\r', "\n").replace('\t', PASTED_TAB);
-        let mut inserted = typed.chars().filter(|&c| c == '\n' || !render::is_unprintable(c)).peekable();
-        if inserted.peek().is_none() {
-            return Edited::Cursor;
-        }
-        inserted.for_each(|c| self.field.insert(c));
-        self.has_stale_colours = true;
-        Edited::Text
+        self.change(|field| field.paste(text))
+    }
+
+    fn change(&mut self, edit: impl FnOnce(&mut Field)) -> Edited {
+        let revision = self.field.revision();
+        edit(&mut self.field);
+        let edited = if self.field.revision() == revision { Edited::Cursor } else { Edited::Text };
+        self.has_stale_colours |= edited == Edited::Text;
+        edited
     }
 }
 
@@ -211,6 +203,14 @@ mod tests {
         editor.recolour();
         assert!(!editor.has_stale_colours());
         assert_eq!(editor.colours()[0].last(), Some(&Painted { bytes: 7..8, token: Token::Number }));
+    }
+
+    #[test]
+    fn a_paste_of_nothing_printable_leaves_the_colours_fresh() {
+        let mut editor = Editor::new("SELECT 1");
+        editor.recolour();
+        assert_eq!(editor.paste("\u{1b}\u{202e}"), Edited::Cursor);
+        assert!(!editor.has_stale_colours());
     }
 
     #[test]

@@ -1,10 +1,11 @@
 //! The `ctrl-p` finder: a vtui palette over every saved query, best match first.
-use super::app::{App, Overlay, ROWS_SHOWN};
+use super::app::{App, Overlay};
 use crate::act::{self, Pane};
 use crate::query::{Query, Source};
 use ratatui::Frame;
 use ratatui::style::Style;
 use ratatui::text::Line;
+use vtui::palette::MAX_SHOWN;
 use vtui::palette::view::{self, Pick, Popup};
 
 const NO_QUERY: &str = "  no saved query yet: add .sql files under .pgbg/queries/";
@@ -12,17 +13,17 @@ const NO_QUERY: &str = "  no saved query yet: add .sql files under .pgbg/queries
 /// A query as the finder lists it, `user` beside one of your own.
 fn pick<'a>(app: &App, query: &Query, label: &'a str) -> Pick<'a> {
     let detail = if query.source == Source::User { "user" } else { "" };
-    Pick { icon: "◆", colour: app.theme.accent, label, detail }
+    Pick { icon: "◆", colour: app.theme.accent, label, detail: view::faded(&app.theme, detail) }
 }
 
 /// The finder over the whole screen when it is open.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App) {
     let Some(Overlay::Finder(finder)) = &app.overlay else { return };
     let theme = &app.theme;
-    let in_view = finder.in_view(ROWS_SHOWN);
+    let in_view = finder.in_view(MAX_SHOWN);
     let labels: Vec<String> = in_view.iter().map(|query| query.path.to_string()).collect();
     let picks: Vec<Pick<'_>> = in_view.iter().zip(&labels).map(|(query, label)| pick(app, query, label)).collect();
-    let selected = finder.palette.selected - finder.first_in_view(ROWS_SHOWN);
+    let selected = finder.palette.selected - finder.first_in_view(MAX_SHOWN);
     let hints: Vec<String> = act::footer(Pane::Finder).map(|hint| format!("{} {}", hint.keys, hint.does)).collect();
     let footer = format!("  {}", hints.join(" · "));
     let popup = Popup { title: "Queries", prompt: view::prompt(theme, &finder.palette, "", |_| vec![]), footer: &footer };
