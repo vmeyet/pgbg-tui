@@ -1460,6 +1460,7 @@ dependencies = [
  "serde_ignored",
  "serde_json",
  "shell-words",
+ "strum",
  "tempfile",
  "tokio",
  "tokio-postgres",

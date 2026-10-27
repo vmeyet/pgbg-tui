@@ -5,6 +5,7 @@ use vtui::help::{Row as HelpRow, Section};
 
 /// One action; its row in [`ROWS`] says everything else about it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(strum::EnumIter))]
 pub(crate) enum Act {
     Run,
     NewLine,
@@ -71,56 +72,6 @@ impl Act {
                 | Self::SwitchFormats
         )
     }
-}
-
-#[cfg(test)]
-impl Act {
-    /// Every action, in the order the enum declares them.
-    const ALL: [Self; 43] = [
-        Self::Run,
-        Self::NewLine,
-        Self::Cancel,
-        Self::SwitchPane,
-        Self::Help,
-        Self::Connections,
-        Self::Quit,
-        Self::Down,
-        Self::Up,
-        Self::PageDown,
-        Self::PageUp,
-        Self::Top,
-        Self::Bottom,
-        Self::Left,
-        Self::Right,
-        Self::Find,
-        Self::Open,
-        Self::Close,
-        Self::Chart,
-        Self::StepFormat,
-        Self::SwitchFormats,
-        Self::Delete,
-        Self::CloseSession,
-        Self::Add,
-        Self::Edit,
-        Self::Save,
-        Self::EditOutside,
-        Self::History,
-        Self::Detail,
-        Self::CopyCell,
-        Self::CopyRow,
-        Self::CopyResult,
-        Self::CopyCsv,
-        Self::CopyJson,
-        Self::CopyMarkdown,
-        Self::SwitchTab,
-        Self::Filter,
-        Self::ReadAgain,
-        Self::TakeGhost,
-        Self::Complete,
-        Self::Preview,
-        Self::Insert,
-        Self::FindTable,
-    ];
 }
 
 /// Where an action's keys work.
@@ -413,6 +364,7 @@ fn help_rows(pane: Pane) -> Vec<HelpRow> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use strum::IntoEnumIterator;
 
     fn hint_width(hint: Hint) -> usize {
         hint.keys.chars().count() + hint.does.chars().count() + 2
@@ -442,66 +394,9 @@ mod tests {
         assert!(keys.contains(&"→".to_owned()) && keys.contains(&"^space".to_owned()), "{keys:?}");
     }
 
-    /// Names every action, so a new one does not build until it is named here, next to its place in `Act::ALL`.
-    const fn listed(act: Act) -> Act {
-        match act {
-            Act::Run
-            | Act::NewLine
-            | Act::Cancel
-            | Act::SwitchPane
-            | Act::Help
-            | Act::Connections
-            | Act::Quit
-            | Act::Down
-            | Act::Up
-            | Act::PageDown
-            | Act::PageUp
-            | Act::Top
-            | Act::Bottom
-            | Act::Left
-            | Act::Right
-            | Act::Find
-            | Act::Open
-            | Act::Close
-            | Act::Chart
-            | Act::StepFormat
-            | Act::SwitchFormats
-            | Act::Delete
-            | Act::CloseSession
-            | Act::Add
-            | Act::Edit
-            | Act::Save
-            | Act::EditOutside
-            | Act::History
-            | Act::Detail
-            | Act::CopyCell
-            | Act::CopyRow
-            | Act::CopyResult
-            | Act::CopyCsv
-            | Act::CopyJson
-            | Act::CopyMarkdown
-            | Act::SwitchTab
-            | Act::Filter
-            | Act::ReadAgain
-            | Act::TakeGhost
-            | Act::Complete
-            | Act::Preview
-            | Act::Insert
-            | Act::FindTable => act,
-        }
-    }
-
-    #[test]
-    fn every_action_is_listed_once_in_the_order_the_enum_declares_them() {
-        for (at, act) in Act::ALL.into_iter().enumerate() {
-            assert_eq!(listed(act) as usize, at, "{act:?}");
-        }
-        assert_eq!(Act::ALL.last(), Some(&Act::FindTable));
-    }
-
     #[test]
     fn every_action_has_a_key() {
-        for act in Act::ALL {
+        for act in Act::iter() {
             assert!(ROWS.iter().any(|row| row.act == act && !row.keys.is_empty()), "{act:?}");
         }
     }
