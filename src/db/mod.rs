@@ -23,7 +23,7 @@ mod pages;
 mod schema;
 mod server;
 
-pub(crate) use open::{Attempt, open_once};
+pub(crate) use open::{Attempt, NotOpened, Opened, TunnelStep, open_along, open_once};
 pub(crate) use pages::{Fetched, Pages, Started};
 
 const NO_PARAMETERS: [&str; 0] = [];

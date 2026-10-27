@@ -6,32 +6,71 @@ use crate::connection::ConnectionName;
 use crate::secret::{Keychain, KeychainItem};
 use anyhow::Result;
 use std::path::{Path, PathBuf};
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
-/// Where the config is, and the loop's channel for what changing it came to.
+/// The way to the task that changes the config one change at a time, so each answer comes in the order asked.
 #[derive(Debug)]
 pub(in crate::tui) struct ConfigFile {
-    pub(super) path: PathBuf,
-    pub(super) answers: UnboundedSender<Answer>,
+    changes: UnboundedSender<Change>,
+}
+
+/// One change of the config, waiting for the one before it.
+enum Change {
+    Remove { id: ConfigChangeId, name: ConnectionName },
+    Save(SaveConnection),
 }
 
 impl ConfigFile {
+    /// Starts the task that changes the config at `path`, and sends what each change came to on `answers`.
+    pub(super) fn start(path: PathBuf, answers: UnboundedSender<Answer>) -> Self {
+        let (changes, queue) = mpsc::unbounded_channel();
+        tokio::spawn(change_in_turn(path, answers, queue));
+        Self { changes }
+    }
+
     /// Removes the connection `name`, and first the keychain item no other connection names, as
-    /// `pgbg connection remove` does; on a blocking thread, since both are files and processes.
+    /// `pgbg connection remove` does.
     pub(super) fn remove(&self, id: ConfigChangeId, name: ConnectionName) {
-        let (path, answers) = (self.path.clone(), self.answers.clone());
-        tokio::task::spawn_blocking(move || send(&answers, id, changed(&path, |path| remove(path, &name))));
+        self.queue(Change::Remove { id, name });
     }
 
     /// Writes the connection as `pgbg connection add|edit` does, then the password typed to its keychain item as
     /// `pgbg password set` does, so a change the config refuses never touches the keychain; an edit that names a new
     /// item then deletes the old one no other connection names.
     pub(super) fn save(&self, save: SaveConnection) {
-        let (path, answers) = (self.path.clone(), self.answers.clone());
-        tokio::task::spawn_blocking(move || {
-            let id = save.id;
-            send(&answers, id, save_answer(&path, save, &Keychain::PGBG));
-        });
+        self.queue(Change::Save(save));
+    }
+
+    fn queue(&self, change: Change) {
+        if self.changes.send(change).is_err() {
+            tracing::warn!("the config task is gone: a change is dropped");
+        }
+    }
+}
+
+/// Makes each change on a blocking thread, since they are files and processes, the next one only once it answered.
+async fn change_in_turn(path: PathBuf, answers: UnboundedSender<Answer>, mut queue: UnboundedReceiver<Change>) {
+    while let Some(change) = queue.recv().await {
+        let id = change.id();
+        let path = path.clone();
+        let answer = tokio::task::spawn_blocking(move || change.made(&path)).await;
+        send(&answers, id, answer.unwrap_or_else(|err| ConfigAnswer::Failed { why: format!("{err}"), password: None }));
+    }
+}
+
+impl Change {
+    fn id(&self) -> ConfigChangeId {
+        match self {
+            Self::Remove { id, .. } => *id,
+            Self::Save(save) => save.id,
+        }
+    }
+
+    fn made(self, path: &Path) -> ConfigAnswer {
+        match self {
+            Self::Remove { name, .. } => changed(path, |path| remove(path, &name)),
+            Self::Save(save) => save_answer(path, save, &Keychain::PGBG),
+        }
     }
 }
 
@@ -107,6 +146,29 @@ mod tests {
         let answer = changed(&path, |path| remove(path, &"replica".parse().unwrap()));
         let ConfigAnswer::Changed(connections) = answer else { panic!("{answer:?}") };
         assert_eq!(connections.iter().map(|c| c.name().to_string()).collect::<Vec<_>>(), ["local"]);
+    }
+
+    #[tokio::test]
+    async fn changes_are_answered_in_the_order_they_were_asked() {
+        let (_dir, path) = config(SHOP);
+        let (sender, mut answers) = mpsc::unbounded_channel();
+        let file = ConfigFile::start(path, sender);
+        let change = config::ConnectionChange {
+            tier: Some(crate::connection::Tier::Local),
+            url: Some(crate::connection::Target::parse("postgres://nina@localhost/shop_copy").unwrap()),
+            ..Default::default()
+        };
+        let name: ConnectionName = "copy".parse().unwrap();
+        file.save(SaveConnection { id: ConfigChangeId::FIRST, name: name.clone(), saving: Saving::Add, change, password: None });
+        file.remove(ConfigChangeId::FIRST.next(), name);
+        let mut counts = vec![];
+        for _ in 0..2 {
+            let Some(Answer::Config { id, answer: ConfigAnswer::Changed(connections) }) = answers.recv().await else {
+                panic!("not changed")
+            };
+            counts.push((id, connections.len()));
+        }
+        assert_eq!(counts, [(ConfigChangeId::FIRST, 3), (ConfigChangeId::FIRST.next(), 2)]);
     }
 
     #[test]

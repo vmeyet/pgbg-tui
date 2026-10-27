@@ -1,8 +1,8 @@
 //! What the runner calls: a session for each connection opened, each served by a task that owns it, and the saved queries.
 use super::app::{Action, Answer, Incoming, RunId, TunnelState};
 use crate::connection::{Connection, ConnectionName, WritePolicy};
-use crate::db::model::{CancelToken, Route, ServerError, Statement};
-use crate::db::{Pages, Session, Started, guard};
+use crate::db::model::{CancelToken, ServerError, Statement};
+use crate::db::{NotOpened, Opened, Pages, Session, Started, TunnelStep, guard, open_along};
 use crate::history::{Entry, History, Outcome, Store};
 use crate::query::{Query, Roots};
 use crate::tunnel::{Died, Tunnel};
@@ -80,7 +80,7 @@ impl Backend {
     /// The backend with no session yet; saved queries are read under `roots`, the config is changed at `config`.
     pub(super) fn new(roots: Roots, config: PathBuf, answers: UnboundedSender<Answer>) -> Self {
         let queries = QueryFiles { roots, answers: answers.clone() };
-        let config = ConfigFile { path: config, answers: answers.clone() };
+        let config = ConfigFile::start(config, answers.clone());
         Self { sessions: BTreeMap::new(), answers, queries, config, history: None, idle_limit: PAGES_IDLE_LIMIT }
     }
 
@@ -328,9 +328,25 @@ impl SessionTask {
         }
     }
 
+    /// Opens the session along the tunnel kept, or one started again, as `pgbg run` does; the tunnel stays for the
+    /// next try when the login fails, and its state goes out as it changes.
     async fn connect(&mut self) -> Result<Session, String> {
-        let route = self.route().await.ok_or_else(|| TUNNEL_NOT_STARTED.to_owned())?;
-        Session::open(&self.connection, route).await.map_err(|err| format!("{err:#}"))
+        let (answers, name) = (&self.answers, self.connection.name());
+        let on_tunnel = |step| send(answers, Answer::Session { connection: name.clone(), incoming: Incoming::Tunnel(tunnel_state(step)) });
+        match open_along(&self.connection, self.tunnel.take(), on_tunnel).await {
+            Ok(Opened { session, tunnel }) => {
+                self.tunnel = tunnel;
+                Ok(session)
+            }
+            Err(NotOpened::Tunnel(err)) => {
+                self.send(Incoming::Tunnel(TunnelState::Died(format!("{err:#}"))));
+                Err(TUNNEL_NOT_STARTED.to_owned())
+            }
+            Err(NotOpened::Login { error, tunnel }) => {
+                self.tunnel = tunnel.map(|tunnel| *tunnel);
+                Err(format!("{error:#}"))
+            }
+        }
     }
 
     /// Opens the session; when it does not open, every statement sent meanwhile fails with it, so a later open never sends one.
@@ -390,30 +406,6 @@ impl SessionTask {
         woken.filter(|woken| !matches!(woken, Woken::Closed(_)))
     }
 
-    /// The way to the connection: direct, or through its tunnel, started again unless it still runs;
-    /// none when the tunnel does not start, and its state says why.
-    async fn route(&mut self) -> Option<Route> {
-        let Some(spec) = self.connection.tunnel() else { return Some(Route::Direct) };
-        if let Some(tunnel) = self.tunnel.as_mut()
-            && tunnel.is_running()
-        {
-            return Some(tunnel.route());
-        }
-        self.tunnel = None;
-        self.send(Incoming::Tunnel(TunnelState::Starting));
-        match Tunnel::start(spec).await {
-            Ok(tunnel) => {
-                self.send(Incoming::Tunnel(TunnelState::Up(tunnel.port())));
-                Some(self.tunnel.insert(tunnel).route())
-            }
-            Err(err) => {
-                self.tunnel = None;
-                self.send(Incoming::Tunnel(TunnelState::Died(format!("{err:#}"))));
-                None
-            }
-        }
-    }
-
     /// Closes the session a dead tunnel carried; the next statement starts both again.
     fn lose_tunnel(&mut self, died: &Died) {
         self.tunnel = None;
@@ -440,6 +432,13 @@ impl SessionTask {
 
     fn send(&self, incoming: Incoming) {
         send(&self.answers, Answer::Session { connection: self.connection.name().clone(), incoming });
+    }
+}
+
+fn tunnel_state(step: TunnelStep) -> TunnelState {
+    match step {
+        TunnelStep::Starting => TunnelState::Starting,
+        TunnelStep::Up(port) => TunnelState::Up(port),
     }
 }
 
@@ -553,7 +552,7 @@ async fn answer_to(session: &mut Session, writes: WritePolicy, queued: Queued) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::model::Value;
+    use crate::db::model::{Route, Value};
     use crate::fixtures;
 
     const SLEEP: &str = "SELECT pg_sleep(30)";
