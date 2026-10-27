@@ -28,6 +28,7 @@ mod server;
 pub(crate) use cancel::Interrupted;
 pub(crate) use open::{Attempt, NotOpened, Opened, TunnelStep, open_along, open_once};
 pub(crate) use pages::{Fetched, Pages, Started};
+pub(crate) use schema::read_schema_along;
 
 const NO_PARAMETERS: [&str; 0] = [];
 /// The rows pgbg keeps of a result; past it the result is cut, so a big table cannot fill the memory.

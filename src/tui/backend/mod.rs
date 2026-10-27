@@ -20,6 +20,7 @@ mod config;
 pub(super) use clipboard::reaches_the_terminal;
 mod paging;
 mod queries;
+mod schema;
 mod session;
 
 /// The way to each session task, one per connection opened, kept until pgbg quits; answers go out on the loop's channel.
@@ -59,6 +60,7 @@ impl Backend {
             Action::Open { connection, session } => self.open(connection, session),
             Action::Run { connection, run, statement } => self.run(&connection, run, statement),
             Action::NextPage { connection, session, run } => self.next_page(&connection, session, run),
+            Action::ReadSchema { connection, session } => self.read_schema(&connection, session),
             Action::Cancel { connection, run } => self.cancel(&connection, run),
             Action::ListQueries => self.queries.list(),
             Action::OpenQuery { connection, query } => self.queries.open(connection, query),
@@ -127,6 +129,13 @@ impl Backend {
     fn next_page(&self, connection: &ConnectionName, session: SessionId, run: RunId) {
         if let Some(link) = self.sessions.get(connection).filter(|link| link.session == session) {
             link.send(Job::NextPage { run });
+        }
+    }
+
+    /// Reads the schema of `connection` along the route of its session `session`; it comes back as an `Answer`.
+    fn read_schema(&self, connection: &ConnectionName, session: SessionId) {
+        if let Some(link) = self.sessions.get(connection).filter(|link| link.session == session) {
+            link.read_schema();
         }
     }
 

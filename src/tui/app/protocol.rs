@@ -1,11 +1,12 @@
 //! What the app and the backend say to each other: the actions it asks for and the answers that come back.
 use crate::config::ConnectionChange;
 use crate::connection::{Connection, ConnectionName};
-use crate::db::model::{LocalPort, Page, ResultSet, Statement};
+use crate::db::model::{Catalog, LocalPort, Page, ResultSet, Statement};
 use crate::export::Format;
 use crate::history::Entry;
 use crate::query::{Query, QueryPath};
 use crate::secret::{KeychainItem, Secret};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Which run of a statement an answer or a cancel is about, so a late one never lands on the next run.
@@ -53,6 +54,8 @@ pub(in crate::tui) enum Action {
     Run { connection: ConnectionName, run: RunId, statement: Statement },
     /// Fetch the next page of this run's result, if its portal is still open on the session `session`.
     NextPage { connection: ConnectionName, session: SessionId, run: RunId },
+    /// Read the connection's schema on a second session along the route of `session`, once that one is open.
+    ReadSchema { connection: ConnectionName, session: SessionId },
     /// Cancel this run if the connection's session is still on it.
     Cancel { connection: ConnectionName, run: RunId },
     /// List every saved query.
@@ -173,6 +176,8 @@ pub(in crate::tui) enum Incoming {
     /// The open session was lost, and why; the next run opens a new one.
     Closed(String),
     Tunnel(TunnelState),
+    /// The schema a second session read, or why it could not.
+    Schema(Result<Arc<Catalog>, String>),
     Result {
         run: RunId,
         result: ResultSet,

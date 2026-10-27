@@ -1,18 +1,21 @@
 //! The schema the role can see, read from the catalogs in one read-only transaction.
-use super::model::{Index, Schema, SchemaColumn, SchemaNode, Table, TableKind};
+use super::model::{Catalog, Index, Route, Schema, SchemaColumn, SchemaNode, Table, TableKind};
 use super::{Session, server_error};
+use crate::connection::Connection;
 use anyhow::{Result, bail};
 use std::collections::HashMap;
 use tokio_postgres::{Row, Transaction};
 
-/// The relations a statement reads from, outside the catalogs, that the role may read at least one column of; a partition
-/// is left to its parent, which reads them all.
+/// The relations a statement reads from, outside the catalogs, that the role may read at least one column of, the
+/// first `$1` by name; a partition is left to its parent, which reads them all.
 const VISIBLE: &str = "WITH visible AS (
     SELECT c.oid, n.nspname, c.relname, c.relkind, c.reltuples
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE c.relkind IN ('r', 'v', 'm', 'f', 'p') AND NOT c.relispartition
       AND n.nspname NOT LIKE 'pg\\_%' AND n.nspname <> 'information_schema'
       AND has_schema_privilege(n.oid, 'USAGE') AND has_any_column_privilege(c.oid, 'SELECT')
+    ORDER BY n.nspname, c.relname
+    LIMIT $1
 )";
 const TABLES: &str = "SELECT oid, nspname, relname, relkind::text, reltuples::float8 FROM visible ORDER BY nspname, relname";
 const COLUMNS: &str =
@@ -25,6 +28,14 @@ const INDEXES: &str = "SELECT i.indrelid, c.relname, i.indisunique, i.indisprima
         ARRAY(SELECT pg_get_indexdef(i.indexrelid, key, true) FROM generate_series(1, i.indnkeyatts) AS key)
     FROM pg_index i JOIN visible v ON v.oid = i.indrelid JOIN pg_class c ON c.oid = i.indexrelid
     ORDER BY i.indrelid, c.relname";
+const SEARCH_PATH: &str = "SELECT current_schemas(false)::text[]";
+
+/// How many tables a read keeps, the first by name, so a database of many tenants cannot fill the memory nor slow
+/// every key of completion.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct TableCap(pub(super) usize);
+
+const TABLE_CAP: TableCap = TableCap(20_000);
 
 /// A table as the catalog query gives it, before its columns and indexes join it.
 struct Listed {
@@ -34,20 +45,35 @@ struct Listed {
 }
 
 impl Session {
-    /// Every schema, table, column and index the role can read, in one read-only transaction.
-    pub(crate) async fn read_schema(&mut self) -> Result<Schema> {
+    /// Every schema, table, column and index the role can read, the first 20 000 tables by name, and the search path,
+    /// in one read-only transaction.
+    pub(crate) async fn read_schema(&mut self) -> Result<Catalog> {
+        self.read_schema_capped(TABLE_CAP).await
+    }
+
+    pub(super) async fn read_schema_capped(&mut self, cap: TableCap) -> Result<Catalog> {
+        let limit = i64::try_from(cap.0 + 1)?;
         self.read_only(async |transaction| {
-            let tables = rows(transaction, TABLES).await?.iter().map(listed).collect::<Result<Vec<_>>>()?;
-            let columns = rows(transaction, COLUMNS).await?.iter().map(column).collect::<Result<Vec<_>>>()?;
-            let indexes = rows(transaction, INDEXES).await?.iter().map(index).collect::<Result<Vec<_>>>()?;
-            Ok(assembled(tables, columns, indexes))
+            let tables = rows(transaction, TABLES, limit).await?.iter().map(listed).collect::<Result<Vec<_>>>()?;
+            let columns = rows(transaction, COLUMNS, limit).await?.iter().map(column).collect::<Result<Vec<_>>>()?;
+            let indexes = rows(transaction, INDEXES, limit).await?.iter().map(index).collect::<Result<Vec<_>>>()?;
+            let search_path = transaction.query_one(SEARCH_PATH, &[]).await.map_err(server_error)?.try_get(0)?;
+            let is_cut = tables.len() > cap.0;
+            let kept = tables.into_iter().take(cap.0).collect();
+            Ok(Catalog { schema: assembled(kept, columns, indexes), search_path, is_cut })
         })
         .await
     }
 }
 
-async fn rows(transaction: &Transaction<'_>, sql: &str) -> Result<Vec<Row>> {
-    transaction.query(&format!("{VISIBLE} {sql}"), &[]).await.map_err(server_error)
+/// The schema of `connection`, read on a session of its own along `route`, its password read again for it; the
+/// session closes once read.
+pub(crate) async fn read_schema_along(connection: &Connection, route: Route) -> Result<Catalog> {
+    Session::open(connection, route).await?.read_schema().await
+}
+
+async fn rows(transaction: &Transaction<'_>, sql: &str, limit: i64) -> Result<Vec<Row>> {
+    transaction.query(&format!("{VISIBLE} {sql}"), &[&limit]).await.map_err(server_error)
 }
 
 fn listed(row: &Row) -> Result<Listed> {
@@ -153,7 +179,7 @@ mod tests {
             ],
         )
         .await;
-        let schema = session.read_schema().await.unwrap();
+        let schema = session.read_schema().await.unwrap().schema;
         let [orders] = tables_of(&schema, "shop_read") else { panic!("{schema:?}") };
         let described: Vec<_> = orders.columns.iter().map(|c| (c.name.as_str(), c.type_name.as_str(), c.is_nullable)).collect();
         assert_eq!(described, [("id", "integer", false), ("customer", "text", false), ("total", "numeric(10,2)", true)]);
@@ -181,7 +207,7 @@ mod tests {
             ],
         )
         .await;
-        let schema = session.read_schema().await.unwrap();
+        let schema = session.read_schema().await.unwrap().schema;
         let kinds: Vec<_> = tables_of(&schema, "shop_kinds").iter().map(|table| (table.name.as_str(), table.kind)).collect();
         assert_eq!(
             kinds,
@@ -206,15 +232,55 @@ mod tests {
             ],
         )
         .await;
-        let schema = session.read_schema().await.unwrap();
+        let schema = session.read_schema().await.unwrap().schema;
         let kinds: Vec<_> = tables_of(&schema, "shop_parts").iter().map(|table| (table.name.as_str(), table.kind)).collect();
         assert_eq!(kinds, [("orders", TableKind::Partitioned)]);
+    }
+
+    /// A session as `role`, which may read every table `tables` makes in the fresh schema `schema`, and only those.
+    async fn session_reading_only(schema: &str, role: &str, tables: &[&str]) -> Session {
+        let made = tables.iter().map(|table| format!("CREATE TABLE {schema}.{table} (id int)"));
+        let granted = [
+            format!("DO $$ BEGIN CREATE ROLE {role}; EXCEPTION WHEN duplicate_object THEN NULL; END $$"),
+            format!("GRANT USAGE ON SCHEMA {schema} TO {role}"),
+            format!("GRANT SELECT ON ALL TABLES IN SCHEMA {schema} TO {role}"),
+            format!("SET ROLE {role}"),
+        ];
+        let sql: Vec<String> = made.chain(granted).collect();
+        session_on(schema, &sql.iter().map(String::as_str).collect::<Vec<_>>()).await
+    }
+
+    fn names_in<'a>(catalog: &'a Catalog, schema: &str) -> Vec<&'a str> {
+        tables_of(&catalog.schema, schema).iter().map(|table| table.name.as_str()).collect()
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_read_past_the_table_cap_keeps_the_first_tables_by_name_and_says_it_is_cut() {
+        let mut session = session_reading_only("shop_cap", "pgbg_test_cap", &["orders", "customers", "invoices"]).await;
+        let catalog = session.read_schema_capped(TableCap(2)).await.unwrap();
+        assert_eq!((names_in(&catalog, "shop_cap"), catalog.is_cut), (vec!["customers", "invoices"], true));
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_read_of_as_many_tables_as_the_cap_is_whole() {
+        let mut session = session_reading_only("shop_cap_whole", "pgbg_test_cap_whole", &["orders", "customers"]).await;
+        let catalog = session.read_schema_capped(TableCap(2)).await.unwrap();
+        assert_eq!((names_in(&catalog, "shop_cap_whole"), catalog.is_cut), (vec!["customers", "orders"], false));
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn the_read_names_the_schemas_of_the_search_path_that_exist() {
+        let mut session = session_on("shop_path", &["SET search_path = shop_path, nowhere, public"]).await;
+        assert_eq!(session.read_schema().await.unwrap().search_path, ["shop_path", "public"]);
     }
 
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn the_schema_leaves_the_catalogs_out() {
-        let schema = session().await.read_schema().await.unwrap();
+        let schema = session().await.read_schema().await.unwrap().schema;
         let names: Vec<&str> = schema.schemas.iter().map(|node| node.name.as_str()).collect();
         assert!(!names.iter().any(|name| name.starts_with("pg_") || *name == "information_schema"), "{names:?}");
     }
@@ -234,7 +300,7 @@ mod tests {
             ],
         )
         .await;
-        let schema = session.read_schema().await.unwrap();
+        let schema = session.read_schema().await.unwrap().schema;
         let [customers] = tables_of(&schema, "shop_private") else { panic!("{schema:?}") };
         assert_eq!(customers.name, "customers");
         assert_eq!(customers.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id"]);

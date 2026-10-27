@@ -8,6 +8,16 @@ pub(crate) struct Schema {
     pub(crate) schemas: Vec<SchemaNode>,
 }
 
+/// The schema as one read gave it: the schemas the session's search path names, whose tables a statement names bare,
+/// and whether the read kept only the first tables by name.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Catalog {
+    pub(crate) schema: Schema,
+    /// `current_schemas(false)`: the schemas of the search path that exist, in its order.
+    pub(crate) search_path: Vec<String>,
+    pub(crate) is_cut: bool,
+}
+
 /// One schema and the tables in it the role can read.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct SchemaNode {
