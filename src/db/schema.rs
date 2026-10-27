@@ -4,6 +4,8 @@ use super::{Isolation, Session, server_error};
 use crate::connection::Connection;
 use anyhow::{Result, bail};
 use std::collections::HashMap;
+use std::fmt;
+use tokio_postgres::error::SqlState;
 use tokio_postgres::{Row, Transaction};
 
 /// The relations a statement reads from, outside the catalogs, that the role may read at least one column of, whose
@@ -26,11 +28,20 @@ const COLUMNS: &str =
     LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
     WHERE a.attnum > 0 AND NOT a.attisdropped AND has_column_privilege(a.attrelid, a.attnum, 'SELECT')
     ORDER BY a.attrelid, a.attnum";
+/// A plain column key is named from the snapshot's `pg_attribute`, as `pg_get_indexdef` would quote it; only an
+/// expression key, whose `indkey` is 0, asks `pg_get_indexdef`, which reads the latest catalog, not the snapshot.
 const INDEXES: &str = "SELECT i.indrelid, c.relname, i.indisunique, i.indisprimary,
-        ARRAY(SELECT pg_get_indexdef(i.indexrelid, key, true) FROM generate_series(1, i.indnkeyatts) AS key)
+        ARRAY(
+            SELECT coalesce(quote_ident(a.attname), pg_get_indexdef(i.indexrelid, key.position::int, true))
+            FROM unnest(i.indkey::int2[]) WITH ORDINALITY AS key(attnum, position)
+            LEFT JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = key.attnum AND key.attnum > 0
+            WHERE key.position <= i.indnkeyatts
+            ORDER BY key.position
+        )
     FROM pg_index i JOIN visible v ON v.oid = i.indrelid JOIN pg_class c ON c.oid = i.indexrelid
     ORDER BY i.indrelid, c.relname";
 const SEARCH_PATH: &str = "SELECT current_schemas(false)::text[]";
+const DROPPED_RELATION: &str = "could not open relation with OID";
 
 /// How many tables a read keeps, the first by name, so a database of many tenants cannot fill the memory nor slow
 /// every key of completion.
@@ -46,6 +57,18 @@ struct Listed {
     table: Table,
 }
 
+/// A relation the read's snapshot lists was dropped by another session before the read could describe it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DroppedDuringRead;
+
+impl fmt::Display for DroppedDuringRead {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("tables kept being dropped while the schema was read, twice in a row: read it again")
+    }
+}
+
+impl std::error::Error for DroppedDuringRead {}
+
 impl Session {
     /// Every schema, table, column and index the role can read, the first 20 000 tables by name, and the search path,
     /// in one read-only transaction that sees one snapshot.
@@ -58,7 +81,15 @@ impl Session {
         self.read_schema_capped(TABLE_CAP, filter).await
     }
 
+    /// Read once more when a relation was dropped under the first read, which a second snapshot no longer lists.
     async fn read_schema_capped(&mut self, cap: TableCap, filter: &str) -> Result<Catalog> {
+        match self.read_schema_once(cap, filter).await {
+            Err(err) if err.is::<DroppedDuringRead>() => self.read_schema_once(cap, filter).await,
+            read => read,
+        }
+    }
+
+    async fn read_schema_once(&mut self, cap: TableCap, filter: &str) -> Result<Catalog> {
         let limit = i64::try_from(cap.0 + 1)?;
         self.read_only(Isolation::OneSnapshot, async |transaction| {
             let tables = rows(transaction, TABLES, limit, filter).await?.iter().map(listed).collect::<Result<Vec<_>>>()?;
@@ -80,7 +111,16 @@ pub(crate) async fn read_schema_along(connection: &Connection, route: Route) -> 
 }
 
 async fn rows(transaction: &Transaction<'_>, sql: &str, limit: i64, filter: &str) -> Result<Vec<Row>> {
-    transaction.query(&format!("{VISIBLE} {sql}"), &[&limit, &filter]).await.map_err(server_error)
+    transaction.query(&format!("{VISIBLE} {sql}"), &[&limit, &filter]).await.map_err(catalog_error)
+}
+
+fn catalog_error(err: tokio_postgres::Error) -> anyhow::Error {
+    let message = err.as_db_error().map_or("", |db| db.message());
+    if is_dropped_relation(err.code(), message) { DroppedDuringRead.into() } else { server_error(err) }
+}
+
+fn is_dropped_relation(code: Option<&SqlState>, message: &str) -> bool {
+    code == Some(&SqlState::INTERNAL_ERROR) && message.starts_with(DROPPED_RELATION)
 }
 
 fn listed(row: &Row) -> Result<Listed> {
@@ -156,6 +196,21 @@ mod tests {
     use crate::db::guard;
     use crate::db::model::{Params, Route, Statement};
     use crate::fixtures;
+
+    #[test]
+    fn an_internal_error_that_cannot_open_a_relation_is_a_drop_during_the_read() {
+        assert!(is_dropped_relation(Some(&SqlState::INTERNAL_ERROR), "could not open relation with OID 16543"));
+    }
+
+    #[test]
+    fn the_same_words_under_another_code_are_not_a_drop_during_the_read() {
+        assert!(!is_dropped_relation(Some(&SqlState::UNDEFINED_TABLE), "could not open relation with OID 16543"));
+    }
+
+    #[test]
+    fn another_internal_error_is_not_a_drop_during_the_read() {
+        assert!(!is_dropped_relation(Some(&SqlState::INTERNAL_ERROR), "cache lookup failed for type 16543"));
+    }
 
     async fn session() -> Session {
         Session::open(&fixtures::test_database("local", "writes = \"allowed\"\n"), Route::Direct).await.unwrap()
@@ -313,6 +368,37 @@ mod tests {
         let schema = read(&mut session().await).await.schema;
         let names: Vec<&str> = schema.schemas.iter().map(|node| node.name.as_str()).collect();
         assert!(!names.iter().any(|name| name.starts_with("pg_") || *name == "information_schema"), "{names:?}");
+    }
+
+    /// Makes then drops a table indexed on its columns and on an expression in `schema`, over and over, until `stop` is sent.
+    async fn churning(schema: &str, mut stop: tokio::sync::oneshot::Receiver<()>) {
+        let mut session = session().await;
+        let made = format!("CREATE TABLE {schema}.orders (id int PRIMARY KEY, customer text UNIQUE)");
+        let indexed = format!("CREATE INDEX ON {schema}.orders (lower(customer))");
+        let dropped = format!("DROP TABLE {schema}.orders");
+        while stop.try_recv().is_err() {
+            for sql in [&made, &indexed, &dropped] {
+                session.run(&guard::admit(Statement::new(sql), Params::default(), WritePolicy::Allowed).unwrap()).await.unwrap();
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_read_while_another_session_drops_tables_still_succeeds() {
+        let mut session = session_on("shop_churn", &[]).await;
+        let _reading = fixtures::reading_the_catalog().await;
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let churn = tokio::spawn(churning("shop_churn", stopped));
+        let mut failures = vec![];
+        for _ in 0..200 {
+            if let Err(err) = session.read_schema_capped(TABLE_CAP, "shop_churn").await {
+                failures.push(format!("{err:#}"));
+            }
+        }
+        stop.send(()).unwrap();
+        churn.await.unwrap();
+        assert_eq!(failures, Vec::<String>::new());
     }
 
     #[tokio::test]
