@@ -1,4 +1,4 @@
-//! A tunnel: a child process pgbg owns that forwards a free `127.0.0.1` port to a database out of reach.
+//! A tunnel: a child process pgbg owns that forwards a free `127.0.0.1` port to a database this machine cannot reach straight.
 use crate::connection::TunnelSpec;
 use crate::db::model::{LocalPort, Route};
 use crate::groups::{self, OWN_GROUP};
@@ -85,8 +85,8 @@ impl Tunnel {
         self.died(status).await
     }
 
-    /// Whether the tunnel's own process still runs; once it is seen ended, its group is killed at once, while its id
-    /// cannot yet be reused.
+    /// Whether the tunnel's own process still runs.
+    /// Once it is seen ended, its group is killed at once, while its id cannot yet be reused.
     pub(crate) fn is_running(&mut self) -> bool {
         let is_running = matches!(self.child.try_wait(), Ok(None));
         if !is_running {
@@ -95,8 +95,9 @@ impl Tunnel {
         is_running
     }
 
-    /// Kills the tunnel's whole group and reaps it, then fails if its port still answers: a process outside
-    /// the group holds the forward, as an ssh `ControlMaster` does. Safe to call twice.
+    /// Kills the tunnel's whole group and reaps it, then fails if its port still answers.
+    /// A port that still answers means a process outside the group holds the forward, as an ssh `ControlMaster` does.
+    /// Safe to call twice.
     pub(crate) async fn stop(&mut self) -> Result<()> {
         self.kill_group();
         if let Err(err) = self.child.wait().await {
