@@ -19,6 +19,7 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
+mod clipboard;
 mod config;
 mod queries;
 
@@ -101,6 +102,7 @@ impl Backend {
             Action::RemoveConnection { id, connection } => self.config.remove(id, connection),
             Action::SaveConnection(save) => self.config.save(save),
             Action::ListHistory(connection) => self.list_history(connection),
+            Action::Copy { text, done } => clipboard::copy(text, done, self.answers.clone()),
         }
     }
 

@@ -3,7 +3,7 @@ use super::app::{App, Fit, Overlay, SessionState, TunnelState};
 use super::{
     detail_view, editor_view, finder_view, form_view, help_view, history_view, picker_view, prompt_view, result_view, sidebar_view, theme,
 };
-use crate::act::{self, Hint};
+use crate::act::{self, Hint, Pane};
 use crate::render::printable;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -76,15 +76,16 @@ fn footer(f: &mut Frame<'_>, app: &App, area: Rect) {
     let status = status(app, usize::from(area.width / STATUS_SHARE_OF_ROW));
     let status_columns = u16::try_from(status.width()).unwrap_or(area.width);
     let [hints_area, status_area] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(status_columns)]).areas(area);
-    f.render_widget(Paragraph::new(hints(app, usize::from(hints_area.width))), hints_area);
+    let pane = if app.overlay == Some(Overlay::CopyAs) { Pane::CopyAs } else { app.focus.pane() };
+    f.render_widget(Paragraph::new(hints(app, pane, usize::from(hints_area.width))), hints_area);
     f.render_widget(Paragraph::new(status), status_area);
 }
 
-fn hints(app: &App, columns: usize) -> Line<'static> {
+fn hints(app: &App, pane: Pane, columns: usize) -> Line<'static> {
     let key = Style::default().fg(app.theme.accent).add_modifier(Modifier::BOLD);
     let does = Style::default().fg(app.theme.muted);
     let width = |hint: Hint| hint_text(hint).iter().map(|text| text.chars().count()).sum();
-    let spans = act::footer_within(app.focus.pane(), columns, width).into_iter().flat_map(|hint| {
+    let spans = act::footer_within(pane, columns, width).into_iter().flat_map(|hint| {
         let [keys, what] = hint_text(hint);
         [Span::styled(keys, key), Span::styled(what, does)]
     });
@@ -101,6 +102,9 @@ fn hint_text(hint: Hint) -> [String; 2] {
 fn status(app: &App, width: usize) -> Line<'static> {
     if let Some(why) = &app.config_failure {
         return failure(app, why, width);
+    }
+    if let Some(note) = &app.note {
+        return Line::styled(truncate(&format!("✓ {} ", printable(note)), width), Style::default().fg(app.theme.muted));
     }
     let sheet = app.sheet();
     let muted = Style::default().fg(app.theme.muted);
@@ -327,6 +331,29 @@ mod tests {
         let footer = footer_of(&render(&app, 100, 8));
         assert_eq!(footer.matches('✗').count(), 1, "{footer}");
         assert!(footer.contains("✗ the tunnel `ssh` died"), "{footer}");
+    }
+
+    fn result_in_focus() -> App {
+        let mut app = typed("SELECT 1");
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result: orders(), took: Duration::from_millis(38) }));
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        app
+    }
+
+    #[test]
+    fn c_on_the_result_asks_for_the_format_on_the_footer() {
+        let mut app = result_in_focus();
+        app.handle_key(KeyEvent::from(KeyCode::Char('c')));
+        let footer = footer_of(&render(&app, 100, 8));
+        assert!(footer.contains("c CSV  j JSON  m Markdown  esc cancel"), "{footer}");
+    }
+
+    #[test]
+    fn a_copy_says_what_it_copied_in_the_status_line() {
+        let mut app = result_in_focus();
+        app.apply(Answer::Copied("copied row 1 as CSV".into()));
+        assert!(footer_of(&render(&app, 100, 8)).contains("✓ copied row 1 as CSV"));
     }
 
     #[test]

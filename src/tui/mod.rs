@@ -157,6 +157,9 @@ async fn event_loop(
             else => break,
         };
         for action in actions {
+            if let Action::Copy { text, .. } = &action {
+                vtui::clipboard::print(text);
+            }
             let Action::EditOutside { connection, query } = action else {
                 backend.dispatch(action);
                 continue;

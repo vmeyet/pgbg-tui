@@ -6,6 +6,7 @@ pub mod commands;
 mod config;
 mod connection;
 mod db;
+mod export;
 #[cfg(test)]
 mod fixtures;
 mod history;

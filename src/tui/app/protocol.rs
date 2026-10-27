@@ -61,6 +61,8 @@ pub(in crate::tui) enum Action {
     SaveConnection(SaveConnection),
     /// Read the history of the connection, for `ctrl-r`.
     ListHistory(ConnectionName),
+    /// Put `text` on the clipboard, then say `done`; the loop sends it to the terminal too.
+    Copy { text: String, done: String },
 }
 
 /// A connection to add or edit: the keys it sets, and the password typed for its keychain item.
@@ -99,6 +101,8 @@ pub(in crate::tui) enum Answer {
     Config { id: ConfigChangeId, answer: ConfigAnswer },
     /// The history of `connection`: each statement once, newest first.
     History { connection: ConnectionName, entries: Vec<Entry> },
+    /// What a copy to the clipboard came to, in a few words.
+    Copied(String),
 }
 
 /// What changing the config came to.

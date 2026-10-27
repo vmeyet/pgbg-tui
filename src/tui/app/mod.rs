@@ -19,6 +19,7 @@ pub(super) use save::Prompt;
 pub(super) use search::{ROWS_SHOWN, Search};
 pub(super) use sheet::{Run, SessionState, Sheet, View};
 
+mod copy;
 mod detail;
 mod editor;
 pub(super) mod form;
@@ -82,6 +83,8 @@ pub(super) enum Overlay {
     Prompt(Prompt),
     /// The grid's row, one column a line.
     Detail(Detail),
+    /// A question on the footer line: which format the whole result is copied as.
+    CopyAs,
 }
 
 /// The help after `key`: `?` lists every key, `j`/`k` scroll, any other key closes it.
@@ -114,6 +117,8 @@ pub(super) struct App {
     next_config_change: ConfigChangeId,
     /// Why a change to the config failed when no form waits on it; the status line says it until the next key.
     pub(super) config_failure: Option<String>,
+    /// What the last copy came to; the status line says it until the next key.
+    pub(super) note: Option<String>,
 }
 
 impl App {
@@ -131,6 +136,7 @@ impl App {
             should_quit: false,
             next_config_change: ConfigChangeId::FIRST,
             config_failure: None,
+            note: None,
         }
     }
 
@@ -151,6 +157,7 @@ impl App {
     /// Takes one key; returns what the runner should do about it.
     pub(super) fn handle_key(&mut self, key: KeyEvent) -> Vec<Action> {
         self.config_failure = None;
+        self.note = None;
         if let Some(overlay) = self.overlay.take() {
             return self.overlay_key(overlay, key);
         }
@@ -217,6 +224,7 @@ impl App {
                 actions
             }
             Overlay::Detail(detail) => self.detail_key(detail, key),
+            Overlay::CopyAs => self.copy_as_key(key),
         }
     }
 
@@ -246,7 +254,10 @@ impl App {
             Act::EditOutside => return self.edit_outside(),
             Act::History => return self.recall(),
             Act::Detail => self.open_detail(),
-            Act::Close | Act::Delete | Act::CloseSession | Act::Add | Act::Edit => {}
+            Act::CopyCell => return self.copy_cell(),
+            Act::CopyRow => return self.copy_row(),
+            Act::CopyResult => self.ask_copy_format(),
+            Act::Close | Act::Delete | Act::CloseSession | Act::Add | Act::Edit | Act::CopyCsv | Act::CopyJson | Act::CopyMarkdown => {}
         }
         vec![]
     }
@@ -318,6 +329,7 @@ impl App {
             Answer::Config { id, answer: ConfigAnswer::Changed(connections) } => return self.take_connections(id, connections),
             Answer::Config { id, answer: ConfigAnswer::Failed(error) } => self.config_failed(id, error),
             Answer::History { connection, entries } => self.history_read(&connection, entries),
+            Answer::Copied(note) => self.copied(note),
         }
         vec![]
     }
