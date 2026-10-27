@@ -72,7 +72,8 @@ Switching connection:
 3. `Session::open` takes the tunnel's `Route`: it connects to `hostaddr=127.0.0.1` and the tunnel's port, and keeps the URL's host for the TLS certificate check; it reads the schema in the background for completion and the sidebar (planned).
 4. The session stays open until pgbg quits or `ctrl-x` in the picker closes it, so switching back is instant; its tunnel stops with it.
    `ctrl-x` keeps the sheet and its editor text, marks its session closed so a late word from the old task changes nothing, and picking it again opens a new session.
-   When the config changes, the sheet of a connection gone closes and the sheet of one changed opens a new session on it (`Action::Reopen`).
+   When the config changes, the sheet of a connection gone closes and the sheet of one changed opens a new session on it (`Action::Reopen`), unless its session was closed: it only takes the connection as it is now.
+   A close or a reopen cuts a result still paging at the rows it has, since its portal closes with the old session.
    Each sheet keeps its editor text and its result while another one is shown, and the answers of its session land on it alone.
 5. A session whose link is gone, or whose rollback failed, is opened again before the next statement; it is never retried on its own.
    A statement sent while its session fails to open fails with it, and is never sent on a later open; once pgbg quits, one still queued is never sent.

@@ -147,7 +147,7 @@ impl App {
     }
 
     /// Takes the connections the config holds now, after the change `id`: the sheet of one gone closes, the sheet of one
-    /// changed opens again, and the form that sent `id` closes.
+    /// changed opens again unless its session was closed, and the form that sent `id` closes.
     pub(super) fn take_connections(&mut self, id: ConfigChangeId, connections: Vec<Connection>) -> Vec<Action> {
         let closed = self.close_gone(&connections);
         let reopened = self.reopen_changed(&connections);
@@ -176,17 +176,20 @@ impl App {
     fn reopen_changed(&mut self, connections: &[Connection]) -> Vec<Action> {
         let changed =
             |sheet: &Sheet| connections.iter().find(|c| c.name() == sheet.name()).filter(|&now| *now != sheet.connection).cloned();
-        let reopened: Vec<Connection> = self.sheets.iter().filter_map(changed).collect();
-        reopened.into_iter().map(|now| self.reopen(now)).collect()
+        let changed_now: Vec<Connection> = self.sheets.iter().filter_map(changed).collect();
+        changed_now.into_iter().filter_map(|now| self.reopen(now)).collect()
     }
 
-    /// Opens a new session on the sheet of `connection`, as the config now says.
-    fn reopen(&mut self, connection: Connection) -> Action {
-        let session = self.new_session();
-        if let Some(sheet) = self.sheet_of_mut(connection.name()) {
-            sheet.reopen(connection.clone(), session);
+    /// Opens a new session on the sheet of `connection`, as the config now says; a closed sheet only takes it.
+    fn reopen(&mut self, connection: Connection) -> Option<Action> {
+        let sheet = self.sheet_of_mut(connection.name())?;
+        if sheet.session == SessionState::Closed {
+            sheet.take_closed(connection);
+            return None;
         }
-        Action::Reopen { connection, session }
+        let session = self.new_session();
+        self.sheet_of_mut(connection.name())?.reopen(connection.clone(), session);
+        Some(Action::Reopen { connection, session })
     }
 
     /// Says why the change `id` did not happen: in the form that sent it, which takes back the password it typed, else
@@ -546,6 +549,17 @@ pub(in crate::tui) mod tests {
         );
         assert_eq!(app.sheet().connection.writes(), WritePolicy::Allowed);
         assert_eq!(app.connections.len(), 1);
+    }
+
+    #[test]
+    fn a_closed_sheet_takes_its_changed_connection_without_opening_again() {
+        let mut app = on_prod_with_local_open();
+        ctrl(&mut app, 'x');
+        let local = named("local", "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\nwrites = \"allowed\"\n");
+        let prod = app.connections[1].clone();
+        let actions = app.apply(Answer::Config { id: ConfigChangeId::FIRST, answer: ConfigAnswer::Changed(vec![local, prod]) });
+        let sheet = app.sheet_of(&name("local")).unwrap();
+        assert_eq!((actions, &sheet.session, sheet.connection.writes()), (vec![], &SessionState::Closed, WritePolicy::Allowed));
     }
 
     fn failed(why: &str) -> Answer {

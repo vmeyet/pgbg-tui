@@ -150,7 +150,7 @@ mod tests {
     use super::super::app::{Answer, App, Incoming, QueryAnswer, RunId};
     use super::super::styled;
     use super::*;
-    use crate::db::model::LocalPort;
+    use crate::db::model::{Extent, LocalPort, Page, ResultSet};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -355,7 +355,11 @@ mod tests {
 
     #[test]
     fn a_failed_page_says_why_in_the_status_line() {
-        let mut app = result_in_focus();
+        let first = Page { rows: orders().rows().to_vec(), extent: Extent::More };
+        let mut app = typed("SELECT 1");
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        let result = ResultSet::new(orders().columns().to_vec(), first);
+        app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result, took: Duration::from_millis(38) }));
         app.apply(to_shop(Incoming::PageFailed { run: RunId::FIRST, error: "ERROR: division by zero".into() }));
         assert!(footer_of(&render(&app, 100, 8)).contains("✗ the next page failed: ERROR: division by zero"));
     }

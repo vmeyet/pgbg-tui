@@ -82,6 +82,13 @@ impl ResultSet {
         self.extent = page.extent;
         self.pages += 1;
     }
+
+    /// Stops waiting on the portal, closed with its session: a result waiting on more pages becomes cut.
+    pub(crate) fn cut(&mut self) {
+        if self.extent == Extent::More {
+            self.extent = Extent::Cut;
+        }
+    }
 }
 
 /// `{"columns", "rows", "is_cut"}`: a script reads a result that waits on more pages as cut, since it gets no more.
