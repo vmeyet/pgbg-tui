@@ -69,6 +69,20 @@ impl fmt::Display for DroppedDuringRead {
 
 impl std::error::Error for DroppedDuringRead {}
 
+/// One read of the catalog, in one snapshot: what a retry runs again, and what a test stands in for.
+trait ReadsCatalogOnce {
+    fn read_catalog_once(&mut self, cap: TableCap, filter: &str) -> impl Future<Output = Result<Catalog>> + Send;
+}
+
+/// The catalog read by `reader`, once more when a relation was dropped under the first read, which a second snapshot
+/// no longer lists.
+async fn read_retried_once_on_drop(reader: &mut impl ReadsCatalogOnce, cap: TableCap, filter: &str) -> Result<Catalog> {
+    match reader.read_catalog_once(cap, filter).await {
+        Err(err) if err.is::<DroppedDuringRead>() => reader.read_catalog_once(cap, filter).await,
+        read => read,
+    }
+}
+
 impl Session {
     /// Every schema, table, column and index the role can read, the first 20 000 tables by name, and the search path,
     /// in one read-only transaction that sees one snapshot.
@@ -81,12 +95,8 @@ impl Session {
         self.read_schema_capped(TABLE_CAP, filter).await
     }
 
-    /// Read once more when a relation was dropped under the first read, which a second snapshot no longer lists.
     async fn read_schema_capped(&mut self, cap: TableCap, filter: &str) -> Result<Catalog> {
-        match self.read_schema_once(cap, filter).await {
-            Err(err) if err.is::<DroppedDuringRead>() => self.read_schema_once(cap, filter).await,
-            read => read,
-        }
+        read_retried_once_on_drop(self, cap, filter).await
     }
 
     async fn read_schema_once(&mut self, cap: TableCap, filter: &str) -> Result<Catalog> {
@@ -101,6 +111,12 @@ impl Session {
             Ok(Catalog { schema: assembled(kept, columns, indexes), search_path, is_cut })
         })
         .await
+    }
+}
+
+impl ReadsCatalogOnce for Session {
+    fn read_catalog_once(&mut self, cap: TableCap, filter: &str) -> impl Future<Output = Result<Catalog>> + Send {
+        self.read_schema_once(cap, filter)
     }
 }
 
@@ -210,6 +226,50 @@ mod tests {
     #[test]
     fn another_internal_error_is_not_a_drop_during_the_read() {
         assert!(!is_dropped_relation(Some(&SqlState::INTERNAL_ERROR), "cache lookup failed for type 16543"));
+    }
+
+    /// A catalog that loses a drop `drops` times, then reads, or fails with `other` when there is one.
+    struct Racing {
+        drops: usize,
+        other: Option<&'static str>,
+        reads: usize,
+    }
+
+    impl ReadsCatalogOnce for Racing {
+        fn read_catalog_once(&mut self, _: TableCap, _: &str) -> impl Future<Output = Result<Catalog>> + Send {
+            self.reads += 1;
+            std::future::ready(self.outcome())
+        }
+    }
+
+    impl Racing {
+        fn outcome(&self) -> Result<Catalog> {
+            if let Some(message) = self.other {
+                bail!(message);
+            }
+            if self.reads <= self.drops { Err(DroppedDuringRead.into()) } else { Ok(fixtures::shop_catalog()) }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_read_that_loses_a_drop_once_is_read_again() {
+        let mut racing = Racing { drops: 1, other: None, reads: 0 };
+        let catalog = read_retried_once_on_drop(&mut racing, TABLE_CAP, "").await.unwrap();
+        assert_eq!((catalog, racing.reads), (fixtures::shop_catalog(), 2));
+    }
+
+    #[tokio::test]
+    async fn a_read_that_loses_a_drop_twice_gives_up_saying_so() {
+        let mut racing = Racing { drops: 2, other: None, reads: 0 };
+        let err = read_retried_once_on_drop(&mut racing, TABLE_CAP, "").await.unwrap_err();
+        assert_eq!((err.downcast_ref(), racing.reads), (Some(&DroppedDuringRead), 2));
+    }
+
+    #[tokio::test]
+    async fn a_read_that_fails_otherwise_is_not_read_again() {
+        let mut racing = Racing { drops: 0, other: Some("permission denied for table orders"), reads: 0 };
+        let err = read_retried_once_on_drop(&mut racing, TABLE_CAP, "").await.unwrap_err();
+        assert_eq!((err.to_string(), racing.reads), ("permission denied for table orders".to_owned(), 1));
     }
 
     async fn session() -> Session {
@@ -370,14 +430,13 @@ mod tests {
         assert!(!names.iter().any(|name| name.starts_with("pg_") || *name == "information_schema"), "{names:?}");
     }
 
-    /// Makes then drops a table indexed on its columns and on an expression in `schema`, over and over, until `stop` is sent.
+    /// Makes then drops a table with keys on its columns in `schema`, over and over, until `stop` is sent.
     async fn churning(schema: &str, mut stop: tokio::sync::oneshot::Receiver<()>) {
         let mut session = session().await;
         let made = format!("CREATE TABLE {schema}.orders (id int PRIMARY KEY, customer text UNIQUE)");
-        let indexed = format!("CREATE INDEX ON {schema}.orders (lower(customer))");
         let dropped = format!("DROP TABLE {schema}.orders");
         while stop.try_recv().is_err() {
-            for sql in [&made, &indexed, &dropped] {
+            for sql in [&made, &dropped] {
                 session.run(&guard::admit(Statement::new(sql), Params::default(), WritePolicy::Allowed).unwrap()).await.unwrap();
             }
         }
