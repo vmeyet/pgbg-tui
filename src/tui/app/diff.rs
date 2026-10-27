@@ -1,5 +1,8 @@
 //! Two texts line by line, as a reader compares a statement with the answer that would replace it.
 
+/// The most lines of each side compared line by line: the table that compares them grows with both sides, on the loop.
+const MAX_LINES_COMPARED: usize = 2_000;
+
 /// What became of one line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::tui) enum Change {
@@ -15,14 +18,32 @@ pub(in crate::tui) struct DiffLine {
 }
 
 /// The lines of `old` and `new` in order: the longest run of lines they share kept, the others removed from `old` or
-/// added in `new`, a removed line before the line added in its place.
+/// added in `new`, a removed line before the line added in its place; past `MAX_LINES_COMPARED` on either side, every
+/// line of `old` removed, then every line of `new` added.
 pub(super) fn lines(old: &str, new: &str) -> Vec<DiffLine> {
     let (old, new): (Vec<&str>, Vec<&str>) = (old.lines().collect(), new.lines().collect());
-    let shared = shared_after(&old, &new);
+    if old.len() > MAX_LINES_COMPARED || new.len() > MAX_LINES_COMPARED {
+        return replaced(&old, &new);
+    }
+    compared(&old, &new)
+}
+
+fn line(change: Change, text: &str) -> DiffLine {
+    DiffLine { change, text: text.to_owned() }
+}
+
+/// Every line of `old` removed, then every line of `new` added.
+fn replaced(old: &[&str], new: &[&str]) -> Vec<DiffLine> {
+    let removed = old.iter().map(|text| line(Change::Removed, text));
+    removed.chain(new.iter().map(|text| line(Change::Added, text))).collect()
+}
+
+/// `old` against `new` line by line, the longest run of lines they share kept.
+fn compared(old: &[&str], new: &[&str]) -> Vec<DiffLine> {
+    let shared = shared_after(old, new);
     let (mut at_old, mut at_new) = (0, 0);
     let mut lines = vec![];
     while at_old < old.len() || at_new < new.len() {
-        let line = |change, text: &str| DiffLine { change, text: text.to_owned() };
         if at_old < old.len() && at_new < new.len() && old[at_old] == new[at_new] {
             lines.push(line(Change::Kept, old[at_old]));
             (at_old, at_new) = (at_old + 1, at_new + 1);
@@ -70,6 +91,14 @@ mod tests {
         let old = "SELECT *\nFROM orders\nLIMIT 10";
         let new = "SELECT id\nFROM orders\nLIMIT 10";
         assert_eq!(marked(old, new), ["-SELECT *", "+SELECT id", " FROM orders", " LIMIT 10"]);
+    }
+
+    #[test]
+    fn past_the_cap_every_old_line_is_removed_then_every_new_one_added() {
+        let text = vec!["SELECT 1"; MAX_LINES_COMPARED + 1].join("\n");
+        let changes: Vec<Change> = lines(&text, &text).into_iter().map(|line| line.change).collect();
+        let expected = [vec![Change::Removed; MAX_LINES_COMPARED + 1], vec![Change::Added; MAX_LINES_COMPARED + 1]].concat();
+        assert_eq!(changes, expected);
     }
 
     #[test]

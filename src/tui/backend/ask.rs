@@ -78,7 +78,7 @@ mod tests {
     fn prompt(sql: &str) -> Prompt {
         let (instruction, statement) = (Instruction::new("only the ids"), Statement::new(sql));
         let catalog = Catalog::default();
-        let ask = ai::Ask {
+        let ask = ai::PromptInput {
             instruction: &instruction,
             statement: Some(&statement),
             catalog: &catalog,
@@ -107,6 +107,18 @@ mod tests {
         asks.ask(AskId::FIRST, prompt("SELECT 1"), &settings);
         let sleep = written_pid(&pid_file).await;
         asks.drop_ask(AskId::FIRST);
+        assert!(is_gone(sleep).await);
+    }
+
+    #[tokio::test]
+    #[ignore = "starts a process"]
+    async fn a_new_ask_kills_the_command_before() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("sleep.pid");
+        let (mut asks, settings, _answers) = asks(&leaving_a_sleep(&pid_file));
+        asks.ask(AskId::FIRST, prompt("SELECT 1"), &settings);
+        let sleep = written_pid(&pid_file).await;
+        asks.ask(AskId::FIRST.next(), prompt("SELECT 2"), &settings);
         assert!(is_gone(sleep).await);
     }
 }

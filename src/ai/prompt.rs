@@ -20,7 +20,7 @@ pub(crate) struct Instruction(String);
 
 /// What one ask is built from.
 #[derive(Debug)]
-pub(crate) struct Ask<'a> {
+pub(crate) struct PromptInput<'a> {
     pub(crate) instruction: &'a Instruction,
     /// The statement under the cursor, none when the editor holds none there.
     pub(crate) statement: Option<&'a Statement>,
@@ -55,14 +55,14 @@ impl Instruction {
     }
 }
 
-/// The prompt for `ask`, its schema slice cut table by table to stay within the cap, or why it is not sent.
-pub(crate) fn prompt(ask: &Ask<'_>) -> Result<Prompt, NotSent> {
-    let sql = ask.statement.map_or("", Statement::as_str);
+/// The prompt for `input`, its schema slice cut table by table to stay within the cap, or why it is not sent.
+pub(crate) fn prompt(input: &PromptInput<'_>) -> Result<Prompt, NotSent> {
+    let sql = input.statement.map_or("", Statement::as_str);
     refuse_unsafe(sql)?;
-    let masked = masked(sql, ask.literals);
-    let head = head(ask, &masked.text);
+    let masked = masked(sql, input.literals);
+    let head = head(input, &masked.text);
     let room = MAX_BYTES.checked_sub(head.len() + CUT_NOTE.len()).ok_or(NotSent::TooLong)?;
-    let schema = fitted(slice(ask.catalog, sql, &ask.instruction.0), room);
+    let schema = fitted(slice(input.catalog, sql, &input.instruction.0), room);
     Ok(Prompt { text: head + &schema, literals: masked.literals })
 }
 
@@ -78,9 +78,9 @@ fn refuse_unsafe(sql: &str) -> Result<(), NotSent> {
     }
 }
 
-fn head(ask: &Ask<'_>, statement: &str) -> String {
+fn head(input: &PromptInput<'_>, statement: &str) -> String {
     let statement = if statement.is_empty() { "(none)" } else { statement };
-    let masking = match ask.literals {
+    let masking = match input.literals {
         LiteralPolicy::Masked => MASKING_NOTE,
         LiteralPolicy::Sent => "",
     };
@@ -92,7 +92,7 @@ fn head(ask: &Ask<'_>, statement: &str) -> String {
          Instruction:\n{}\n\n\
          Statement under the cursor:\n{statement}\n\n\
          Schema, names and types:\n",
-        ask.tier, ask.instruction.0
+        input.tier, input.instruction.0
     )
 }
 
@@ -130,7 +130,7 @@ impl fmt::Debug for Prompt {
 impl fmt::Display for NotSent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::HoldsSecret => "the statement holds a password, so it is never sent",
+            Self::HoldsSecret => "the statement holds a secret, so it is never sent",
             Self::UnreadableParam => "the statement holds a `{{` that opens no parameter: close it as `{{name}}` first",
             Self::UnclosedQuote => "the statement opens a quote it never closes: close it first",
             Self::TooLong => "the instruction and the statement pass 16 KiB: shorten one of them",
@@ -149,7 +149,7 @@ mod tests {
     fn prompt_with(statement: &str, instruction: &str, catalog: &Catalog, literals: LiteralPolicy) -> Result<Prompt, NotSent> {
         let instruction = Instruction::new(instruction);
         let statement = Statement::new(statement);
-        prompt(&Ask { instruction: &instruction, statement: Some(&statement), catalog, tier: Tier::Production, literals })
+        prompt(&PromptInput { instruction: &instruction, statement: Some(&statement), catalog, tier: Tier::Production, literals })
     }
 
     fn prompt_for(statement: &str, instruction: &str, catalog: &Catalog) -> Result<Prompt, NotSent> {

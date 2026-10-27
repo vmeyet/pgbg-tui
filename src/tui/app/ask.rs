@@ -37,8 +37,8 @@ pub(in crate::tui) struct Suggestion {
     text: String,
     /// The statement it replaces, then the answer, line by line.
     pub(in crate::tui) lines: Vec<DiffLine>,
-    /// The first write among them, when the guard reads one.
-    pub(in crate::tui) write: Option<Write>,
+    /// Each write the guard reads among them, in order.
+    pub(in crate::tui) writes: Vec<Write>,
 }
 
 /// What asking needs from the config, the id the next ask takes, and why the last one failed.
@@ -179,7 +179,13 @@ impl Sheet {
         let statement = self.range_under_cursor().map(|range| Statement::new(&self.editor.text()[range]));
         let unread = Catalog::default();
         let catalog = self.catalog().unwrap_or(&unread);
-        ai::prompt(&ai::Ask { instruction: &instruction, statement: statement.as_ref(), catalog, tier: self.connection.tier(), literals })
+        ai::prompt(&ai::PromptInput {
+            instruction: &instruction,
+            statement: statement.as_ref(),
+            catalog,
+            tier: self.connection.tier(),
+            literals,
+        })
     }
 
     /// `statements` against the statement under the cursor, which they would replace, unless the editor is no longer
@@ -188,11 +194,12 @@ impl Sheet {
         if revision != self.editor.revision() {
             return Err(AskFailure::EditorChanged);
         }
-        let write = statements.iter().find_map(|statement| guard::write_in(statement.as_str(), &lex::tokens(statement.as_str())));
+        let writes =
+            statements.iter().filter_map(|statement| guard::write_in(statement.as_str(), &lex::tokens(statement.as_str()))).collect();
         let text = statements.iter().map(Statement::as_str).collect::<Vec<_>>().join(";\n");
         let replaces = self.range_under_cursor();
         let lines = diff::lines(replaces.clone().map_or("", |range| &self.editor.text()[range]), &text);
-        Ok(Suggestion { revision, replaces, text, lines, write })
+        Ok(Suggestion { revision, replaces, text, lines, writes })
     }
 
     /// Puts the answer in the editor as one paste, in place of the statement it was asked about.
@@ -334,6 +341,17 @@ pub(in crate::tui) mod tests {
     }
 
     #[test]
+    fn an_answer_to_an_older_ask_is_dropped_while_a_newer_one_waits() {
+        let mut app = waiting("SELECT 1", "ids");
+        press(&mut app, KeyCode::Esc);
+        ctrl_g(&mut app);
+        type_in(&mut app, "names");
+        press(&mut app, KeyCode::Enter);
+        app.apply(Answer::Asked { ask: AskId::FIRST, answer: Ok(vec![Statement::new("SELECT 2")]) });
+        assert!(matches!(step(&app), Some(AskStep::Waiting { ask, .. }) if *ask == AskId::FIRST.next()), "{:?}", step(&app));
+    }
+
+    #[test]
     fn an_answer_to_a_dropped_ask_is_dropped() {
         let mut app = waiting("SELECT 1", "ids");
         press(&mut app, KeyCode::Esc);
@@ -393,7 +411,18 @@ pub(in crate::tui) mod tests {
     fn an_answer_that_writes_names_its_write() {
         let app = answered("SELECT 1", "DELETE FROM orders WHERE id = 7");
         let Some(AskStep::Answered(suggestion)) = step(&app) else { panic!("no answer") };
-        assert_eq!(suggestion.write.as_ref().map(ToString::to_string).as_deref(), Some("DELETE from orders"));
+        assert_eq!(suggestion.writes.iter().map(ToString::to_string).collect::<Vec<_>>(), ["DELETE from orders"]);
+    }
+
+    #[test]
+    fn an_answer_names_each_of_its_writes() {
+        let mut app = waiting("SELECT 1", "ids");
+        let writes =
+            vec![Statement::new("DELETE FROM orders"), Statement::new("SELECT 1"), Statement::new("UPDATE customers SET name = 'x'")];
+        app.apply(Answer::Asked { ask: AskId::FIRST, answer: Ok(writes) });
+        let Some(AskStep::Answered(suggestion)) = step(&app) else { panic!("no answer") };
+        let named: Vec<String> = suggestion.writes.iter().map(ToString::to_string).collect();
+        assert_eq!(named, ["DELETE from orders", "UPDATE customers"]);
     }
 
     #[test]
@@ -402,7 +431,7 @@ pub(in crate::tui) mod tests {
         let reads = vec![Statement::new("SELECT 1"), Statement::new("SELECT 2")];
         app.apply(Answer::Asked { ask: AskId::FIRST, answer: Ok(reads) });
         let Some(AskStep::Answered(suggestion)) = step(&app) else { panic!("no answer") };
-        assert_eq!((suggestion.text.as_str(), &suggestion.write), ("SELECT 1;\nSELECT 2", &None));
+        assert_eq!((suggestion.text.as_str(), suggestion.writes.is_empty()), ("SELECT 1;\nSELECT 2", true));
     }
 
     fn open_in_the_editor(app: &mut App, text: &str) {
