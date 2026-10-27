@@ -56,7 +56,7 @@ ORDER BY role <> session_user, role, rank, object";
 const SIGNALS_SESSIONS: &str = "SELECT pg_has_role(session_user, 'pg_signal_backend', 'MEMBER')";
 /// The `dblink` functions that send SQL of the caller's to a session of their own, which a read-only transaction does
 /// not hold, that the login role, or a role it may become, may call.
-const DBLINK_FUNCTIONS: &str = "SELECT p.oid::regprocedure::text FROM pg_proc p
+const DBLINK_FUNCTIONS: &str = "SELECT DISTINCT p.proname::text FROM pg_proc p
     JOIN pg_depend d ON d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e'
     JOIN pg_extension e ON e.oid = d.refobjid
     WHERE e.extname = 'dblink' AND p.proname IN ('dblink', 'dblink_exec', 'dblink_send_query', 'dblink_open')
@@ -219,6 +219,12 @@ mod tests {
         format!("DO $$ BEGIN CREATE ROLE {role} {options}; EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$")
     }
 
+    /// Two tests making it at once on a fresh database race past `IF NOT EXISTS`, and the loser meets the winner's row.
+    fn create_dblink() -> String {
+        "DO $$ BEGIN CREATE EXTENSION IF NOT EXISTS dblink; EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$"
+            .to_owned()
+    }
+
     /// A login role `role` that may read `table`, and do `grant` on it too when set.
     async fn role_on(role: &str, table: &str, grant: Option<&str>) -> Session {
         let setup = [
@@ -355,19 +361,19 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
-    async fn a_role_that_may_call_dblink_names_its_functions() {
-        as_owner(&[create_role("doctor_linker", "LOGIN"), "CREATE EXTENSION IF NOT EXISTS dblink".to_owned()]).await;
+    async fn a_role_that_may_call_dblink_names_each_function_once() {
+        as_owner(&[create_role("doctor_linker", "LOGIN"), create_dblink()]).await;
         let gaps = gaps_of("doctor_linker").await;
-        assert!(gaps.dblink_functions.iter().any(|function| function.starts_with("dblink_exec(")), "{gaps:?}");
+        assert_eq!(gaps.dblink_functions.iter().filter(|function| *function == "dblink_exec").count(), 1, "{gaps:?}");
     }
 
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_role_that_may_send_a_query_through_dblink_names_those_functions() {
-        as_owner(&[create_role("doctor_sender", "LOGIN"), "CREATE EXTENSION IF NOT EXISTS dblink".to_owned()]).await;
+        as_owner(&[create_role("doctor_sender", "LOGIN"), create_dblink()]).await;
         let gaps = gaps_of("doctor_sender").await;
-        for name in ["dblink_send_query(", "dblink_open("] {
-            assert!(gaps.dblink_functions.iter().any(|function| function.starts_with(name)), "{name}: {gaps:?}");
+        for name in ["dblink_send_query", "dblink_open"] {
+            assert!(gaps.dblink_functions.iter().any(|function| function == name), "{name}: {gaps:?}");
         }
     }
 

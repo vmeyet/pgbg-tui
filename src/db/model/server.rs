@@ -59,7 +59,8 @@ pub(crate) struct Named {
 pub(crate) struct ReadOnlyGaps {
     /// It may cancel or end other sessions, through `pg_signal_backend`.
     pub(crate) signals_sessions: bool,
-    /// The `dblink` functions it may call, as `dblink_exec(text,text)`: each opens a session of its own that may write.
+    /// The `dblink` functions it may call, each named once whatever its overloads: each opens a session of its own that
+    /// may write.
     pub(crate) dblink_functions: Vec<String>,
     /// The settings only a superuser could set, granted it with `GRANT SET ON PARAMETER`.
     pub(crate) granted_settings: Vec<String>,
