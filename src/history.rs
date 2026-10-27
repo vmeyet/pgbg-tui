@@ -20,6 +20,10 @@ const PATH_VARIABLE: &str = "PGBG_DATA_DIR";
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
 const DIR_MODE: u32 = 0o700;
 const FILE_MODE: u32 = 0o600;
+/// How many times a writer opens the file again when another one rolled it over while it waited for the lock; a file
+/// system whose files never stay the same (some FUSE and SMB mounts) would loop forever otherwise.
+const LOCK_ATTEMPTS: usize = 8;
+const KEPT_CHANGING: &str = "the history file kept changing while pgbg waited for its lock";
 const PASSWORD_WORD: &str = "password";
 const SCHEME_END: &str = "://";
 const PASSWORD_KEPT_AS: &str = "-- not kept: it holds a password";
@@ -149,15 +153,23 @@ fn dir_from(variable: Option<OsString>, data_dir: Option<PathBuf>) -> Option<Pat
     Some(config::named_path(variable).or_else(|| data_dir.map(|dir| dir.join("pgbg")))?.join("history"))
 }
 
-/// The file at `path`, opened to append and locked for this process alone; opened again when another writer rolled it over
-/// while this one waited.
+/// The file at `path`, opened to append and locked for this process alone; opened again, a few times at most, when
+/// another writer rolled it over while this one waited.
 fn locked(path: &Path) -> io::Result<File> {
-    loop {
+    first_some(LOCK_ATTEMPTS, || {
         let file = OpenOptions::new().create(true).append(true).mode(FILE_MODE).open(path)?;
-        if let Some(file) = locked_if_current(file, path)? {
-            return Ok(file);
+        locked_if_current(file, path)
+    })
+}
+
+/// What the first of `attempts` tries gives, else an error.
+fn first_some<T>(attempts: usize, mut attempt: impl FnMut() -> io::Result<Option<T>>) -> io::Result<T> {
+    for _ in 0..attempts {
+        if let Some(found) = attempt()? {
+            return Ok(found);
         }
     }
+    Err(io::Error::other(KEPT_CHANGING))
 }
 
 /// `file` once locked, while it is still the one at `path`; `None` when it was rolled over before the lock was taken.
@@ -233,6 +245,12 @@ mod tests {
 
     fn shop() -> ConnectionName {
         "shop".parse().unwrap()
+    }
+
+    #[test]
+    fn a_file_that_keeps_changing_under_the_lock_is_an_error_not_a_loop() {
+        let err = first_some(3, || Ok(None::<File>)).unwrap_err();
+        assert!(err.to_string().contains("kept"), "{err}");
     }
 
     #[test]

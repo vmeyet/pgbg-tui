@@ -28,7 +28,18 @@ impl ConfigFile {
     /// item then deletes the old one no other connection names.
     pub(super) fn save(&self, save: SaveConnection) {
         let (path, answers) = (self.path.clone(), self.answers.clone());
-        tokio::task::spawn_blocking(move || send(&answers, save.id, changed(&path, |path| saved(path, &save, &Keychain::PGBG))));
+        tokio::task::spawn_blocking(move || {
+            let id = save.id;
+            send(&answers, id, save_answer(&path, save, &Keychain::PGBG));
+        });
+    }
+}
+
+/// What `save` came to; a failure hands the password typed back, so the form keeps it.
+fn save_answer(path: &Path, save: SaveConnection, keychain: &Keychain) -> ConfigAnswer {
+    match changed(path, |path| saved(path, &save, keychain)) {
+        ConfigAnswer::Failed { why, .. } => ConfigAnswer::Failed { why, password: save.password.map(|typed| typed.password) },
+        ConfigAnswer::Changed(connections) => ConfigAnswer::Changed(connections),
     }
 }
 
@@ -67,7 +78,7 @@ fn remove(path: &Path, name: &ConnectionName) -> Result<()> {
 fn changed(path: &Path, change: impl FnOnce(&Path) -> Result<()>) -> ConfigAnswer {
     match change(path).and_then(|()| Config::read(path)) {
         Ok(loaded) => ConfigAnswer::Changed(loaded.config.connections),
-        Err(err) => ConfigAnswer::Failed(format!("{err:#}")),
+        Err(err) => ConfigAnswer::Failed { why: format!("{err:#}"), password: None },
     }
 }
 
@@ -126,15 +137,28 @@ mod tests {
         let answer = changed(&path, |path| saved(path, &save, &Keychain::TEST));
         let read = Keychain::TEST.read(&item).await;
         Keychain::TEST.delete(&item).unwrap();
-        assert!(matches!(&answer, ConfigAnswer::Failed(why) if why.contains("already")), "{answer:?}");
+        assert!(matches!(&answer, ConfigAnswer::Failed { why, .. } if why.contains("already")), "{answer:?}");
         assert!(read.is_err(), "the keychain item was written");
+    }
+
+    #[test]
+    fn a_failed_save_hands_back_the_password_typed() {
+        let (_dir, path) = config(SHOP);
+        let mut typed = crate::secret::Secret::default();
+        "hunter2".chars().for_each(|c| typed.push(c));
+        let item: KeychainItem = "probe-handed-back".parse().unwrap();
+        let change = config::ConnectionChange { password: Some(crate::secret::SecretSource::Keychain(item.clone())), ..Default::default() };
+        let password = Some(KeychainPassword { item, password: typed });
+        let save = SaveConnection { id: ConfigChangeId::FIRST, name: "local".parse().unwrap(), saving: Saving::Add, change, password };
+        let answer = save_answer(&path, save, &Keychain::TEST);
+        assert!(matches!(&answer, ConfigAnswer::Failed { password: Some(back), .. } if back.expose() == "hunter2"), "{answer:?}");
     }
 
     #[test]
     fn a_connection_the_config_does_not_hold_is_a_failure_and_the_file_stays() {
         let (_dir, path) = config(SHOP);
         let answer = changed(&path, |path| remove(path, &"prod".parse().unwrap()));
-        assert!(matches!(&answer, ConfigAnswer::Failed(why) if why.contains("prod")), "{answer:?}");
+        assert!(matches!(&answer, ConfigAnswer::Failed { why, .. } if why.contains("prod")), "{answer:?}");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), SHOP);
     }
 }

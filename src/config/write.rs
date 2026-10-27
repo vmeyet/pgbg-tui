@@ -19,7 +19,7 @@ pub(crate) struct ConnectionChange {
     pub(crate) tier: Option<Tier>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) url: Option<Target>,
-    /// Sets the tunnel's `command`, keeping the `before` the config already has.
+    /// Sets the tunnel's `command`, and its `before` when it has one, else keeps the `before` the config already has.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) tunnel: Option<TunnelSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -67,12 +67,12 @@ pub(crate) fn set_password(path: &Path, name: &ConnectionName, source: &SecretSo
     edit_connection(path, name, &change)
 }
 
-/// Each key `change` sets, in place of the old one; a tunnel sets only its `command`.
+/// Each key `change` sets, in place of the old one; a tunnel sets only the keys it has.
 fn apply(table: &mut dyn TableLike, change: &ConnectionChange) -> Result<()> {
     let Value::InlineTable(keys) = value_of(change)? else { bail!("a connection change is not a table") };
     for (key, value) in &keys {
-        match value.as_inline_table().and_then(|tunnel| tunnel.get("command")).filter(|_| key == TUNNEL) {
-            Some(command) => set_tunnel_command(table, command.clone()),
+        match value.as_inline_table().filter(|_| key == TUNNEL) {
+            Some(tunnel) => set_tunnel(table, tunnel),
             None => set_value(table, key, value.clone()),
         }
     }
@@ -91,11 +91,11 @@ fn set_value(table: &mut dyn TableLike, key: &str, mut value: Value) {
     table.insert(key, Item::Value(value));
 }
 
-/// The tunnel's `command`, keeping its `before` when it has one.
-fn set_tunnel_command(table: &mut dyn TableLike, command: Value) {
+/// The tunnel's keys `keys` sets, keeping the `before` it has when `keys` has none.
+fn set_tunnel(table: &mut dyn TableLike, keys: &InlineTable) {
     match table.get_mut(TUNNEL).and_then(Item::as_table_like_mut) {
-        Some(tunnel) => set_value(tunnel, "command", command),
-        None => set_value(table, TUNNEL, Value::InlineTable(InlineTable::from_iter([("command", command)]))),
+        Some(tunnel) => keys.iter().for_each(|(key, value)| set_value(tunnel, key, value.clone())),
+        None => set_value(table, TUNNEL, Value::InlineTable(keys.clone())),
     }
 }
 
@@ -255,7 +255,7 @@ mod tests {
     }
 
     fn tunnel(command: &[&str]) -> TunnelSpec {
-        TunnelSpec::new(command.iter().map(|&word| word.to_owned()).collect()).unwrap()
+        TunnelSpec::new(command.iter().map(|&word| word.to_owned()).collect(), None).unwrap()
     }
 
     fn read(path: &Path) -> String {
@@ -320,6 +320,14 @@ mod tests {
         let (_dir, path) = typed_config(&format!("{TYPED}tunnel = {{ command = [\"proxy\", \"{{port}}\"], before = [\"wake\"] }}\n"));
         edit_connection(&path, &prod(), &change(|c| c.tunnel = Some(tunnel(&["ssh", "{port}"])))).unwrap();
         assert!(read(&path).ends_with("tunnel = { command = [\"ssh\", \"{port}\"], before = [\"wake\"] }\n"), "{}", read(&path));
+    }
+
+    #[test]
+    fn editing_the_tunnel_with_a_before_command_sets_both() {
+        let (_dir, path) = typed_config(&format!("{TYPED}tunnel = {{ command = [\"proxy\", \"{{port}}\"], before = [\"wake\"] }}\n"));
+        let tunnel = TunnelSpec::new(vec!["ssh".into(), "{port}".into()], Some(vec!["start".into()])).unwrap();
+        edit_connection(&path, &prod(), &change(|c| c.tunnel = Some(tunnel))).unwrap();
+        assert!(read(&path).ends_with("tunnel = { command = [\"ssh\", \"{port}\"], before = [\"start\"] }\n"), "{}", read(&path));
     }
 
     #[test]

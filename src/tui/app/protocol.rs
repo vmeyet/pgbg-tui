@@ -32,7 +32,7 @@ impl ConfigChangeId {
 }
 
 /// What the app asks the runner to do.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(in crate::tui) enum Action {
     /// Open a session on this connection; one already open stays as it is.
     Open(Connection),
@@ -66,7 +66,7 @@ pub(in crate::tui) enum Action {
 }
 
 /// A connection to add or edit: the keys it sets, and the password typed for its keychain item.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(in crate::tui) struct SaveConnection {
     pub(in crate::tui) id: ConfigChangeId,
     pub(in crate::tui) name: ConnectionName,
@@ -77,7 +77,7 @@ pub(in crate::tui) struct SaveConnection {
 }
 
 /// A password typed for the keychain item the connection names, whether that item is new or already in the config.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(in crate::tui) struct KeychainPassword {
     pub(in crate::tui) item: KeychainItem,
     pub(in crate::tui) password: Secret,
@@ -91,7 +91,7 @@ pub(in crate::tui) enum Saving {
 }
 
 /// What the backend answers.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub(in crate::tui) enum Answer {
     /// From the session of `connection`, so an answer from one never lands on another.
     Session { connection: ConnectionName, incoming: Incoming },
@@ -106,12 +106,13 @@ pub(in crate::tui) enum Answer {
 }
 
 /// What changing the config came to.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(in crate::tui) enum ConfigAnswer {
     /// Its connections once changed, read back from the file.
     Changed(Vec<Connection>),
-    /// The change was refused or failed, in the error's words; the file is as it was.
-    Failed(String),
+    /// The change was refused or failed, in the error's words; the file is as it was, and the password typed for it
+    /// comes back to the form.
+    Failed { why: String, password: Option<Secret> },
 }
 
 /// What reading the saved queries came to.

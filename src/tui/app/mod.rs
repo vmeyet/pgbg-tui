@@ -67,7 +67,7 @@ pub(super) struct Fit {
 }
 
 /// What lies over the panes and takes every key while it is open.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub(super) enum Overlay {
     /// The `?` list of keys.
     Help(Help),
@@ -327,7 +327,7 @@ impl App {
             Answer::Queries(QueryAnswer::Saved { connection, query, text }) => self.saved(&connection, query, &text),
             Answer::Queries(QueryAnswer::NotSaved { connection, path, error }) => self.not_saved(&connection, &path, &error),
             Answer::Config { id, answer: ConfigAnswer::Changed(connections) } => return self.take_connections(id, connections),
-            Answer::Config { id, answer: ConfigAnswer::Failed(error) } => self.config_failed(id, error),
+            Answer::Config { id, answer: ConfigAnswer::Failed { why, password } } => self.config_failed(id, why, password),
             Answer::History { connection, entries } => self.history_read(&connection, entries),
             Answer::Copied(note) => self.copied(note),
         }

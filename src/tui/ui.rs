@@ -130,6 +130,7 @@ fn session_text(session: &SessionState) -> &'static str {
         SessionState::Opening => "connecting…",
         SessionState::Open => "connected",
         SessionState::Failed(_) => "failed",
+        SessionState::Closed => "closed",
     }
 }
 

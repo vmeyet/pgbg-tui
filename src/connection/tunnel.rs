@@ -21,9 +21,9 @@ pub(crate) struct TunnelSpec {
 }
 
 impl TunnelSpec {
-    /// A tunnel that runs `command` and nothing before it.
-    pub(crate) fn new(command: Vec<String>) -> anyhow::Result<Self> {
-        Self::try_from(TunnelEntry { command, before: None }).map_err(anyhow::Error::msg)
+    /// A tunnel that runs `command`, once `before` ran when there is one.
+    pub(crate) fn new(command: Vec<String>, before: Option<Vec<String>>) -> anyhow::Result<Self> {
+        Self::try_from(TunnelEntry { command, before }).map_err(anyhow::Error::msg)
     }
 
     pub(crate) fn command(&self) -> &[String] {
@@ -88,7 +88,7 @@ mod tests {
 
     #[test]
     fn a_tunnel_built_from_a_command_without_the_port_placeholder_is_refused() {
-        assert!(TunnelSpec::new(vec!["ssh".into(), "db.example.com".into()]).unwrap_err().to_string().contains("{port}"));
+        assert!(TunnelSpec::new(vec!["ssh".into(), "db.example.com".into()], None).unwrap_err().to_string().contains("{port}"));
     }
 
     #[test]

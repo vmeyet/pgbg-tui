@@ -9,6 +9,7 @@ use crate::query::{Header, Query};
 use std::time::Duration;
 
 pub(in crate::tui) const LOST_SESSION: &str = "session lost, ⏎ opens a new one";
+const CLOSED_WHILE_RUNNING: &str = "cancelled: its session was closed";
 
 /// The statement last sent, and the byte of the editor it starts at until the text changes.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -23,6 +24,8 @@ pub(in crate::tui) enum SessionState {
     Opening,
     Open,
     Failed(String),
+    /// Closed from the picker; the sheet stays, and picking it again opens a new session.
+    Closed,
 }
 
 /// The last statement run and what came of it.
@@ -118,6 +121,15 @@ impl Sheet {
         self.tunnel = None;
     }
 
+    /// Forgets the session, which the backend closes; a statement running on it fails, the editor stays.
+    pub(super) fn close(&mut self) {
+        self.session = SessionState::Closed;
+        self.tunnel = None;
+        if self.is_running() {
+            self.run = Run::Failed(CLOSED_WHILE_RUNNING.to_owned());
+        }
+    }
+
     pub(super) fn cancel(&mut self) -> Vec<Action> {
         let Run::Running { run } = self.run else { return vec![] };
         self.run = Run::Cancelling { run };
@@ -173,7 +185,9 @@ impl Sheet {
     }
 
     pub(super) fn apply(&mut self, incoming: Incoming) {
+        let is_closed = self.session == SessionState::Closed;
         match incoming {
+            Incoming::Opened | Incoming::NotOpened(_) | Incoming::Closed(_) | Incoming::Tunnel(_) if is_closed => {}
             Incoming::Opened => self.session = SessionState::Open,
             Incoming::NotOpened(err) => self.session = SessionState::Failed(err),
             Incoming::Closed(why) => self.session = SessionState::Failed(format!("{LOST_SESSION}: {why}")),
