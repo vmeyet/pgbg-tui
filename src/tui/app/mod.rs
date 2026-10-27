@@ -243,6 +243,18 @@ impl App {
             Act::Quit => return self.quit(),
             Act::Down if self.focus == Focus::Queries => self.step_sidebar(1),
             Act::Up if self.focus == Focus::Queries => self.step_sidebar(-1),
+            Act::Down
+            | Act::Up
+            | Act::PageDown
+            | Act::PageUp
+            | Act::Top
+            | Act::Bottom
+            | Act::Left
+            | Act::Right
+            | Act::Detail
+            | Act::CopyCell
+            | Act::CopyRow
+                if self.sheet().is_chart_shown() => {}
             Act::Down => return self.grid_step(Move::Down),
             Act::Up => return self.grid_step(Move::Up),
             Act::PageDown => return self.grid_step(Move::PageDown),
@@ -524,6 +536,26 @@ pub(super) mod tests {
         let Run::Done { grid, .. } = &app.sheet().run else { panic!("no result") };
         assert_eq!(grid.row, 1);
         assert_eq!(app.sheet().editor.text(), "SELECT 1");
+    }
+
+    fn on_the_chart() -> App {
+        let mut app = with_result();
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Char('v'));
+        app
+    }
+
+    #[test]
+    fn j_on_the_chart_leaves_the_hidden_grid_alone() {
+        let mut app = on_the_chart();
+        press(&mut app, KeyCode::Char('j'));
+        let Run::Done { grid, .. } = &app.sheet().run else { panic!("no result") };
+        assert_eq!(grid.row, 0);
+    }
+
+    #[test]
+    fn y_on_the_chart_copies_no_hidden_cell() {
+        assert_eq!(on_the_chart().handle_key(KeyEvent::from(KeyCode::Char('y'))), []);
     }
 
     #[test]

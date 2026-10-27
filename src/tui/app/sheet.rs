@@ -134,15 +134,35 @@ impl Sheet {
         self.session_id = session_id;
         self.session = SessionState::Opening;
         self.tunnel = None;
+        self.stop_paging();
+    }
+
+    /// Takes `connection` as it is now and leaves the session closed: picking the sheet opens it as it is then.
+    pub(super) fn take_closed(&mut self, connection: Connection) {
+        self.connection = connection;
     }
 
     /// Forgets the session, which the backend closes; a statement running on it fails, the editor stays.
     pub(super) fn close(&mut self) {
         self.session = SessionState::Closed;
         self.tunnel = None;
+        self.stop_paging();
         if self.is_running() {
             self.run = Run::Failed(CLOSED_WHILE_RUNNING.to_owned());
         }
+    }
+
+    /// Cuts the result at the rows it has, since the portal its pages came from closes with the session.
+    fn stop_paging(&mut self) {
+        if let Run::Done { result, is_page_asked, .. } = &mut self.run {
+            result.cut();
+            *is_page_asked = false;
+        }
+    }
+
+    /// Whether the result pane shows a chart, and so not the grid the cursor keys move.
+    pub(super) fn is_chart_shown(&self) -> bool {
+        matches!(self.run, Run::Done { view: View::Chart(_), .. })
     }
 
     pub(super) fn cancel(&mut self) -> Vec<Action> {
@@ -215,9 +235,10 @@ impl Sheet {
                 let view = header_chart.map_or(View::Grid, |series| View::Chart(Ok(series)));
                 self.run = Run::Done { run, grid: Box::new(Grid::new(&result)), result, took, view, is_page_asked: false };
             }
-            Incoming::Page { run, page } => self.push_page(run, page),
-            Incoming::PageFailed { run, error } => {
-                self.push_page(run, Page { rows: vec![], extent: Extent::Cut });
+            Incoming::Page { run, .. } | Incoming::PageFailed { run, .. } if !self.is_waiting_on_page(run) => {}
+            Incoming::Page { page, .. } => self.push_page(page),
+            Incoming::PageFailed { error, .. } => {
+                self.push_page(Page { rows: vec![], extent: Extent::Cut });
                 self.page_failure = Some(format!("the next page failed: {error}"));
             }
             Incoming::Refused { why, .. } => self.run = Run::Failed(format!("not sent: {why}")),
@@ -241,12 +262,14 @@ impl Sheet {
         vec![Action::NextPage { connection: self.connection.name().clone(), session: self.session_id, run: *run }]
     }
 
-    /// Adds `page` to the result of `of`, the grid's widths kept from the first page; a page of another run is dropped.
-    fn push_page(&mut self, of: RunId, page: Page) {
-        if let Run::Done { run, result, is_page_asked, .. } = &mut self.run
-            && *run == of
-            && result.extent() == Extent::More
-        {
+    /// Whether the result of `run` waits on its next page.
+    fn is_waiting_on_page(&self, of: RunId) -> bool {
+        matches!(&self.run, Run::Done { run, result, .. } if *run == of && result.extent() == Extent::More)
+    }
+
+    /// Adds `page` to the result, the grid's widths kept from the first page.
+    fn push_page(&mut self, page: Page) {
+        if let Run::Done { result, is_page_asked, .. } = &mut self.run {
             result.push(page);
             *is_page_asked = false;
         }
@@ -350,6 +373,45 @@ mod tests {
         let Run::Done { result, .. } = &app.sheet().run else { panic!("no result") };
         assert_eq!(result.extent(), Extent::Cut);
         assert_eq!(app.sheet().page_failure.as_deref(), Some("the next page failed: ERROR: division by zero"));
+    }
+
+    fn extent(app: &App) -> Extent {
+        let Run::Done { result, .. } = &app.sheet().run else { panic!("no result") };
+        result.extent()
+    }
+
+    #[test]
+    fn closing_a_sheet_waiting_on_pages_cuts_its_result_and_asks_for_no_more() {
+        let mut app = first_page();
+        press(&mut app, 'G');
+        app.sheet_mut().close();
+        assert_eq!((extent(&app), press(&mut app, 'G')), (Extent::Cut, vec![]));
+    }
+
+    #[test]
+    fn opening_a_sheet_again_cuts_the_result_its_old_session_paged() {
+        let mut app = first_page();
+        let connection = app.sheet().connection.clone();
+        app.sheet_mut().reopen(connection, SessionId::FIRST.next());
+        assert_eq!(extent(&app), Extent::Cut);
+    }
+
+    #[test]
+    fn a_late_page_on_a_closed_sheet_is_dropped() {
+        let mut app = first_page();
+        press(&mut app, 'G');
+        app.sheet_mut().close();
+        app.apply(to_shop(Incoming::Page { run: RunId::FIRST, page: page(500, Extent::More) }));
+        assert_eq!(rows(&app), 500);
+    }
+
+    #[test]
+    fn a_late_page_failure_on_a_closed_sheet_says_nothing() {
+        let mut app = first_page();
+        press(&mut app, 'G');
+        app.sheet_mut().close();
+        app.apply(to_shop(Incoming::PageFailed { run: RunId::FIRST, error: "ERROR: canceling statement".into() }));
+        assert_eq!(app.sheet().page_failure, None);
     }
 
     #[test]

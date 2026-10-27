@@ -164,11 +164,13 @@ impl Form {
         self.sent == Some(id)
     }
 
-    /// Says why the save failed; the form stays as it was typed, with the password it sent back in it.
+    /// Says why the save failed; the form stays as it was typed, with the password it sent back in it unless another
+    /// was typed during the save.
     pub(in crate::tui) fn failed(&mut self, why: String, password: Option<Secret>) {
         self.sent = None;
         self.failure = Some(why);
-        if let Some(password) = password {
+        let is_password_empty = self.password.typed_count() == 0;
+        if let Some(password) = password.filter(|_| is_password_empty) {
             self.password = password;
         }
     }
@@ -553,6 +555,15 @@ mod tests {
         app.apply(Answer::Config { id: save.id, answer: failed("permission denied", save.password.map(|typed| typed.password)) });
         let again = saved(key(&mut app, KeyCode::Enter));
         assert_eq!(again.password.map(|typed| typed.password.expose().to_owned()).as_deref(), Some("hunter2"));
+    }
+
+    #[test]
+    fn a_failed_save_keeps_a_password_typed_while_it_was_saving() {
+        let mut app = on_local();
+        let save = keychain_password_typed(&mut app);
+        press(&mut app, "swordfish");
+        app.apply(Answer::Config { id: save.id, answer: failed("permission denied", save.password.map(|typed| typed.password)) });
+        assert_eq!(form(&app).password.expose(), "swordfish");
     }
 
     fn local() -> Connection {
