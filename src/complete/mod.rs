@@ -74,7 +74,7 @@ mod tests {
         use crate::fixtures::best_of;
         use std::time::Duration;
 
-        /// The worst key takes 0.23 ms on a laptop (`SELECT c|`, 40 000 columns to weigh), CI about four times that: ten times slower fails.
+        /// The worst key takes 0.1 ms on a laptop (`SELECT c|`, 40 000 columns to weigh), CI about four times that: ten times slower fails.
         const BUDGET: Duration = Duration::from_micros(2_500);
 
         #[test]

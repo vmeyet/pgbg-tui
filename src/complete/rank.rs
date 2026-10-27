@@ -1,8 +1,9 @@
 //! The candidates for an ask, best first: vtui ranks each list of names, and this merges the lists, a prefix before a
 //! fuzzy match, a column of a table the statement names before any other name, and among prefixes the shorter first.
 use super::context::{Ask, Want};
-use super::index::{Found, Index, Names};
+use super::index::{Index, Names};
 use std::collections::HashSet;
+use vtui::complete::Ghost;
 
 /// How many candidates the list keeps.
 const MAX_LISTED: usize = 50;
@@ -62,7 +63,7 @@ impl Index {
             let found = tier.filter_map(|source| Some((source.kind, source.names.ghost(&ask.prefix)?)));
             found.min_by_key(|(_, found)| found.rest.chars().count())
         };
-        let (kind, Found { rest, name }) = best(true).or_else(|| best(false))?;
+        let (kind, Ghost { rest, name }) = best(true).or_else(|| best(false))?;
         let insert = self.candidate(kind, &name, &ask.prefix).insert;
         let rest = if kind == Kind::Keyword { cased_as(&rest, &ask.prefix) } else { rest };
         Some(Ghosted { rest, insert })

@@ -191,7 +191,7 @@ Charting a result:
 - `tui/app/` is pure: it never reads the clock nor does I/O; its tests drive it with keys and `Answer` values.
 - `chart/` is pure: a `ResultSet` in, a `Series` out; drawing lives in `tui/chart_view/`.
 - `format/` is pure: a `Value`, a `Format` and a `Clock` in, the cell's text out; it never reads the clock itself.
-- A program that takes the terminal (`$EDITOR` on a saved query) runs from the loop through `Screen::lend`, with the key stream dropped and, through vtui, pastes given back until it exits; the query is read again after.
+- A program that takes the terminal (`$EDITOR` on a saved query) runs from the loop through `Screen::lend`, with the key stream dropped and, through vtui, pastes given back until it exits, then every cell drawn again at the terminal's size; the query is read again after.
 - Secrets are read only in `secret/` and sent only by `Session::open` and the keychain write.
 
 ## Read only
