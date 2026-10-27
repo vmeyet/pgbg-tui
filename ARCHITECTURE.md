@@ -18,20 +18,24 @@ When a boundary or a flow changes, change this page in the same MR.
 | `tunnel/` | `Tunnel`: a child process forwarding a free `127.0.0.1` port to the database; start, wait for the port, stop; its `Route` is what a session opens along |
 | `db/` | The only module that sees `tokio_postgres`: connect over rustls, open a session along its route, through the connection's tunnel when it has one (`open_once` for a command, which owns the tunnel and stops it), run a statement, stream rows, cancel |
 | `db/model/` | The neutral model: `ResultSet`, `Column`, `ColumnKind`, `Value`, `Page` (planned), `Schema` (its tables, their columns and indexes, filtered by name, and `Schema::complete` for the editor), `Table`, `ServerError`, `Route` (direct, or a tunnel's `LocalPort`), and `CancelToken`, whose driver part only `db/` reads |
-| `db/schema.rs` | `Session::read_schema`: every schema, table, column and index the role can read, from `pg_class`, `pg_attribute` and `pg_index` in one read-only transaction, a partition left to its parent; the TUI reads it on a second session along the same route, so its statements never wait on it (planned) |
+| `db/schema.rs` | `Session::read_schema`: every schema, table, column and index the role can read, from `pg_class`, `pg_attribute` and `pg_index` in one read-only transaction, a partition left to its parent; the TUI reads it on a second session along the same route, opened with the same password read and closed once read, so its statements never wait on it (planned) |
 | `db/server.rs` | What the server says of a session (`ServerFacts`: user, version, the `statement_timeout` in effect and the server's own, from `pg_settings`) and what its role can write (`RoleRights`: for the login role, each role it may `SET ROLE` to and `PUBLIC`, the flags, `pg_write_all_data`, database `CREATE`, and the schemas, tables and sequences each may write, read from the ACLs so each grant names its role), read with `Session::read_only` like the schema |
+| `db/lex.rs` (planned) | The tokenizer: words, strings, comments, dollar quotes and `{{name}}`, each with its place; the guard, completion and parameters read the same tokens |
 | `db/guard.rs` | Classifies a statement before it is sent: read, write, or more than one statement; `admit` turns a statement into an `Admitted`, the only kind a session runs; `statement_at` finds the statement under the editor's cursor with the same tokenizer |
 | `db/decode.rs` | Wire values to `Value`, by column type, a domain by its base type; a value it cannot decode is `Unsupported`, never an error |
-| `query/` | Saved queries: the `.pgbg/queries/` tree, the header (`-- name:`, `-- connection:`, `-- chart:`), load, and save (planned) |
+| `query/` | Saved queries: the `.pgbg/queries/` tree, the header (`-- name:`, `-- connection:`, `-- chart:`, and `-- param:`, `-- format:` (planned)), load, and save |
+| `query/params.rs` (planned) | Parameters: the `{{name}}` of a statement turned into `$n` and the `Params` each run binds; pure |
+| `complete/` (planned) | Completion, pure: the `Index` built once from a `Schema` (names lowercased and sorted, so a prefix is a binary search), the `Context` at the cursor from the tokens of the statement under it (a table after `FROM` or `JOIN`, a column of `orders` after `o.` when `FROM orders o`, a keyword at a statement's start), and the ranked candidates |
+| `format/` (planned) | Formats, pure: for each `ColumnKind`, the ways a cell can read (raw first) and the text of one cell in one of them, the clock and the time zone passed in |
 | `history.rs` | Every statement run, per connection: one JSON line each in `<data folder>/pgbg/history/<connection>.jsonl` (folder `0700`, file `0600`), rolled over to `.1` past 4 MB under an exclusive `flock`, so two pgbg never lose each other's lines; the text, when, how long and what came of it, never a row, the server's words or a statement holding `PASSWORD` or a URL with a password; `History::distinct` lists each statement once for `ctrl-r`, which `Search` narrows as the finder does |
 | `chart/` | `ChartSpec` (kind, x column, y columns) and `Series` built from a `ResultSet`, both pure; one file per chart kind |
 | `syntax/` | SQL colours from tree-sitter, loaded on first use |
 | `act.rs`, `keymap.rs` (planned) | Every action in one table (name, default keys, help, pane, and palette verb (planned)); the user's `[keys]` on top (planned) |
 | `tui/mod.rs` | The event loop: terminal events, answers and the recolour timer in, frames out |
-| `tui/app/` | `App`, the pure state machine: keys in, `Action`s out, `Answer`s applied to the sheet of the connection that gave them, a saved query read to the sheet that asked for it, a config answer to the form that sent its `ConfigChangeId` (else to the status line); `protocol.rs` holds what the app and the backend say to each other, `sheet.rs` one connection's state, `search.rs` the fzf-narrowed list the finder and the picker share; one `Overlay` at most (help, finder, picker, connection form) takes the keys |
+| `tui/app/` | `App`, the pure state machine: keys in, `Action`s out, `Answer`s applied to the sheet of the connection that gave them, a saved query read to the sheet that asked for it, a config answer to the form that sent its `ConfigChangeId` (else to the status line); `protocol.rs` holds what the app and the backend say to each other, `sheet.rs` one connection's state, `search.rs` the fzf-narrowed list the finder and the picker share; one `Overlay` at most (help, finder, picker, connection form, the completion list (planned)) takes the keys; the sidebar shows the queries or the schema (planned), and the parameter bar sits above the editor (planned) |
 | `tui/backend/` | `Backend::dispatch` hands each `Action` over without waiting, to one part per concern: sessions (one per connection opened, a task owns each one, runs its statements in turn, takes cancels by `RunId` while a statement runs, and says when the session is lost), queries, the config (changed through `config/` on a blocking thread, then read back; a typed password goes to the keychain only once the config took the change), and history (each run added on a blocking thread once answered, best effort and logged; read for `ctrl-r` the same way) |
 | `tui/ui.rs`, `tui/*_view.rs` | Drawing: layout in `ui.rs`, one view module per pane or modal |
-| `tui/grid_view/` | The results grid: only the visible rows and columns are drawn |
+| `tui/grid_view/` | The results grid: only the visible rows and columns are drawn, each cell through its column's format (planned) |
 | `tui/chart_view/` | Draws a `Series` with ratatui's `BarChart` (bars across, so text labels stay readable) and `Chart` (braille line), one file per kind; a legend in vtui's user colours |
 | `tui/theme.rs` | The tier colours, the failure colour (never the production red) and the SQL token colours on top of vtui's palette |
 | `vtui` (git dependency) | Shared with the sibling TUIs: the terminal in raw mode (`Screen`), the palette (`Theme`), the input box (`Field`), the `ctrl-k` palette, the `?` overlay, fzf-style matching |
@@ -68,6 +72,30 @@ Switching connection:
    It is a session setting, so behind PgBouncer in transaction pooling it does not follow pgbg's next transaction: there, give the role its own `statement_timeout`.
 7. Opening gives up after 10 seconds, TLS and login included, unless the `url` sets `connect_timeout`; and each session asks the server to stop its statement once pgbg is gone (`client_connection_check_interval`).
 
+Completing a name (planned):
+
+1. Once a session opens, its task opens a second session along the same route, reads the schema, closes it and answers `Incoming::Schema`; a failed read is a warning, never a lost session.
+   The backend builds the `complete::Index` on a blocking thread and the sheet keeps it with the `Schema` behind an `Arc`, shared and never changed; `r` in the schema tab reads it again, and so does a session opened again.
+2. Each key in the editor asks `complete` for the context at the cursor and the candidates, in the app, before the frame: under a millisecond, so it never waits on the database.
+3. Candidates rank by: a prefix before a fuzzy match, a column of a table the statement names before any other, then shorter first; at most 50 are kept.
+4. The best one shows dimmed after the cursor (vtui's `complete::ghost`); `→` at the end of the word takes it, quoted when its name needs it; `ctrl-space` opens the list.
+5. A schema past 20 000 tables keeps the first ones in name order and says it is cut; completion and the sidebar work on what was kept.
+
+Running a saved query with parameters (planned):
+
+1. `query::params` reads the `{{name}}` of the statement under the cursor from `db::lex`'s tokens, never inside a string, a comment or a quoted name, and the header's `-- param: since date = 2024-01-01`, `-- param: owner text optional`.
+2. The parameter bar above the editor shows one field per name, filled with the last values given for this query on this connection, else the default; `⏎` in a field runs.
+3. The statement is sent with each name as `$1`, `$2` (the same name the same number), so the guard classifies what the server gets; a name left empty, with no default and not `optional`, stops the run before anything is sent, and an `optional` one is bound as NULL.
+4. The session prepares the statement with the header's types, looked up by the server (`to_regtype`) from a bound name, else with the types the server infers, and binds each value in text: the server parses it with that type's own input, and a value it cannot read fails with its words.
+5. The history keeps the statement with its `{{name}}`, never the values; the values go in `<data folder>/pgbg/params/<connection>.json` (`0600`), keyed by query path.
+
+Formatting a cell (planned):
+
+1. A result opens with every column in the format the header's `-- format:` names, else the config's `[display] format` (`raw` or `readable`).
+2. `f` on a column steps through its kind's formats, `F` sets every column raw or readable; the sheet keeps the choice by column index with the result, and the grid widths are measured again on the first page.
+3. The loop passes the clock and the local time zone to the drawing, so `format/` stays pure; a relative time redraws each minute while one is shown.
+4. Formats are for reading only: `pgbg run`, `--json` and a copy (planned) give raw values.
+
 Charting a result:
 
 1. `v` on a result asks `chart::infer` for its `ChartColumns`, by index so two columns of one name (`count`) stay apart: the first text, date or time column as x, else the first numeric column when it holds ascending integers (`year`), every other numeric column as y; bars when x is text or there are at most 12 rows, a line otherwise.
@@ -94,6 +122,8 @@ Four layers, outermost first; only the last one is a guarantee.
 2. **Guard**: `db::guard` lets through `SELECT`, `WITH` without a data-changing part, `VALUES`, `TABLE`, `EXPLAIN` without `ANALYZE`, and `SHOW`, without a row lock (`FOR UPDATE`, `FOR SHARE`) or `SELECT ... INTO`; anything else is refused locally.
 3. **Transaction**: one statement per round trip (the extended protocol refuses more), inside `BEGIN READ ONLY`, always rolled back; the server refuses writes even when the guard misses one.
 4. **Role**: a read-only database role. A read-only transaction still lets a function with side effects run (`pg_terminate_backend`, `dblink`); only the role stops those.
+
+A parameter is always bound, never put in the statement's text (planned): its value cannot change what the guard admitted.
 
 On a connection that allows writes, a statement runs as typed, except that one returning rows goes through a portal in its own committed transaction, unless the user's own `BEGIN` left one open (a `SAVEPOINT` probe tells).
 
@@ -135,7 +165,7 @@ On a connection that allows writes, a statement runs as typed, except that one r
 - Listing walks the folders on a blocking thread, keeps only plain files, and never follows a link, so nothing outside the root is listed.
 - Opening reads the file through `tokio::fs`, again only when it is a plain file whose real path stays inside its root, and only up to 1 MiB; a bigger one is too big for the editor.
 - A query path is drawn with its control characters and text-reversing marks escaped.
-- An optional header of `--` lines sets the name, the default connection and the chart; a file without a header is still a query.
+- An optional header of `--` lines sets the name, the default connection, the chart, and the parameters and formats (planned); a file without a header is still a query.
 - The header is read again whenever the editor's text changes; a line it cannot read is a warning in the editor's title, never a failure.
 - `-- connection:` only suggests: the editor's title names it, in red when it is a production connection, and a statement always runs on the session on screen.
 - The file is the source of truth: pgbg reads it when it is opened and writes it back when it is saved, nothing else.
@@ -173,3 +203,7 @@ One word per concept, in code, docs and UI.
 | page | One batch of rows fetched from the portal |
 | chart | A bar or line drawing of a result |
 | history | Every statement run on a connection |
+| schema | The schemas, tables, columns and indexes a session's role can read |
+| completion | A name the editor offers at the cursor, from the schema or the keywords |
+| parameter | A `{{name}}` in a statement, filled in the parameter bar and bound when it runs |
+| format | How a column's cells read: raw, or a readable form of its kind |

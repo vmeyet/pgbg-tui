@@ -55,8 +55,9 @@ The MR that ships a step ticks its box.
 
 ## 8. Schema
 
-- [ ] Schema sidebar: schemas, tables, columns, indexes
-- [ ] Completion of tables and columns in the editor
+- [ ] The schema read on a second session along the same route once a session opens, kept by its sheet, read again with `r` in the sidebar; the status line says how many tables, or that it is cut
+- [ ] Schema sidebar: a second tab beside the queries (`[` `]`), schemas, tables, columns and indexes, `/` to filter
+- [ ] From a table in the sidebar: `p` previews `SELECT * FROM <table> LIMIT 100`, `i` puts its name in the editor, `⏎` shows its columns, types and indexes in the result pane
 
 ## 9. Reading a row
 
@@ -73,6 +74,25 @@ The MR that ships a step ticks its box.
 
 - [x] `pgbg doctor <connection>`: config, TLS, tunnel, login, timeout; `--json`, exit 1 on a failed check
 - [x] Role privileges: what the role can write, a warning when a read-only connection's role can
+
+## 12. Completion
+
+- [ ] `db/lex.rs`: the guard's tokenizer on its own, shared by the guard, completion and parameters
+- [ ] `complete/`: what the cursor wants (a table, a column of a table or alias, a keyword) from the statement under it, and the candidates ranked from the schema's index; pure, under a millisecond on 50 000 columns
+- [ ] Ghost in the editor: the rest of the best candidate, dimmed after the cursor, taken with `→` at the end of the word
+- [ ] `ctrl-space` lists the candidates in a popup at the cursor: `↑↓` to pick, `⏎` or `⇥` to take, `esc` to close
+
+## 13. Parameters
+
+- [ ] `{{name}}` in a statement, outside strings and comments, and `-- param: name type = default` in the header; each name becomes `$n`, so the guard and the statement under the cursor read the statement as sent
+- [ ] Bound, never spliced: each value goes in text, and the server reads it as the type it infers or the header names; `pgbg run --param name=value`
+- [ ] The parameter bar above the editor: one field per parameter of the statement under the cursor, `⏎` runs, an empty one without a default stops the run; the last values kept per query and connection
+
+## 14. Formats
+
+- [ ] `format/`: each column kind's formats (timestamps local or relative, numbers grouped or as a size, UUID short, bytes as a size), pure, the clock passed in
+- [ ] The grid draws its visible cells through them: `f` cycles the column under the cursor, `F` sets every column raw or readable
+- [ ] `-- format: created_at=relative size=bytes` in the header, and a default in `config.toml`
 
 ## Later
 
