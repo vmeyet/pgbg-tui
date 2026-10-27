@@ -137,7 +137,7 @@ The code keeps its own rules where they slipped, one MR per step.
 - [x] Channels between the session task and the app say why they cannot grow
 - [x] The session task split by concern
 - [ ] Test helpers several modules share live in `fixtures`
-- [ ] `ResultSet` storage reworked, measured before and after
+- [x] `ResultSet` storage measured on a capped result: a frame costs the same at any row, so its rows stay as they are
 - [x] `[lints]` keeps only the lints that guard a house rule or a real hazard
 
 ## Later
