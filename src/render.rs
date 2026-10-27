@@ -1,5 +1,6 @@
 //! Text for the terminal: aligned tables for the scriptable commands, and values escaped and cut for every view.
 use crate::db::model::{Extent, ResultSet, Value};
+use crate::format;
 use ratatui::text::Span;
 use std::borrow::Cow;
 
@@ -29,10 +30,7 @@ pub(crate) fn row_count(result: &ResultSet) -> String {
 
 /// `count` with its thousands apart: `1 732`, `12 000`.
 pub(crate) fn grouped(count: usize) -> String {
-    let digits = count.to_string();
-    let first = digits.len() % 3;
-    let groups = std::iter::once(&digits[..first]).chain((first..digits.len()).step_by(3).map(|at| &digits[at..at + 3]));
-    groups.filter(|group| !group.is_empty()).collect::<Vec<_>>().join(" ")
+    format::grouped_digits(&count.to_string())
 }
 
 /// The first `chars` characters `value` prints, control characters escaped.

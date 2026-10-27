@@ -30,7 +30,7 @@ When a boundary or a flow changes, change this page in the same MR.
 | `query/params.rs` (planned) | Parameters: the `{{name}}` of a statement turned into `$n` and the `Params` each run binds; pure |
 | `complete/` (planned) | Completion, pure: the `Index` built once from a `Schema` (names lowercased and sorted, so a prefix is a binary search; names in the session's `current_schemas(false)` bare, the others as `schema.table`), the `Context` at the cursor from the tokens of the statement under it, never of the whole editor (a table after `FROM` or `JOIN`, a column of `orders` after `o.` when `FROM orders o`, a keyword at a statement's start), and the ranked candidates |
 | `ai/` (planned) | Asking a command for SQL, pure: the `Prompt` (instruction, statement, schema slice, tier) as the text on the command's stdin, and its answer read back as statements; the backend runs the command |
-| `format/` (planned) | Formats, pure: for each `ColumnKind`, the ways a cell can read (raw first) and the text of one cell in one of them, the clock and the time zone passed in |
+| `format/` | Formats, pure: for each `ColumnKind`, the ways a cell can read (raw first), the step to the next one, and the text of one cell in one of them, the clock and the time zone passed in as a `Clock`; `number.rs` groups digits and reads sizes, `time.rs` reads timestamps local or relative |
 | `export.rs` | A cell, a row or a whole result as text to paste: CSV (a NULL left empty), JSON (one object per row, as `--json` gives values, a later column of a name already taken suffixed `_2`, `_3`, past every real name) or a Markdown table; every value raw and whole, a CSV formula not guarded; pure |
 | `history.rs` | Every statement run, per connection: one JSON line each in `<data folder>/pgbg/history/<connection>.jsonl` (folder `0700`, file `0600`), rolled over to `.1` past 4 MB under an exclusive `flock`, so two pgbg never lose each other's lines, the file opened again a few times at most when another pgbg rolled it over meanwhile; the text, when, how long and what came of it, never a row, the server's words or a statement holding `PASSWORD` or a URL with a password; `History::distinct` lists each statement once for `ctrl-r`, which `Search` narrows as the finder does |
 | `chart/` | `ChartSpec` (kind, x column, y columns) and `Series` built from a `ResultSet`, both pure; one file per chart kind |
@@ -149,6 +149,7 @@ Charting a result:
 - Side effects live at the edges: `main.rs`, `signal.rs`, `commands/`, `tui/mod.rs`, `tui/backend/`, `tunnel/`, `secret/`, `config/` when it rewrites the file, `query/` when it lists and reads the queries folders, `history.rs` when it appends and reads its files.
 - `tui/app/` is pure: it never reads the clock nor does I/O; its tests drive it with keys and `Answer` values.
 - `chart/` is pure: a `ResultSet` in, a `Series` out; drawing lives in `tui/chart_view/`.
+- `format/` is pure: a `Value`, a `Format` and a `Clock` in, the cell's text out; it never reads the clock itself.
 - A program that takes the terminal (`$EDITOR` on a saved query) runs from the loop through `Screen::lend`, with the key stream dropped and, through vtui, pastes given back until it exits; the query is read again after.
 - Secrets are read only in `secret/` and sent only by `Session::open` and the keychain write.
 
