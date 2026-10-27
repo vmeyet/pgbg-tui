@@ -9,7 +9,7 @@ use vtui::toward::Toward;
 /// The tables, columns and keywords completion offers, built once per catalog and never changed.
 #[derive(Debug)]
 pub(crate) struct Index {
-    /// Bare in a schema of the search path that is the first to hold that name, else `schema.table`.
+    /// Each table bare when its schema is the first of the search path to hold that name, else `schema.table`.
     pub(super) tables: complete::Index,
     /// The columns of each table, by its place in `by_name`.
     table_columns: Vec<complete::Index>,

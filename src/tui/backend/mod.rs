@@ -1,4 +1,4 @@
-//! What the runner calls: a session for each connection opened, each served by a task that owns it, and the saved queries.
+//! What the runner calls: one session per opened connection, each owned by its own task, and the saved queries.
 use super::app::{Action, Answer, Confirmed, RunId, SessionId};
 use crate::connection::{Connection, ConnectionName};
 use crate::db::model::Statement;
@@ -24,28 +24,29 @@ mod queries;
 mod schema;
 mod session;
 
-/// The way to each session task, one per connection opened, kept until pgbg quits; answers go out on the loop's channel.
+/// The handles to the session tasks, one per opened connection, kept until pgbg quits; answers go out on the loop's
+/// channel.
 #[derive(Debug)]
 pub(super) struct Backend {
     sessions: BTreeMap<ConnectionName, SessionLink>,
     answers: UnboundedSender<Answer>,
     queries: QueryFiles,
     config: ConfigFile,
-    /// Where each run is added and `ctrl-r` reads from; none keeps no history.
+    /// Where each run is recorded and where `ctrl-r` reads from; none keeps no history.
     history: Option<Store>,
     /// How long a result's portal waits for its next page.
     idle_limit: Duration,
 }
 
 impl Backend {
-    /// The backend with no session yet; saved queries are read under `roots`, the config is changed at `config`.
+    /// The backend with no session yet; saved queries are read under `roots`, and the config is changed at `config`.
     pub(super) fn new(roots: Roots, config: PathBuf, answers: UnboundedSender<Answer>) -> Self {
         let queries = QueryFiles { roots, answers: answers.clone() };
         let config = ConfigFile::start(config, answers.clone());
         Self { sessions: BTreeMap::new(), answers, queries, config, history: None, idle_limit: PAGES_IDLE_LIMIT }
     }
 
-    /// The backend adding each run to `history`.
+    /// The backend recording each run in `history`.
     pub(super) fn with_history(self, history: Option<Store>) -> Self {
         Self { history, ..self }
     }
@@ -55,7 +56,7 @@ impl Backend {
         self.queries.file(query)
     }
 
-    /// Hands `action` over without waiting on it; the loop never awaits the database.
+    /// Hands `action` over without waiting for it; the loop never waits on the database.
     pub(super) fn dispatch(&mut self, action: Action) {
         match action {
             Action::Open { connection, session } => self.open(connection, session),
@@ -83,7 +84,8 @@ impl Backend {
         }
     }
 
-    /// Reads the history of `connection` on a blocking thread; one that cannot be read is logged and comes back empty.
+    /// Reads the history of `connection` on a blocking thread; a history that cannot be read is logged and comes back
+    /// empty.
     fn list_history(&self, connection: ConnectionName) {
         let (history, answers) = (self.history.clone(), self.answers.clone());
         tokio::task::spawn_blocking(move || {
@@ -103,8 +105,8 @@ impl Backend {
         }
     }
 
-    /// Starts the task that opens the session `session` on `connection`, or asks the one that serves it to open it again
-    /// unless it is open; a task serving an older session of `connection` stops first.
+    /// Starts the task that opens the session `session` on `connection`, or asks the task already serving it to open
+    /// it again unless it is open; a task serving an older session of `connection` stops first.
     fn open(&mut self, connection: Connection, session: SessionId) {
         match self.sessions.get(connection.name()) {
             Some(link) if link.session == session => return link.send(Job::Open),
@@ -117,7 +119,8 @@ impl Backend {
         _ = self.sessions.insert(name, link);
     }
 
-    /// Queues `statement` on the session of `connection`, a write only when `confirmed`; its answer comes back as an `Answer`.
+    /// Queues `statement` on the session of `connection`, a write only when `confirmed`; its answer comes back as an
+    /// `Answer`.
     fn run(&self, connection: &ConnectionName, run: RunId, statement: Statement, input: ParamInput, confirmed: Option<Confirmed>) {
         let Some(session) = self.sessions.get(connection) else {
             tracing::warn!("no session for `{connection}`: the statement is dropped");
@@ -126,14 +129,14 @@ impl Backend {
         session.send(Job::Run(Queued { run, statement, input, confirmed }));
     }
 
-    /// Asks the session of `connection` for the next page of `run`; nothing comes when its portal is closed.
+    /// Asks the session of `connection` for the next page of `run`; nothing comes back when its portal is closed.
     fn next_page(&self, connection: &ConnectionName, session: SessionId, run: RunId) {
         if let Some(link) = self.sessions.get(connection).filter(|link| link.session == session) {
             link.send(Job::NextPage { run });
         }
     }
 
-    /// Reads the schema of `connection` along the route of its session `session`; it comes back as an `Answer`.
+    /// Reads the schema of `connection` along the same route as its session `session`; it comes back as an `Answer`.
     fn read_schema(&self, connection: &ConnectionName, session: SessionId) {
         if let Some(link) = self.sessions.get(connection).filter(|link| link.session == session) {
             link.read_schema();
@@ -155,7 +158,7 @@ impl Backend {
     }
 }
 
-/// Hands `answer` to the loop; one that comes after the loop ended is dropped with a warning.
+/// Hands `answer` to the loop; an answer sent after the loop ended is dropped with a warning.
 fn send(answers: &UnboundedSender<Answer>, answer: Answer) {
     if answers.send(answer).is_err() {
         tracing::warn!("the loop is gone: an answer is dropped");

@@ -1,15 +1,16 @@
 //! Wire values to `Value`, by column type; a type pgbg does not know decodes as `Value::Unsupported`.
 use super::model::{Column, ColumnKind, ColumnName, JsonText, TypeName, Value};
 use chrono::{DateTime, Utc};
-use serde_json::value::RawValue;
 use tokio_postgres::Row;
-use tokio_postgres::types::{FromSql, Json, Kind, Type};
+use tokio_postgres::types::{FromSql, Kind, Type};
 
 const NUMERIC_DIGITS_PER_WORD: usize = 4;
 const NUMERIC_NEGATIVE: u16 = 0x4000;
 const NUMERIC_NAN: u16 = 0xC000;
 const NUMERIC_INFINITY: u16 = 0xD000;
 const NUMERIC_NEGATIVE_INFINITY: u16 = 0xF000;
+/// The byte a binary `jsonb` starts with, before its text.
+const JSONB_VERSION: u8 = 1;
 
 /// A column as `ResultSet` holds it.
 pub(super) fn column(column: &tokio_postgres::Column) -> Column {
@@ -70,7 +71,7 @@ fn cell(ty: &Type, raw: &[u8]) -> Value {
         ColumnKind::Float => typed(ty, raw, Value::Float),
         ColumnKind::Numeric => numeric_text(raw).map_or(Value::Unsupported, |text| Value::Numeric(text.into_boxed_str())),
         ColumnKind::Text => Value::Text(String::from_utf8_lossy(raw).into()),
-        ColumnKind::Json => typed(ty, raw, json),
+        ColumnKind::Json => json(ty, raw),
         ColumnKind::Uuid => typed(ty, raw, Value::Uuid),
         ColumnKind::Date => date(raw),
         ColumnKind::Time => typed(ty, raw, Value::Time),
@@ -82,9 +83,14 @@ fn cell(ty: &Type, raw: &[u8]) -> Value {
     }
 }
 
-/// JSON as the server sent it, compacted; never parsed into a tree.
-fn json(Json(sent): Json<&RawValue>) -> Value {
-    JsonText::compacted(sent.get()).map_or(Value::Unsupported, Value::Json)
+/// JSON as the server sent it, compacted and checked once; never parsed into a tree.
+fn json(ty: &Type, raw: &[u8]) -> Value {
+    let sent = match (ty, raw.split_first()) {
+        (&Type::JSONB, Some((&JSONB_VERSION, text))) => text,
+        (&Type::JSONB, _) => return Value::Unsupported,
+        _ => raw,
+    };
+    std::str::from_utf8(sent).ok().and_then(|text| JsonText::compacted(text).ok()).map_or(Value::Unsupported, Value::Json)
 }
 
 /// A `real` widened through its shortest text, so `0.1` stays `0.1` and does not become `0.10000000149011612`.
@@ -218,6 +224,32 @@ mod tests {
     #[test]
     fn a_real_keeps_the_digits_the_server_shows() {
         assert_eq!(cell(&Type::FLOAT4, &0.1_f32.to_be_bytes()).to_string(), "0.1");
+    }
+
+    fn json_shown(ty: &Type, raw: &[u8]) -> String {
+        cell(ty, raw).to_string()
+    }
+
+    #[test]
+    fn json_keeps_its_escapes_its_key_order_and_its_big_numbers() {
+        let sent = r#"{"z": "say \"hi\" \u00e9 é", "a": 123456789012345678901234567890.5}"#;
+        assert_eq!(json_shown(&Type::JSON, sent.as_bytes()), r#"{"z":"say \"hi\" \u00e9 é","a":123456789012345678901234567890.5}"#);
+    }
+
+    #[test]
+    fn jsonb_is_read_past_its_version_byte() {
+        assert_eq!(json_shown(&Type::JSONB, b"\x01{\"b\": 2, \"aa\": 1}"), r#"{"b":2,"aa":1}"#);
+    }
+
+    #[test]
+    fn jsonb_of_a_version_pgbg_does_not_know_is_unsupported() {
+        assert_eq!(cell(&Type::JSONB, b"\x02{}"), Value::Unsupported);
+    }
+
+    #[test]
+    fn json_that_is_not_json_or_not_utf8_is_unsupported() {
+        assert_eq!(cell(&Type::JSON, b"{\"a\": "), Value::Unsupported);
+        assert_eq!(cell(&Type::JSON, b"\"\xff\""), Value::Unsupported);
     }
 
     #[test]

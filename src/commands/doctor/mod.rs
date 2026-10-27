@@ -43,8 +43,8 @@ fn file_mode(path: &Path) -> Check {
     }
 }
 
-/// The checks that need the server: the tunnel when there is one, the login, then what the session reads; a signal
-/// stops them as it stops `pgbg run`, the tunnel stopped still.
+/// The checks that need the server: the tunnel when there is one, the login, then what the session reads. A signal
+/// stops them as it stops `pgbg run`, and the tunnel is still stopped.
 async fn reached(connection: &Connection) -> Result<Vec<Check>> {
     let mut signals = Signals::listen()?;
     let Attempt { session, tunnel } = match signals.or_stopped(open_once(connection)).await? {
@@ -65,7 +65,7 @@ async fn reached(connection: &Connection) -> Result<Vec<Check>> {
     Ok(started.into_iter().chain(session?).chain(stopped).collect())
 }
 
-/// What the session says of itself and of its role; the session is dropped once read, before its tunnel stops.
+/// What the session says about itself and its role; the session is dropped once read, before its tunnel stops.
 async fn read(connection: &Connection, session: &mut Session) -> Vec<Check> {
     let facts = match session.server_facts().await {
         Ok(facts) => facts,

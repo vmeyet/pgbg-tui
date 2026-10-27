@@ -25,7 +25,7 @@ pub(crate) enum Format {
     Local,
     /// A timestamp as the time from now: `3 h ago`, `in 2 d`.
     Relative,
-    /// A number with its thousands apart: `1 234 567.5`.
+    /// A number grouped by thousands: `1 234 567.5`.
     Grouped,
     /// A number of bytes, or a byte string's length, as a size: `1.5 KiB`.
     Bytes,

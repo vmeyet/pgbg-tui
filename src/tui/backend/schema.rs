@@ -1,5 +1,5 @@
-//! The schema of a connection, read on a second, short session along the route of its open one: the session task polls
-//! it beside its statements, so they never wait on it, and drops it when the task stops.
+//! The schema of a connection, read on a second, short session that takes the same route as the open one.
+//! The session task polls the reader next to its statements, so they never wait on it, and drops it when the task stops.
 use super::session::SessionAnswers;
 use crate::complete::Index;
 use crate::connection::Connection;
@@ -10,7 +10,7 @@ use futures_util::FutureExt;
 use std::sync::Arc;
 use tokio::sync::{Notify, watch};
 
-/// What reads the schema each time it is asked, along the route the session task says its open session takes.
+/// Reads the schema each time it is asked, along the route the session task reports for its open session.
 #[derive(Debug)]
 pub(super) struct SchemaReader {
     pub(super) connection: Connection,
@@ -21,8 +21,9 @@ pub(super) struct SchemaReader {
 }
 
 impl SchemaReader {
-    /// Reads the schema at each ask once the session is open, the asks that came meanwhile served by the same read; a
-    /// failed read is answered in its words, and the session stays as it is. Never ends: the session task drops it.
+    /// Reads the schema at each ask once the session is open; asks that arrive during a read are served by that read.
+    /// A failed read answers with its message, and the session stays as it is.
+    /// It never ends: the session task drops it.
     pub(super) async fn serve(mut self) {
         loop {
             self.asks.notified().await;
@@ -38,12 +39,12 @@ impl SchemaReader {
         std::future::pending::<()>().await;
     }
 
-    /// Forgets an ask that came while the session opened: the read about to start serves it.
+    /// Forgets an ask that came while the session was opening: the read about to start serves it.
     fn drop_asks_served_by_this_read(&self) {
         self.asks.notified().now_or_never();
     }
 
-    /// Builds the completion index of `catalog` on a blocking thread, and says it.
+    /// Builds the completion index of `catalog` on a blocking thread, and sends it.
     async fn say_index(&self, catalog: Arc<Catalog>) {
         let read = Arc::clone(&catalog);
         match tokio::task::spawn_blocking(move || Index::new(&read)).await {

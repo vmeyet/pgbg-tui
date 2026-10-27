@@ -13,7 +13,7 @@ mod line;
 
 const UNITS: [(f64, &str); 4] = [(1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "k")];
 
-/// The chart of a result, or why it has none, in `area`.
+/// The chart of a result in `area`, or why it has none.
 pub(super) fn draw(f: &mut Frame<'_>, chart: &Result<Series, ChartError>, theme: &Theme, area: Rect) {
     match chart {
         Ok(series) => draw_series(f, series, theme, area),
@@ -48,7 +48,7 @@ fn legend(series: &Series, theme: &Theme) -> Line<'static> {
     Line::from(entries.collect::<Vec<_>>())
 }
 
-/// Each y column takes the next of vtui's user colours, round again after the last.
+/// Each y column takes the next of vtui's user colours, starting over after the last one.
 fn colour(theme: &Theme, column: usize) -> Color {
     theme.users[column % theme.users.len()]
 }
