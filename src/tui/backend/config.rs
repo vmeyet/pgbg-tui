@@ -39,7 +39,7 @@ impl ConfigFile {
 fn save_answer(path: &Path, save: SaveConnection, keychain: &Keychain) -> ConfigAnswer {
     match changed(path, |path| saved(path, &save, keychain)) {
         ConfigAnswer::Failed { why, .. } => ConfigAnswer::Failed { why, password: save.password.map(|typed| typed.password) },
-        answer => answer,
+        ConfigAnswer::Changed(connections) => ConfigAnswer::Changed(connections),
     }
 }
 
