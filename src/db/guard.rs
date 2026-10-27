@@ -7,8 +7,36 @@ use std::fmt;
 use std::ops::Range;
 
 const READS: [&str; 6] = ["SELECT", "WITH", "VALUES", "TABLE", "EXPLAIN", "SHOW"];
-/// Words that change data, create a table (`SELECT ... INTO`) or run the statement (`EXPLAIN ANALYZE`).
-const WRITES: [&str; 7] = ["INSERT", "UPDATE", "DELETE", "MERGE", "INTO", "ANALYZE", "ANALYSE"];
+/// Words that change data or create a table (`SELECT ... INTO`).
+const WRITES: [&str; 5] = ["INSERT", "UPDATE", "DELETE", "MERGE", "INTO"];
+/// The words `EXPLAIN` takes before the statement it explains: its options and their values.
+const EXPLAIN_OPTIONS: [&str; 23] = [
+    "ANALYZE",
+    "ANALYSE",
+    "VERBOSE",
+    "COSTS",
+    "SETTINGS",
+    "GENERIC_PLAN",
+    "BUFFERS",
+    "SERIALIZE",
+    "WAL",
+    "TIMING",
+    "SUMMARY",
+    "MEMORY",
+    "FORMAT",
+    "TEXT",
+    "XML",
+    "JSON",
+    "YAML",
+    "TRUE",
+    "FALSE",
+    "ON",
+    "OFF",
+    "NONE",
+    "BINARY",
+];
+/// What `EXPLAIN ANALYZE`, which runs the statement it explains, may run.
+const EXPLAINED_READS: [&str; 4] = ["SELECT", "WITH", "VALUES", "TABLE"];
 /// Row locks a `SELECT` takes; `FOR UPDATE` is caught by `UPDATE` already.
 const LOCKS: [[&str; 2]; 2] = [["FOR", "SHARE"], ["KEY", "SHARE"]];
 
@@ -108,7 +136,8 @@ fn check_read(tokens: &[Token]) -> Result<(), Refusal> {
     if !READS.contains(&first) {
         return Err(Refusal::Write(first.to_owned()));
     }
-    match first_write_word(&words) {
+    let statement = if first == "EXPLAIN" { explained(&words[1..])? } else { &words };
+    match first_write_word(statement) {
         Some(word) => Err(Refusal::Write(word.to_owned())),
         None => Ok(()),
     }
@@ -156,6 +185,16 @@ fn trimmed(sql: &str, range: Range<usize>) -> Range<usize> {
 fn holds_more_than_one_statement(tokens: &[Token]) -> bool {
     let mut after_first_end = tokens.iter().skip_while(|token| **token != Token::End).skip(1);
     after_first_end.any(|token| *token != Token::End)
+}
+
+/// The words of the statement `EXPLAIN` explains, past its options; with `ANALYZE` it runs, so it must be a read.
+fn explained<'a, 'w>(words: &'a [&'w str]) -> Result<&'a [&'w str], Refusal> {
+    let (options, statement) = words.split_at(words.iter().take_while(|word| EXPLAIN_OPTIONS.contains(word)).count());
+    let runs = options.iter().any(|option| matches!(*option, "ANALYZE" | "ANALYSE"));
+    match statement.first() {
+        Some(first) if runs && !EXPLAINED_READS.contains(first) => Err(Refusal::Write((*first).to_owned())),
+        _ => Ok(statement),
+    }
 }
 
 fn first_write_word<'a>(words: &[&'a str]) -> Option<&'a str> {
@@ -245,9 +284,28 @@ mod tests {
     }
 
     #[test]
-    fn an_explain_analyze_runs_the_statement_so_it_is_a_write() {
-        assert_eq!(refused_word("EXPLAIN ANALYZE SELECT * FROM orders"), "ANALYZE");
-        assert_eq!(refused_word("explain (analyse, buffers) SELECT * FROM orders"), "ANALYSE");
+    fn an_explain_analyze_of_a_read_is_a_read() {
+        assert_eq!(verdict("EXPLAIN ANALYZE SELECT * FROM orders"), Ok(Mode::ReadOnly));
+        assert_eq!(verdict("explain (analyse, buffers, format json) WITH paid AS (SELECT 1) TABLE paid"), Ok(Mode::ReadOnly));
+        assert_eq!(verdict("EXPLAIN ANALYZE VERBOSE VALUES (1)"), Ok(Mode::ReadOnly));
+    }
+
+    #[test]
+    fn an_explain_analyze_of_a_write_is_a_write() {
+        assert_eq!(refused_word("EXPLAIN ANALYZE DELETE FROM orders"), "DELETE");
+        assert_eq!(refused_word("EXPLAIN (ANALYZE true) WITH gone AS (DELETE FROM orders RETURNING id) SELECT * FROM gone"), "DELETE");
+        assert_eq!(refused_word("EXPLAIN ANALYZE SELECT * INTO orders_copy FROM orders"), "INTO");
+    }
+
+    #[test]
+    fn an_explain_analyze_of_what_is_not_a_read_is_refused() {
+        assert_eq!(refused_word("EXPLAIN ANALYZE EXECUTE close_orders"), "EXECUTE");
+        assert_eq!(refused_word("EXPLAIN (ANALYZE) CREATE TABLE orders_copy AS SELECT 1"), "CREATE");
+    }
+
+    #[test]
+    fn an_analyze_of_a_table_is_a_write() {
+        assert_eq!(refused_word("ANALYZE orders"), "ANALYZE");
     }
 
     #[test]

@@ -557,6 +557,14 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn an_explain_analyze_of_a_read_shows_the_plan_as_it_ran() {
+        let result = run(WritePolicy::ReadOnly, "EXPLAIN (ANALYZE, FORMAT TEXT) SELECT generate_series(1, 3)").await.unwrap();
+        let plan: Vec<String> = result.rows().iter().map(|row| row[0].to_string()).collect();
+        assert!(plan.iter().any(|line| line.contains("actual")), "{plan:?}");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_write_the_guard_lets_through_is_refused_by_the_read_only_transaction() {
         run(WritePolicy::Allowed, "CREATE SEQUENCE IF NOT EXISTS order_numbers").await.unwrap();
         let err = run(WritePolicy::ReadOnly, "SELECT nextval('order_numbers')").await.unwrap_err();

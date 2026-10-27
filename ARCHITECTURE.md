@@ -180,7 +180,7 @@ Charting a result:
 Four layers, outermost first; only the last one is a guarantee.
 
 1. **Policy**: each connection chooses; it is read only unless it says `writes = "allowed"`, whatever its tier.
-2. **Guard**: `db::guard` lets through `SELECT`, `WITH` without a data-changing part, `VALUES`, `TABLE`, `EXPLAIN` without `ANALYZE`, and `SHOW`, without a row lock (`FOR UPDATE`, `FOR SHARE`) or `SELECT ... INTO`; anything else is refused locally.
+2. **Guard**: `db::guard` lets through `SELECT`, `WITH` without a data-changing part, `VALUES`, `TABLE`, `EXPLAIN` of any of those (with `ANALYZE`, which runs the statement, only of a `SELECT`, `WITH`, `VALUES` or `TABLE`), and `SHOW`, without a row lock (`FOR UPDATE`, `FOR SHARE`) or `SELECT ... INTO`; anything else is refused locally.
 3. **Transaction**: one statement per round trip (the extended protocol refuses more), inside `BEGIN READ ONLY`, always rolled back; the server refuses writes even when the guard misses one.
 4. **Role**: a read-only database role. A read-only transaction still lets a function with side effects run (`pg_terminate_backend`, `dblink`); only the role stops those.
 
