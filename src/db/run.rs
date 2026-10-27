@@ -92,7 +92,7 @@ impl Session {
 
     /// Runs `admitted` on its `WritePath`, and keeps track of the transaction the user began; until the server answers
     /// a statement that opens or ends one, the session is unsure of it.
-    async fn run_writes(&mut self, admitted: &Admitted) -> Result<ResultSet> {
+    pub(super) async fn run_writes(&mut self, admitted: &Admitted) -> Result<ResultSet> {
         let step = admitted.transaction_step;
         if step != TransactionStep::Keeps {
             self.marks.user_transaction = UserTransaction::Unsure;
@@ -137,7 +137,7 @@ impl Session {
 
     /// Reads through an SQL cursor: the driver binds a portal only inside a transaction handle of its own, whose start
     /// or drop would roll the user's transaction back.
-    pub(super) async fn fetch_through_cursor(&self, statement: &Prepared, admitted: &Admitted) -> Result<ResultSet> {
+    async fn fetch_through_cursor(&self, statement: &Prepared, admitted: &Admitted) -> Result<ResultSet> {
         let cursor = free_cursor_name(&self.cursors_taken().await?);
         let declare = format!("DECLARE {cursor} NO SCROLL CURSOR FOR {}", admitted.statement.as_str());
         let declare = self.client.prepare_typed(&declare, statement.params()).await.map_err(server_error)?;
@@ -235,7 +235,7 @@ pub(super) async fn bind_portal(transaction: &Transaction<'_>, statement: &Prepa
 }
 
 /// Streams the rows of `statement` run with `params`, prepared first so a result without rows still has its columns.
-pub(super) async fn fetch(client: &Client, statement: &Prepared, params: &Params) -> Result<ResultSet> {
+async fn fetch(client: &Client, statement: &Prepared, params: &Params) -> Result<ResultSet> {
     let rows = client.query_raw(statement, bind::as_text(params)).await.map_err(server_error)?;
     Ok(ResultSet::new(columns(statement), first_rows(rows).await?))
 }

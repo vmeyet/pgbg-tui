@@ -464,7 +464,7 @@ impl fmt::Display for Write {
         let (changes, cascades) = match self {
             Self::Statement { changes, cascades } => (changes, cascades),
             Self::Several => return f.write_str("more than one statement"),
-            Self::Hidden => return f.write_str("this statement tried to write: run it"),
+            Self::Hidden => return f.write_str("this statement tried to write, and may run twice: run it"),
         };
         let changes: Vec<String> = changes.iter().map(ToString::to_string).collect();
         f.write_str(&changes.join(" and "))?;
@@ -712,8 +712,8 @@ mod tests {
     }
 
     #[test]
-    fn a_hidden_write_asks_whether_to_run_the_statement() {
-        assert_eq!(Write::Hidden.to_string(), "this statement tried to write: run it");
+    fn a_hidden_write_asks_whether_to_run_the_statement_that_may_run_twice() {
+        assert_eq!(Write::Hidden.to_string(), "this statement tried to write, and may run twice: run it");
     }
 
     #[test]

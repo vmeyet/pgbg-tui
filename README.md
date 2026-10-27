@@ -146,11 +146,13 @@ Four layers stand between you and a write, outermost first:
 2. **The guard.** pgbg reads each statement before it sends it, and refuses anything that is not a read.
 3. **The transaction.** On a read-only connection, each statement runs alone in `BEGIN READ ONLY`, always rolled back, so the server refuses a write the guard missed.
    On a connection that allows writes, a statement the guard reads as a read runs with writes refused too, and a write the server finds in it, as in `SELECT archive_orders()`, asks before it runs again.
+   Inside a transaction you began with `BEGIN`, it does not ask: your `COMMIT` or `ROLLBACK` decides what stays.
 4. **The role.** Only a read-only database role truly stops a write: use one for production.
 
 On a connection that allows writes, each write asks first; `BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT` and cursor statements do not, but `COMMIT PREPARED` and `ROLLBACK PREPARED` do.
 The TUI's footer names it, such as `DELETE from orders?`: `y` sends it, any other key drops it.
-A write hidden in a read, as a function that writes or `setval`, runs nothing at first, then asks `this statement tried to write: run it?`.
+A write hidden in a read, as a function that writes or `setval`, keeps nothing at first, then asks `this statement tried to write, and may run twice: run it?`.
+What a read-only transaction does not stop, as `dblink_exec` or `pg_advisory_lock`, has already run once, so a `y` runs it a second time.
 `pgbg run` asks `y/N` on the terminal; with no terminal, it refuses the write unless you pass `--yes`.
 A read-only transaction does not stop `dblink` or `pg_terminate_backend`: those run without asking, and only the role stops them.
 

@@ -130,7 +130,10 @@ mod tests {
 
     #[test]
     fn a_statement_that_tried_to_write_asks_before_it_runs_again() {
-        assert_eq!(asked(&tried_to_write("SELECT archive_orders()")).as_deref(), Some("this statement tried to write: run it"));
+        assert_eq!(
+            asked(&tried_to_write("SELECT archive_orders()")).as_deref(),
+            Some("this statement tried to write, and may run twice: run it")
+        );
     }
 
     #[test]

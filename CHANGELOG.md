@@ -18,7 +18,7 @@ Each entry says what changed, then where, then how to use it.
 - **A write asks before it is sent**, on a connection with `writes = "allowed"`, whatever its tier: the TUI's footer names it, as `DELETE from orders?`.
   Press `y` to send it; any other key drops it and nothing reaches the server.
   `pgbg run` asks `y/N` on the terminal; without a terminal, as in a script, it refuses the write unless you pass `--yes`.
-  A write hidden in a read, as in a function that writes, asks too, once the server has refused it.
+  A write hidden in a read, as in a function that writes, asks too, once the server has refused it, outside your own transaction.
 - **`EXPLAIN ANALYZE` of a read** on a read-only connection, in the TUI and `pgbg run`: the plan as the statement ran, with its times and rows.
   Write `EXPLAIN ANALYZE SELECT ...` or `EXPLAIN (ANALYZE, BUFFERS) SELECT ...`; the statement runs in the read-only transaction, so `EXPLAIN ANALYZE` of a write is still refused.
 - **`pgbg doctor` looks beyond read only**: on a read-only connection it warns when the role can do what a read-only transaction does not stop.
@@ -142,7 +142,7 @@ Each entry says what changed, then where, then how to use it.
 - **A password or a secret connection key inside a dollar-quoted string is kept out of the history and never sent to the AI**, as in `SELECT dblink_connect($$password=... host=...$$)` or `$q$sslpassword=...$q$`.
 - **A statement naming `sslpassword` or `oauth_client_secret` is kept out of the history and never sent to the AI**, as one holding a password is.
 - **A `url` with `sslpassword` or `oauth_client_secret` in it is refused**, in `config.toml`, `--url` and the TUI's connection form, as one with a password is, so `pgbg connections` never prints the secret.
-- **A write inside a function call asks first**, on a connection that allows writes, in the TUI and `pgbg run`: `SELECT archive_orders()` or `SELECT setval(...)` runs with writes refused, then asks `this statement tried to write: run it?`.
+- **A write inside a function call asks first**, on a connection that allows writes, outside your own transaction, in the TUI and `pgbg run`: `SELECT archive_orders()` or `SELECT setval(...)` runs with writes refused, then asks `this statement tried to write, and may run twice: run it?`.
 - **Completion puts in the table or column it shows** in the TUI's editor, when two names differ only in case, as `orders` and `"Orders"`: it took the other one.
 - **A write's question names every write it holds and every table it lists**, in the TUI's footer and `pgbg run`: `WITH moved AS (INSERT INTO archived_orders ...) DELETE FROM orders ...` asks `INSERT into archived_orders and DELETE from orders?`, and `TRUNCATE orders, customers CASCADE` names both tables and the `CASCADE`.
 - **`BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT` and the cursor statements `FETCH`, `MOVE` and `CLOSE` run without asking** on a connection that allows writes, since they change no data by themselves.
