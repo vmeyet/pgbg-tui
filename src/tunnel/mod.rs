@@ -1,17 +1,15 @@
 //! A tunnel: a child process pgbg owns that forwards a free `127.0.0.1` port to a database this machine cannot reach straight.
 use crate::connection::TunnelSpec;
 use crate::db::model::{LocalPort, Route};
-use crate::groups::{self, OWN_GROUP};
+use crate::groups::{self, OWN_GROUP, keep_last_words, with_last_words};
 use crate::program::Program;
 use anyhow::{Context, Result, anyhow, bail};
 use rustix::io::Errno;
 use rustix::process::Pid;
-use std::collections::VecDeque;
 use std::fmt;
 use std::net::Ipv4Addr;
 use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process::{Child, Command};
 use tokio::task::JoinHandle;
@@ -28,8 +26,6 @@ const HANDED_OFF: &str = "the tunnel ended cleanly before its port answered, so 
                           (a `ControlMaster`) or went to the background: add `-o ControlPath=none` to an ssh command, and drop `-f`";
 /// How long a dead tunnel's stderr is waited for, in case a process outside its group still holds it.
 const LAST_WORDS_TIMEOUT: Duration = Duration::from_secs(1);
-const LAST_WORDS_LINES: usize = 5;
-const LAST_WORDS_LINE_CHARS: usize = 200;
 
 /// A running tunnel; dropping it kills its whole process group.
 #[derive(Debug)]
@@ -220,31 +216,6 @@ async fn free_port() -> Result<LocalPort> {
     Ok(LocalPort::new(listener.local_addr()?.port()))
 }
 
-/// Reads `stderr` to its end, so the tunnel never blocks on a full pipe, and keeps its last lines, each cut short;
-/// a byte that is not UTF-8 shows as `�`.
-async fn keep_last_words(stderr: impl AsyncRead + Unpin) -> Vec<String> {
-    let mut lines = BufReader::new(stderr).split(b'\n');
-    let mut kept = VecDeque::with_capacity(LAST_WORDS_LINES);
-    while let Ok(Some(line)) = lines.next_segment().await {
-        if kept.len() == LAST_WORDS_LINES {
-            kept.pop_front();
-        }
-        kept.push_back(shortened(&line));
-    }
-    kept.into()
-}
-
-fn shortened(line: &[u8]) -> String {
-    String::from_utf8_lossy(line).trim_end_matches('\r').chars().take(LAST_WORDS_LINE_CHARS).collect()
-}
-
-fn with_last_words(how: &str, last_words: &[String]) -> String {
-    match last_words.join(" / ") {
-        words if words.is_empty() => how.to_owned(),
-        words => format!("{how}: {words}"),
-    }
-}
-
 impl fmt::Display for Died {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let how = self.status.map_or_else(|| "it ended".to_owned(), |status| status.to_string());
@@ -303,12 +274,6 @@ time.sleep(60)
         })
         .await
         .is_ok()
-    }
-
-    #[tokio::test]
-    async fn last_words_keep_the_last_lines_even_past_utf8() {
-        let stderr = b"one\ntwo\nthree\nfour\nfive\n\xffsix\r\nseven";
-        assert_eq!(keep_last_words(&stderr[..]).await, ["three", "four", "five", "\u{fffd}six", "seven"]);
     }
 
     #[tokio::test]
