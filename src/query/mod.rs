@@ -204,6 +204,26 @@ impl Roots {
         Self { project: project_root(places), user: places.config_dir.and_then(user_root) }
     }
 
+    /// The roots for the working directory, the home folder and the user's config folder, found off the runtime.
+    pub(crate) async fn find_here() -> Result<Self> {
+        let working_dir = std::env::current_dir()?;
+        let (home, config_dir) = (dirs::home_dir(), dirs::config_dir());
+        let found = move || Self::find(&Places { working_dir: &working_dir, home: home.as_deref(), config_dir: config_dir.as_deref() });
+        Ok(tokio::task::spawn_blocking(found).await?)
+    }
+
+    /// The query at `path`, `.sql` added when it lacks it: the project's before the user's.
+    pub(crate) async fn named(&self, path: &str) -> Result<Query> {
+        let with_extension = if path.ends_with(EXTENSION) { path.to_owned() } else { format!("{path}{EXTENSION}") };
+        let path = QueryPath::parse(&with_extension)?;
+        let roots = self.clone();
+        let listed = tokio::task::spawn_blocking(move || roots.list()).await?;
+        listed
+            .into_iter()
+            .find(|query| query.path == path)
+            .with_context(|| format!("no saved query {path}: `pgbg` lists them in its sidebar"))
+    }
+
     fn root(&self, source: Source) -> Option<&Root> {
         match source {
             Source::Project => self.project.as_ref(),

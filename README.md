@@ -42,6 +42,7 @@ Each session gets a statement timeout from its tier: none on local, a minute on 
 pgbg run local "SELECT id, total FROM orders LIMIT 5"
 pgbg run local "SELECT count(*) FROM orders" --json
 pgbg run local "SELECT * FROM orders WHERE day > {{since}}::date" --param since=2024-01-01
+pgbg run local --query orders/daily --param since=2024-01-01
 pgbg history local --limit 5
 pgbg schema local orders
 ```

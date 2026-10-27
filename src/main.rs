@@ -30,8 +30,8 @@ async fn run(cli: &Cli) -> Result<()> {
         None => commands::tui::run(None).await,
         Some(Command::Tui { connection }) => commands::tui::run(connection.as_ref()).await,
         Some(Command::Connections) => commands::connections::run(cli.json),
-        Some(Command::Run { connection, sql, params, params_file }) => {
-            until_stopped(commands::run::run(connection, sql, params, params_file.as_deref(), cli.json)).await
+        Some(Command::Run { connection, statement, params, params_file }) => {
+            until_stopped(commands::run::run(connection, statement, params, params_file.as_deref(), cli.json)).await
         }
         Some(Command::Doctor { connection }) => until_stopped(commands::doctor::run(connection, cli.json)).await,
         Some(Command::History { connection, limit }) => commands::history::run(connection, *limit, cli.json),

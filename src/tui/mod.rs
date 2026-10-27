@@ -22,7 +22,7 @@ mod ui;
 use crate::connection::{Connection, ConnectionName};
 use crate::format::Mode;
 use crate::history::Store;
-use crate::query::{Places, Query, Roots};
+use crate::query::{Query, Roots};
 use crate::signal::Signals;
 use anyhow::Result;
 use app::{Action, Answer, App, Clock, Fit, QueryAnswer};
@@ -51,7 +51,7 @@ pub(crate) async fn run(connections: Vec<Connection>, first: Connection, config:
     let theme = vtui::ground::ask().map_or_else(Theme::default, |ground| Theme::default().with_ground(ground));
     let mut app = App::new(connections, &first, theme).with_format_mode(format);
     let (answers, mut incoming) = mpsc::unbounded_channel();
-    let mut backend = Backend::new(find_roots().await?, config, answers).with_history(Store::from_env());
+    let mut backend = Backend::new(Roots::find_here().await?, config, answers).with_history(Store::from_env());
     for action in app.start() {
         backend.dispatch(action);
     }
@@ -61,14 +61,6 @@ pub(crate) async fn run(connections: Vec<Connection>, first: Connection, config:
     screen.leave();
     let stopped = signals.or_stopped(backend.stop()).await;
     outcome.and(stopped.map_err(Into::into))
-}
-
-/// The folders of saved queries: the one nearest the working directory, and the one in the config folder.
-async fn find_roots() -> Result<Roots> {
-    let working_dir = std::env::current_dir()?;
-    let (home, config_dir) = (dirs::home_dir(), dirs::config_dir());
-    let found = move || Roots::find(&Places { working_dir: &working_dir, home: home.as_deref(), config_dir: config_dir.as_deref() });
-    Ok(tokio::task::spawn_blocking(found).await?)
 }
 
 /// The terminal the loop draws on, and the screen that lends it to another program.
