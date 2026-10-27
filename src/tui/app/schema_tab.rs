@@ -1,4 +1,4 @@
-//! The sidebar's schema tab: the schemas of the sheet on screen and their tables, folded and filtered, and its cursor.
+//! The sidebar's schema tab: the schemas and tables of the sheet on screen, which fold and filter, and its cursor.
 use super::save::typed_into;
 use super::{Action, App, Focus, Overlay};
 use crate::act::{self, Act, Pane};
@@ -18,7 +18,7 @@ pub(in crate::tui) enum SidebarTab {
     Schema,
 }
 
-/// The schemas folded, the filter typed with `/`, and the cursor's row.
+/// The folded schemas, the filter typed with `/`, and the cursor's row.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(in crate::tui) struct SchemaTab {
     pub(in crate::tui) selected: usize,
@@ -34,7 +34,7 @@ pub(in crate::tui) struct PickedTable {
 }
 
 impl PickedTable {
-    /// The table as a statement writes it.
+    /// The table's name as SQL writes it, schema first.
     fn sql_name(&self) -> String {
         qualified(&self.schema, &self.name)
     }
@@ -59,7 +59,7 @@ pub(in crate::tui) enum SchemaRow<'a> {
 const PREVIEW_ROWS: usize = 100;
 const DESCRIBED: [&str; 4] = ["", "name", "type", "detail"];
 
-/// A table's columns, then its indexes, one a row: what it holds, its name, its type or keys, and the rest.
+/// A table's columns, then its indexes, one per row: what it is, its name, its type or keys, and the rest.
 fn described(table: &Table) -> ResultSet {
     let columns =
         DESCRIBED.iter().map(|name| Column { name: ColumnName::new(*name), kind: ColumnKind::Text, type_name: TypeName::new("text") });
@@ -98,7 +98,7 @@ fn texts(cells: [&str; 4]) -> Vec<Value> {
 }
 
 impl SchemaTab {
-    /// The schemas holding a table the filter keeps, each with those tables unless it is folded.
+    /// The schemas that hold a table the filter keeps, each followed by those tables unless it is folded.
     pub(in crate::tui) fn rows<'a>(&self, catalog: &'a Catalog) -> Vec<SchemaRow<'a>> {
         let filter = self.filter.text().to_lowercase();
         let mut rows = vec![];
@@ -118,7 +118,7 @@ impl SchemaTab {
 }
 
 impl App {
-    /// The pane whose keys work: the sidebar's own depends on its tab.
+    /// The pane whose keys work now: for the sidebar, it depends on the tab shown.
     pub(in crate::tui) fn pane(&self) -> Pane {
         match (self.focus, self.sidebar) {
             (Focus::Queries, SidebarTab::Schema) => Pane::Schema,
@@ -126,7 +126,7 @@ impl App {
         }
     }
 
-    /// Switches the sidebar's tab; switching to the schema reads it, opening a failed session again for it.
+    /// Switches the sidebar's tab; showing the schema tab reads the schema, and opens a failed session again to do so.
     pub(super) fn switch_tab(&mut self) -> Vec<Action> {
         self.sidebar = match self.sidebar {
             SidebarTab::Queries => SidebarTab::Schema,
@@ -139,8 +139,8 @@ impl App {
         self.sidebar == SidebarTab::Schema && self.fit.has_sidebar
     }
 
-    /// `actions`, then a read of the schema when its tab is drawn, the session on screen is open and has none, read or
-    /// asked for: the schema is read the moment it shows, on whichever sheet, and a failed session stays failed.
+    /// `actions`, plus a read of the schema when its tab is drawn and the open session on screen has no schema yet.
+    /// So the schema is read as soon as it shows, on any sheet, while a failed session stays failed.
     pub(super) fn and_the_schema_shown(&mut self, mut actions: Vec<Action>) -> Vec<Action> {
         if self.is_schema_shown() {
             actions.extend(self.sheet_mut().want_schema_while_open());
@@ -208,8 +208,8 @@ impl App {
         self.sheet_mut().show(title, result, &reading);
     }
 
-    /// Runs `SELECT * FROM` `picked`, its first rows, as the editor's statements run; a read whatever the table's name,
-    /// so it never asks as a write does.
+    /// Runs `SELECT * FROM` `picked` for its first rows, as the editor runs a statement.
+    /// It is a read whatever the table's name, so it never asks for confirmation as a write does.
     pub(super) fn preview_table(&mut self, picked: &PickedTable) -> Vec<Action> {
         self.sheet_mut().run_statement(picked.preview(), None, ParamInput::default(), None)
     }

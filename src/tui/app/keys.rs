@@ -1,4 +1,4 @@
-//! Keys and pastes: which pane or overlay takes them, and the act each key does.
+//! Keys and pastes: which pane or overlay gets them, and what each key does.
 use super::grid::Move;
 use super::param_bar::Direction;
 use super::{Action, App, Focus, Overlay};
@@ -46,7 +46,7 @@ impl App {
         vec![]
     }
 
-    /// Takes text the terminal pasted: the editor, the finder or the form gets it whole, so its line ends run nothing.
+    /// Takes text the terminal pasted: the editor, the finder or the form gets it whole, so a line end in it runs nothing.
     pub(in crate::tui) fn paste(&mut self, text: &str) -> Vec<Action> {
         match &mut self.overlay {
             Some(Overlay::Form(form)) => form.paste(text),
@@ -163,7 +163,7 @@ impl App {
         }
     }
 
-    /// Steps through the bar's fields; past its last one the keys go to the next pane, before its first to the editor.
+    /// Steps through the bar's fields; past the last one the keys go to the next pane, and before the first to the editor.
     fn step_bar(&mut self, direction: Direction) {
         if self.sheet_mut().step_bar(direction) {
             return;

@@ -15,8 +15,8 @@ pub(super) enum Edited {
     Cursor,
 }
 
-/// The editor's text, its tokens and its colours; the tokens follow each change, the colours are rebuilt by `recolour`
-/// once the text changed.
+/// The editor's text, its tokens and its colours.
+/// The tokens are updated on each change; the colours are rebuilt by `recolour` after the text changes.
 #[derive(Debug, Default)]
 pub(in crate::tui) struct Editor {
     field: Field,
@@ -26,7 +26,8 @@ pub(in crate::tui) struct Editor {
 }
 
 impl Editor {
-    /// An editor on `text`, left for the loop to colour, so opening a big query never waits on tree-sitter.
+    /// An editor on `text`, not coloured yet: the loop colours it later, so opening a big query never waits on
+    /// tree-sitter.
     pub(super) fn new(text: &str) -> Self {
         Self { field: Field::new(text), lexed: Lexed::of(text), colours: vec![], has_stale_colours: true }
     }
@@ -35,7 +36,7 @@ impl Editor {
         self.field.text()
     }
 
-    /// The text as the guard, completion and the parameters read it, as of the last change.
+    /// The lexed text that the guard, completion and the parameters read, as of the last change.
     pub(in crate::tui) fn lexed(&self) -> &Lexed {
         &self.lexed
     }
@@ -55,7 +56,6 @@ impl Editor {
         self.has_stale_colours
     }
 
-    /// Builds the colours of the text as it is now.
     pub(super) fn recolour(&mut self) {
         if self.has_stale_colours {
             self.colours = syntax::highlight(self.field.text());
@@ -63,13 +63,12 @@ impl Editor {
         }
     }
 
-    /// Applies one editing key.
     pub(super) fn edit(&mut self, key: KeyEvent) -> Edited {
         self.change(|field| apply(field, key))
     }
 
-    /// Inserts `text` at the cursor as vtui cleans a paste: its line ends as `\n`, its tabs as spaces, without other
-    /// control characters or marks that reverse text.
+    /// Inserts `text` at the cursor, cleaned as vtui cleans a paste: line ends become `\n`, tabs become spaces, and other
+    /// control characters and marks that reverse text are removed.
     pub(super) fn paste(&mut self, text: &str) -> Edited {
         self.change(|field| field.paste(text))
     }
@@ -95,7 +94,7 @@ impl Editor {
     }
 }
 
-/// Applies `key` to `field` as the editor does: a key that types, deletes or moves the cursor.
+/// Applies `key` to `field` as the editor does: keys that type, delete or move the cursor.
 pub(super) fn apply(field: &mut Field, key: KeyEvent) {
     let alt = key.modifiers.contains(KeyModifiers::ALT);
     let control = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -119,7 +118,7 @@ pub(super) fn apply(field: &mut Field, key: KeyEvent) {
 }
 
 impl Sheet {
-    /// Applies `key` to the editor; a name key asks for the next ghost.
+    /// Applies `key` to the editor; a key that types a name asks for the next ghost.
     pub(super) fn edit(&mut self, key: KeyEvent) -> Vec<Action> {
         if self.editor.edit(key) != Edited::Text {
             return vec![];
@@ -135,8 +134,8 @@ impl Sheet {
         }
     }
 
-    /// Reads the header of the new text, and drops the ghost, the error mark and the place of the statement sent, which
-    /// pointed into the old text; the colours follow on their own.
+    /// Reads the header of the new text, and drops the ghost, the error mark and the position of the statement sent,
+    /// which all pointed into the old text; the colours are rebuilt later by `recolour`.
     pub(super) fn text_changed(&mut self) {
         self.ghost = None;
         self.header = Header::parse(self.editor.text());

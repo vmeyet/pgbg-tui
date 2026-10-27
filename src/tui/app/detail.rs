@@ -1,4 +1,4 @@
-//! `⏎` on the grid: the row under the cursor over the screen, one column after another, scrolled with `j`/`k`.
+//! `⏎` on the grid: the row under the cursor shown over the screen, one column after another, scrolled with `j`/`k`.
 use super::{Action, App, Overlay, Run, RunId};
 use crate::act::{self, Act, Pane};
 use crate::connection::ConnectionName;
@@ -11,7 +11,7 @@ pub(in crate::tui) struct Detail {
     pub(in crate::tui) scroll: DetailScroll,
 }
 
-/// Where the detail starts: at a column until a frame drew it, then at a line, which `j`/`k` move.
+/// Where the detail starts: at a column until a frame has drawn it, then at a line, which `j`/`k` move.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::tui) enum DetailScroll {
     /// The first line of the column at this index.
@@ -19,8 +19,8 @@ pub(in crate::tui) enum DetailScroll {
     Lines(usize),
 }
 
-/// Where the detail just drawn started, how far it scrolls before its last line is at the bottom, and its lines when
-/// that frame had to build them.
+/// Where the detail just drawn started, how far it can scroll before its last line reaches the bottom, and its lines
+/// when that frame had to build them.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(in crate::tui) struct DetailFit {
     pub(in crate::tui) first_line: usize,
@@ -28,8 +28,8 @@ pub(in crate::tui) struct DetailFit {
     pub(in crate::tui) drawn: Option<DrawnDetail>,
 }
 
-/// The detail's lines as built for one row at one width, kept so the next frames build none: indenting, colouring and
-/// wrapping a long value costs more than the rest of a frame.
+/// The detail's lines built for one row at one width, kept so the next frames do not build them again: indenting,
+/// colouring and wrapping a long value costs more than the rest of a frame.
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::tui) struct DrawnDetail {
     pub(in crate::tui) of: DrawnRow,
@@ -65,7 +65,7 @@ impl App {
         }
     }
 
-    /// The detail after `key`: it scrolls within what the frame drew, `esc` closes it.
+    /// The detail after `key`: it scrolls within what the frame drew, and `esc` closes it.
     pub(super) fn detail_key(&mut self, detail: Detail, key: KeyEvent) -> Vec<Action> {
         let line = match detail.scroll {
             DetailScroll::Lines(line) => line,

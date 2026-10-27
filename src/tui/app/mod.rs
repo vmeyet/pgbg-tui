@@ -1,4 +1,5 @@
-//! The pure state machine: keys in, actions out, incoming answers applied. No clock, no I/O.
+//! The TUI's pure state: it takes keys and answers, and returns the actions to run.
+//! It reads no clock and does no I/O.
 use super::theme::Theme;
 use crate::act::Pane;
 use crate::connection::Connection;
@@ -72,7 +73,7 @@ impl Focus {
 /// What the frame just drawn had room for.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct Fit {
-    /// The grid rows, a page for `PgDn`, and the columns its cells had.
+    /// The rows and columns the grid had, which also set the size of a `PgDn` page.
     pub(super) grid: Room,
     /// Whether the sidebar was drawn, which a terminal narrower than 80 columns leaves out.
     pub(super) has_sidebar: bool,
@@ -95,13 +96,13 @@ pub(super) enum Overlay {
     Recall(Recall),
     /// A question on the footer line: the path of a new query, or whether to open one over unsaved text.
     Prompt(Prompt),
-    /// The grid's row, one column a line.
+    /// The row under the grid's cursor, one column per line.
     Detail(Detail),
     /// A question on the footer line: which format the whole result is copied as.
     CopyAs,
     /// The schema tab's filter line, typed into from `/` until `⏎` or `esc`.
     SchemaFilter,
-    /// The `ctrl-space` list of names for the one before the cursor.
+    /// The `ctrl-space` list of names that complete the word before the cursor.
     Completion(Completions),
     /// The `ctrl-t` finder of the schema's tables.
     TableFinder(Box<TableFinder>),
@@ -132,14 +133,14 @@ pub(super) struct App {
     next_session: SessionId,
     /// Why a change to the config failed when no form waits on it; the status line says it until the next key.
     config_failure: Option<String>,
-    /// What the last copy came to; the status line says it until the next key.
+    /// The outcome of the last copy; the status line says it until the next key.
     note: Option<String>,
     /// The format mode new results open in, and the clock the loop last read.
     reading: Reading,
 }
 
 impl App {
-    /// The app on `first`, its session still opening, with `connections` to pick from.
+    /// The app showing the sheet of `first`, whose session is still opening, with `connections` in the picker.
     pub(super) fn new(connections: Vec<Connection>, first: &Connection, theme: Theme) -> Self {
         Self {
             theme,
@@ -176,12 +177,10 @@ impl App {
         &self.theme
     }
 
-    /// Every connection of the config.
     pub(super) fn connections(&self) -> &[Connection] {
         &self.connections
     }
 
-    /// The pane that has the keys.
     pub(super) fn focus(&self) -> Focus {
         self.focus
     }
@@ -202,7 +201,6 @@ impl App {
         &self.schema_tab
     }
 
-    /// The row's detail as a frame last built it.
     pub(super) fn drawn_detail(&self) -> Option<&DrawnDetail> {
         self.drawn_detail.as_ref()
     }
@@ -211,17 +209,14 @@ impl App {
         self.should_quit
     }
 
-    /// Why a change to the config failed, until the next key.
     pub(super) fn config_failure(&self) -> Option<&str> {
         self.config_failure.as_deref()
     }
 
-    /// What the last copy came to, until the next key.
     pub(super) fn note(&self) -> Option<&str> {
         self.note.as_deref()
     }
 
-    /// The clock the loop last read.
     pub(super) fn clock(&self) -> &Clock {
         &self.reading.clock
     }
@@ -241,7 +236,7 @@ impl App {
         vec![Action::Open { connection: first.connection.clone(), session: first.session_id }, Action::ListQueries]
     }
 
-    /// Whether the editor on screen waits for `recolour`.
+    /// Whether the editor on screen changed since its colours were built, so it needs `recolour`.
     pub(super) fn has_stale_colours(&self) -> bool {
         self.sheet().editor.has_stale_colours()
     }
@@ -269,7 +264,7 @@ impl App {
         self.keep_drawn_detail(built);
     }
 
-    /// A new id for a session about to open, so the words of the one before it are dropped.
+    /// A new id for a session about to open, so answers from the session before it are dropped.
     fn new_session(&mut self) -> SessionId {
         let id = self.next_session;
         self.next_session = id.next();
@@ -283,7 +278,7 @@ impl App {
         id
     }
 
-    /// Quits, cancelling every running statement first so no server runs one to its end.
+    /// Quits, after cancelling every running statement so no server keeps running it.
     pub(super) fn quit(&mut self) -> Vec<Action> {
         self.should_quit = true;
         self.sheets.iter().filter_map(Sheet::cancel_of_running).collect()

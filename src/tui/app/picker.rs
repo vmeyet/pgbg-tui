@@ -1,5 +1,5 @@
-//! `ctrl-o`, the connection picker: typing narrows the connections as fzf does, and picking one shows its sheet,
-//! opening its session the first time.
+//! `ctrl-o`, the connection picker: typing narrows the connections as fzf does.
+//! Picking one shows its sheet, and opens its session the first time.
 use super::search::{Search, Searching};
 use super::{Action, App, ConfigChangeId, Form, Overlay, SessionState, Sheet};
 use crate::act::{Act, Pane};
@@ -7,7 +7,7 @@ use crate::connection::{Connection, ConnectionName};
 use crate::secret::Secret;
 use crossterm::event::{KeyCode, KeyEvent};
 
-/// The picker: the connections matching the line typed, and the line it says under them.
+/// The picker: the connections that match the typed line, and the note shown under them.
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::tui) struct Picker {
     pub(in crate::tui) search: Search<Connection>,
@@ -19,7 +19,7 @@ pub(in crate::tui) struct Picker {
 pub(in crate::tui) enum Note {
     /// `y` removes this connection, any other key keeps it.
     ConfirmRemove(ConnectionName),
-    /// Something to read, gone at the next key.
+    /// A message, cleared at the next key.
     Said(String),
 }
 
@@ -39,7 +39,7 @@ impl App {
         self.overlay = Some(Overlay::Picker(Picker { search: Search::new(&self.connections), note: None }));
     }
 
-    /// The sheet of the connection `name`, once it was opened.
+    /// The sheet of the connection `name`, once it has been opened.
     pub(in crate::tui) fn sheet_of(&self, name: &ConnectionName) -> Option<&Sheet> {
         self.sheets.iter().find(|sheet| sheet.name() == name)
     }
@@ -71,7 +71,8 @@ impl App {
         vec![]
     }
 
-    /// What `key` does: a pending question takes it; else the search moves, picks and closes, the rest acts on the highlighted row.
+    /// What `key` does: a pending question takes it first; otherwise the search moves, picks and closes, and other
+    /// keys act on the highlighted row.
     fn picked(&self, picker: Picker, key: KeyEvent) -> Picked {
         let Picker { search, note } = picker;
         if let Some(Note::ConfirmRemove(name)) = note {
@@ -113,13 +114,13 @@ impl App {
         self.sheet_of(name).is_some_and(|sheet| sheet.session != SessionState::Closed)
     }
 
-    /// The question before removing `name`; the connection on screen cannot go.
+    /// The question asked before removing `name`; the connection on screen cannot be removed.
     fn removal(&self, name: ConnectionName) -> Note {
         if name == *self.sheet().name() { on_screen(&name) } else { Note::ConfirmRemove(name) }
     }
 
-    /// Shows the sheet of `connection`, starting one and opening its session when it has none, or when it failed or
-    /// was closed.
+    /// Shows the sheet of `connection`, creating it if needed.
+    /// Its session opens when it has none, or when the last one failed or was closed.
     fn show(&mut self, connection: Connection) -> Vec<Action> {
         let Some(open) = self.sheets.iter().position(|sheet| sheet.name() == connection.name()) else {
             let session = self.new_session();
@@ -146,9 +147,9 @@ impl App {
         self.shown = self.sheets.iter().position(|sheet| *sheet.name() == shown).unwrap_or_default();
     }
 
-    /// Takes the connections the config holds now, after the change `id`: the sheet of one gone closes, the sheet of one
-    /// changed opens again unless its session was closed, the form that sent `id` closes, and the status line says
-    /// `warning`.
+    /// Takes the connections the config holds after the change `id`.
+    /// The sheet of a removed connection closes, the sheet of a changed one opens its session again unless it was
+    /// closed, the form that sent `id` closes, and the status line shows `warning`.
     pub(super) fn take_connections(&mut self, id: ConfigChangeId, connections: Vec<Connection>, warning: Option<String>) -> Vec<Action> {
         let closed = self.close_gone(&connections);
         let reopened = self.reopen_changed(&connections);
@@ -164,7 +165,7 @@ impl App {
         closed.into_iter().chain(reopened).collect()
     }
 
-    /// Drops the sheets of connections no longer in `connections`, but the one on screen.
+    /// Drops the sheets of connections no longer in `connections`, except the one on screen.
     fn close_gone(&mut self, connections: &[Connection]) -> Vec<Action> {
         let shown = self.sheet().name().clone();
         let is_gone = |name: &ConnectionName| *name != shown && !connections.iter().any(|c| c.name() == name);
@@ -182,7 +183,8 @@ impl App {
         changed_now.into_iter().filter_map(|now| self.reopen(now)).collect()
     }
 
-    /// Opens a new session on the sheet of `connection`, as the config now says; a closed sheet only takes it.
+    /// Opens a new session on the sheet of `connection`, as the config now says; a closed sheet only takes the new
+    /// connection and stays closed.
     fn reopen(&mut self, connection: Connection) -> Option<Action> {
         let sheet = self.sheet_of_mut(connection.name())?;
         if sheet.session == SessionState::Closed {
@@ -194,8 +196,8 @@ impl App {
         Some(Action::Reopen { connection, session })
     }
 
-    /// Says why the change `id` did not happen: in the form that sent it, which takes back the password it typed, else
-    /// in the status line.
+    /// Shows why the change `id` failed: in the form that sent it, which takes back its typed password, or else in the
+    /// status line.
     pub(super) fn config_failed(&mut self, id: ConfigChangeId, why: String, password: Option<Secret>) {
         match &mut self.overlay {
             Some(Overlay::Form(form)) if form.is_waiting_on(id) => form.failed(why, password),
@@ -231,7 +233,7 @@ pub(in crate::tui) mod tests {
     use crossterm::event::KeyModifiers;
     use std::time::Duration;
 
-    /// Three connections, the TUI on `local`.
+    /// The app with three connections, showing `local`.
     pub(in crate::tui) fn on_local() -> App {
         let local = named("local", "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\n");
         let prod = named(

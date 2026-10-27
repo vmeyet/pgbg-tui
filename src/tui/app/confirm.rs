@@ -1,4 +1,4 @@
-//! A write asks on the footer line before it is sent: `y` sends it, any other key drops it.
+//! Before a write is sent, the footer line asks for it: `y` sends it, any other key drops it.
 use super::sheet::ToRun;
 use super::{Action, App, Overlay, Prompt};
 use crate::db::guard::Write;
@@ -10,7 +10,7 @@ pub(in crate::tui) struct WriteToSend {
     to_run: ToRun,
 }
 
-/// Says the user answered `y` to a write: only this module builds one, and the backend runs no write without it.
+/// Proof that the user answered `y` to a write: only this module builds one, and the backend runs no write without it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::tui) struct Confirmed(());
 
@@ -20,7 +20,8 @@ impl Confirmed {
 }
 
 impl App {
-    /// Runs the statement under the cursor; a write asks first. Nothing while another one runs.
+    /// Runs the statement under the cursor, asking first when it is a write.
+    /// Does nothing while another statement runs.
     pub(super) fn run_editor(&mut self) -> Vec<Action> {
         let sheet = self.sheet_mut();
         let Some(to_run) = sheet.editor_run().filter(|_| !sheet.is_running()) else { return vec![] };

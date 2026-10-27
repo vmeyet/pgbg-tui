@@ -10,7 +10,7 @@ use vtui::field::Field;
 #[derive(Debug, Default, PartialEq)]
 pub(in crate::tui) struct ParamBar {
     fields: BTreeMap<ParamName, Field>,
-    /// The field with the keys, by its place among the statement's names.
+    /// The index of the field with the keys among the statement's names.
     pub(in crate::tui) at: usize,
 }
 
@@ -20,7 +20,7 @@ impl ParamBar {
         self.fields.get(name)
     }
 
-    /// Moves to the next field among `count`, or to the one before; false past either end, where the keys leave the bar.
+    /// Moves to the next or previous of `count` fields; false past either end, where the keys leave the bar.
     pub(super) fn step(&mut self, count: usize, direction: Direction) -> bool {
         let next = match direction {
             Direction::Forward => self.at.checked_add(1).filter(|&next| next < count),
@@ -31,7 +31,7 @@ impl ParamBar {
         true
     }
 
-    /// Applies `key` to the field of `name`; a value holds one line, so `⏎` with any modifier types nothing.
+    /// Applies `key` to the field of `name`; a value is one line, so `⏎` with any modifier types nothing.
     pub(super) fn edit(&mut self, name: &ParamName, key: KeyEvent) {
         if key.code == KeyCode::Enter {
             return;
@@ -39,12 +39,12 @@ impl ParamBar {
         editor::apply(self.field_mut(name), key);
     }
 
-    /// Pastes `text` in the field of `name`, its line ends as spaces.
+    /// Pastes `text` in the field of `name`, with its line ends turned into spaces.
     pub(super) fn paste(&mut self, name: &ParamName, text: &str) {
         self.field_mut(name).paste(&text.replace(['\r', '\n'], " "));
     }
 
-    /// The field of `name`, made on first use as a secret one, so a value never shows in `Debug` or a log.
+    /// The field of `name`, created on first use as a secret field, so a value never shows in `Debug` or a log.
     fn field_mut(&mut self, name: &ParamName) -> &mut Field {
         self.fields.entry(name.clone()).or_insert_with(|| Field::secret(""))
     }

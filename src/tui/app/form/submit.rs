@@ -17,7 +17,7 @@ struct Keys {
     statement_timeout: Option<StatementTimeout>,
 }
 
-/// `now`, unless the config already says it.
+/// `now` when it differs from `was`, the value the config already holds.
 fn differs<T: PartialEq>(now: T, was: Option<T>) -> Option<T> {
     match was {
         Some(was) if was == now => None,
@@ -26,8 +26,8 @@ fn differs<T: PartialEq>(now: T, was: Option<T>) -> Option<T> {
 }
 
 impl Form {
-    /// What to save as `id`, once every line checks; else each refused line says why. A new connection cannot take the
-    /// name of one in `connections`.
+    /// What to save as `id` once every line checks; otherwise each refused line says why.
+    /// A new connection cannot reuse the name of one in `connections`.
     pub(super) fn submit(&mut self, id: ConfigChangeId, connections: &[Connection]) -> Option<SaveConnection> {
         let name = self.checked_name(connections);
         let url = Target::parse(self.url.text()).map_err(|err| RefusedLine::new(Slot::Url, format!("{err:#}")));
@@ -47,8 +47,8 @@ impl Form {
         Some(SaveConnection { id, name, saving: self.saving, change: self.change(keys), password: typed })
     }
 
-    /// The password typed, moved out of the form, for the keychain item `source` names, whether the config already
-    /// names that item or not.
+    /// Moves the typed password out of the form, for the keychain item `source` names, whether or not the config
+    /// already names that item.
     fn take_typed_password(&mut self, source: Option<&SecretSource>) -> Option<KeychainPassword> {
         let has_typed = self.password.typed_count() > 0;
         match source {

@@ -7,7 +7,7 @@ use crate::connection::ConnectionName;
 use crate::history::Entry;
 use crossterm::event::KeyEvent;
 
-/// The history of one connection, each statement once, and the search over it; empty until the backend read it.
+/// The history of one connection, each statement once, and the search over it; empty until the backend has read it.
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::tui) struct Recall {
     pub(in crate::tui) connection: ConnectionName,
@@ -33,7 +33,7 @@ impl App {
         recall.search.rank(&recall.all);
     }
 
-    /// The search after `key`: a picked statement goes in the editor, under what it holds.
+    /// The search after `key`: a picked statement goes in the editor, below the text already there.
     pub(super) fn recall_key(&mut self, recall: Recall, key: KeyEvent) -> Vec<Action> {
         let Recall { connection, all, search } = recall;
         match search.after(key, Pane::Finder, &all) {
@@ -47,7 +47,7 @@ impl App {
         vec![]
     }
 
-    /// `statement` at the end of the editor, a blank line after what it held, the cursor on it so `⏎` runs it.
+    /// Adds `statement` at the end of the editor after a blank line, with the cursor on it so `⏎` runs it.
     fn put_in_editor(&mut self, statement: &str) {
         let sheet = self.sheet_mut();
         let held = sheet.editor.text().trim_end();

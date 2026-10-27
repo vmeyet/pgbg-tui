@@ -1,5 +1,6 @@
-//! The connection form, from the picker's `ctrl-a` and `ctrl-e`: each key of a connection on its own line, checked as
-//! the command line checks its flags, then written by the backend; an edit writes only the keys that changed.
+//! The connection form, opened from the picker with `ctrl-a` and `ctrl-e`.
+//! Each connection key has its own line, checked as the command line checks its flags, then written by the backend.
+//! An edit writes only the keys that changed.
 use super::{Action, App, ConfigChangeId, Overlay, Saving};
 use crate::act::{self, Act, Pane};
 use crate::connection::{Connection, Tier, Tls, TunnelSpec, WritePolicy};
@@ -72,7 +73,7 @@ pub(in crate::tui) struct Form {
     password_from: PasswordFrom,
     /// The keychain item, the variable or the command, as `password_from` says.
     password_where: Field,
-    /// Typed for the keychain item, which saving writes; nothing typed leaves the item as it is.
+    /// The password for the keychain item, written on save; left empty, the item does not change.
     password: Secret,
     tunnel: Field,
     /// The command the tunnel runs first, once.
@@ -80,7 +81,7 @@ pub(in crate::tui) struct Form {
     writes: WritePolicy,
     /// The `tls` key; none leaves it to the url's `sslmode`.
     tls: Option<Tls>,
-    /// Empty for the tier's.
+    /// Empty means the tier's default.
     statement_timeout: Field,
     /// Why a line is refused, each beside its line.
     errors: Vec<RefusedLine>,
@@ -198,12 +199,10 @@ impl Form {
         self.writes
     }
 
-    /// The `tls` key; none leaves it to the url's `sslmode`.
     pub(in crate::tui) fn tls(&self) -> Option<Tls> {
         self.tls
     }
 
-    /// Why the last save failed.
     pub(in crate::tui) fn failure(&self) -> Option<&str> {
         self.failure.as_deref()
     }
@@ -217,8 +216,8 @@ impl Form {
         self.sent == Some(id)
     }
 
-    /// Says why the save failed; the form stays as it was typed, with the password it sent back in it unless another
-    /// was typed during the save.
+    /// Shows why the save failed.
+    /// The form keeps what was typed, and takes back the password it sent unless another one was typed during the save.
     pub(in crate::tui) fn failed(&mut self, why: String, password: Option<Secret>) {
         self.sent = None;
         self.failure = Some(why);
@@ -232,8 +231,8 @@ impl Form {
         self.errors.iter().find(|refused| refused.slot == slot).map(|refused| refused.why.as_str())
     }
 
-    /// Types `text` on the line with the cursor as vtui cleans a paste, on one line, but on the password line, which takes
-    /// every character a password may hold but a line end; a choice line takes none.
+    /// Types `text` on the line with the cursor, cleaned as vtui cleans a paste and kept on one line.
+    /// The password line takes any character but a line end; a choice line takes nothing.
     pub(super) fn paste(&mut self, text: &str) {
         let is_line_end = |c: char| matches!(c, '\r' | '\n');
         if self.at == Slot::Password {
@@ -318,7 +317,7 @@ fn turn_of(key: KeyEvent) -> Option<Turn> {
     }
 }
 
-/// The value after `now` among `choices`, or before it, going round.
+/// The value after `now` in `choices`, or before it, wrapping around at either end.
 fn turned<T: Copy + PartialEq>(choices: &[T], now: T, turn: Turn) -> T {
     let at = choices.iter().position(|&choice| choice == now).unwrap_or_default();
     let next = match turn {
