@@ -3,10 +3,11 @@ use super::editor::Editor;
 use super::grid::{Move, Room};
 use super::{Action, Grid, Incoming, RunId, SessionId, TunnelState};
 use crate::chart::{self, ChartError, Series};
-use crate::connection::{Connection, ConnectionName};
+use crate::connection::{Connection, ConnectionName, SchemaReading};
 use crate::db::guard;
-use crate::db::model::{Extent, Page, ResultSet, Statement};
+use crate::db::model::{Catalog, Extent, Page, ResultSet, Statement};
 use crate::query::{Header, Query};
+use std::sync::Arc;
 use std::time::Duration;
 
 pub(in crate::tui) const LOST_SESSION: &str = "session lost, ⏎ opens a new one";
@@ -58,6 +59,18 @@ pub(in crate::tui) enum Run {
     Failed(String),
 }
 
+/// Where the sheet's schema stands: read once first needed, read again on demand.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(in crate::tui) enum SchemaState {
+    #[default]
+    NotRead,
+    Reading,
+    /// Shared with whatever builds on it, and never changed: a new read replaces it whole.
+    Read(Arc<Catalog>),
+    /// The read failed, in its words; the session stays as it was.
+    Failed(String),
+}
+
 /// How the result pane shows a result; `v` switches, and a new result starts on the grid, or on the chart its header asks
 /// for when that chart fits the result.
 #[derive(Clone, Debug, PartialEq)]
@@ -93,6 +106,7 @@ pub(in crate::tui) struct Sheet {
     pub(in crate::tui) is_dirty: bool,
     /// Why the last page asked for failed, until the next run.
     pub(in crate::tui) page_failure: Option<String>,
+    pub(in crate::tui) schema: SchemaState,
 }
 
 impl Sheet {
@@ -112,6 +126,7 @@ impl Sheet {
             header: Header::default(),
             is_dirty: false,
             page_failure: None,
+            schema: SchemaState::NotRead,
         }
     }
 
@@ -138,6 +153,7 @@ impl Sheet {
         self.tunnel = None;
         self.stop_paging();
         self.fail_running(REOPENED_WHILE_RUNNING);
+        self.schema = SchemaState::NotRead;
     }
 
     /// Takes `connection` as it is now and leaves the session closed: picking the sheet opens it as it is then.
@@ -151,6 +167,30 @@ impl Sheet {
         self.tunnel = None;
         self.stop_paging();
         self.fail_running(CLOSED_WHILE_RUNNING);
+        if self.schema == SchemaState::Reading {
+            self.schema = SchemaState::NotRead;
+        }
+    }
+
+    /// Asks for the schema the first time something needs it; nothing once asked.
+    #[cfg_attr(not(test), expect(dead_code, reason = "the schema sidebar asks for it, the next step"))]
+    pub(super) fn want_schema(&mut self) -> Vec<Action> {
+        if self.schema != SchemaState::NotRead {
+            return vec![];
+        }
+        self.read_schema_again()
+    }
+
+    /// Asks for the schema again, unless a read is on its way, the session is closed, or the connection says
+    /// `schema = "off"`.
+    pub(super) fn read_schema_again(&mut self) -> Vec<Action> {
+        let is_off = self.connection.schema() == SchemaReading::Off;
+        let is_closed = self.session == SessionState::Closed;
+        if is_off || is_closed || self.schema == SchemaState::Reading {
+            return vec![];
+        }
+        self.schema = SchemaState::Reading;
+        vec![Action::ReadSchema { connection: self.name().clone(), session: self.session_id }]
     }
 
     /// Fails the running statement in `why`: the session it ran on is gone, and its answer with it.
@@ -231,11 +271,12 @@ impl Sheet {
     pub(super) fn apply(&mut self, incoming: Incoming) {
         let is_closed = self.session == SessionState::Closed;
         match incoming {
-            Incoming::Opened | Incoming::NotOpened(_) | Incoming::Closed(_) | Incoming::Tunnel(_) if is_closed => {}
+            Incoming::Opened | Incoming::NotOpened(_) | Incoming::Closed(_) | Incoming::Tunnel(_) | Incoming::Schema(_) if is_closed => {}
             Incoming::Opened => self.session = SessionState::Open,
             Incoming::NotOpened(err) => self.session = SessionState::Failed(err),
             Incoming::Closed(why) => self.session = SessionState::Failed(format!("{LOST_SESSION}: {why}")),
             Incoming::Tunnel(state) => self.tunnel = Some(state),
+            Incoming::Schema(read) => self.schema = read.map_or_else(SchemaState::Failed, SchemaState::Read),
             Incoming::Result { run, .. } | Incoming::Refused { run, .. } | Incoming::Failed { run, .. }
                 if !self.is_answer_to_running(run) => {}
             Incoming::Result { run, result, took } => {
@@ -294,10 +335,10 @@ impl Sheet {
 #[cfg(test)]
 mod tests {
     use super::super::App;
-    use super::super::tests::{on_the_result, shop, to_shop};
+    use super::super::tests::{app, app_on, on_the_result, shop, to_shop};
     use super::*;
     use crate::db::model::{ColumnKind, Value};
-    use crate::fixtures::{column, orders, page};
+    use crate::fixtures::{self, column, orders, page, shop_schema};
     use crossterm::event::{KeyCode, KeyEvent};
 
     fn first_page() -> App {
@@ -404,6 +445,90 @@ mod tests {
         app.sheet_mut().close();
         app.apply(to_shop(Incoming::PageFailed { run: RunId::FIRST, error: "ERROR: canceling statement".into() }));
         assert_eq!(app.sheet().page_failure, None);
+    }
+
+    fn read_schema() -> Vec<Action> {
+        vec![Action::ReadSchema { connection: shop(), session: SessionId::FIRST }]
+    }
+
+    fn catalog() -> Arc<Catalog> {
+        Arc::new(Catalog { schema: shop_schema(), search_path: vec!["public".to_owned()], is_cut: false })
+    }
+
+    #[test]
+    fn the_schema_is_asked_for_the_first_time_it_is_needed() {
+        assert_eq!(app().sheet_mut().want_schema(), read_schema());
+    }
+
+    #[test]
+    fn the_schema_is_asked_for_once() {
+        let mut app = app();
+        app.sheet_mut().want_schema();
+        assert_eq!(app.sheet_mut().want_schema(), []);
+    }
+
+    #[test]
+    fn a_connection_whose_schema_is_off_never_asks_for_it() {
+        let off = fixtures::connection("tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\nschema = \"off\"\n");
+        assert_eq!(app_on(&off).sheet_mut().want_schema(), []);
+    }
+
+    #[test]
+    fn the_schema_read_is_kept_on_the_sheet() {
+        let mut app = app();
+        app.sheet_mut().want_schema();
+        app.apply(to_shop(Incoming::Schema(Ok(catalog()))));
+        assert_eq!(app.sheet().schema, SchemaState::Read(catalog()));
+    }
+
+    #[test]
+    fn a_schema_that_could_not_be_read_says_why() {
+        let mut app = app();
+        app.sheet_mut().want_schema();
+        app.apply(to_shop(Incoming::Schema(Err("permission denied for table pg_class".to_owned()))));
+        assert_eq!(app.sheet().schema, SchemaState::Failed("permission denied for table pg_class".to_owned()));
+    }
+
+    #[test]
+    fn a_schema_read_can_be_read_again() {
+        let mut app = app();
+        app.sheet_mut().want_schema();
+        app.apply(to_shop(Incoming::Schema(Ok(catalog()))));
+        assert_eq!(app.sheet_mut().read_schema_again(), read_schema());
+    }
+
+    #[test]
+    fn a_schema_being_read_is_not_asked_for_again() {
+        let mut app = app();
+        app.sheet_mut().want_schema();
+        assert_eq!(app.sheet_mut().read_schema_again(), []);
+    }
+
+    #[test]
+    fn a_sheet_opened_again_asks_its_new_session_for_the_schema() {
+        let mut app = app();
+        app.sheet_mut().want_schema();
+        app.apply(to_shop(Incoming::Schema(Ok(catalog()))));
+        let connection = app.sheet().connection.clone();
+        app.sheet_mut().reopen(connection, SessionId::FIRST.next());
+        assert_eq!(app.sheet_mut().want_schema(), [Action::ReadSchema { connection: shop(), session: SessionId::FIRST.next() }]);
+    }
+
+    #[test]
+    fn a_sheet_closed_while_its_schema_is_read_asks_again_once_it_opens() {
+        let mut app = app();
+        app.sheet_mut().want_schema();
+        app.sheet_mut().close();
+        let connection = app.sheet().connection.clone();
+        app.sheet_mut().reopen(connection, SessionId::FIRST.next());
+        assert_eq!(app.sheet_mut().want_schema(), [Action::ReadSchema { connection: shop(), session: SessionId::FIRST.next() }]);
+    }
+
+    #[test]
+    fn a_closed_sheet_asks_for_no_schema() {
+        let mut app = app();
+        app.sheet_mut().close();
+        assert_eq!(app.sheet_mut().want_schema(), []);
     }
 
     #[test]

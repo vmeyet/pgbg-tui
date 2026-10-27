@@ -1,9 +1,10 @@
 //! One session task per connection opened: it owns the session and its tunnel, runs each statement in turn, takes
 //! cancels by `RunId`, and stops a statement as every stop does.
 use super::paging::{Paging, serve_pages};
+use super::schema::SchemaReader;
 use super::send;
 use crate::connection::{Connection, ConnectionName, WritePolicy};
-use crate::db::model::{CancelToken, ServerError, Statement};
+use crate::db::model::{CancelToken, Route, ServerError, Statement};
 use crate::db::{Interrupted, NotOpened, Opened, Pages, Session, Started, TunnelStep, guard, open_along};
 use crate::history::{Entry, Outcome, Store};
 use crate::signal::STOP_WAIT;
@@ -23,7 +24,7 @@ const TUNNEL_NOT_STARTED: &str = "its tunnel did not start";
 const TUNNEL_DIED: &str = "its tunnel died";
 
 /// Where the answers of one session go, each tagged with its connection and its `SessionId`.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(super) struct SessionAnswers {
     pub(super) connection: ConnectionName,
     pub(super) session: SessionId,
@@ -42,6 +43,7 @@ pub(super) struct SessionLink {
     pub(super) session: SessionId,
     jobs: UnboundedSender<Job>,
     cancels: UnboundedSender<RunId>,
+    schema_asks: UnboundedSender<()>,
     /// What the task has on the server and no cancel reached yet, shared with the task; an abort cancels it first.
     pub(super) running: watch::Receiver<Option<CancelToken>>,
     task: JoinHandle<()>,
@@ -72,17 +74,28 @@ impl SessionLink {
     pub(super) fn start(connection: Connection, answers: SessionAnswers, history: Option<Store>, idle_limit: Duration) -> Self {
         let (jobs, queue) = mpsc::unbounded_channel();
         let (cancels, cancelled) = mpsc::unbounded_channel();
+        let (schema_asks, asks) = mpsc::unbounded_channel();
         let (on_server, running) = watch::channel(None);
+        let (route, open_route) = watch::channel(None);
         let session = answers.session;
+        let reader = SchemaReader { connection: connection.clone(), answers: answers.clone(), asks, route: open_route };
         let (cancelled, on_server) = (Cancels { receiver: cancelled, latest: None }, OnServer(on_server));
-        let task = SessionTask { connection, tunnel: None, session: None, cancelled, on_server, answers, history, idle_limit };
-        Self { session, jobs, cancels, running, task: tokio::spawn(task.serve(queue)) }
+        let task = SessionTask { connection, tunnel: None, session: None, route, cancelled, on_server, answers, history, idle_limit };
+        Self { session, jobs, cancels, schema_asks, running, task: tokio::spawn(task.serve(queue, reader)) }
     }
 
     /// Queues `job` behind the one running.
     pub(super) fn send(&self, job: Job) {
         if self.jobs.send(job).is_err() {
             tracing::warn!("the session task is gone: a statement or an open is dropped");
+        }
+    }
+
+    /// Reads the schema on a second session along the route of this one, opening this one first unless it is open.
+    pub(super) fn read_schema(&self) {
+        self.send(Job::Open);
+        if self.schema_asks.send(()).is_err() {
+            tracing::warn!("the session task is gone: the schema is not read");
         }
     }
 
@@ -126,6 +139,8 @@ struct SessionTask {
     connection: Connection,
     tunnel: Option<Tunnel>,
     session: Option<Session>,
+    /// The route of the open session, for the schema reader; none while it is not open.
+    route: watch::Sender<Option<Route>>,
     cancelled: Cancels,
     on_server: OnServer,
     answers: SessionAnswers,
@@ -202,7 +217,15 @@ impl Answered<'_> {
 impl SessionTask {
     /// Opens the session at once, and again before a statement when the last try failed or the session was lost;
     /// once pgbg quits, a statement still queued is never sent.
-    async fn serve(mut self, mut queue: UnboundedReceiver<Job>) {
+    async fn serve(mut self, queue: UnboundedReceiver<Job>, reader: SchemaReader) {
+        tokio::select! {
+            () = self.serve_jobs(queue) => {}
+            () = reader.serve() => {}
+        }
+        self.stop().await;
+    }
+
+    async fn serve_jobs(&mut self, mut queue: UnboundedReceiver<Job>) {
         self.open_or_fail_queued(&mut queue).await;
         let mut pending = None;
         loop {
@@ -221,7 +244,6 @@ impl SessionTask {
                 Woken::TunnelEnded(died) => self.lose_tunnel(&died),
             }
         }
-        self.stop().await;
     }
 
     async fn woken(&mut self, queue: &mut UnboundedReceiver<Job>) -> Woken {
@@ -237,12 +259,12 @@ impl SessionTask {
     async fn open(&mut self) -> Result<(), String> {
         match self.connect().await {
             Ok(session) => {
-                self.session = Some(session);
+                self.set_session(Some(session));
                 self.send(Incoming::Opened);
                 Ok(())
             }
             Err(error) => {
-                self.session = None;
+                self.set_session(None);
                 self.send(Incoming::NotOpened(error.clone()));
                 Err(error)
             }
@@ -346,8 +368,15 @@ impl SessionTask {
     }
 
     fn lose(&mut self, why: String) {
-        self.session = None;
+        self.set_session(None);
         self.send(Incoming::Closed(why));
+    }
+
+    /// Keeps `session`, and tells the schema reader the route it takes.
+    fn set_session(&mut self, session: Option<Session>) {
+        let route = session.as_ref().map(|_| self.tunnel.as_ref().map_or(Route::Direct, Tunnel::route));
+        self.session = session;
+        self.route.send_replace(route);
     }
 
     fn send(&self, incoming: Incoming) {
@@ -760,6 +789,58 @@ mod tests {
         backend.stop().await;
         let rows = on_a_side_session(&format!("SELECT n FROM {table}")).await;
         assert_eq!(rows, [[Value::Int(1)]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn the_schema_is_read_while_a_statement_runs() {
+        let (backend, mut answers) = started();
+        backend.run(&shop(), RunId::FIRST, Statement::new(SLEEP));
+        until_sleeping().await;
+        backend.read_schema(&shop(), SessionId::FIRST);
+        let answer = next_answer(&mut answers).await;
+        assert!(matches!(&answer, Incoming::Schema(Ok(catalog)) if !catalog.search_path.is_empty()), "{answer:?}");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn the_schema_is_read_through_the_tunnel_of_the_session() {
+        let marker = "pgbg-test-schema-through-the-tunnel";
+        let (backend, mut answers) = started_on(fixtures::tunnelled(marker));
+        backend.read_schema(&shop(), SessionId::FIRST);
+        let seen = answers_until(&mut answers, |answer| matches!(answer, Incoming::Schema(_))).await;
+        let tunnels_started = seen.iter().filter(|answer| **answer == Incoming::Tunnel(TunnelState::Starting)).count();
+        assert!(matches!(seen.last(), Some(Incoming::Schema(Ok(_)))) && tunnels_started == 1, "{seen:?}");
+    }
+
+    /// `shop` on the test database, its password from a shell line that `$1` names a file for.
+    fn with_password_command(line: &str, file: &std::path::Path) -> Connection {
+        let command = format!("password = {{ command = [\"sh\", \"-c\", {line:?}, \"sh\", {:?}] }}\n", file.display().to_string());
+        fixtures::test_database("local", &command)
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn the_schema_session_reads_the_password_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let reads = dir.path().join("reads");
+        let (backend, mut answers) = started_on(with_password_command("echo read >> \"$1\"; echo nina-password", &reads));
+        backend.read_schema(&shop(), SessionId::FIRST);
+        answers_until(&mut answers, |answer| matches!(answer, Incoming::Schema(_))).await;
+        assert_eq!(std::fs::read_to_string(&reads).unwrap(), "read\nread\n");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_schema_read_that_fails_leaves_the_session_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let once = "[ -e \"$1\" ] && exit 1; touch \"$1\"; echo nina-password";
+        let (backend, mut answers) = started_on(with_password_command(once, &dir.path().join("read")));
+        backend.read_schema(&shop(), SessionId::FIRST);
+        let seen = answers_until(&mut answers, |answer| matches!(answer, Incoming::Schema(_))).await;
+        assert!(matches!(seen.last(), Some(Incoming::Schema(Err(_)))), "{seen:?}");
+        let after = answer_to(&backend, &mut answers, RunId::FIRST, "SELECT 1").await;
+        assert!(matches!(after, Incoming::Result { .. }), "{after:?}");
     }
 
     #[tokio::test]

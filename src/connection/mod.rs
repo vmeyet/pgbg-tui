@@ -33,6 +33,8 @@ pub(crate) struct Entry {
     tls: Option<Tls>,
     #[serde(default)]
     statement_timeout: Option<String>,
+    #[serde(default)]
+    schema: SchemaReading,
 }
 
 /// A named database target: where it is, how to reach it, how to log in, and whether it takes writes.
@@ -51,12 +53,23 @@ pub(crate) struct Connection {
     #[serde(skip)]
     tls_setting: Option<Tls>,
     statement_timeout: TimeoutChoice,
+    schema: SchemaReading,
 }
 
 /// The name a connection has under `[connections.<name>]`, typed on the command line.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct ConnectionName(String);
+
+/// Whether the TUI reads a connection's schema, on a second login, once the sidebar or completion first needs it;
+/// `schema = "off"` saves that login where a pooler or `CONNECTION LIMIT` has no slot to spare.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum SchemaReading {
+    #[default]
+    On,
+    Off,
+}
 
 /// Sets the colour and the timeout of a connection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, clap::ValueEnum)]
@@ -79,7 +92,7 @@ pub enum WritePolicy {
 impl Connection {
     /// The connection `[connections.<name>]` describes, or why it is refused.
     pub(crate) fn new(name: &str, entry: Entry) -> Result<Self> {
-        let Entry { tier, url, password, tunnel, writes, tls, statement_timeout } = entry;
+        let Entry { tier, url, password, tunnel, writes, tls, statement_timeout, schema } = entry;
         let url = Target::parse(&url)?;
         let statement_timeout = statement_timeout.as_deref().map(StatementTimeout::parse).transpose()?;
         Ok(Self {
@@ -92,6 +105,7 @@ impl Connection {
             password: password.map(secret_source).transpose()?,
             writes,
             statement_timeout: statement_timeout.map_or_else(|| TimeoutChoice::Tier(tier.statement_timeout()), TimeoutChoice::Own),
+            schema,
         })
     }
 
@@ -131,6 +145,10 @@ impl Connection {
     /// The connection's own `statement_timeout`, else its tier's.
     pub(crate) fn statement_timeout(&self) -> TimeoutChoice {
         self.statement_timeout
+    }
+
+    pub(crate) fn schema(&self) -> SchemaReading {
+        self.schema
     }
 }
 
@@ -288,6 +306,16 @@ mod tests {
     #[test]
     fn a_statement_timeout_that_does_not_parse_is_refused() {
         assert!(shop("statement_timeout = \"soon\"").unwrap_err().to_string().contains("statement_timeout"));
+    }
+
+    #[test]
+    fn a_connection_reads_its_schema_unless_it_says_off() {
+        assert_eq!((shop("").unwrap().schema(), shop("schema = \"off\"").unwrap().schema()), (SchemaReading::On, SchemaReading::Off));
+    }
+
+    #[test]
+    fn an_unknown_schema_setting_is_refused() {
+        assert!(shop("schema = \"lazy\"").is_err());
     }
 
     #[test]
