@@ -1,4 +1,4 @@
-//! The tokens of SQL text, each with its place: the guard reads them, and the parameters and completion will.
+//! The tokens of SQL text, each with its place: the guard and the parameters read them, and completion will.
 use std::ops::Range;
 
 /// One token of SQL text and the bytes it spans.
@@ -16,6 +16,10 @@ pub(crate) enum Token {
     Word(String),
     /// A `;`.
     End,
+    /// `{{name}}`, holding the name.
+    Param(String),
+    /// A `{{` that opens no `{{name}}`, or one glued to a word, which would read as part of it once replaced by `$n`.
+    Unreadable,
     /// `$1`, `$2`: a parameter the statement numbers itself.
     Numbered(u32),
     Other,
@@ -25,7 +29,7 @@ impl Token {
     pub(crate) fn word(&self) -> Option<&str> {
         match self {
             Self::Word(word) => Some(word),
-            Self::End | Self::Numbered(_) | Self::Other => None,
+            Self::End | Self::Param(_) | Self::Unreadable | Self::Numbered(_) | Self::Other => None,
         }
     }
 }
@@ -45,6 +49,7 @@ pub(crate) fn tokens(sql: &str) -> Vec<Placed> {
             c if c.is_alphabetic() || c == '_' => word(rest),
             '\'' | '"' => (Some(Token::Other), after_quoted(after, c)),
             '$' => dollar(rest),
+            '{' if after.starts_with('{') => param(sql, at),
             _ => (Some(Token::Other), after),
         };
         if let Some(token) = token {
@@ -66,6 +71,24 @@ fn word(rest: &str) -> (Option<Token>, &str) {
     let next = &rest[end..];
     let is_escape_string = word == "E" && next.starts_with('\'');
     (Some(Token::Word(word)), if is_escape_string { after_escape_string(&next[1..]) } else { next })
+}
+
+/// `{{name}}` at byte `at` of `sql`, spaces allowed around the name; anything else from `{{` on is unreadable.
+fn param(sql: &str, at: usize) -> (Option<Token>, &str) {
+    let rest = &sql[at + 2..];
+    let Some(close) = rest.find("}}") else { return (Some(Token::Unreadable), "") };
+    let name = rest[..close].trim_matches(' ');
+    let next = &rest[close + 2..];
+    let is_glued = sql[..at].ends_with(is_word_char) || next.starts_with(is_word_char);
+    let token = if is_param_name(name) && !is_glued { Token::Param(name.to_owned()) } else { Token::Unreadable };
+    (Some(token), next)
+}
+
+/// Whether `name` can name a parameter: a letter or `_`, then letters, digits or `_`.
+pub(crate) fn is_param_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let starts_well = chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
+    starts_well && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 fn after_block_comment(body: &str) -> &str {
@@ -163,6 +186,41 @@ mod tests {
     #[test]
     fn a_dollar_quote_or_a_lone_dollar_is_no_numbered_parameter() {
         assert_eq!(numbered("SELECT $tag$ $1 $tag$, '$2', $"), []);
+    }
+
+    fn params(sql: &str) -> Vec<Token> {
+        tokens(sql).into_iter().map(|placed| placed.token).filter(|token| matches!(token, Token::Param(_) | Token::Unreadable)).collect()
+    }
+
+    #[test]
+    fn a_param_holds_its_name_and_spans_its_braces() {
+        let placed = tokens("SELECT * FROM orders WHERE day > {{since}}");
+        let last = placed.last().unwrap();
+        assert_eq!((&last.token, last.range.clone()), (&Token::Param("since".into()), 33..42));
+    }
+
+    #[test]
+    fn spaces_around_a_param_name_are_dropped() {
+        assert_eq!(params("SELECT {{ since }}"), [Token::Param("since".into())]);
+    }
+
+    #[test]
+    fn a_param_inside_a_string_a_comment_or_a_quoted_name_is_no_param() {
+        assert_eq!(params("SELECT '{{since}}', \"{{owner}}\", $$ {{a}} $$ -- {{b}}\n/* {{c}} */"), []);
+    }
+
+    #[test]
+    fn a_brace_pair_that_holds_no_name_is_unreadable() {
+        assert_eq!(params("SELECT {{1st}}"), [Token::Unreadable]);
+        assert_eq!(params("SELECT {{since"), [Token::Unreadable]);
+        assert_eq!(params("SELECT {{owner name}}"), [Token::Unreadable]);
+    }
+
+    #[test]
+    fn a_param_glued_to_a_word_is_unreadable() {
+        assert_eq!(params("SELECT x{{since}}"), [Token::Unreadable]);
+        assert_eq!(params("SELECT {{since}}e"), [Token::Unreadable]);
+        assert_eq!(params("SELECT {{since}}1"), [Token::Unreadable]);
     }
 
     #[test]

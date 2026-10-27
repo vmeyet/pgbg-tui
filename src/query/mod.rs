@@ -20,6 +20,7 @@ pub(crate) use save::Write;
 pub(crate) use tree::{TreeRow, tree_rows};
 
 mod header;
+pub(crate) mod params;
 mod save;
 mod tree;
 

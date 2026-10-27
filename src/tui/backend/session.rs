@@ -4,9 +4,10 @@ use super::paging::{Paging, serve_pages};
 use super::schema::SchemaReader;
 use super::send;
 use crate::connection::{Connection, ConnectionName, WritePolicy};
-use crate::db::model::{CancelToken, Params, Route, ServerError, Statement};
-use crate::db::{Interrupted, NotOpened, Opened, Pages, Session, Started, TunnelStep, guard, open_along};
+use crate::db::model::{CancelToken, Route, ServerError, Statement};
+use crate::db::{Interrupted, NotOpened, Opened, Pages, Session, Started, TunnelStep, open_along};
 use crate::history::{Entry, Outcome, Store};
+use crate::query::params::{self, Given};
 use crate::signal::STOP_WAIT;
 use crate::tui::app::{Answer, Incoming, RunId, SessionId, TunnelState};
 use crate::tunnel::{Died, Tunnel};
@@ -447,7 +448,7 @@ async fn cancel(token: &CancelToken) {
 
 async fn answer_to(session: &mut Session, writes: WritePolicy, queued: Queued) -> Answered<'_> {
     let Queued { run, statement } = queued;
-    let admitted = match guard::admit(statement, Params::default(), writes) {
+    let admitted = match params::admit(&statement, &Given::none(), writes) {
         Ok(admitted) => admitted,
         Err(refusal) => {
             return Answered { incoming: Incoming::Refused { run, why: refusal.to_string() }, outcome: Outcome::Refused, rest: None };
@@ -473,7 +474,8 @@ async fn answer_to(session: &mut Session, writes: WritePolicy, queued: Queued) -
 mod tests {
     use super::super::Backend;
     use super::*;
-    use crate::db::model::{Route, Value};
+    use crate::db::guard;
+    use crate::db::model::{Params, Route, Value};
     use crate::fixtures;
     use crate::query::Roots;
     use std::path::PathBuf;
