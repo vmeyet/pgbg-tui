@@ -1,9 +1,9 @@
-//! The candidates for an ask, best first: a prefix before a fuzzy match, a column of a table the statement names
-//! before any other name, then shorter first.
+//! The candidates for an ask, best first: vtui ranks each list of names, and this merges the lists, a prefix before a
+//! fuzzy match, a column of a table the statement names before any other name, and among prefixes the shorter first.
 use super::context::{Ask, Want};
-use super::index::{Index, Name, starting};
-use std::cmp::Ordering;
+use super::index::{Index, ranked};
 use std::collections::HashSet;
+use vtui::complete;
 
 /// How many candidates the list keeps.
 const MAX_LISTED: usize = 50;
@@ -26,64 +26,57 @@ pub(crate) struct Candidate {
     pub(crate) kind: Kind,
 }
 
+/// The name the ghost offers: what shows after the cursor, and what taking it puts in place of what was typed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Ghosted {
+    pub(crate) rest: String,
+    pub(crate) insert: String,
+}
+
 /// Names of one kind an ask draws from, and whether they are columns of a table the statement names.
 #[derive(Clone, Copy)]
 struct Source<'a> {
-    names: &'a [Name],
+    names: &'a complete::Index,
     kind: Kind,
     is_in_scope: bool,
 }
 
-/// How a name matches what was typed: every prefix match ranks before any fuzzy one.
-#[derive(Clone, Copy)]
-enum Tier {
-    Prefix,
-    Fuzzy,
-}
-
-/// A name that matches what was typed, and what ranks it.
-struct Match<'a> {
+/// A name of one source that matches what was typed.
+struct Match {
+    name: String,
+    kind: Kind,
+    is_in_scope: bool,
     is_fuzzy: bool,
-    is_in_scope: bool,
-    kind: Kind,
-    name: &'a Name,
-}
-
-impl Candidate {
-    /// What the ghost shows after the cursor: the name past the characters of `typed`.
-    pub(crate) fn rest_after(&self, typed: &str) -> &str {
-        let at = self.name.char_indices().nth(typed.chars().count()).map_or(self.name.len(), |(at, _)| at);
-        &self.name[at..]
-    }
 }
 
 impl Index {
-    /// The best name that starts with what `ask` typed, for the ghost; none when nothing was typed, unless after a `.`.
-    pub(crate) fn ghost(&self, ask: &Ask) -> Option<Candidate> {
+    /// The best name that starts with what `ask` typed, for the ghost; none when nothing was typed, unless after a `.`,
+    /// where it is the table's first column.
+    pub(crate) fn ghost(&self, ask: &Ask) -> Option<Ghosted> {
         let is_after_dot = matches!(ask.want, Want::ColumnOf { .. });
         if ask.prefix.is_empty() && !is_after_dot {
             return None;
         }
-        let key = ask.prefix.to_lowercase();
         let sources = self.sources(&ask.want);
         let best = |is_in_scope: bool| {
             let tier = sources.iter().filter(|source| source.is_in_scope == is_in_scope);
-            tier.flat_map(|source| source.found(Tier::Prefix, &key)).min_by(Match::compare)
+            let rests = tier.filter_map(|source| Some((source.kind, source.rest_after(&ask.prefix)?)));
+            rests.min_by_key(|(_, rest)| rest.chars().count())
         };
-        best(true).or_else(|| best(false)).map(|best| best.candidate(&ask.prefix))
+        let (kind, rest) = best(true).or_else(|| best(false))?;
+        let insert = self.candidate(kind, &format!("{}{rest}", ask.prefix), &ask.prefix).insert;
+        let rest = if kind == Kind::Keyword { cased_as(&rest, &ask.prefix) } else { rest };
+        Some(Ghosted { rest, insert })
     }
 
-    /// The best names for `ask`, at most 50: the prefix matches, a binary search each, then fuzzy ones only to fill the
-    /// list, since a prefix match ranks before any fuzzy one.
+    /// The best names for `ask`, at most 50, each name once: a column of a table the statement names wins over the
+    /// same name among every column.
     pub(crate) fn candidates(&self, ask: &Ask) -> Vec<Candidate> {
-        let key = ask.prefix.to_lowercase();
-        let sources = self.sources(&ask.want);
-        let mut best = best_distinct(&sources, Tier::Prefix, &key);
-        if best.len() < MAX_LISTED {
-            best.extend(best_distinct(&sources, Tier::Fuzzy, &key));
-            best.truncate(MAX_LISTED);
-        }
-        best.iter().map(|found| found.candidate(&ask.prefix)).collect()
+        let mut seen = HashSet::new();
+        let found = self.sources(&ask.want).into_iter().flat_map(|source| source.matches(&ask.prefix));
+        let mut found: Vec<Match> = found.filter(|found| seen.insert((found.kind, found.name.to_lowercase()))).collect();
+        found.sort_by_key(Match::rank);
+        found.into_iter().take(MAX_LISTED).map(|found| self.candidate(found.kind, &found.name, &ask.prefix)).collect()
     }
 
     fn sources(&self, want: &Want) -> Vec<Source<'_>> {
@@ -99,85 +92,45 @@ impl Index {
             }
         }
     }
-}
 
-impl<'a> Source<'a> {
-    fn matched(&self, name: &'a Name, is_fuzzy: bool) -> Match<'a> {
-        Match { is_fuzzy, is_in_scope: self.is_in_scope, kind: self.kind, name }
-    }
-
-    /// The names that match `key` in `tier`: those that start with it, a binary search, or those that hold its
-    /// characters in order without starting with it.
-    fn found<'k>(self, tier: Tier, key: &'k str) -> Box<dyn Iterator<Item = Match<'a>> + 'k>
-    where
-        'a: 'k,
-    {
-        match tier {
-            Tier::Prefix => Box::new(starting(self.names, key).iter().map(move |name| self.matched(name, false))),
-            Tier::Fuzzy => {
-                let is_fuzzy = move |name: &&Name| !name.key.starts_with(key) && is_subsequence(key, &name.key);
-                Box::new(self.names.iter().filter(is_fuzzy).map(move |name| self.matched(name, true)))
-            }
+    fn candidate(&self, kind: Kind, name: &str, typed: &str) -> Candidate {
+        if kind == Kind::Keyword {
+            let name = cased_as(name, typed);
+            return Candidate { insert: name.clone(), name, kind };
         }
+        Candidate { name: name.to_owned(), insert: self.insert(name), kind }
     }
 }
 
-impl<'a> Match<'a> {
-    /// What tells two matches apart: one kind of name is listed once, from whichever source gave it first.
-    fn identity(&self) -> (Kind, &'a str) {
-        (self.kind, self.name.key.as_str())
+impl Source<'_> {
+    /// What the ghost shows after `typed`: the rest of the best name it starts, or the first name when nothing was typed.
+    fn rest_after(&self, typed: &str) -> Option<String> {
+        if typed.is_empty() { self.names.cycle("").map(|cycle| cycle.current().to_owned()) } else { self.names.ghost(typed) }
     }
 
-    fn compare(&self, other: &Self) -> Ordering {
-        let rank = |found: &Self| (found.is_fuzzy, !found.is_in_scope, found.name.key.len(), found.name.key.as_str());
-        rank(self).cmp(&rank(other))
-    }
-
-    fn candidate(&self, typed: &str) -> Candidate {
-        if self.kind == Kind::Keyword {
-            let name = cased_as(&self.name.text, typed);
-            return Candidate { insert: name.clone(), name, kind: self.kind };
-        }
-        let insert = self.name.quoted.as_deref().unwrap_or(&self.name.text).to_owned();
-        Candidate { name: self.name.text.clone(), insert, kind: self.kind }
+    fn matches(self, typed: &str) -> impl Iterator<Item = Match> {
+        let key = typed.to_lowercase();
+        ranked(self.names, typed).into_iter().map(move |name| Match {
+            is_fuzzy: !name.to_lowercase().starts_with(&key),
+            name,
+            kind: self.kind,
+            is_in_scope: self.is_in_scope,
+        })
     }
 }
 
-/// The best 50 matches of `key` in `tier` from `sources`, each name once: a column of a table the statement names wins
-/// over the same name among every column, which is the only list it can come twice from.
-fn best_distinct<'a>(sources: &[Source<'a>], tier: Tier, key: &str) -> Vec<Match<'a>> {
-    let mut seen = HashSet::new();
-    let in_scope = sources.iter().filter(|source| source.is_in_scope).flat_map(|source| source.found(tier, key));
-    let in_scope: Vec<Match<'a>> = in_scope.filter(|found| seen.insert(found.identity())).collect();
-    let others = sources.iter().filter(|source| !source.is_in_scope).flat_map(|source| source.found(tier, key));
-    best_of(in_scope.into_iter().chain(others), |found| !found.is_in_scope && seen.contains(&found.identity()))
-}
-
-/// The first 50 of `matches` in rank order but those `is_twice`, kept sorted as they come, so a long list is read once
-/// and never stored; `is_twice` only weighs a match that would make the list.
-fn best_of<'a>(matches: impl Iterator<Item = Match<'a>>, is_twice: impl Fn(&Match<'a>) -> bool) -> Vec<Match<'a>> {
-    let mut best: Vec<Match<'a>> = Vec::with_capacity(MAX_LISTED + 1);
-    for found in matches {
-        let is_beaten = best.len() == MAX_LISTED && best.last().is_some_and(|last| found.compare(last) != Ordering::Less);
-        if is_beaten || is_twice(&found) {
-            continue;
-        }
-        let at = best.partition_point(|kept| kept.compare(&found) != Ordering::Greater);
-        best.insert(at, found);
-        best.truncate(MAX_LISTED);
+impl Match {
+    /// Its place across the lists: each list keeps vtui's order, and a prefix match of one list takes the shorter
+    /// name's place among the prefix matches of the others.
+    fn rank(&self) -> (bool, bool, usize) {
+        let prefix_length = if self.is_fuzzy { 0 } else { self.name.chars().count() };
+        (self.is_fuzzy, !self.is_in_scope, prefix_length)
     }
-    best
 }
 
 /// A keyword in lower case once what was typed of it holds a lower-case letter.
 fn cased_as(keyword: &str, typed: &str) -> String {
     if typed.chars().any(char::is_lowercase) { keyword.to_lowercase() } else { keyword.to_owned() }
-}
-
-/// Whether every character of `query` comes in `key`, in order.
-fn is_subsequence(query: &str, key: &str) -> bool {
-    let mut chars = key.chars();
-    query.chars().all(|wanted| chars.any(|c| c == wanted))
 }
 
 #[cfg(test)]
@@ -198,7 +151,7 @@ mod tests {
     }
 
     fn ghost(marked: &str) -> Option<String> {
-        index().ghost(&ask(marked)).map(|candidate| candidate.name)
+        index().ghost(&ask(marked)).map(|ghosted| ghosted.rest)
     }
 
     fn listed(marked: &str) -> Vec<String> {
@@ -207,13 +160,13 @@ mod tests {
 
     #[test]
     fn the_ghost_is_the_shortest_name_the_typed_text_starts() {
-        assert_eq!(ghost("SELECT * FROM c|").as_deref(), Some("customers"));
-        assert_eq!(ghost("SELECT o|").as_deref(), Some("on"));
+        assert_eq!(ghost("SELECT * FROM c|").as_deref(), Some("ustomers"));
+        assert_eq!(ghost("SELECT o|").as_deref(), Some("n"));
     }
 
     #[test]
     fn a_column_of_a_named_table_beats_a_shorter_name() {
-        assert_eq!(ghost("SELECT c| FROM orders").as_deref(), Some("customer_id"));
+        assert_eq!(ghost("SELECT c| FROM orders").as_deref(), Some("ustomer_id"));
     }
 
     #[test]
@@ -229,14 +182,13 @@ mod tests {
 
     #[test]
     fn a_keyword_takes_the_case_it_is_typed_in() {
-        assert_eq!(ghost("SEL|").as_deref(), Some("SELECT"));
-        assert_eq!(ghost("sel|").as_deref(), Some("select"));
+        assert_eq!(ghost("SEL|").as_deref(), Some("ECT"));
+        assert_eq!(ghost("sel|").as_deref(), Some("ect"));
     }
 
     #[test]
     fn the_ghost_shows_the_rest_of_its_name_after_what_was_typed() {
-        let ghost = index().ghost(&ask("SELECT * FROM CUS|")).unwrap();
-        assert_eq!(ghost.rest_after("CUS"), "tomers");
+        assert_eq!(ghost("SELECT * FROM CUS|").as_deref(), Some("tomers"));
     }
 
     #[test]
@@ -259,6 +211,6 @@ mod tests {
         let mut schema = shop_schema();
         schema.schemas[1].tables[0].name = "Orders".to_owned();
         let index = Index::new(&Catalog { schema, search_path: vec!["public".to_owned()], is_cut: false });
-        assert_eq!(index.ghost(&ask("SELECT * FROM or|")).map(|candidate| candidate.insert).as_deref(), Some("\"Orders\""));
+        assert_eq!(index.ghost(&ask("SELECT * FROM or|")).map(|ghosted| ghosted.insert).as_deref(), Some("\"Orders\""));
     }
 }

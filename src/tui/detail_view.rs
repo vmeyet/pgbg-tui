@@ -10,8 +10,8 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
-use vtui::pane;
 use vtui::theme::Theme;
+use vtui::{pane, text};
 
 /// No value is drawn longer, so a 10 MB document costs no more than a page of it.
 const VALUE_MAX_CHARS: usize = 64 * 1024;
@@ -73,8 +73,8 @@ fn column_lines(theme: &Theme, column: &Column, value: &Value, width: u16) -> Ve
     let type_name = Span::styled(format!("  {}", render::printable(column.type_name.as_str())), Style::default().fg(theme.muted));
     let header = if column.type_name.as_str().is_empty() { Line::from(name) } else { Line::from(vec![name, type_name]) };
     let room = usize::from(width).saturating_sub(INDENT.len());
-    let value_lines = value_spans(theme, value).into_iter().flat_map(|spans| wrapped(&spans, room));
-    let indented = value_lines.map(|spans| Line::from(std::iter::once(Span::raw(INDENT)).chain(spans).collect::<Vec<_>>()));
+    let value_lines = value_spans(theme, value).into_iter().flat_map(|spans| text::wrap_line(&Line::from(spans), room));
+    let indented = value_lines.map(|line| Line::from(std::iter::once(Span::raw(INDENT)).chain(line.spans).collect::<Vec<_>>()));
     std::iter::once(header).chain(indented).chain([Line::default()]).collect()
 }
 
@@ -108,28 +108,6 @@ fn painted_spans(theme: &Theme, line: &str, painted: &[Painted]) -> Vec<Span<'st
     }
     spans.push(Span::raw(render::printable(&line[at..]).into_owned()));
     spans.into_iter().filter(|span| !span.content.is_empty()).collect()
-}
-
-/// `spans` broken into lines of at most `columns` terminal columns, each piece keeping its style.
-fn wrapped(spans: &[Span<'static>], columns: usize) -> Vec<Vec<Span<'static>>> {
-    let columns = columns.max(1);
-    let mut lines = vec![];
-    let mut line: Vec<Span<'static>> = vec![];
-    let mut used = 0;
-    for (c, style) in spans.iter().flat_map(|span| span.content.chars().map(|c| (c, span.style))) {
-        let taken = render::width(c.encode_utf8(&mut [0; 4]));
-        if used + taken > columns && used > 0 {
-            lines.push(std::mem::take(&mut line));
-            used = 0;
-        }
-        used += taken;
-        match line.last_mut() {
-            Some(last) if last.style == style => last.content.to_mut().push(c),
-            _ => line.push(Span::styled(c.to_string(), style)),
-        }
-    }
-    lines.push(line);
-    lines
 }
 
 #[cfg(test)]
@@ -228,14 +206,5 @@ mod tests {
         app.fit(Fit { detail: first, ..Fit::default() });
         assert!(render(&app, 40, 20).1.drawn.is_none());
         assert!(render(&app, 50, 20).1.drawn.is_some());
-    }
-
-    #[test]
-    fn a_long_line_wraps_at_the_columns_given_and_keeps_its_style() {
-        let style = Style::default().fg(ratatui::style::Color::Red);
-        let lines = wrapped(&[Span::raw("ab"), Span::styled("cdé", style)], 2);
-        let texts: Vec<Vec<(&str, Style)>> =
-            lines.iter().map(|line| line.iter().map(|span| (span.content.as_ref(), span.style)).collect()).collect();
-        assert_eq!(texts, [vec![("ab", Style::default())], vec![("cd", style)], vec![("é", style)]]);
     }
 }

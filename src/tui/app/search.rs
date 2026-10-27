@@ -76,9 +76,9 @@ impl<T: Searched> Search<T> {
         self.palette.move_by(0, self.shown.len());
     }
 
-    /// Types `text` on the line as vtui cleans a paste, without the blank around it a copy often carries, then ranks once.
+    /// Types `text` on the line as vtui cleans a paste, then ranks once.
     pub(super) fn paste(&mut self, text: &str, all: &[T]) {
-        self.palette.type_str(text.trim());
+        self.palette.type_str(text);
         self.rank(all);
     }
 

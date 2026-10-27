@@ -11,6 +11,7 @@ mod rank;
 
 #[cfg(test)]
 mod tests {
+    use super::rank::Ghosted;
     use super::*;
     use crate::db::lex::Lexed;
     use crate::db::model::{Catalog, Schema, SchemaColumn, SchemaNode, Table, TableKind, TypeName};
@@ -41,7 +42,7 @@ mod tests {
         let cursor = marked.find('|').unwrap();
         let text = marked.replace('|', "");
         let started = Instant::now();
-        let ghost: Option<Candidate> = Ask::at(&text, &Lexed::of(&text), cursor).and_then(|ask| index.ghost(&ask));
+        let ghost: Option<Ghosted> = Ask::at(&text, &Lexed::of(&text), cursor).and_then(|ask| index.ghost(&ask));
         let took = started.elapsed();
         assert!(ghost.is_some(), "{marked} offers a ghost");
         took
