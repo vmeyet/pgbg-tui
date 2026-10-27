@@ -2,6 +2,7 @@
 use crate::connection::TunnelSpec;
 use crate::db::model::{LocalPort, Route};
 use crate::groups::{self, OWN_GROUP};
+use crate::program::Program;
 use anyhow::{Context, Result, anyhow, bail};
 use rustix::io::Errno;
 use rustix::process::Pid;
@@ -34,7 +35,7 @@ const LAST_WORDS_LINE_CHARS: usize = 200;
 #[derive(Debug)]
 pub(crate) struct Tunnel {
     port: LocalPort,
-    program: String,
+    program: Program,
     child: Child,
     /// Taken once the group is killed, so a stop never signals a reused id.
     group: Option<Pid>,
@@ -44,7 +45,7 @@ pub(crate) struct Tunnel {
 /// How a tunnel ended: its exit and the last lines it wrote to stderr.
 #[derive(Debug)]
 pub(crate) struct Died {
-    program: String,
+    program: Program,
     status: Option<ExitStatus>,
     last_words: Vec<String>,
 }
@@ -130,7 +131,7 @@ impl Tunnel {
             groups::register(group);
         }
         let last_words = child.stderr.take().map(|stderr| tokio::spawn(keep_last_words(stderr)));
-        Ok(Self { port, program: program.clone(), child, group, last_words })
+        Ok(Self { port, program: Program::new(program), child, group, last_words })
     }
 
     async fn wait_until_ready(&mut self, ready_timeout: Duration) -> Result<()> {

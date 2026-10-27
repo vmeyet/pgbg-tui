@@ -1,7 +1,10 @@
 //! The command line `pgbg` parses, with the help text each flag shows.
-use crate::connection::{ConnectionName, StatementTimeout, Tier, Tls, WritePolicy};
+use crate::connection::{ConnectionName, StatementTimeout, Target, Tier, Tls, WritePolicy};
 use crate::query::params::Assignment;
+use clap::builder::TypedValueParser;
+use clap::error::ErrorKind;
 use clap::{Args, Parser, Subcommand};
+use std::ffi::OsStr;
 use std::path::PathBuf;
 
 /// The command line: global flags, then one subcommand.
@@ -103,8 +106,8 @@ pub enum ConnectionCommand {
         #[arg(long)]
         tier: Tier,
         /// `postgres://user@host:port/database`, without a password.
-        #[arg(long)]
-        url: String,
+        #[arg(long, value_parser = UrlParser)]
+        url: Target,
         /// The other keys.
         #[command(flatten)]
         keys: ConnectionKeys,
@@ -119,8 +122,8 @@ pub enum ConnectionCommand {
         #[arg(long)]
         tier: Option<Tier>,
         /// `postgres://user@host:port/database`, without a password.
-        #[arg(long)]
-        url: Option<String>,
+        #[arg(long, value_parser = UrlParser)]
+        url: Option<Target>,
         /// The other keys.
         #[command(flatten)]
         keys: ConnectionKeys,
@@ -185,6 +188,21 @@ pub struct PasswordFlags {
     pub keychain: Option<String>,
 }
 
+/// Reads `--url` into a `Target`; unlike clap's own refusal, its refusal never repeats the value, which may hold a password.
+#[derive(Clone)]
+struct UrlParser;
+
+impl TypedValueParser for UrlParser {
+    type Value = Target;
+
+    fn parse_ref(&self, cmd: &clap::Command, _arg: Option<&clap::Arg>, value: &OsStr) -> Result<Target, clap::Error> {
+        let refusal =
+            |why: &dyn std::fmt::Display| clap::Error::raw(ErrorKind::ValueValidation, format!("in `--url`: {why}\n")).with_cmd(cmd);
+        let text = value.to_str().ok_or_else(|| refusal(&"not UTF-8"))?;
+        Target::parse(text).map_err(|err| refusal(&format!("{err:#}")))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,6 +243,18 @@ mod tests {
         assert!(parse(&add[..5]).is_err());
         assert!(parse(&[&add[..], &["--tier", "qa"]].concat()).is_err());
         assert!(parse(&[&add[..], &["--password", "hunter2"]].concat()).is_err());
+    }
+
+    #[test]
+    fn a_url_is_checked_while_parsing() {
+        assert!(parse(&["connection", "edit", "prod", "--url", "postgres://nina@db.example.com/shop"]).is_ok());
+        assert!(parse(&["connection", "edit", "prod", "--url", "mysql://nina@db.example.com/shop"]).is_err());
+    }
+
+    #[test]
+    fn a_refused_url_is_never_repeated() {
+        let err = parse(&["connection", "edit", "prod", "--url", "postgres://nina:hunter2@db.example.com/shop"]).unwrap_err().to_string();
+        assert!(err.contains("`--url`") && err.contains("password") && !err.contains("hunter2"), "{err}");
     }
 
     #[test]
