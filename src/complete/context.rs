@@ -1,13 +1,11 @@
 //! What the cursor wants, read from the tokens of the statement under it alone.
 use super::keyword::is_keyword;
 use crate::db::guard;
-use crate::db::lex::{self, Placed, Token};
+use crate::db::lex::{self, Placed, Span, Token};
 use std::ops::Range;
 
 /// The words a table name follows.
 const TABLE_AFTER: [&str; 3] = ["FROM", "JOIN", "TABLE"];
-/// A word character typed after the text, to learn whether a word could start there or a string or comment holds it.
-const PROBE: &str = "x";
 
 /// A completion asked at the cursor: the text a candidate replaces, and what kind of name it wants.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,23 +38,18 @@ struct TableRef {
 }
 
 impl Ask {
-    /// What the cursor at byte `cursor` of `text` wants; `None` inside a string, a comment or a quoted name.
+    /// What the cursor at byte `cursor` of `text` wants; `None` inside a string, a comment, a quoted name or a `{{name}}`.
     pub(crate) fn at(text: &str, cursor: usize) -> Option<Self> {
         let statement = guard::statement_at(text, cursor).unwrap_or(cursor..cursor);
-        let start = statement.start.min(cursor);
-        let before = &text[start..cursor];
-        if !is_in_code(before) {
+        if lex::span_at(text, cursor) != Span::Code {
             return None;
         }
+        let start = statement.start.min(cursor);
+        let before = &text[start..cursor];
         let refs = table_refs(&text[start..statement.end.max(cursor)]);
         let (typed, want) = wanted(before, &refs);
         Some(Self { typed: start + typed..cursor, prefix: before[typed..].to_owned(), want })
     }
-}
-
-fn is_in_code(before: &str) -> bool {
-    let probed = format!("{before}{PROBE}");
-    lex::tokens(&probed).last().is_some_and(|last| last.range.end == probed.len() && is_word(last))
 }
 
 /// Where the name typed before the cursor starts in `before`, and what it wants.
