@@ -491,7 +491,7 @@ fn a_kill_of_pgbg_doctor_stops_its_tunnel_too() {
 fn schema_json_lists_the_tables_the_filter_keeps() {
     let url = std::env::var("PGBG_TEST_DATABASE_URL").unwrap();
     let config = format!("[connections.shop]\ntier = \"local\"\nurl = \"{url}\"\nwrites = \"allowed\"\n");
-    let created = pgbg(&config, &["run", "shop", "CREATE TABLE IF NOT EXISTS cli_schema_orders (id int PRIMARY KEY)"]);
+    let created = pgbg(&config, &["run", "shop", "CREATE TABLE IF NOT EXISTS cli_schema_orders (id int PRIMARY KEY)", "--yes"]);
     assert!(created.status.success(), "{}", stderr(&created));
     let output = pgbg(&config, &["schema", "shop", "cli_schema_ord", "--json"]);
     assert!(output.status.success(), "{}", stderr(&output));
