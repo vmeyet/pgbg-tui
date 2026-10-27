@@ -1,4 +1,5 @@
-//! The `?` overlay over the whole screen: the keys of the focused pane, or every key after a second `?`. vtui draws it.
+//! The `?` overlay over the whole screen: the keys of the focused pane, or every key after a second `?`.
+//! vtui draws it.
 use super::app::{App, Overlay};
 use crate::act;
 use ratatui::Frame;

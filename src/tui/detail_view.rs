@@ -1,5 +1,6 @@
-//! The row's detail over the screen: each column's name and type, its whole value under it, wrapped, JSON indented
-//! and coloured; every piece of text drawn through `render::printable`.
+//! The row's detail over the screen: each column's name and type, with its whole value below, wrapped, and JSON
+//! indented and coloured.
+//! Every piece of text is drawn through `render::printable`.
 use super::app::{App, DetailFit, DetailScroll, DrawnDetail, DrawnRow, Overlay, Run};
 use crate::act::{self, Pane};
 use crate::db::model::{Column, Value};
@@ -13,12 +14,13 @@ use ratatui::widgets::{Clear, Paragraph};
 use vtui::theme::Theme;
 use vtui::{pane, text};
 
-/// No value is drawn longer, so a 10 MB document costs no more than a page of it.
+/// The longest value drawn, so a 10 MB document costs no more than a page of it.
 const VALUE_MAX_CHARS: usize = 64 * 1024;
 const INDENT: &str = "  ";
 const SHARE_OF_SCREEN_PCT: u16 = 80;
 
-/// The detail when it is open; returns the line it started at, how far it scrolls, and its lines when it built them.
+/// The detail when it is open; returns the line it started at, how far it can scroll, and its lines when it built
+/// them.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> DetailFit {
     let Some(Overlay::Detail(detail)) = app.overlay() else { return DetailFit::default() };
     let Run::Done { run, result, grid, .. } = &app.sheet().run else { return DetailFit::default() };
@@ -58,7 +60,7 @@ fn centred(area: Rect) -> Rect {
     Rect { x: area.x + (area.width - width) / 2, y: area.y + (area.height - height) / 2, width, height }
 }
 
-/// `SHARE_OF_SCREEN_PCT` of `cells`, counted wide enough for any screen.
+/// `SHARE_OF_SCREEN_PCT` of `cells`, computed in a type wide enough for any screen.
 fn share_of_screen(cells: u16) -> u16 {
     u16::try_from(u32::from(cells) * u32::from(SHARE_OF_SCREEN_PCT) / 100).unwrap_or(cells)
 }
@@ -67,7 +69,7 @@ fn hints() -> String {
     act::footer(Pane::Detail).map(|hint| format!("{} {}", hint.keys, hint.does)).collect::<Vec<_>>().join(" · ")
 }
 
-/// The column's name and type, its value under it, then a blank line.
+/// The column's name and type, its value below, then a blank line.
 fn column_lines(theme: &Theme, column: &Column, value: &Value, width: u16) -> Vec<Line<'static>> {
     let name = Span::styled(render::printable(column.name.as_str()).into_owned(), Style::default().add_modifier(Modifier::BOLD));
     let type_name = Span::styled(format!("  {}", render::printable(column.type_name.as_str())), Style::default().fg(theme.muted));
@@ -78,7 +80,7 @@ fn column_lines(theme: &Theme, column: &Column, value: &Value, width: u16) -> Ve
     std::iter::once(header).chain(indented).chain([Line::default()]).collect()
 }
 
-/// Each line of the value as coloured spans, then a note when it was cut.
+/// Each line of the value as coloured spans, then a note when the value was cut.
 fn value_spans(theme: &Theme, value: &Value) -> Vec<Vec<Span<'static>>> {
     if *value == Value::Null {
         return vec![vec![Span::styled("NULL", Style::default().fg(theme.faded))]];
@@ -96,7 +98,7 @@ fn line_colours(line: &str, is_json: bool) -> Vec<Painted> {
     if is_json { syntax::highlight_json_line(line) } else { vec![] }
 }
 
-/// `line` cut at its painted pieces, each one escaped on its own and in its token's colour.
+/// `line` split at its painted pieces, each piece escaped on its own and drawn in its token's colour.
 fn painted_spans(theme: &Theme, line: &str, painted: &[Painted]) -> Vec<Span<'static>> {
     let mut spans = vec![];
     let mut at = 0;

@@ -1,4 +1,5 @@
-//! The SQL editor pane: the text in its syntax colours, the cursor kept in view, the server's error position, and whether the connection takes writes.
+//! The SQL editor pane: the text in its syntax colours, the cursor kept in view, the server's error position, and
+//! whether the connection takes writes.
 use super::app::{App, Focus};
 use crate::connection::{ConnectionName, Tier, WritePolicy};
 use crate::syntax::{Painted, Spans};
@@ -11,7 +12,7 @@ use std::ops::Range;
 use vtui::pane;
 use vtui::theme::Theme;
 
-/// The editor in `area`, scrolled so the cursor's line shows, with the terminal's cursor on it when it has the keys.
+/// The editor in `area`, scrolled so the cursor's line shows, with the terminal's cursor in it when it has the keys.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
     let focused = app.focus() == Focus::Editor;
     let block = pane::framed(app.theme(), &title(app), focused).title(badge(app)).title(header_notes(app)).title(open_error(app));
@@ -35,7 +36,8 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
     f.set_cursor_position(cursor_position(inside, column, row - scroll));
 }
 
-/// The line and column of the cursor in the text, and the first line in view of `inside`, so the cursor's line shows.
+/// The line and column of the cursor in the text, and the first line in view in `inside`, chosen so the cursor's line
+/// shows.
 struct Place {
     row: usize,
     column: usize,
@@ -49,14 +51,14 @@ fn place(app: &App, inside: Rect) -> Place {
     Place { row, column, scroll: row.saturating_sub(usize::from(inside.height.saturating_sub(1))) }
 }
 
-/// Where the terminal's cursor stands in the editor pane drawn in `area`.
+/// The position of the terminal's cursor in the editor pane drawn in `area`.
 pub(super) fn cursor_at(app: &App, area: Rect) -> Position {
     let inside = Block::bordered().inner(area);
     let Place { row, column, scroll } = place(app, inside);
     cursor_position(inside, column, row - scroll)
 }
 
-/// Where the cursor at `column` of the `row`th line in view lands, kept inside `inside`.
+/// The screen position of the cursor at `column` of the `row`th line in view, kept inside `inside`.
 fn cursor_position(inside: Rect, column: usize, row: usize) -> Position {
     let offset = |at: usize| u16::try_from(at).unwrap_or(u16::MAX);
     let x = inside.x.saturating_add(offset(column)).min(inside.right().saturating_sub(1));
@@ -70,7 +72,8 @@ struct Window {
     rows: usize,
 }
 
-/// How the text is painted: its colours per line, the character at byte `mark` in `mark_style` on top, and the ghost.
+/// How the text is painted: its colours per line, the character at byte `mark` drawn on top in `mark_style`, and the
+/// ghost.
 #[derive(Clone, Copy)]
 struct Paint<'a> {
     colours: &'a [Spans],
@@ -87,7 +90,8 @@ struct Ghost<'a> {
     rest: &'a str,
 }
 
-/// The lines of `text` in `window`, each token in its colour, the mark on top; a mark on a line's end draws a space there.
+/// The lines of `text` in `window`, each token in its colour and the mark on top; a mark at a line's end draws a space
+/// there.
 fn coloured<'a>(text: &'a str, paint: Paint<'_>, window: Window) -> Text<'a> {
     let mut line_start = 0;
     let mut lines = Vec::new();
@@ -112,14 +116,14 @@ fn marked_range(line: &str, at: usize) -> Range<usize> {
     at..at + line[at..].chars().next().map_or(0, char::len_utf8)
 }
 
-/// What is cut into one line: the mark, and the ghost, by bytes of that line.
+/// What is inserted into one line, at byte positions of that line: the mark and the ghost.
 struct Cuts<'a> {
     mark: Option<Range<usize>>,
     ghost: Option<Ghost<'a>>,
 }
 
-/// The line as runs of one style each, in one pass over its spans, then the mark cut in on top and the ghost in after the
-/// cursor.
+/// The line as runs of one style each, built in one pass over its spans, then the mark drawn on top and the ghost
+/// after the cursor.
 fn coloured_line<'a>(line: &'a str, spans: &[Painted], cuts: Cuts<'_>, paint: Paint<'_>) -> Line<'a> {
     let runs = token_runs(line, spans, paint.theme);
     let runs = match &cuts.mark {
@@ -158,8 +162,8 @@ impl Run {
     }
 }
 
-/// The whole line as runs: each span in its token's colour, the gaps between them plain; spans that do not fit the
-/// line or its characters are skipped, as stale colours can be.
+/// The whole line as runs: each span in its token's colour, and the gaps between them plain.
+/// Spans that do not fit the line or its characters are skipped, since colours can be stale.
 fn token_runs(line: &str, spans: &[Painted], theme: &Theme) -> Vec<Run> {
     let fits = |painted: &&Painted| {
         painted.bytes.end <= line.len() && line.is_char_boundary(painted.bytes.start) && line.is_char_boundary(painted.bytes.end)
@@ -179,7 +183,7 @@ fn token_runs(line: &str, spans: &[Painted], theme: &Theme) -> Vec<Run> {
     runs
 }
 
-/// `run` split where `mark` starts and ends, the marked part in `mark_style`.
+/// `run` split where `mark` starts and ends, with the marked part in `mark_style`.
 fn cut_by_mark(run: &Run, mark: &Range<usize>, mark_style: Style) -> [Run; 3] {
     let clamp = |at: usize| at.clamp(run.bytes.start, run.bytes.end);
     let (start, end) = (clamp(mark.start), clamp(mark.end));
@@ -190,7 +194,7 @@ fn cut_by_mark(run: &Run, mark: &Range<usize>, mark_style: Style) -> [Run; 3] {
     ]
 }
 
-/// `Editor`, then the name the header gives, or else the path of the saved query in it.
+/// `Editor`, then the name the header gives, or else the path of the saved query in the editor.
 fn title(app: &App) -> String {
     let sheet = app.sheet();
     let path = sheet.opened.as_ref().map(|query| query.path.to_string());
@@ -210,8 +214,9 @@ fn suggested(app: &App, named: &ConnectionName) -> Span<'static> {
     Span::styled(format!(" written for {named} "), Style::default().fg(app.theme().muted))
 }
 
-/// The connection the header suggests when it is not the one on screen, loud when it is a production one, then the
-/// first header line pgbg could not read. The statement still runs on the connection on screen.
+/// The connection the header suggests when it is not the one on screen, in a warning style when it is a production
+/// one, then the first header line pgbg could not read.
+/// The statement still runs on the connection on screen.
 fn header_notes(app: &App) -> Line<'static> {
     let sheet = app.sheet();
     let elsewhere = sheet.header.connection.as_ref().filter(|&named| named != sheet.name());
