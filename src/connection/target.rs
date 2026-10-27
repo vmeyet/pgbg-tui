@@ -10,7 +10,7 @@ const LOCAL_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "[::1]"];
 const PASSWORD_IN_URL: &str =
     "`url` carries a password: take it out and set `password = { keychain = \"...\" }`, `{ env = \"...\" }` or `{ command = [...] }`";
 /// The libpq query keys whose value is a secret; `password` is refused on its own, as it has a source to point to.
-const SECRET_KEYS: [&str; 2] = ["sslpassword", "oauth_client_secret"];
+pub(crate) const SECRET_KEYS: [&str; 2] = ["sslpassword", "oauth_client_secret"];
 const HOSTADDR_IN_URL: &str = "`url` sets `hostaddr`: pgbg keeps it for the local port its tunnels open; name the host in the URL instead";
 
 /// Where the database is: a `postgres://` URL that never carries a password or another secret.

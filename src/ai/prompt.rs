@@ -212,6 +212,12 @@ mod tests {
     }
 
     #[test]
+    fn a_statement_naming_a_secret_connection_key_is_never_sent() {
+        let sql = "SELECT dblink_connect('host=db.example.com sslpassword=x')";
+        assert_eq!(prompt_for(sql, "", &shop_catalog()).unwrap_err(), NotSent::HoldsPassword);
+    }
+
+    #[test]
     fn a_statement_with_an_unreadable_param_is_never_sent() {
         assert_eq!(prompt_for("SELECT {{ 'nina'", "", &shop_catalog()).unwrap_err(), NotSent::UnreadableParam);
     }

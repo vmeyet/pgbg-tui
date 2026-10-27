@@ -5,7 +5,7 @@ use password::PasswordEntry;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
-pub(crate) use target::Target;
+pub(crate) use target::{SECRET_KEYS, Target};
 pub(crate) use timeout::{StatementTimeout, TimeoutChoice};
 pub(crate) use tls::Tls;
 pub(crate) use tunnel::TunnelSpec;

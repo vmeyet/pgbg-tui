@@ -126,6 +126,7 @@ Each entry says what changed, then where, then how to use it.
 
 ### Fixed
 
+- **A statement naming `sslpassword` or `oauth_client_secret` is kept out of the history and never sent to the AI**, as one holding a password is.
 - **A `url` with `sslpassword` or `oauth_client_secret` in it is refused**, in `config.toml`, `--url` and the TUI's connection form, as one with a password is, so `pgbg connections` never prints the secret.
 - **A write inside a function call asks first**, on a connection that allows writes, in the TUI and `pgbg run`: `SELECT archive_orders()` or `SELECT setval(...)` runs with writes refused, then asks `this statement tried to write: run it?`.
 - **Completion puts in the table or column it shows** in the TUI's editor, when two names differ only in case, as `orders` and `"Orders"`: it took the other one.
