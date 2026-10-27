@@ -6,6 +6,8 @@ use std::path::Path;
 const PRIVATE_CA: &str = "sslrootcert";
 const OTHERS_READ_OR_WRITE: u32 = 0o077;
 const READ_ONLY_ROLE: &str = "use a read-only role: the role is the only real guarantee";
+/// What any role can do to the sessions of its own role, `pg_signal_backend` or not.
+const OWN_SESSIONS: &str = "; it can still cancel or end sessions of its own role, as any role can";
 
 pub(super) fn config_refused(err: &anyhow::Error) -> Check {
     Check::fail("config", format!("{err:#}"), "fix `config.toml` as it says; `pgbg connections` lists what loads")
@@ -167,10 +169,11 @@ pub(super) fn beyond_read_only(writes: WritePolicy, gaps: &ReadOnlyGaps) -> Chec
     let dblink = listed("call", &gaps.dblink_functions).map(|call| format!("{call}, which opens a session of its own that may write"));
     let settings = listed("set", &gaps.granted_settings);
     let ways: Vec<String> = [signals, dblink, settings].into_iter().flatten().collect();
+    let own_sessions = if gaps.signals_sessions { "" } else { OWN_SESSIONS };
     let found = match ways.as_slice() {
-        [] => return Check::ok("beyond read only", "nothing: a read-only transaction holds the role"),
-        [one] => format!("it can {one}"),
-        [rest @ .., last] => format!("it can {}, and {last}", rest.join(", ")),
+        [] => return Check::ok("beyond read only", format!("nothing: a read-only transaction holds the role{own_sessions}")),
+        [one] => format!("it can {one}{own_sessions}"),
+        [rest @ .., last] => format!("it can {}, and {last}{own_sessions}", rest.join(", ")),
     };
     match writes {
         WritePolicy::Allowed => Check::ok("beyond read only", format!("{found}; this connection allows writes")),
@@ -355,6 +358,19 @@ mod tests {
         let found = "it can cancel or end other sessions (`pg_signal_backend`), call `dblink_exec(text,text)`, which opens a \
                      session of its own that may write, and set `session_replication_role`";
         assert_eq!((check.verdict, check.found.as_str()), (Verdict::Warn, found));
+    }
+
+    #[test]
+    fn a_role_a_read_only_transaction_holds_can_still_end_sessions_of_its_own_role() {
+        let found = beyond_read_only(WritePolicy::ReadOnly, &ReadOnlyGaps::default()).found;
+        assert!(found.contains("cancel or end sessions of its own role"), "{found}");
+    }
+
+    #[test]
+    fn a_role_without_pg_signal_backend_can_still_end_sessions_of_its_own_role() {
+        let gaps = ReadOnlyGaps { signals_sessions: false, ..gaps() };
+        let found = beyond_read_only(WritePolicy::ReadOnly, &gaps).found;
+        assert!(found.ends_with("; it can still cancel or end sessions of its own role, as any role can"), "{found}");
     }
 
     #[test]

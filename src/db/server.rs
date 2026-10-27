@@ -54,11 +54,12 @@ ORDER BY role <> session_user, role, rank, object";
 
 /// Whether the login role, or a role it may become, can cancel or end other sessions.
 const SIGNALS_SESSIONS: &str = "SELECT pg_has_role(session_user, 'pg_signal_backend', 'MEMBER')";
-/// The `dblink` functions the login role, or a role it may become, may call.
+/// The `dblink` functions that send SQL of the caller's to a session of their own, which a read-only transaction does
+/// not hold, that the login role, or a role it may become, may call.
 const DBLINK_FUNCTIONS: &str = "SELECT p.oid::regprocedure::text FROM pg_proc p
     JOIN pg_depend d ON d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e'
     JOIN pg_extension e ON e.oid = d.refobjid
-    WHERE e.extname = 'dblink' AND p.proname IN ('dblink', 'dblink_exec')
+    WHERE e.extname = 'dblink' AND p.proname IN ('dblink', 'dblink_exec', 'dblink_send_query', 'dblink_open')
     AND EXISTS (SELECT 1 FROM pg_roles r WHERE pg_has_role(session_user, r.oid, 'MEMBER') AND has_function_privilege(r.oid, p.oid, 'EXECUTE'))
     ORDER BY 1";
 /// The settings granted with `GRANT SET ON PARAMETER`, PostgreSQL 15 on: only a superuser sets them otherwise.
@@ -358,6 +359,16 @@ mod tests {
         as_owner(&[create_role("doctor_linker", "LOGIN"), "CREATE EXTENSION IF NOT EXISTS dblink".to_owned()]).await;
         let gaps = gaps_of("doctor_linker").await;
         assert!(gaps.dblink_functions.iter().any(|function| function.starts_with("dblink_exec(")), "{gaps:?}");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_role_that_may_send_a_query_through_dblink_names_those_functions() {
+        as_owner(&[create_role("doctor_sender", "LOGIN"), "CREATE EXTENSION IF NOT EXISTS dblink".to_owned()]).await;
+        let gaps = gaps_of("doctor_sender").await;
+        for name in ["dblink_send_query(", "dblink_open("] {
+            assert!(gaps.dblink_functions.iter().any(|function| function.starts_with(name)), "{name}: {gaps:?}");
+        }
     }
 
     #[tokio::test]
