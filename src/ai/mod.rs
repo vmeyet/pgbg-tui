@@ -11,6 +11,4 @@ mod slice;
 pub(crate) use answer::AnswerError;
 pub(crate) use command::{Asking, CommandError};
 pub(crate) use mask::LiteralPolicy;
-pub(crate) use prompt::Prompt;
-#[cfg(test)]
-pub(crate) use prompt::{Ask, Instruction, prompt};
+pub(crate) use prompt::{Ask, Instruction, NotSent, Prompt, prompt};

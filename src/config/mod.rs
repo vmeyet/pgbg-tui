@@ -45,7 +45,6 @@ pub(crate) struct Config {
     /// How the TUI's results open: raw, or each column readable.
     pub(crate) format: Mode,
     /// How `ctrl-g` asks for SQL; none when `[ai]` names no command.
-    #[cfg_attr(not(test), expect(dead_code, reason = "`ctrl-g` reads it, the next step"))]
     pub(crate) ai: Option<AiSettings>,
 }
 

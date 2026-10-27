@@ -2,10 +2,13 @@
 //! It reads no clock and does no I/O.
 use super::theme::Theme;
 use crate::act::Pane;
+use crate::config::AiSettings;
 use crate::connection::Connection;
 use crate::format::Mode;
+use ask::Asks;
 use vtui::help::Help;
 
+pub(super) use ask::AskStep;
 pub(super) use completion::Completions;
 pub(super) use confirm::{Confirmed, WriteToSend};
 pub(super) use detail::{Detail, DetailFit, DetailScroll, DrawnDetail, DrawnRow};
@@ -24,6 +27,7 @@ pub(super) use search::Search;
 pub(super) use sheet::{Run, SchemaState, SessionState, Sheet, View};
 pub(super) use table_finder::TableFinder;
 
+pub(super) mod ask;
 mod completion;
 mod confirm;
 mod copy;
@@ -106,6 +110,8 @@ pub(super) enum Overlay {
     Completion(Completions),
     /// The `ctrl-t` finder of the schema's tables.
     TableFinder(Box<TableFinder>),
+    /// The `ctrl-g` instruction on the footer line, then the ask waiting on the `[ai] command`, then its answer.
+    Ask(AskStep),
 }
 
 /// The whole TUI state; `handle_key`, `apply` and `fit` are the only ways it changes.
@@ -137,6 +143,7 @@ pub(super) struct App {
     note: Option<String>,
     /// The format mode new results open in, and the clock the loop last read.
     reading: Reading,
+    asks: Asks,
 }
 
 impl App {
@@ -160,12 +167,18 @@ impl App {
             config_failure: None,
             note: None,
             reading: Reading { mode: Mode::Raw, clock: grid::clock_at_epoch() },
+            asks: Asks::new(None),
         }
     }
 
     /// The app with each new result opening in `mode`.
     pub(super) fn with_format_mode(self, mode: Mode) -> Self {
         Self { reading: Reading { mode, ..self.reading }, ..self }
+    }
+
+    /// The app asking the `[ai] command` of `settings`; none leaves asking off.
+    pub(super) fn with_ai(self, settings: Option<AiSettings>) -> Self {
+        Self { asks: Asks::new(settings), ..self }
     }
 
     /// Takes the clock the loop read for the next frame.
@@ -317,8 +330,7 @@ impl App {
             Answer::History { connection, entries } => self.history_read(&connection, entries),
             Answer::Copied(note) => self.copied(note),
             Answer::Exported { text, done } => return vec![Action::Copy { text, done }],
-            // Nothing asks before `ctrl-g` does, in the next step.
-            Answer::Asked { .. } => {}
+            Answer::Asked { ask, answer } => self.asked(ask, answer),
         }
         vec![]
     }

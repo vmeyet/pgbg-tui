@@ -1,5 +1,6 @@
 //! The TUI: an event loop over a pure `App`, with the database at its edge.
 mod app;
+mod ask_view;
 mod backend;
 mod chart_view;
 mod completion_view;
@@ -22,6 +23,7 @@ mod table_finder_view;
 mod theme;
 mod ui;
 
+use crate::config::AiSettings;
 use crate::connection::{Connection, ConnectionName};
 use crate::format::Mode;
 use crate::history::Store;
@@ -46,13 +48,19 @@ const RECOLOUR_DELAY: Duration = Duration::from_millis(40);
 /// How often the screen is drawn again while a column shows time from now, so it stays right to the minute.
 const RELATIVE_TIME_REDRAW: Duration = Duration::from_secs(60);
 
-/// Runs the TUI on `first` until the user quits, with `connections` to switch to, read from the `config` file, and each
-/// result opening in `format`; it gives the terminal back on the way out.
+/// Runs the TUI on `first` until the user quits, with `connections` to switch to, read from the `config` file, each
+/// result opening in `format`, and `ctrl-g` asking the command of `ai`; it gives the terminal back on the way out.
 /// A signal while the sessions stop drops them at once, as a command does.
-pub(crate) async fn run(connections: Vec<Connection>, first: Connection, config: PathBuf, format: Mode) -> Result<()> {
+pub(crate) async fn run(
+    connections: Vec<Connection>,
+    first: Connection,
+    config: PathBuf,
+    format: Mode,
+    ai: Option<AiSettings>,
+) -> Result<()> {
     let mut signals = Signals::listen()?;
     let theme = vtui::ground::ask().map_or_else(Theme::default, |ground| Theme::default().with_ground(ground));
-    let mut app = App::new(connections, &first, theme).with_format_mode(format);
+    let mut app = App::new(connections, &first, theme).with_format_mode(format).with_ai(ai);
     // Unbounded: each answer follows an action, a page only once the grid asks for it, and the loop takes one per turn.
     let (answers, mut incoming) = mpsc::unbounded_channel();
     let mut backend = Backend::new(Roots::find_here().await?, config, answers).with_history(Store::from_env());

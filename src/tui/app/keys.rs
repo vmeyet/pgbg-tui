@@ -1,7 +1,7 @@
 //! Keys and pastes: which pane or overlay gets them, and what each key does.
 use super::grid::Move;
 use super::param_bar::Direction;
-use super::{Action, App, Focus, Overlay};
+use super::{Action, App, AskStep, Focus, Overlay};
 use crate::act::{self, Act, Pane};
 use crossterm::event::{KeyCode, KeyEvent};
 use vtui::help::Help;
@@ -27,6 +27,7 @@ impl App {
     fn take_key(&mut self, key: KeyEvent) -> Vec<Action> {
         self.config_failure = None;
         self.note = None;
+        self.asks.failure = None;
         if let Some(overlay) = self.overlay.take() {
             return self.overlay_key(overlay, key);
         }
@@ -55,6 +56,8 @@ impl App {
             Some(Overlay::Recall(recall)) => recall.search.paste(text, &recall.all),
             Some(Overlay::SchemaFilter) => self.schema_tab.filter.paste(text),
             Some(Overlay::Completion(_)) => self.paste_past_completions(text),
+            Some(Overlay::Ask(AskStep::Instruction(instruction))) => instruction.paste(text),
+            Some(Overlay::Ask(_)) => {}
             Some(Overlay::Help(_) | Overlay::Picker(_) | Overlay::Prompt(_) | Overlay::Detail(_) | Overlay::CopyAs) => {}
             None => self.paste_in_focus(text),
         }
@@ -96,6 +99,7 @@ impl App {
             Overlay::CopyAs => self.copy_as_key(key),
             Overlay::SchemaFilter => self.schema_filter_key(key),
             Overlay::Completion(completions) => self.completions_key(completions, key),
+            Overlay::Ask(step) => self.ask_key(step, key),
         }
     }
 
@@ -109,6 +113,7 @@ impl App {
             Act::Run => return self.run_editor(),
             Act::TakeGhost => return self.sheet_mut().edit(KeyEvent::from(KeyCode::Right)),
             Act::Complete => return self.open_completions(),
+            Act::Ask => return self.open_ask(),
             Act::Cancel if self.focus == Focus::Params && !self.sheet().is_running() => self.focus = Focus::Editor,
             Act::Cancel => return self.sheet_mut().cancel(),
             Act::NewLine => return self.sheet_mut().edit(KeyEvent::from(KeyCode::Enter)),

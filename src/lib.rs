@@ -1,6 +1,5 @@
 //! PostgreSQL in your terminal, read only by default: the library behind the `pgbg` binary.
 mod act;
-#[cfg_attr(not(test), expect(dead_code, reason = "the backend runs the command and the editor asks, the next steps"))]
 mod ai;
 mod chart;
 pub mod cli;

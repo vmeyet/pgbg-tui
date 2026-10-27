@@ -300,7 +300,7 @@ impl Sheet {
     }
 
     /// The byte range of the statement under the editor's cursor.
-    fn range_under_cursor(&self) -> Option<Range<usize>> {
+    pub(super) fn range_under_cursor(&self) -> Option<Range<usize>> {
         let (before, _, _) = self.editor.split();
         guard::statement_at(self.editor.text(), self.editor.lexed(), before.len())
     }
