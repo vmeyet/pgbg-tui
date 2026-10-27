@@ -13,8 +13,10 @@ pub(crate) enum LiteralPolicy {
 }
 
 /// The literals a masked statement left out, marker `n` at place `n - 1`.
+#[derive(PartialEq, Eq)]
 pub(super) struct Literals(Vec<Literal>);
 
+#[derive(PartialEq, Eq)]
 struct Literal {
     kind: LiteralKind,
     text: String,

@@ -30,6 +30,7 @@ pub(crate) struct Ask<'a> {
 }
 
 /// The text for the command's stdin, and the literals it masked, to put back in the answer.
+#[derive(PartialEq, Eq)]
 pub(crate) struct Prompt {
     text: String,
     literals: Literals,

@@ -1,7 +1,8 @@
 //! The messages between the app and the backend: the actions the app asks for, and the answers that come back.
 use super::Confirmed;
+use crate::ai::{AnswerError, CommandError, Prompt};
 use crate::complete::Index;
-use crate::config::ConnectionChange;
+use crate::config::{AiSettings, ConnectionChange};
 use crate::connection::{Connection, ConnectionName};
 use crate::db::model::{Catalog, LocalPort, Page, ResultSet, Statement};
 use crate::export::Format;
@@ -50,6 +51,19 @@ impl SessionId {
     }
 }
 
+/// Which ask an answer is about, so the answer to an ask dropped or replaced never shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::tui) struct AskId(u64);
+
+#[expect(dead_code, reason = "`ctrl-g` asks, the next step")]
+impl AskId {
+    pub(in crate::tui) const FIRST: Self = Self(1);
+
+    pub(in crate::tui) fn next(self) -> Self {
+        Self(self.0 + 1)
+    }
+}
+
 /// What the app asks the runner to do.
 #[derive(Debug, PartialEq)]
 pub(in crate::tui) enum Action {
@@ -88,6 +102,12 @@ pub(in crate::tui) enum Action {
     Copy { text: String, done: String },
     /// Build the text of `result` in `format` off the loop, then copy it as `Copy` does.
     CopyResult { result: ResultSet, format: Format, done: String },
+    /// Ask the `[ai] command` of `settings` with `prompt`, killing the command of the ask before it.
+    #[expect(dead_code, reason = "`ctrl-g` asks, the next step")]
+    Ask { ask: AskId, prompt: Prompt, settings: AiSettings },
+    /// Kill the command of `ask` if it still runs; its answer never comes.
+    #[expect(dead_code, reason = "`ctrl-g` asks, the next step")]
+    DropAsk(AskId),
 }
 
 /// A connection to add or edit: the keys it sets, and the password typed for its keychain item.
@@ -130,6 +150,15 @@ pub(in crate::tui) enum Answer {
     Copied(String),
     /// The text of a result that `CopyResult` asked for, to copy before reporting `done`.
     Exported { text: String, done: String },
+    /// The statements the `[ai] command` answered `ask` with, its literals put back, or why there are none.
+    Asked { ask: AskId, answer: Result<Vec<Statement>, AskFailure> },
+}
+
+/// Why `ctrl-g` shows no answer.
+#[derive(Debug, PartialEq)]
+pub(in crate::tui) enum AskFailure {
+    Command(CommandError),
+    Answer(AnswerError),
 }
 
 /// The outcome of a change to the config.

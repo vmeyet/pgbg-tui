@@ -14,8 +14,8 @@ pub(super) use grid::{Clock, GAP, Grid, Reading, Room};
 pub(super) use history::Recall;
 pub(super) use picker::{Note, Picker};
 pub(super) use protocol::{
-    Action, Answer, ConfigAnswer, ConfigChangeId, Incoming, KeychainPassword, QueryAnswer, RunId, SaveConnection, Saving, SessionId,
-    TunnelState,
+    Action, Answer, AskFailure, AskId, ConfigAnswer, ConfigChangeId, Incoming, KeychainPassword, QueryAnswer, RunId, SaveConnection,
+    Saving, SessionId, TunnelState,
 };
 pub(super) use queries::{Finder, Queries};
 pub(super) use save::Prompt;
@@ -317,6 +317,8 @@ impl App {
             Answer::History { connection, entries } => self.history_read(&connection, entries),
             Answer::Copied(note) => self.copied(note),
             Answer::Exported { text, done } => return vec![Action::Copy { text, done }],
+            // Nothing asks before `ctrl-g` does, in the next step.
+            Answer::Asked { .. } => {}
         }
         vec![]
     }
