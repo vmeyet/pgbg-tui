@@ -4,6 +4,7 @@ use crate::config;
 use crate::connection::ConnectionName;
 use crate::db::guard::Refusal;
 use crate::db::model::{ResultSet, ServerError};
+use crate::query::params::ParamError;
 use chrono::{DateTime, Utc};
 use rustix::fs::{FlockOperation, flock};
 use serde::{Deserialize, Serialize};
@@ -37,7 +38,7 @@ pub(crate) enum Outcome {
         /// More rows were left on the server than came back with the first answer: cut, or waiting for the grid.
         is_cut: bool,
     },
-    /// pgbg's guard kept it from the server.
+    /// pgbg kept it from the server: its guard, or parameters it could not fill or type.
     Refused,
     ServerError,
     /// The tunnel, the link or the login failed before the server answered.
@@ -48,7 +49,7 @@ impl Outcome {
     pub(crate) fn of(result: &anyhow::Result<ResultSet>) -> Self {
         match result {
             Ok(result) => Self::Rows { count: result.rows().len(), is_cut: !result.is_whole() },
-            Err(err) if err.is::<Refusal>() => Self::Refused,
+            Err(err) if err.is::<Refusal>() || err.is::<ParamError>() => Self::Refused,
             Err(err) if err.is::<ServerError>() => Self::ServerError,
             Err(_) => Self::LinkError,
         }
@@ -223,7 +224,7 @@ fn parsed(line: &str) -> Option<Entry> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::model::{Extent, Page};
+    use crate::db::model::{Extent, Page, TypeName};
     use std::os::unix::fs::PermissionsExt;
 
     fn store(dir: &tempfile::TempDir) -> Store {
@@ -375,6 +376,12 @@ mod tests {
         assert_eq!(Outcome::of(&Err(anyhow::anyhow!("connection refused"))), Outcome::LinkError);
         assert_eq!(Outcome::of(&Err(Refusal::Multiple.into())), Outcome::Refused);
         assert_eq!(serde_json::to_string(&Outcome::ServerError).unwrap(), r#"{"kind":"server_error"}"#);
+    }
+
+    #[test]
+    fn a_parameter_that_cannot_be_filled_or_typed_is_refused() {
+        assert_eq!(Outcome::of(&Err(ParamError::Mixed.into())), Outcome::Refused);
+        assert_eq!(Outcome::of(&Err(ParamError::UnknownType(TypeName::new("dat")).into())), Outcome::Refused);
     }
 
     #[test]

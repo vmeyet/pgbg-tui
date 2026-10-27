@@ -113,13 +113,13 @@ Running a statement with parameters (the parameter bar planned):
    A statement holding both a `$n` of its own and a `{{name}}` is refused, and a `{{` the lexer cannot read as a name is too: a doubt never runs.
 2. The parameter bar above the editor shows one field per name, filled with the default; `⏎` in a field runs.
    The values typed stay on the sheet until pgbg quits and are never written to disk.
-3. Each name becomes `$1`, `$2` (the same name the same number), so the guard classifies what the server gets; `admit` takes the values with the statement and refuses an `Admitted` whose count of values is not its count of `$n`.
+3. Each name becomes `$1`, `$2` (the same name the same number), so the guard classifies what the server gets; `admit` takes the values with the statement and, when values came, refuses one whose count of values is not its count of `$n`; a statement given none (`CREATE FUNCTION add1(int) RETURNS int RETURN $1 + 1`) is left to the server.
    A name left empty, with no default and not `optional`, stops the run before anything is sent; an `optional` one is bound as NULL.
-   A `--param` for a name the statement does not hold, or a name given twice, stops the run too; a params file may name more, so one file serves several queries.
+   A `--param` for a name the statement does not hold, or a name given twice, stops the run too; a params file may name more, so one file serves several queries, and a line of it that is no `name=value` is told by its number only.
 4. Both ways of running bind them: the read-only portal and the one a connection that allows writes uses.
    The statement is prepared with unknown types (id 0) where the header names none, so the server infers them; a header type is looked up first with `SELECT to_regtype($1)::oid`, the name itself bound, and a type the server does not know stops the run.
    Each value goes through one `ToSql` wrapper that accepts any type and encodes as text (`encode_format`): the server parses it with that type's own input, and a value it cannot read fails with its words.
-5. The history keeps the statement with its `{{name}}`, never the values.
+5. The history keeps the statement with its `{{name}}`, never the values; a run its parameters stopped, a type the server does not know included, is `refused`.
 6. `pgbg run` reads the `-- param:` lines heading its statement, and takes `--param name=value`, `--params-file <file>` (one `name=value` a line) or `--params-file -` on stdin, so a value need not sit in argv or the shell's history.
 
 Asking a command for SQL (planned):
@@ -181,6 +181,9 @@ Four layers, outermost first; only the last one is a guarantee.
 4. **Role**: a read-only database role. A read-only transaction still lets a function with side effects run (`pg_terminate_backend`, `dblink`); only the role stops those.
 
 A parameter is always bound, never put in the statement's text: its value cannot change what the guard admitted.
+
+The guard reads a backslash in a string as itself, and blanks as PostgreSQL does (` `, tab, newline, carriage return, form feed, vertical tab; any other character outside ASCII is part of a word).
+So the server reads strings the same way, every read-only transaction sets `SET LOCAL standard_conforming_strings = on` with its other limits, and a connection that allows writes sets it for its session.
 
 On a connection that allows writes, a statement runs as typed, except that one returning rows goes through a portal in its own committed transaction, unless the user's own `BEGIN` left one open (a `SAVEPOINT` probe tells).
 

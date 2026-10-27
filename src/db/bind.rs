@@ -2,7 +2,8 @@
 use super::guard::Admitted;
 use super::model::{Params, TypeName};
 use super::server_error;
-use anyhow::{Result, anyhow};
+use crate::query::params::ParamError;
+use anyhow::Result;
 use bytes::BytesMut;
 use std::error::Error;
 use tokio_postgres::types::{Format, IsNull, Kind, ToSql, Type, to_sql_checked};
@@ -60,7 +61,7 @@ pub(super) async fn prepare(client: &impl GenericClient, admitted: &Admitted) ->
 async fn looked_up(client: &impl GenericClient, name: &TypeName) -> Result<Type> {
     let row = client.query_one(TYPE_ID, &[&AsText(Some(name.as_str()))]).await.map_err(server_error)?;
     let oid: Option<u32> = row.try_get(0).map_err(server_error)?;
-    let oid = oid.ok_or_else(|| anyhow!("the server knows no type `{}`", name.as_str()))?;
+    let oid = oid.ok_or_else(|| ParamError::UnknownType(name.clone()))?;
     Ok(Type::from_oid(oid).unwrap_or_else(|| Type::new(name.as_str().to_owned(), oid, Kind::Simple, String::new())))
 }
 

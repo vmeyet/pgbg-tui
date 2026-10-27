@@ -10,6 +10,8 @@ use std::str::FromStr;
 
 /// Says nothing of the text itself, which may be a value typed in the wrong place.
 const NO_EQUAL_SIGN: &str = "a value is given as `name=value`, and this has no `=`";
+/// Says nothing of the line either: what a mistyped line holds before its `=` may be a secret.
+const NO_ASSIGNMENT_LINE: &str = "a line is `name=value`, the name a letter or `_`, then letters, digits or `_`";
 
 /// The name in a `{{name}}`: a letter or `_`, then letters, digits or `_`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -69,6 +71,8 @@ pub(crate) enum ParamError {
     /// A value given for a name the statement does not hold, other than by a params file.
     Unknown(ParamName),
     Twice(ParamName),
+    /// A type a header names that the server does not know.
+    UnknownType(TypeName),
 }
 
 impl Given {
@@ -91,10 +95,10 @@ impl Given {
     }
 }
 
-/// The `name=value` of each line of `text`, blank lines left out; a line that is none fails with its number.
+/// The `name=value` of each line of `text`, blank lines left out; a line that is none fails with its number only.
 pub(crate) fn assignments(text: &str) -> Result<Vec<Assignment>, String> {
     let lines = text.lines().enumerate().filter(|(_, line)| !line.trim().is_empty());
-    lines.map(|(at, line)| line.parse().map_err(|err| format!("line {}: {err}", at + 1))).collect()
+    lines.map(|(at, line)| line.parse().map_err(|_quotes_the_line: String| format!("line {}: {NO_ASSIGNMENT_LINE}", at + 1))).collect()
 }
 
 /// `template` with each `{{name}}` replaced by `$n`, the same name the same number, and the value given for each,
@@ -244,6 +248,7 @@ impl fmt::Display for ParamError {
             Self::Missing(name) => write!(f, "`{{{{{name}}}}}` has no value"),
             Self::Unknown(name) => write!(f, "a value was given for `{name}`, and the statement holds no `{{{{{name}}}}}`"),
             Self::Twice(name) => write!(f, "`{name}` was given twice"),
+            Self::UnknownType(name) => write!(f, "the server knows no type `{}`", name.as_str()),
         }
     }
 }
@@ -344,6 +349,12 @@ mod tests {
     #[test]
     fn a_params_file_line_that_is_no_assignment_says_its_number() {
         assert!(assignments("since=1\nowner\n").unwrap_err().starts_with("line 2:"));
+    }
+
+    #[test]
+    fn a_params_file_line_with_a_bad_name_says_nothing_of_its_text() {
+        let err = assignments("since=1\nhunter2 secret=x\n").unwrap_err();
+        assert!(err.starts_with("line 2:") && !err.contains("hunter2"), "{err}");
     }
 
     fn spec(text: &str) -> ParamSpec {

@@ -88,9 +88,9 @@ fn lexemes(sql: &str) -> Vec<Lexeme> {
         let (kind, next) = match c {
             '-' if after.starts_with('-') => (Kind::LineComment, after.find(['\n', '\r']).map(|end| &after[end..])),
             '/' if after.starts_with('*') => (Kind::Comment, after_block_comment(&after[1..])),
-            c if c.is_whitespace() => (Kind::Blank, Some(after)),
+            c if is_blank(c) => (Kind::Blank, Some(after)),
             ';' => (Kind::Token(Token::End), Some(after)),
-            c if c.is_alphabetic() || c == '_' => word(rest),
+            c if is_word_start(c) => word(rest),
             '\'' | '"' => (Kind::Token(Token::Other), after_quoted(after, c)),
             '$' => dollar(rest),
             '{' if after.starts_with('{') => param(sql, at),
@@ -118,8 +118,17 @@ impl Lexeme {
     }
 }
 
+/// What PostgreSQL parts tokens with; any other character outside ASCII, a no-break space included, is part of a word.
+pub(crate) fn is_blank(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0c' | '\x0b')
+}
+
+fn is_word_start(c: char) -> bool {
+    c.is_ascii_alphabetic() || c == '_' || !c.is_ascii()
+}
+
 fn is_word_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_' || c == '$'
+    is_word_start(c) || c.is_ascii_digit() || c == '$'
 }
 
 /// A word at the start of `rest`, and an `E'...'` literal right after an `E`.
@@ -211,7 +220,7 @@ fn dollar(rest: &str) -> (Kind, Option<&str>) {
 
 /// After a `$tag$...$tag$` literal; a `$` that opens none is skipped alone.
 fn after_dollar(rest: &str) -> Option<&str> {
-    let tag_end = rest[1..].find(|c: char| !(c.is_alphanumeric() || c == '_')).map(|at| at + 1);
+    let tag_end = rest[1..].find(|c: char| !(is_word_start(c) || c.is_ascii_digit())).map(|at| at + 1);
     match tag_end {
         Some(end) if rest[end..].starts_with('$') => {
             let tag = &rest[..=end];
@@ -279,6 +288,20 @@ mod tests {
         assert_eq!(params("SELECT x{{since}}"), [Token::Unreadable]);
         assert_eq!(params("SELECT {{since}}e"), [Token::Unreadable]);
         assert_eq!(params("SELECT {{since}}1"), [Token::Unreadable]);
+    }
+
+    #[test]
+    fn a_non_ascii_character_is_part_of_a_word() {
+        assert_eq!(params("SELECT a\u{a0}{{since}}"), [Token::Unreadable]);
+        assert_eq!(params("SELECT {{since}}\u{1f980}"), [Token::Unreadable]);
+        let words: Vec<Token> = tokens("SELECT\u{a0}\u{1f980}x").into_iter().map(|placed| placed.token).collect();
+        assert_eq!(words, [Token::Word("SELECT\u{a0}\u{1f980}X".into())]);
+    }
+
+    #[test]
+    fn only_ascii_blanks_part_words() {
+        let words: Vec<Token> = tokens("a \t\n\r\x0c\x0bb").into_iter().map(|placed| placed.token).collect();
+        assert_eq!(words, [Token::Word("A".into()), Token::Word("B".into())]);
     }
 
     /// The span a character typed at the `|` of `marked` would fall in.

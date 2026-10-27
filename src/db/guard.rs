@@ -37,7 +37,7 @@ pub(crate) enum Refusal {
     Multiple,
     /// The statement numbers `expected` parameters, and `given` values came with it.
     Params {
-        expected: u32,
+        expected: usize,
         given: usize,
     },
 }
@@ -53,11 +53,15 @@ pub(crate) fn admit(statement: Statement, params: Params, writes: WritePolicy) -
     Ok(Admitted { statement, params, mode })
 }
 
+/// Only when values came: a statement without any may number `$n` of its own (`CREATE FUNCTION ... RETURN $1 + 1`),
+/// and the server judges those.
 fn check_params(tokens: &[Token], params: &Params) -> Result<(), Refusal> {
+    if params.is_empty() {
+        return Ok(());
+    }
     let numbered = tokens.iter().filter_map(|token| if let Token::Numbered(n) = token { Some(*n) } else { None });
-    let expected = numbered.max().unwrap_or(0);
-    let is_matched = usize::try_from(expected).is_ok_and(|expected| expected == params.len());
-    if is_matched { Ok(()) } else { Err(Refusal::Params { expected, given: params.len() }) }
+    let expected = numbered.max().map_or(0, |highest| usize::try_from(highest).unwrap_or(usize::MAX));
+    if expected == params.len() { Ok(()) } else { Err(Refusal::Params { expected, given: params.len() }) }
 }
 
 fn check_read(tokens: &[Token]) -> Result<(), Refusal> {
@@ -109,8 +113,8 @@ fn pieces(tokens: &[Placed], len: usize) -> Vec<Piece> {
 
 fn trimmed(sql: &str, range: Range<usize>) -> Range<usize> {
     let text = &sql[range.clone()];
-    let start = range.start + text.len() - text.trim_start().len();
-    let end = range.end - (text.len() - text.trim_end().len());
+    let start = range.start + text.len() - text.trim_start_matches(lex::is_blank).len();
+    let end = range.end - (text.len() - text.trim_end_matches(lex::is_blank).len());
     start..end
 }
 
@@ -135,12 +139,18 @@ impl fmt::Display for Refusal {
                 write!(f, "`{word}` is not a read, and this connection is read only: set `writes = \"allowed\"` on it to run writes")
             }
             Self::Multiple => f.write_str("one statement at a time: this text holds more than one"),
-            Self::Params { expected, given } => write!(f, "the statement takes {expected} parameters, and {given} values came with it"),
+            Self::Params { expected, given } => {
+                write!(f, "the statement takes {}, and {} came with it", counted(*expected, "parameter"), counted(*given, "value"))
+            }
         }
     }
 }
 
 impl std::error::Error for Refusal {}
+
+fn counted(count: usize, noun: &str) -> String {
+    if count == 1 { format!("1 {noun}") } else { format!("{count} {noun}s") }
+}
 
 #[cfg(test)]
 mod tests {
@@ -296,6 +306,11 @@ mod tests {
     }
 
     #[test]
+    fn a_no_break_space_at_the_end_stays_in_the_statement() {
+        assert_eq!(statement_under("SELECT a\u{a0}|"), Some("SELECT a\u{a0}".into()));
+    }
+
+    #[test]
     fn blank_text_holds_no_statement() {
         assert_eq!(statement_under("  -- nothing\n|"), None);
     }
@@ -320,6 +335,19 @@ mod tests {
     fn a_count_of_values_that_is_not_the_count_of_parameters_is_refused() {
         assert_eq!(admitted_with("SELECT $1, $2", 1, WritePolicy::ReadOnly), Err(Refusal::Params { expected: 2, given: 1 }));
         assert_eq!(admitted_with("SELECT 1", 1, WritePolicy::Allowed), Err(Refusal::Params { expected: 0, given: 1 }));
+    }
+
+    #[test]
+    fn a_statement_given_no_values_leaves_its_own_numbers_to_the_server() {
+        let function = "CREATE FUNCTION add1(int) RETURNS int RETURN $1 + 1";
+        assert_eq!(admitted_with(function, 0, WritePolicy::Allowed), Ok(Mode::Writes));
+        assert_eq!(admitted_with("PREPARE p(int) AS SELECT $1", 0, WritePolicy::Allowed), Ok(Mode::Writes));
+    }
+
+    #[test]
+    fn a_refused_count_of_one_says_parameter() {
+        assert_eq!(Refusal::Params { expected: 1, given: 2 }.to_string(), "the statement takes 1 parameter, and 2 values came with it");
+        assert_eq!(Refusal::Params { expected: 2, given: 1 }.to_string(), "the statement takes 2 parameters, and 1 value came with it");
     }
 
     #[test]

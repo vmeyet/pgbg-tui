@@ -46,6 +46,8 @@ const SERVER_IDLE_IN_TRANSACTION_TIMEOUT: &str =
 /// The server ends the session of a read-only transaction left idle this long, should pgbg not close a portal waiting for
 /// its next page itself, after 5 minutes.
 const IDLE_IN_TRANSACTION_BACKSTOP: Duration = Duration::from_mins(6);
+/// The guard and the parameters read a backslash in a string as itself; the server must read it the same way.
+const STANDARD_STRINGS: &str = "standard_conforming_strings = on";
 const PROBE_SAVEPOINT: &str = "SAVEPOINT pgbg_probe";
 const RELEASE_PROBE: &str = "RELEASE SAVEPOINT pgbg_probe";
 const ROLLBACK_FAILED: &str = "a rollback failed, so the server may still hold its transaction";
@@ -104,7 +106,7 @@ impl IdleTimeout {
 
 impl ReadLimits {
     fn sql(&self) -> String {
-        let statement = format!("SET LOCAL statement_timeout = {}", self.statement_timeout.as_millis());
+        let statement = format!("SET LOCAL {STANDARD_STRINGS}; SET LOCAL statement_timeout = {}", self.statement_timeout.as_millis());
         match self.idle {
             IdleTimeout::Server(_) => statement,
             IdleTimeout::Backstop => {
@@ -147,7 +149,7 @@ impl Session {
         stop_statements_when_client_gone(&client).await;
         let statement_timeout = statement_timeout_in_effect(&client, connection.statement_timeout()).await?;
         if connection.writes() == WritePolicy::Allowed {
-            set_statement_timeout(&client, statement_timeout).await?;
+            set_session_limits(&client, statement_timeout).await?;
         }
         let limits = ReadLimits { statement_timeout, idle: idle_timeout(&client).await? };
         Ok(Self { client, tls, limits, ended, link, marks: Marks::default() })
@@ -341,9 +343,9 @@ async fn begin_read_only<'c>(client: &'c mut Client, limits: &ReadLimits, isolat
 /// Only where writes are allowed, whose own `BEGIN` and statements run outside pgbg's transactions; behind a
 /// transaction pooler it holds only on the server link it reached. Not best effort: a production session never runs
 /// without its timeout.
-async fn set_statement_timeout(client: &Client, timeout: StatementTimeout) -> Result<()> {
-    let sql = format!("SET statement_timeout = {}", timeout.as_millis());
-    client.batch_execute(&sql).await.map_err(server_error).context("setting the statement timeout")
+async fn set_session_limits(client: &Client, timeout: StatementTimeout) -> Result<()> {
+    let sql = format!("SET {STANDARD_STRINGS}; SET statement_timeout = {}", timeout.as_millis());
+    client.batch_execute(&sql).await.map_err(server_error).context("setting the session's limits")
 }
 
 /// `statement` bound to a portal with `params`, each in text.
@@ -410,6 +412,7 @@ mod tests {
     use super::*;
     use crate::connection::WritePolicy;
     use crate::fixtures;
+    use crate::query::params::ParamError;
     use model::LocalPort;
     use model::{Params, Statement};
     use std::net::Ipv4Addr;
@@ -436,6 +439,26 @@ mod tests {
     async fn run(writes: WritePolicy, sql: &str) -> Result<ResultSet> {
         let admitted = guard::admit(Statement::new(sql), Params::default(), writes).unwrap();
         session(writes).await.run(&admitted).await
+    }
+
+    /// `shop` on the test database, its server set to read a backslash in a string as an escape.
+    fn reading_backslashes_as_escapes(writes: WritePolicy) -> Connection {
+        let database = fixtures::test_database_url();
+        let separator = if database.contains('?') { '&' } else { '?' };
+        let url = format!("{database}{separator}options=-c%20standard_conforming_strings%3Doff");
+        let writes = if writes == WritePolicy::Allowed { "allowed" } else { "read-only" };
+        fixtures::connection(&format!("tier = \"local\"\nurl = \"{url}\"\nwrites = \"{writes}\"\n"))
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_server_set_to_read_backslashes_as_escapes_reads_a_string_as_the_guard_does() {
+        for writes in [WritePolicy::ReadOnly, WritePolicy::Allowed] {
+            let mut session = Session::open(&reading_backslashes_as_escapes(writes), Route::Direct).await.unwrap();
+            let admitted = guard::admit(Statement::new(r"SELECT '\' AS mark"), Params::default(), writes).unwrap();
+            let result = session.run(&admitted).await.unwrap();
+            assert_eq!(result.rows(), [[Value::Text(r"\".into())]], "{writes:?}");
+        }
     }
 
     #[test]
@@ -796,7 +819,7 @@ mod tests {
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_type_the_server_does_not_know_stops_the_run() {
         let err = run_typed(WritePolicy::ReadOnly, "SELECT $1", "1", "no_such_kind").await.unwrap_err();
-        assert!(err.to_string().contains("the server knows no type `no_such_kind`"), "{err}");
+        assert_eq!(err.downcast_ref(), Some(&ParamError::UnknownType(model::TypeName::new("no_such_kind"))), "{err}");
     }
 
     #[tokio::test]
