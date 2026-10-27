@@ -1,8 +1,9 @@
 //! A result shown a page at a time: its portal stays open between pages, in its `BEGIN READ ONLY` transaction.
 use super::guard::{Admitted, Mode};
 use super::model::{Column, Extent, Page, ResultSet};
-use super::{FetchSize, Marks, Session, columns, fetch_page, roll_back, server_error, why_ended};
+use super::{FetchSize, Marks, Session, begin_read_only, columns, fetch_page, roll_back, server_error, why_ended};
 use anyhow::Result;
+use std::time::Duration;
 use tokio::sync::watch;
 use tokio_postgres::{Portal, Transaction};
 
@@ -28,6 +29,7 @@ pub(crate) struct Pages<'s> {
     portal: Portal,
     marks: &'s mut Marks,
     ended: &'s watch::Receiver<Option<String>>,
+    idle_limit_on_server: Duration,
 }
 
 /// A statement bound to its portal, and the columns it returns.
@@ -43,8 +45,9 @@ impl Session {
         if admitted.mode == Mode::Writes {
             return Ok(Started { result: self.run(admitted).await?, rest: None });
         }
-        let Self { client, marks, ended, .. } = self;
-        let transaction = marks.during(client.build_transaction().read_only(true).start()).await.map_err(server_error)?;
+        let Self { client, limits, marks, ended, .. } = self;
+        let idle_limit_on_server = limits.idle.on_server();
+        let transaction = marks.during(begin_read_only(client, limits)).await?;
         let bound = marks.during(bind(&transaction, admitted.statement.as_str())).await;
         let Bound { columns, portal } = match bound {
             Ok(bound) => bound,
@@ -53,7 +56,7 @@ impl Session {
                 return Err(err);
             }
         };
-        let Fetched { page, rest } = Pages { transaction, portal, marks, ended }.next().await?;
+        let Fetched { page, rest } = Pages { transaction, portal, marks, ended, idle_limit_on_server }.next().await?;
         Ok(Started { result: ResultSet::new(columns, page), rest })
     }
 }
@@ -76,6 +79,11 @@ impl<'s> Pages<'s> {
     /// Ends the portal's transaction; the rows it did not send stay on the server.
     pub(crate) async fn close(self) -> Result<()> {
         roll_back(self.transaction, self.marks).await
+    }
+
+    /// How long the portal may wait for its next page before the server ends the whole session.
+    pub(crate) fn idle_limit_on_server(&self) -> Duration {
+        self.idle_limit_on_server
     }
 
     /// Waits until the link to the server ends, and says why.
@@ -158,6 +166,27 @@ mod tests {
         let admitted = guard::admit(Statement::new(numbers_up_to(ROW_CAP + 1)), WritePolicy::Allowed).unwrap();
         let Started { result, rest } = session.start(&admitted).await.unwrap();
         assert_eq!((result.rows().len(), result.extent(), rest.is_none()), (ROW_CAP, Extent::Cut, true));
+    }
+
+    async fn idle_limit_of_a_portal(url: &str) -> Duration {
+        let connection = fixtures::connection(&format!("tier = \"local\"\nurl = \"{url}\"\n"));
+        let mut session = Session::open(&connection, Route::Direct).await.unwrap();
+        let started = session.start(&read_only(&numbers_up_to(1200))).await.unwrap();
+        started.rest.unwrap().idle_limit_on_server()
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_portal_waits_on_the_server_until_the_backstop() {
+        assert_eq!(idle_limit_of_a_portal(&fixtures::test_database_url()).await, Duration::from_mins(6));
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_portal_waits_on_the_server_no_longer_than_its_stricter_idle_timeout() {
+        let mut url = url::Url::parse(&fixtures::test_database_url()).unwrap();
+        url.query_pairs_mut().append_pair("options", "-cidle_in_transaction_session_timeout=1min");
+        assert_eq!(idle_limit_of_a_portal(url.as_str()).await, Duration::from_mins(1));
     }
 
     async fn backend_pid(session: &mut Session) -> Value {

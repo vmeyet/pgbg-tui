@@ -10,10 +10,19 @@ use zeroize::Zeroize;
 mod keychain;
 mod typed;
 
+/// The bytes a password typed or piped in has room for before its buffer grows, which would leave a copy behind.
+const TYPED_CAPACITY_BYTES: usize = 1024;
+
 /// A password, read when a session opens and dropped once connected, or typed in the TUI's connection form; never
 /// copied, and wiped from memory when dropped.
-#[derive(Default, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub(crate) struct Secret(String);
+
+impl Default for Secret {
+    fn default() -> Self {
+        Self(String::with_capacity(TYPED_CAPACITY_BYTES))
+    }
+}
 
 impl Drop for Secret {
     fn drop(&mut self) {
@@ -103,14 +112,18 @@ async fn from_command(argv: &[String]) -> Result<Secret> {
     if !output.status.success() {
         bail!("`{program}` failed ({}) instead of printing the password", output.status);
     }
-    let printed =
-        String::from_utf8(output.stdout).map_err(|_password_bytes| anyhow!("`{program}` printed a password that is not UTF-8"))?;
-    Ok(Secret(without_line_end(&printed).to_owned()))
+    let printed = String::from_utf8(output.stdout).map_err(|err| {
+        err.into_bytes().zeroize();
+        anyhow!("`{program}` printed a password that is not UTF-8")
+    })?;
+    Ok(without_line_end(printed))
 }
 
-/// `text` without the newlines a command or a terminal ends it with.
-fn without_line_end(text: &str) -> &str {
-    text.trim_end_matches(['\n', '\r'])
+/// `text` as a password, without the newlines a command or a terminal ends it with; cut in place, so no copy is left.
+fn without_line_end(mut text: String) -> Secret {
+    let end = text.trim_end_matches(['\n', '\r']).len();
+    text.truncate(end);
+    Secret(text)
 }
 
 #[cfg(test)]
