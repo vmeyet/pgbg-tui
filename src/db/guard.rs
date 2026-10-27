@@ -18,6 +18,18 @@ pub(crate) struct Admitted {
     pub(super) statement: Statement,
     pub(super) params: Params,
     pub(super) mode: Mode,
+    pub(super) transaction_step: TransactionStep,
+}
+
+/// What a statement does to a transaction the user began, read from its first words; the server's answer to it
+/// decides whether it did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TransactionStep {
+    Keeps,
+    Opens,
+    Ends,
+    /// It ends one in a way the guard cannot read.
+    Unsure,
 }
 
 /// How a session runs an admitted statement.
@@ -45,12 +57,34 @@ pub(crate) enum Refusal {
 /// `statement` with `params` bound to its `$n`, cleared for a connection of policy `writes`, or why it is not.
 pub(crate) fn admit(statement: Statement, params: Params, writes: WritePolicy) -> Result<Admitted, Refusal> {
     let tokens = tokens(statement.as_str());
-    let mode = match writes {
-        WritePolicy::Allowed => Mode::Writes,
-        WritePolicy::ReadOnly => check_read(&tokens).map(|()| Mode::ReadOnly)?,
+    let (mode, transaction_step) = match writes {
+        WritePolicy::Allowed => (Mode::Writes, transaction_step(&tokens)),
+        WritePolicy::ReadOnly => check_read(&tokens).map(|()| (Mode::ReadOnly, TransactionStep::Keeps))?,
     };
     check_params(&tokens, &params)?;
-    Ok(Admitted { statement, params, mode })
+    Ok(Admitted { statement, params, mode, transaction_step })
+}
+
+fn transaction_step(tokens: &[Token]) -> TransactionStep {
+    let words: Vec<&str> = tokens.iter().filter_map(Token::word).collect();
+    match words.as_slice() {
+        ["BEGIN" | "START", ..] => TransactionStep::Opens,
+        ["PREPARE", "TRANSACTION", ..] => TransactionStep::Ends,
+        ["COMMIT" | "END" | "ROLLBACK" | "ABORT", "WORK" | "TRANSACTION", rest @ ..]
+        | ["COMMIT" | "END" | "ROLLBACK" | "ABORT", rest @ ..] => step_after_an_ending(rest),
+        _ => TransactionStep::Keeps,
+    }
+}
+
+/// `rest`, the words after `COMMIT` or `ROLLBACK`: a chain opens the next transaction at once, and a rollback to a
+/// savepoint or the end of a prepared transaction leaves the open one as it is.
+fn step_after_an_ending(rest: &[&str]) -> TransactionStep {
+    match rest {
+        [] | ["AND", "NO", "CHAIN"] => TransactionStep::Ends,
+        ["AND", "CHAIN"] => TransactionStep::Opens,
+        ["TO" | "PREPARED", ..] => TransactionStep::Keeps,
+        _ => TransactionStep::Unsure,
+    }
 }
 
 /// Only when values came: a statement without any may number `$n` of its own (`CREATE FUNCTION ... RETURN $1 + 1`),
@@ -354,5 +388,53 @@ mod tests {
     #[test]
     fn a_parameter_in_a_string_needs_no_value() {
         assert_eq!(admitted_with("SELECT '$1'", 0, WritePolicy::ReadOnly), Ok(Mode::ReadOnly));
+    }
+
+    fn step(sql: &str) -> TransactionStep {
+        admit(Statement::new(sql), Params::default(), WritePolicy::Allowed).unwrap().transaction_step
+    }
+
+    #[test]
+    fn a_begin_opens_a_transaction_of_the_user() {
+        assert_eq!(step("begin isolation level serializable"), TransactionStep::Opens);
+        assert_eq!(step("START TRANSACTION READ WRITE"), TransactionStep::Opens);
+    }
+
+    #[test]
+    fn a_commit_or_a_rollback_ends_it() {
+        for sql in ["COMMIT", "END", "ROLLBACK", "ABORT", "COMMIT WORK", "ROLLBACK TRANSACTION AND NO CHAIN;", "PREPARE TRANSACTION 'shop'"]
+        {
+            assert_eq!(step(sql), TransactionStep::Ends, "{sql}");
+        }
+    }
+
+    #[test]
+    fn a_commit_and_chain_opens_the_next_one() {
+        assert_eq!(step("COMMIT AND CHAIN"), TransactionStep::Opens);
+        assert_eq!(step("rollback work and chain"), TransactionStep::Opens);
+    }
+
+    #[test]
+    fn a_rollback_to_a_savepoint_or_of_a_prepared_transaction_keeps_it() {
+        assert_eq!(step("ROLLBACK TO SAVEPOINT before_orders"), TransactionStep::Keeps);
+        assert_eq!(step("COMMIT PREPARED 'shop'"), TransactionStep::Keeps);
+    }
+
+    #[test]
+    fn any_other_statement_keeps_it() {
+        assert_eq!(step("INSERT INTO orders VALUES (1) RETURNING id"), TransactionStep::Keeps);
+        assert_eq!(step("DO $$ BEGIN COMMIT; END $$"), TransactionStep::Keeps);
+        assert_eq!(step("-- COMMIT\nSELECT 1"), TransactionStep::Keeps);
+    }
+
+    #[test]
+    fn an_ending_the_guard_cannot_read_is_unsure() {
+        assert_eq!(step("COMMIT AND MAYBE"), TransactionStep::Unsure);
+    }
+
+    #[test]
+    fn a_read_only_statement_keeps_it() {
+        let admitted = admit(Statement::new("SELECT 1"), Params::default(), WritePolicy::ReadOnly).unwrap();
+        assert_eq!(admitted.transaction_step, TransactionStep::Keeps);
     }
 }
