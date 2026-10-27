@@ -80,7 +80,7 @@ mod tests {
     use super::super::{Focus, Incoming, Run, RunId, SessionId};
     use super::*;
     use crate::db::model::Statement;
-    use crate::fixtures::shop_schema;
+    use crate::fixtures::shop_catalog;
     use crate::query::params::ParamInput;
     use crossterm::event::{KeyCode, KeyModifiers};
     use std::sync::Arc;
@@ -90,7 +90,7 @@ mod tests {
     }
 
     fn read(app: &mut App) {
-        let catalog = Catalog { schema: shop_schema(), search_path: vec!["public".to_owned()], is_cut: false };
+        let catalog = shop_catalog();
         app.apply(to_shop(Incoming::Schema(Ok(Arc::new(catalog)))));
     }
 

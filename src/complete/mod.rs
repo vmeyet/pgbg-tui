@@ -46,12 +46,33 @@ mod tests {
         took
     }
 
+    fn list_took(index: &Index, marked: &str) -> Duration {
+        let cursor = marked.find('|').unwrap();
+        let text = marked.replace('|', "");
+        let started = Instant::now();
+        let listed = Ask::at(&text, cursor).map(|ask| index.candidates(&ask)).unwrap_or_default();
+        let took = started.elapsed();
+        assert!(!listed.is_empty(), "{marked} lists a name");
+        took
+    }
+
+    const KEYS: [&str; 5] =
+        ["SELECT * FROM o|", "SELECT o.| FROM orders_40 o", "SELECT st| FROM orders_40", "SELECT c|", "SELECT cr| FROM missing"];
+
     #[test]
     fn one_key_on_twenty_thousand_tables_finds_its_ghost_within_the_budget() {
         let index = Index::new(&large_catalog());
-        let keys = ["SELECT * FROM o|", "SELECT o.| FROM orders_40 o", "SELECT st| FROM orders_40", "SELECT c|", "SELECT cr| FROM missing"];
-        for marked in keys {
+        for marked in KEYS {
             let took = ghost_took(&index, marked);
+            assert!(took < BUDGET, "{marked} took {took:?}");
+        }
+    }
+
+    #[test]
+    fn one_key_on_twenty_thousand_tables_fills_its_list_within_the_budget() {
+        let index = Index::new(&large_catalog());
+        for marked in KEYS {
+            let took = list_took(&index, marked);
             assert!(took < BUDGET, "{marked} took {took:?}");
         }
     }

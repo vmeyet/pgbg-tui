@@ -235,7 +235,7 @@ mod tests {
     use super::super::tests::{app, app_on, shop, to_shop};
     use super::super::{Answer, Fit, Incoming, Run, RunId, SessionId};
     use super::*;
-    use crate::fixtures::{self, shop_schema};
+    use crate::fixtures::{self, shop_catalog};
     use crossterm::event::KeyCode;
     use std::sync::Arc;
 
@@ -252,7 +252,7 @@ mod tests {
         let mut app = app();
         on_the_sidebar(&mut app);
         press(&mut app, KeyCode::Char(']'));
-        let catalog = Catalog { schema: shop_schema(), search_path: vec!["public".to_owned()], is_cut: false };
+        let catalog = shop_catalog();
         app.apply(to_shop(Incoming::Schema(Ok(Arc::new(catalog)))));
         app
     }

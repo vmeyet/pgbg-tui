@@ -487,7 +487,7 @@ mod tests {
     use super::super::tests::{app, app_on, on_the_result, shop, to_shop};
     use super::*;
     use crate::db::model::{ColumnKind, Value};
-    use crate::fixtures::{self, column, orders, page, shop_schema};
+    use crate::fixtures::{self, column, orders, page, shop_catalog};
     use crate::format::Mode;
     use crossterm::event::{KeyCode, KeyEvent};
     use std::time::Duration;
@@ -603,7 +603,7 @@ mod tests {
     }
 
     fn catalog() -> Arc<Catalog> {
-        Arc::new(Catalog { schema: shop_schema(), search_path: vec!["public".to_owned()], is_cut: false })
+        Arc::new(shop_catalog())
     }
 
     #[test]

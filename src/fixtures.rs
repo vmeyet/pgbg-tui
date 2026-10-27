@@ -1,6 +1,8 @@
 //! Invented fixtures the tests share: the connection `shop`, the test database, tunnels to it, and results of `orders`.
 use crate::connection::{Connection, Entry, WritePolicy};
-use crate::db::model::{Column, ColumnKind, Extent, Index, Page, ResultSet, Schema, SchemaColumn, SchemaNode, Table, TableKind, Value};
+use crate::db::model::{
+    Catalog, Column, ColumnKind, Extent, Index, Page, ResultSet, Schema, SchemaColumn, SchemaNode, Table, TableKind, Value,
+};
 use rustix::process::{Pid, test_kill_process};
 use std::path::Path;
 use std::time::Duration;
@@ -162,6 +164,11 @@ fn schema_column(name: &str, type_name: &str, default: Option<&str>) -> SchemaCo
 
 fn schema_table(name: &str, columns: Vec<SchemaColumn>) -> Table {
     Table { name: name.to_owned(), kind: TableKind::Table, estimated_rows: None, columns, indexes: vec![] }
+}
+
+/// The catalog of `shop`: its schema, `public` its search path, whole.
+pub(crate) fn shop_catalog() -> Catalog {
+    Catalog { schema: shop_schema(), search_path: vec!["public".to_owned()], is_cut: false }
 }
 
 /// The schema of `shop`: `orders` and `customers` in `public`, `invoices` in `billing`; `orders` has its key, a

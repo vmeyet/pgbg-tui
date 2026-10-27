@@ -1,0 +1,16 @@
+---
+source: src/tui/param_bar_view.rs
+expression: terminal.backend()
+---
+"╭ ● shop · local ──────────────────────────────────────────╮"
+"│owner nina, who placed the orders of last week  note late │"
+"│╭ Editor ─ READ ONLY ────────────────────────────────────╮│"
+"││ WHERE day > {{since}} AND owner = {{owner}} AND note = ││"
+"│╰────────────────────────────────────────────────────────╯│"
+"│╭ Result ────────────────────────────────────────────────╮│"
+"││ ⏎ runs the statement under the cursor                  ││"
+"││                                                        ││"
+"││                                                        ││"
+"│╰────────────────────────────────────────────────────────╯│"
+"│ ⏎ run  ⇥ next  esc editor  F1 keys  ^c quit  connecting… │"
+"╰──────────────────────────────────────────────────────────╯"

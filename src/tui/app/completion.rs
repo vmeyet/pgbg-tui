@@ -25,13 +25,24 @@ impl Completions {
     }
 }
 
+/// What the cursor asks of completion, and the index that answers it.
+pub(super) struct Asked<'a> {
+    pub(super) ask: Ask,
+    pub(super) index: &'a Index,
+}
+
 impl Sheet {
-    /// The list for the name before the cursor, from the index once there is one, else from the keywords; none when
-    /// the cursor is in a string or a comment.
-    fn completions(&self) -> Option<Completions> {
+    /// What the cursor asks, from the index once there is one, else from the keywords; none when the cursor is in a
+    /// string or a comment.
+    pub(super) fn ask(&self) -> Option<Asked<'_>> {
         let (before, _, _) = self.editor.split();
         let ask = Ask::at(self.editor.text(), before.len())?;
-        let index = self.index.as_deref().unwrap_or_else(|| Index::of_keywords());
+        Some(Asked { ask, index: self.index.as_deref().unwrap_or_else(|| Index::of_keywords()) })
+    }
+
+    /// The list for the name before the cursor.
+    fn completions(&self) -> Option<Completions> {
+        let Asked { ask, index } = self.ask()?;
         Some(Completions { candidates: index.candidates(&ask), typed: ask.typed, selected: 0 })
     }
 }
@@ -92,14 +103,13 @@ mod tests {
     use super::super::{Incoming, Overlay};
     use super::*;
     use crate::complete::Index;
-    use crate::db::model::Catalog;
-    use crate::fixtures::shop_schema;
+    use crate::fixtures::shop_catalog;
     use crossterm::event::{KeyCode, KeyModifiers};
     use std::sync::Arc;
 
     fn listing(text: &str) -> App {
         let mut app = typed("");
-        let catalog = Arc::new(Catalog { schema: shop_schema(), search_path: vec!["public".to_owned()], is_cut: false });
+        let catalog = Arc::new(shop_catalog());
         let index = Arc::new(Index::new(&catalog));
         app.apply(to_shop(Incoming::Schema(Ok(Arc::clone(&catalog)))));
         app.apply(to_shop(Incoming::Index { catalog, index }));
