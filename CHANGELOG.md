@@ -10,6 +10,9 @@ Each entry says what changed, then where, then how to use it.
 
 - **Row detail** in the TUI: on the grid, press `⏎` or `space` to see the row under the cursor, one column after another with its type and its whole value, long ones wrapped.
   JSON shows indented and coloured; `j`/`k` scroll, `esc` goes back to the grid.
+- **Copy** from the grid: `y` copies the value of the first column in view on the cursor's row, `Y` the row as a CSV line, and `c` then `c`, `j` or `m` the whole result as CSV, JSON or a Markdown table.
+  Values are copied whole and as the database gave them, NUMERIC with every digit; the status line says what was copied.
+  It goes to your terminal's clipboard (OSC 52, so it works over ssh and in tmux with `set-clipboard on`) and to `pbcopy` on a Mac.
 - **`pgbg doctor <connection>`** checks a connection, one line per check: `✓` fine, `!` worth a look, `✗` broken, each with how to fix it.
   It reads the config and the mode of `config.toml`, says whether TLS is on and why, starts and stops the tunnel, logs in, and shows the server's version and the statement timeout in effect, with where it comes from: the connection, its tier or the server.
   It says what the role can write: superuser, `CREATEROLE`, `CREATEDB`, `BYPASSRLS`, `pg_write_all_data`, new schemas, and the schemas, tables and sequences it may change; a read-only connection whose role can write gets `!`, since only a read-only role truly stops a write.

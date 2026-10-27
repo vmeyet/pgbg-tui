@@ -33,6 +33,12 @@ pub(crate) enum Act {
     EditOutside,
     History,
     Detail,
+    CopyCell,
+    CopyRow,
+    CopyResult,
+    CopyCsv,
+    CopyJson,
+    CopyMarkdown,
 }
 
 #[cfg(test)]
@@ -70,7 +76,13 @@ impl Act {
             Self::Save => Some(Self::EditOutside),
             Self::EditOutside => Some(Self::History),
             Self::History => Some(Self::Detail),
-            Self::Detail => None,
+            Self::Detail => Some(Self::CopyCell),
+            Self::CopyCell => Some(Self::CopyRow),
+            Self::CopyRow => Some(Self::CopyResult),
+            Self::CopyResult => Some(Self::CopyCsv),
+            Self::CopyCsv => Some(Self::CopyJson),
+            Self::CopyJson => Some(Self::CopyMarkdown),
+            Self::CopyMarkdown => None,
         }
     }
 
@@ -117,6 +129,8 @@ pub(crate) enum Pane {
     Prompt,
     /// The detail of the grid's row over the screen, a popup like the finder.
     Detail,
+    /// A question on the footer line, the format to copy the result as: while open it takes every key.
+    CopyAs,
 }
 
 /// Keys as the help or the footer writes them, and what they do in a few words.
@@ -184,6 +198,9 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Detail, Pane::Result, &[key(KeyCode::Enter), key(KeyCode::Char(' '))])
         .help("⏎ space", "the row under the cursor, one column a line")
         .footer("⏎", "row"),
+    row(Act::CopyCell, Pane::Result, &[key(KeyCode::Char('y'))]).help("y", "copy the first column in view of the row").footer("y", "copy"),
+    row(Act::CopyRow, Pane::Result, &[key(KeyCode::Char('Y'))]).help("Y", "copy the row as CSV"),
+    row(Act::CopyResult, Pane::Result, &[key(KeyCode::Char('c'))]).help("c", "copy the result as CSV, JSON or Markdown"),
     row(Act::Chart, Pane::Result, &[key(KeyCode::Char('v'))]).help("v", "the result as a grid or a chart").footer("v", "chart"),
     row(Act::Help, Pane::Result, &[key(KeyCode::Char('?'))]).help("?", "these keys; again for every key"),
     row(Act::Down, Pane::Queries, &[key(KeyCode::Char('j')), key(KeyCode::Down)]).help("j k", "next, previous query").footer("j/k", "move"),
@@ -219,6 +236,11 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Up, Pane::Detail, &[key(KeyCode::Char('k')), key(KeyCode::Up)]),
     row(Act::Close, Pane::Detail, &[key(KeyCode::Esc)]).help("esc", "back to the grid").footer("esc", "closes"),
     row(Act::Quit, Pane::Detail, &[control('c')]).help("^c", "quit"),
+    row(Act::CopyCsv, Pane::CopyAs, &[key(KeyCode::Char('c'))]).help("c", "copy the result as CSV").footer("c", "CSV"),
+    row(Act::CopyJson, Pane::CopyAs, &[key(KeyCode::Char('j'))]).help("j", "copy it as JSON").footer("j", "JSON"),
+    row(Act::CopyMarkdown, Pane::CopyAs, &[key(KeyCode::Char('m'))]).help("m", "copy it as a Markdown table").footer("m", "Markdown"),
+    row(Act::Close, Pane::CopyAs, &[key(KeyCode::Esc)]).help("esc", "copy nothing").footer("esc", "cancel"),
+    row(Act::Quit, Pane::CopyAs, &[control('c')]).help("^c", "quit"),
     row(Act::EditOutside, Pane::Editor, &[control('e')]).help("^e", "edit the saved query in $EDITOR"),
     row(Act::Save, Pane::Anywhere, &[control('s')]).help("^s", "save the query, naming a new one").footer("^s", "save"),
     row(Act::History, Pane::Anywhere, &[control('r')]).help("^r", "search the statements run on this connection"),
@@ -235,7 +257,8 @@ fn is_the_key(own: &KeyEvent, pressed: KeyEvent) -> bool {
 
 fn works_in(row: &Row, pane: Pane) -> bool {
     row.pane == pane
-        || (row.pane == Pane::Anywhere && !matches!(pane, Pane::Finder | Pane::Picker | Pane::Form | Pane::Prompt | Pane::Detail))
+        || (row.pane == Pane::Anywhere
+            && !matches!(pane, Pane::Finder | Pane::Picker | Pane::Form | Pane::Prompt | Pane::Detail | Pane::CopyAs))
 }
 
 /// What `key` does while `pane` has the keys; `None` leaves it to the pane, as text for the editor.
@@ -285,6 +308,7 @@ pub(crate) fn sections(pane: Pane, every_key: bool) -> Vec<Section> {
         (Pane::Form, "form"),
         (Pane::Prompt, "prompt"),
         (Pane::Detail, "row"),
+        (Pane::CopyAs, "copy as"),
         (Pane::Anywhere, "anywhere"),
     ];
     let shown = panes.into_iter().filter(|&(listed, _)| every_key || listed == pane || listed == Pane::Anywhere);
@@ -333,7 +357,9 @@ mod tests {
 
     #[test]
     fn no_key_does_two_actions_in_one_pane() {
-        for pane in [Pane::Editor, Pane::Result, Pane::Queries, Pane::Finder, Pane::Picker, Pane::Form, Pane::Prompt, Pane::Detail] {
+        for pane in
+            [Pane::Editor, Pane::Result, Pane::Queries, Pane::Finder, Pane::Picker, Pane::Form, Pane::Prompt, Pane::Detail, Pane::CopyAs]
+        {
             let keys: Vec<&KeyEvent> = ROWS.iter().filter(|row| works_in(row, pane)).flat_map(|row| row.keys).collect();
             for (at, key) in keys.iter().enumerate() {
                 assert!(!keys[at + 1..].contains(key), "{key:?} in {pane:?}");
@@ -370,6 +396,6 @@ mod tests {
     fn the_first_help_lists_the_focused_pane_and_what_works_anywhere() {
         let titles: Vec<&str> = sections(Pane::Result, false).iter().map(|section| section.title).collect();
         assert_eq!(titles, ["result", "anywhere"]);
-        assert_eq!(sections(Pane::Result, true).len(), 9);
+        assert_eq!(sections(Pane::Result, true).len(), 10);
     }
 }

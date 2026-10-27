@@ -62,7 +62,7 @@ The MR that ships a step ticks its box.
 ## 9. Reading a row
 
 - [x] Row detail and JSON view
-- [ ] Copy a cell, a row or the result as CSV, JSON or Markdown
+- [x] Copy a cell, a row or the result as CSV, JSON or Markdown
 
 ## 10. Charts
 
