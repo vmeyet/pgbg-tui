@@ -133,6 +133,7 @@ Each entry says what changed, then where, then how to use it.
 
 ### Fixed
 
+- **The TUI redraws whole after your editor exits**, after `ctrl-e` on a saved query: it could come back blank or half drawn, and it now takes a resize made while the editor ran.
 - **The `ctrl-t` finder's keys fit a narrow terminal**, in the TUI: the hints that do not fit go whole, `esc closes` last, instead of being cut mid-word.
 - **A relative time over a month counts calendar months and years**, in a `relative` column: a day short of a year reads `11 mo ago`, not `12 mo ago`, and a span of years no longer drifts with leap days.
 - **Copying over 100 KB works on Linux**, from the TUI's grid: it goes through `wl-copy`, `xclip` or `xsel`, and when none takes it the status line says the copy was too big for the terminal.
