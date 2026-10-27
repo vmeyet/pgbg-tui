@@ -246,18 +246,7 @@ impl App {
             Act::Quit => return self.quit(),
             Act::Down if self.focus == Focus::Queries => self.step_sidebar(1),
             Act::Up if self.focus == Focus::Queries => self.step_sidebar(-1),
-            Act::Down
-            | Act::Up
-            | Act::PageDown
-            | Act::PageUp
-            | Act::Top
-            | Act::Bottom
-            | Act::Left
-            | Act::Right
-            | Act::Detail
-            | Act::CopyCell
-            | Act::CopyRow
-                if self.sheet().is_chart_shown() => {}
+            act if act.is_grid() && self.sheet().is_chart_shown() => {}
             Act::Down => return self.grid_step(Move::Down),
             Act::Up => return self.grid_step(Move::Up),
             Act::PageDown => return self.grid_step(Move::PageDown),
