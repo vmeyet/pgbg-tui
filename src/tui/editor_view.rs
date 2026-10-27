@@ -13,19 +13,19 @@ use vtui::theme::Theme;
 
 /// The editor in `area`, scrolled so the cursor's line shows, with the terminal's cursor on it when it has the keys.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
-    let focused = app.focus == Focus::Editor;
-    let block = pane::framed(&app.theme, &title(app), focused).title(badge(app)).title(header_notes(app)).title(open_error(app));
+    let focused = app.focus() == Focus::Editor;
+    let block = pane::framed(app.theme(), &title(app), focused).title(badge(app)).title(header_notes(app)).title(open_error(app));
     let inside = block.inner(area);
     f.render_widget(block, area);
     let sheet = app.sheet();
     let (before, _, _) = sheet.editor.split();
     let Place { row, column, scroll } = place(app, inside);
-    let mark = Style::default().fg(app.theme.danger).add_modifier(Modifier::REVERSED);
+    let mark = Style::default().fg(app.theme().danger).add_modifier(Modifier::REVERSED);
     let window = Window { first: scroll, rows: usize::from(inside.height) };
     let ghost = sheet.ghost.as_ref().filter(|_| focused).map(|ghost| Ghost { at: before.len(), rest: &ghost.rest });
     let text = coloured(
         sheet.editor.text(),
-        Paint { colours: sheet.editor.colours(), mark: sheet.error_mark, mark_style: mark, ghost, theme: &app.theme },
+        Paint { colours: sheet.editor.colours(), mark: sheet.error_mark, mark_style: mark, ghost, theme: app.theme() },
         window,
     );
     f.render_widget(Paragraph::new(text), inside);
@@ -200,14 +200,14 @@ fn title(app: &App) -> String {
 }
 
 fn suggested(app: &App, named: &ConnectionName) -> Span<'static> {
-    let is_production = app.connections.iter().any(|known| known.name() == named && known.tier() == Tier::Production);
+    let is_production = app.connections().iter().any(|known| known.name() == named && known.tier() == Tier::Production);
     if is_production {
         return Span::styled(
             format!(" ⚠ written for production {named} "),
-            Style::default().fg(app.theme.danger).add_modifier(Modifier::BOLD),
+            Style::default().fg(app.theme().danger).add_modifier(Modifier::BOLD),
         );
     }
-    Span::styled(format!(" written for {named} "), Style::default().fg(app.theme.muted))
+    Span::styled(format!(" written for {named} "), Style::default().fg(app.theme().muted))
 }
 
 /// The connection the header suggests when it is not the one on screen, loud when it is a production one, then the
@@ -216,26 +216,27 @@ fn header_notes(app: &App) -> Line<'static> {
     let sheet = app.sheet();
     let elsewhere = sheet.header.connection.as_ref().filter(|&named| named != sheet.name());
     let suggestion = elsewhere.map(|named| suggested(app, named));
-    let warning = sheet.header.warnings.first().map(|warning| Span::styled(format!(" ⚠ {warning} "), Style::default().fg(app.theme.warn)));
+    let warning =
+        sheet.header.warnings.first().map(|warning| Span::styled(format!(" ⚠ {warning} "), Style::default().fg(app.theme().warn)));
     Line::from(suggestion.into_iter().chain(warning).collect::<Vec<_>>())
 }
 
 /// Why the last query asked for could not be opened, in `danger`.
 fn open_error(app: &App) -> Span<'static> {
     let error = app.sheet().query_error.as_ref().map(|error| format!(" ✗ {error} "));
-    Span::styled(error.unwrap_or_default(), Style::default().fg(app.theme.danger))
+    Span::styled(error.unwrap_or_default(), Style::default().fg(app.theme().danger))
 }
 
 fn badge(app: &App) -> Span<'static> {
     match app.sheet().connection.writes() {
-        WritePolicy::ReadOnly => Span::styled(" READ ONLY ", Style::default().fg(app.theme.muted)),
-        WritePolicy::Allowed => Span::styled(" WRITES ", Style::default().fg(app.theme.danger).add_modifier(Modifier::BOLD)),
+        WritePolicy::ReadOnly => Span::styled(" READ ONLY ", Style::default().fg(app.theme().muted)),
+        WritePolicy::Allowed => Span::styled(" WRITES ", Style::default().fg(app.theme().danger).add_modifier(Modifier::BOLD)),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::app::tests::typed;
+    use super::super::app::tests::{typed, with_focus};
     use super::*;
     use crate::syntax;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -288,8 +289,7 @@ mod tests {
 
     #[test]
     fn the_ghost_shows_only_while_the_editor_has_the_keys() {
-        let mut app = typed("sel");
-        app.focus = Focus::Result;
+        let app = with_focus(typed("sel"), Focus::Result);
         let mut terminal = Terminal::new(TestBackend::new(30, 5)).unwrap();
         terminal.draw(|f| draw(f, &app, f.area())).unwrap();
         assert!(!terminal.backend().to_string().contains("select"), "{}", terminal.backend());

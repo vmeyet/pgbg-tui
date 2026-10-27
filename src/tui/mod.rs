@@ -105,7 +105,7 @@ async fn event_loop(
     signals: &mut Signals,
 ) -> Result<()> {
     let mut events = EventStream::new();
-    while !app.should_quit {
+    while !app.should_quit() {
         app.set_clock(Clock { now: Utc::now(), zone: Local });
         let mut fit = Fit::default();
         screens.terminal.draw(|f| fit = ui::draw(f, app))?;

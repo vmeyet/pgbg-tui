@@ -32,18 +32,18 @@ impl Focused {
 /// the keys shows, with the terminal's cursor in it.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
     let sheet = app.sheet();
-    let focused_name = if app.focus == Focus::Params { sheet.param_at() } else { None };
+    let focused_name = if app.focus() == Focus::Params { sheet.param_at() } else { None };
     let mut spans = vec![];
     let mut focused = None;
     for name in sheet.param_names() {
         let is_focused = focused_name.as_ref() == Some(&name);
         let start = Line::from(spans.clone()).width();
-        spans.push(Span::styled(format!(" {name} "), Style::default().fg(app.theme.muted)));
+        spans.push(Span::styled(format!(" {name} "), Style::default().fg(app.theme().muted)));
         let field = sheet.bar.field(&name).filter(|field| !field.text().is_empty());
         let cursor = Line::from(spans.clone()).width() + field.map_or(0, before_cursor_width);
         spans.push(match field {
             Some(field) => Span::styled(render::printable(field.text()).into_owned(), value_style(app, is_focused)),
-            None => Span::styled(fallback_text(app, &name), Style::default().fg(app.theme.faded).add_modifier(Modifier::ITALIC)),
+            None => Span::styled(fallback_text(app, &name), Style::default().fg(app.theme().faded).add_modifier(Modifier::ITALIC)),
         });
         spans.push(Span::raw(" "));
         if is_focused {
@@ -64,7 +64,7 @@ fn to_cells(columns: usize) -> u16 {
 
 fn value_style(app: &App, is_focused: bool) -> Style {
     let style = Style::default().add_modifier(Modifier::UNDERLINED);
-    if is_focused { style.fg(app.theme.accent) } else { style }
+    if is_focused { style.fg(app.theme().accent) } else { style }
 }
 
 fn before_cursor_width(field: &Field) -> usize {

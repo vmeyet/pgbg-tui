@@ -17,9 +17,9 @@ const NO_MATCH: &str = "no match";
 
 /// The list when it is open, under the cursor of the editor drawn in `editor`, or over it when no room is left below.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App, editor: Rect) {
-    let Some(Overlay::Completion(completions)) = &app.overlay else { return };
+    let Some(Overlay::Completion(completions)) = app.overlay() else { return };
     let area = popup_area(f.area(), editor_view::cursor_at(app, editor), completions);
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(app.theme.accent));
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(app.theme().accent));
     let inside = block.inner(area);
     f.render_widget(Clear, area);
     f.render_widget(block, area);
@@ -39,7 +39,7 @@ fn popup_area(screen: Rect, cursor: Position, completions: &Completions) -> Rect
 /// The names in view, each with its kind pushed to the right, the pick reversed; `no match` when none are left.
 fn lines(app: &App, completions: &Completions, room: usize) -> Vec<Line<'static>> {
     if completions.candidates.is_empty() {
-        return vec![Line::styled(NO_MATCH, Style::default().fg(app.theme.faded))];
+        return vec![Line::styled(NO_MATCH, Style::default().fg(app.theme().faded))];
     }
     let first = completions.selected.saturating_sub(SHOWN_ROWS - 1);
     let shown = completions.candidates.iter().enumerate().skip(first).take(SHOWN_ROWS);
@@ -48,7 +48,7 @@ fn lines(app: &App, completions: &Completions, room: usize) -> Vec<Line<'static>
         let gap = room.saturating_sub(Span::raw(&candidate.name).width() + kind.len());
         let style = if at == completions.selected { Style::default().add_modifier(Modifier::REVERSED) } else { Style::default() };
         let name = Span::styled(format!("{}{}", candidate.name, " ".repeat(gap)), style);
-        Line::from(vec![name, Span::styled(kind, style.fg(app.theme.faded))])
+        Line::from(vec![name, Span::styled(kind, style.fg(app.theme().faded))])
     };
     shown.map(line).collect()
 }

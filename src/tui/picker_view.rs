@@ -16,11 +16,11 @@ const FOOTER: &str = "  ↑↓ pick · ⏎ opens · ^d removes · ^x closes · e
 
 /// The picker when it is open.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App) {
-    let Some(Overlay::Picker(picker)) = &app.overlay else { return };
-    let prompt = view::prompt(&app.theme, &picker.search.palette, "", |_| vec![]);
+    let Some(Overlay::Picker(picker)) = app.overlay() else { return };
+    let prompt = view::prompt(app.theme(), &picker.search.palette, "", |_| vec![]);
     let popup = Popup { title: "Connections", prompt, footer: FOOTER };
     let rows = MAX_SHOWN - usize::from(picker.note.is_some());
-    view::draw(f, &app.theme, f.area(), popup, |room| {
+    view::draw(f, app.theme(), f.area(), popup, |room| {
         let mut lines = lines(app, &picker.search, rows, room);
         lines.extend(picker.note.as_ref().map(|note| note_line(app, note, room)));
         lines
@@ -32,9 +32,9 @@ fn note_line(app: &App, note: &Note, room: usize) -> Line<'static> {
     let (text, style) = match note {
         Note::ConfirmRemove(name) => (
             format!("  remove `{name}`? y removes it, any other key keeps it"),
-            Style::default().fg(app.theme.danger).add_modifier(Modifier::BOLD),
+            Style::default().fg(app.theme().danger).add_modifier(Modifier::BOLD),
         ),
-        Note::Said(said) => (format!("  {said}"), Style::default().fg(app.theme.muted)),
+        Note::Said(said) => (format!("  {said}"), Style::default().fg(app.theme().muted)),
     };
     Line::styled(truncate(&text, room + 2), style)
 }
@@ -45,7 +45,7 @@ fn lines(app: &App, search: &Search<Connection>, rows: usize, room: usize) -> Ve
     let names: Vec<String> = search.in_view(rows).iter().map(|connection| connection.name().to_string()).collect();
     let picks: Vec<Pick<'_>> =
         search.in_view(rows).iter().zip(&names).map(|(connection, name)| pick(app, connection, name, room)).collect();
-    view::pick_lines(&app.theme, &picks, selected, room)
+    view::pick_lines(app.theme(), &picks, selected, room)
 }
 
 /// `● prod  via tunnel · read only  open`: the dot in the tier's colour; vtui cuts the name before the badges,
@@ -54,14 +54,14 @@ fn pick<'a>(app: &App, connection: &Connection, name: &'a str, room: usize) -> P
     let badges = badges(app, connection);
     let place = connection.tunnel().map_or_else(|| connection.target().place(), |_| "via tunnel".to_owned());
     let place_room = room.saturating_sub(Span::raw(name).width() + GAP_WIDTH + badges.width());
-    let mut detail = Line::styled(truncate(&place, place_room), Style::default().fg(app.theme.muted));
+    let mut detail = Line::styled(truncate(&place, place_room), Style::default().fg(app.theme().muted));
     detail.spans.extend(badges.spans);
-    Pick { icon: "●", colour: app.theme.tier(connection.tier()), label: name, detail }
+    Pick { icon: "●", colour: app.theme().tier(connection.tier()), label: name, detail }
 }
 
 /// Whether the connection takes writes, then the state of its session.
 fn badges(app: &App, connection: &Connection) -> Line<'static> {
-    let theme = &app.theme;
+    let theme = app.theme();
     let writes = match connection.writes() {
         WritePolicy::ReadOnly => Span::styled(" · read only", Style::default().fg(theme.faded)),
         WritePolicy::Allowed => Span::styled("  WRITES", Style::default().fg(theme.danger).add_modifier(Modifier::BOLD)),
@@ -74,13 +74,13 @@ fn badges(app: &App, connection: &Connection) -> Line<'static> {
 fn session_state(app: &App, connection: &Connection) -> (&'static str, Style) {
     let Some(sheet) = app.sheet_of(connection.name()) else { return ("", Style::default()) };
     if sheet.is_running() {
-        return ("  running…", Style::default().fg(app.theme.accent));
+        return ("  running…", Style::default().fg(app.theme().accent));
     }
     match sheet.session {
-        SessionState::Opening => ("  opening…", Style::default().fg(app.theme.muted)),
-        SessionState::Open => ("  open", Style::default().fg(app.theme.success)),
-        SessionState::Failed(_) => ("  failed", Style::default().fg(app.theme.danger)),
-        SessionState::Closed => ("  closed", Style::default().fg(app.theme.muted)),
+        SessionState::Opening => ("  opening…", Style::default().fg(app.theme().muted)),
+        SessionState::Open => ("  open", Style::default().fg(app.theme().success)),
+        SessionState::Failed(_) => ("  failed", Style::default().fg(app.theme().danger)),
+        SessionState::Closed => ("  closed", Style::default().fg(app.theme().muted)),
     }
 }
 

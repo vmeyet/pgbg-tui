@@ -16,29 +16,29 @@ const FOOTER: &str = "⇥ next · ←→ choose · ⏎ saves · esc";
 
 /// The form when it is open, with the terminal's cursor on the text line being typed.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App) {
-    let Some(Overlay::Form(form)) = &app.overlay else { return };
+    let Some(Overlay::Form(form)) = app.overlay() else { return };
     let width = form_width(f.area());
-    let block = pane::framed(&app.theme, &title(form), true);
+    let block = pane::framed(app.theme(), &title(form), true);
     let room = usize::from(block.inner(Rect::new(0, 0, width, 0)).width).saturating_sub(MARK_WIDTH + LABEL_WIDTH);
     let mut lines: Vec<Line<'static>> = form.slots().into_iter().flat_map(|slot| slot_lines(app, form, slot, room)).collect();
     lines.push(Line::default());
-    lines.extend(form.is_saving().then(|| Line::styled("saving…", Style::default().fg(app.theme.muted))));
-    lines.extend(form.failure.as_ref().map(|why| Line::styled(format!("✗ {why}"), Style::default().fg(app.theme.danger))));
-    lines.push(Line::styled(FOOTER, Style::default().fg(app.theme.faded)));
+    lines.extend(form.is_saving().then(|| Line::styled("saving…", Style::default().fg(app.theme().muted))));
+    lines.extend(form.failure().map(|why| Line::styled(format!("✗ {why}"), Style::default().fg(app.theme().danger))));
+    lines.push(Line::styled(FOOTER, Style::default().fg(app.theme().faded)));
     let area = centred(f.area(), width, lines.len() as u16 + 2);
     let inside = block.inner(area);
     let scroll = scroll(line_of_cursor(form), inside.height);
     f.render_widget(Clear, area);
-    f.render_widget(Paragraph::new(lines).block(block).style(Style::default().bg(app.theme.surface)).scroll((scroll, 0)), area);
+    f.render_widget(Paragraph::new(lines).block(block).style(Style::default().bg(app.theme().surface)).scroll((scroll, 0)), area);
     if let Some(at) = cursor(form, inside, room, scroll) {
         f.set_cursor_position(at);
     }
 }
 
 fn title(form: &Form) -> String {
-    match form.saving {
+    match form.saving() {
         Saving::Add => "Add a connection".to_owned(),
-        Saving::Edit => format!("Edit {}", form.name.text()),
+        Saving::Edit => format!("Edit {}", form.name()),
     }
 }
 
@@ -53,17 +53,17 @@ fn centred(area: Rect, width: u16, height: u16) -> Rect {
 
 /// The line of `slot`, its text in `room` columns, then why it was refused when it was.
 fn slot_lines(app: &App, form: &Form, slot: Slot, room: usize) -> Vec<Line<'static>> {
-    let is_here = form.at == slot;
-    let mark = Span::styled(if is_here { "▎" } else { " " }, Style::default().fg(app.theme.accent));
-    let label_style = if is_here { Style::default().add_modifier(Modifier::BOLD) } else { Style::default().fg(app.theme.muted) };
+    let is_here = form.at() == slot;
+    let mark = Span::styled(if is_here { "▎" } else { " " }, Style::default().fg(app.theme().accent));
+    let label_style = if is_here { Style::default().add_modifier(Modifier::BOLD) } else { Style::default().fg(app.theme().muted) };
     let label = Span::styled(format!("{:<LABEL_WIDTH$}", label(form, slot)), label_style);
     let line = Line::from(vec![mark, label, Span::raw(value(form, slot, room))]);
-    let refusal = form.error(slot).map(|why| Line::styled(format!("  ✗ {why}"), Style::default().fg(app.theme.danger)));
+    let refusal = form.error(slot).map(|why| Line::styled(format!("  ✗ {why}"), Style::default().fg(app.theme().danger)));
     std::iter::once(line).chain(refusal).collect()
 }
 
 fn label(form: &Form, slot: Slot) -> &'static str {
-    match (slot, form.password_from) {
+    match (slot, form.password_from()) {
         (Slot::Name, _) => "name",
         (Slot::Tier, _) => "tier",
         (Slot::Url, _) => "url",
@@ -81,27 +81,31 @@ fn label(form: &Form, slot: Slot) -> &'static str {
 }
 
 fn value(form: &Form, slot: Slot, room: usize) -> String {
-    match slot {
-        Slot::Name => shown(form, slot, &form.name, room),
-        Slot::Tier => format!("‹ {} ›", form.tier),
-        Slot::Url => shown(form, slot, &form.url, room),
-        Slot::PasswordFrom => format!("‹ {} ›", password_from(form.password_from)),
-        Slot::PasswordWhere => shown(form, slot, &form.password_where, room),
-        Slot::Password => "•".repeat(form.password.typed_count()),
-        Slot::Tunnel => shown(form, slot, &form.tunnel, room),
-        Slot::TunnelBefore => shown(form, slot, &form.tunnel_before, room),
-        Slot::Writes => format!("‹ {} ›", if form.writes == WritePolicy::Allowed { "allowed" } else { "read only" }),
-        Slot::Tls => format!("‹ {} ›", tls(form.tls)),
-        Slot::StatementTimeout if form.statement_timeout.text().is_empty() && form.at != slot => {
-            "stricter of the tier's and server's".to_owned()
-        }
-        Slot::StatementTimeout => shown(form, slot, &form.statement_timeout, room),
+    if let Some(field) = form.field_of(slot) {
+        return text_value(form, slot, field, room);
     }
+    match slot {
+        Slot::Tier => format!("‹ {} ›", form.tier()),
+        Slot::PasswordFrom => format!("‹ {} ›", password_from(form.password_from())),
+        Slot::Password => "•".repeat(form.typed_password_count()),
+        Slot::Writes => format!("‹ {} ›", if form.writes() == WritePolicy::Allowed { "allowed" } else { "read only" }),
+        Slot::Tls => format!("‹ {} ›", tls(form.tls())),
+        Slot::Name | Slot::Url | Slot::PasswordWhere | Slot::Tunnel | Slot::TunnelBefore | Slot::StatementTimeout => String::new(),
+    }
+}
+
+/// The text of a text line; an empty timeout away from the cursor says what applies instead.
+fn text_value(form: &Form, slot: Slot, field: &Field, room: usize) -> String {
+    let is_tier_timeout = slot == Slot::StatementTimeout && field.text().is_empty() && form.at() != slot;
+    if is_tier_timeout {
+        return "stricter of the tier's and server's".to_owned();
+    }
+    shown(form, slot, field, room)
 }
 
 /// The text of `field`, from where it scrolled to on the line with the cursor.
 fn shown(form: &Form, slot: Slot, field: &Field, room: usize) -> String {
-    let start = if form.at == slot { scrolled(field, room) } else { 0 };
+    let start = if form.at() == slot { scrolled(field, room) } else { 0 };
     field.text()[start..].to_owned()
 }
 
@@ -131,7 +135,7 @@ fn tls(tls: Option<Tls>) -> &'static str {
 
 /// The line of the slot with the cursor, counting each refusal above it.
 fn line_of_cursor(form: &Form) -> u16 {
-    let above = form.slots().into_iter().take_while(|&slot| slot != form.at);
+    let above = form.slots().into_iter().take_while(|&slot| slot != form.at());
     above.map(|slot| 1 + u16::from(form.error(slot).is_some())).sum()
 }
 
@@ -176,7 +180,7 @@ mod tests {
         ctrl(&mut app, 'o');
         ctrl(&mut app, 'a');
         let tab_to = |app: &mut App, slot: Slot| {
-            while !matches!(&app.overlay, Some(Overlay::Form(form)) if form.at == slot) {
+            while !matches!(app.overlay(), Some(Overlay::Form(form)) if form.at() == slot) {
                 app.handle_key(KeyEvent::from(KeyCode::Tab));
             }
         };

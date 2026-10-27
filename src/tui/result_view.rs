@@ -13,23 +13,23 @@ use vtui::pane;
 
 /// The pane in `area` for the last statement run; returns the room its grid had.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) -> Room {
-    let focused = app.focus == Focus::Result;
+    let focused = app.focus() == Focus::Result;
     let run = &app.sheet().run;
-    let block = pane::framed(&app.theme, &title(run, app.sheet().shown.as_deref()), focused);
+    let block = pane::framed(app.theme(), &title(run, app.sheet().shown.as_deref()), focused);
     let inside = block.inner(area);
     f.render_widget(block, area);
     let body = match run {
         Run::Done { result, grid, view: View::Grid, .. } => {
-            return grid_view::draw(f, GridView { result, grid, theme: &app.theme, focused, clock: &app.reading.clock }, inside);
+            return grid_view::draw(f, GridView { result, grid, theme: app.theme(), focused, clock: app.clock() }, inside);
         }
         Run::Done { view: View::Chart(chart), .. } => {
-            chart_view::draw(f, chart, &app.theme, inside);
+            chart_view::draw(f, chart, app.theme(), inside);
             return Room::default();
         }
-        Run::Idle => Text::styled("⏎ runs the statement under the cursor", Style::default().fg(app.theme.faded)),
-        Run::Running { .. } => Text::styled("running… esc cancels it", Style::default().fg(app.theme.muted)),
-        Run::Cancelling { .. } => Text::styled("cancelling…", Style::default().fg(app.theme.muted)),
-        Run::Failed(err) => printable_lines(err).style(Style::default().fg(app.theme.danger)),
+        Run::Idle => Text::styled("⏎ runs the statement under the cursor", Style::default().fg(app.theme().faded)),
+        Run::Running { .. } => Text::styled("running… esc cancels it", Style::default().fg(app.theme().muted)),
+        Run::Cancelling { .. } => Text::styled("cancelling…", Style::default().fg(app.theme().muted)),
+        Run::Failed(err) => printable_lines(err).style(Style::default().fg(app.theme().danger)),
     };
     f.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }), inside);
     Room::default()
