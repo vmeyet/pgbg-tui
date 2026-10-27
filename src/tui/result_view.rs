@@ -50,14 +50,10 @@ fn title(run: &Run) -> String {
     }
 }
 
-/// `1 500 rows · more…` while more pages wait in the portal, `all 1 732 rows` once paged to the end.
+/// `first 1 500 rows · more…` while more pages wait in the portal, else the count every other place says.
 fn row_count(result: &ResultSet) -> String {
-    let count = render::grouped(result.rows().len());
-    match result.extent() {
-        Extent::More => format!("{count} rows · more…"),
-        Extent::All if result.is_paged() => format!("all {count} rows"),
-        Extent::All | Extent::Cut => render::row_count(result),
-    }
+    let count = render::row_count(result);
+    if result.extent() == Extent::More { format!("{count} · more…") } else { count }
 }
 
 /// `[grid] chart` or `grid [chart]`: the view shown in brackets, the other one `v` switches to.
@@ -72,17 +68,13 @@ const fn view_switch(view: &View) -> &'static str {
 mod tests {
     use super::*;
     use crate::chart::ChartError;
-    use crate::db::model::{Page, Value};
-
-    fn page(count: usize, extent: Extent) -> Page {
-        Page { rows: vec![vec![Value::Int(7)]; count], extent }
-    }
+    use crate::fixtures::page;
 
     #[test]
     fn a_result_waiting_on_more_pages_says_so() {
         let mut result = ResultSet::new(vec![], page(500, Extent::More));
         result.push(page(1000, Extent::More));
-        assert_eq!(row_count(&result), "1 500 rows · more…");
+        assert_eq!(row_count(&result), "first 1 500 rows · more…");
     }
 
     #[test]

@@ -85,19 +85,11 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{orders, to_shop, typed};
+    use super::super::tests::{on_the_result, orders, to_shop, typed};
     use super::super::{Fit, Incoming, RunId};
     use super::*;
     use crossterm::event::{KeyCode, KeyModifiers};
     use std::time::Duration;
-
-    fn on_the_result() -> App {
-        let mut app = typed("SELECT 1");
-        app.handle_key(KeyEvent::from(KeyCode::Enter));
-        app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result: orders(), took: Duration::from_millis(38) }));
-        app.handle_key(KeyEvent::from(KeyCode::Tab));
-        app
-    }
 
     fn press(app: &mut App, code: KeyCode) -> Vec<Action> {
         app.handle_key(KeyEvent::from(code))
@@ -105,14 +97,14 @@ mod tests {
 
     #[test]
     fn enter_on_the_grid_opens_the_detail_of_its_row() {
-        let mut app = on_the_result();
+        let mut app = on_the_result(orders());
         assert_eq!(press(&mut app, KeyCode::Enter), []);
         assert_eq!(app.overlay, Some(Overlay::Detail(Detail { scroll: DetailScroll::ToColumn(0) })));
     }
 
     #[test]
     fn space_opens_it_too() {
-        let mut app = on_the_result();
+        let mut app = on_the_result(orders());
         press(&mut app, KeyCode::Char(' '));
         assert_eq!(app.overlay, Some(Overlay::Detail(Detail { scroll: DetailScroll::ToColumn(0) })));
     }
@@ -130,7 +122,7 @@ mod tests {
 
     #[test]
     fn j_scrolls_down_no_further_than_the_frame_drew() {
-        let mut app = on_the_result();
+        let mut app = on_the_result(orders());
         app.fit(Fit { detail: DetailFit { first_line: 0, last_scroll: 2, ..DetailFit::default() }, ..Fit::default() });
         press(&mut app, KeyCode::Enter);
         (0..4).for_each(|_| _ = press(&mut app, KeyCode::Char('j')));
@@ -140,7 +132,7 @@ mod tests {
 
     #[test]
     fn the_detail_opens_at_the_cursors_column() {
-        let mut app = on_the_result();
+        let mut app = on_the_result(orders());
         press(&mut app, KeyCode::Char('l'));
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.overlay, Some(Overlay::Detail(Detail { scroll: DetailScroll::ToColumn(1) })));
@@ -148,7 +140,7 @@ mod tests {
 
     #[test]
     fn once_drawn_the_detail_scrolls_from_the_line_the_frame_started_at() {
-        let mut app = on_the_result();
+        let mut app = on_the_result(orders());
         press(&mut app, KeyCode::Enter);
         app.fit(Fit { detail: DetailFit { first_line: 3, last_scroll: 5, ..DetailFit::default() }, ..Fit::default() });
         press(&mut app, KeyCode::Char('j'));
@@ -157,7 +149,7 @@ mod tests {
 
     #[test]
     fn esc_closes_the_detail_and_leaves_the_grid_where_it_was() {
-        let mut app = on_the_result();
+        let mut app = on_the_result(orders());
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Enter);
         press(&mut app, KeyCode::Esc);
@@ -167,7 +159,7 @@ mod tests {
 
     #[test]
     fn ctrl_c_in_the_detail_quits() {
-        let mut app = on_the_result();
+        let mut app = on_the_result(orders());
         press(&mut app, KeyCode::Enter);
         app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
         assert!(app.should_quit);

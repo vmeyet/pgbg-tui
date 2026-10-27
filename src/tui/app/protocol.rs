@@ -2,6 +2,7 @@
 use crate::config::ConnectionChange;
 use crate::connection::{Connection, ConnectionName};
 use crate::db::model::{LocalPort, Page, ResultSet, Statement};
+use crate::export::Format;
 use crate::history::Entry;
 use crate::query::{Query, QueryPath};
 use crate::secret::{KeychainItem, Secret};
@@ -44,7 +45,7 @@ impl SessionId {
 }
 
 /// What the app asks the runner to do.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub(in crate::tui) enum Action {
     /// Open the session `session` on this connection; one already open stays as it is.
     Open { connection: Connection, session: SessionId },
@@ -75,8 +76,10 @@ pub(in crate::tui) enum Action {
     SaveConnection(SaveConnection),
     /// Read the history of the connection, for `ctrl-r`.
     ListHistory(ConnectionName),
-    /// Put `text` on the clipboard, then say `done`; the loop sends it to the terminal too.
+    /// Put `text` on the clipboard, then say `done`; the loop sends it to the terminal too, unless it is too big.
     Copy { text: String, done: String },
+    /// Build the text of `result` in `format` off the loop, then copy it as `Copy` does.
+    CopyResult { result: ResultSet, format: Format, done: String },
 }
 
 /// A connection to add or edit: the keys it sets, and the password typed for its keychain item.
@@ -117,6 +120,8 @@ pub(in crate::tui) enum Answer {
     History { connection: ConnectionName, entries: Vec<Entry> },
     /// What a copy to the clipboard came to, in a few words.
     Copied(String),
+    /// The text of a result `CopyResult` asked for, to copy and then say `done`.
+    Exported { text: String, done: String },
 }
 
 /// What changing the config came to.

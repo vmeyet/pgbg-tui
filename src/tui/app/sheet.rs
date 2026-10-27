@@ -286,30 +286,14 @@ impl Sheet {
 #[cfg(test)]
 mod tests {
     use super::super::App;
-    use super::super::tests::{shop, to_shop, typed};
+    use super::super::tests::{on_the_result, shop, to_shop};
     use super::*;
     use crate::db::model::{ColumnKind, Value};
-    use crate::fixtures::{column, orders};
+    use crate::fixtures::{column, orders, page};
     use crossterm::event::{KeyCode, KeyEvent};
 
-    fn numbers(count: usize) -> Vec<Vec<Value>> {
-        (0..count).map(|n| vec![Value::Int(n as i64)]).collect()
-    }
-
-    fn page(count: usize, extent: Extent) -> Page {
-        Page { rows: numbers(count), extent }
-    }
-
-    fn with_result(result: ResultSet) -> App {
-        let mut app = typed("SELECT n FROM orders");
-        app.handle_key(KeyEvent::from(KeyCode::Enter));
-        app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result, took: Duration::ZERO }));
-        app.handle_key(KeyEvent::from(KeyCode::Tab));
-        app
-    }
-
     fn first_page() -> App {
-        with_result(ResultSet::new(vec![column("n", ColumnKind::Int)], page(500, Extent::More)))
+        on_the_result(ResultSet::new(vec![column("n", ColumnKind::Int)], page(500, Extent::More)))
     }
 
     fn press(app: &mut App, c: char) -> Vec<Action> {
@@ -416,6 +400,6 @@ mod tests {
 
     #[test]
     fn a_whole_result_never_asks_for_a_page() {
-        assert_eq!(press(&mut with_result(orders()), 'G'), []);
+        assert_eq!(press(&mut on_the_result(orders()), 'G'), []);
     }
 }

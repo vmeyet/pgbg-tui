@@ -23,6 +23,8 @@ use tokio::time::Instant;
 
 mod clipboard;
 mod config;
+
+pub(super) use clipboard::reaches_the_terminal;
 mod paging;
 mod queries;
 
@@ -118,6 +120,7 @@ impl Backend {
             Action::SaveConnection(save) => self.config.save(save),
             Action::ListHistory(connection) => self.list_history(connection),
             Action::Copy { text, done } => clipboard::copy(text, done, self.answers.clone()),
+            Action::CopyResult { result, format, done } => clipboard::export(result, format, done, self.answers.clone()),
         }
     }
 

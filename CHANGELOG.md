@@ -9,7 +9,7 @@ Each entry says what changed, then where, then how to use it.
 ### New
 
 - **Big results page in** in the TUI: a result comes 500 rows at a time, and the next page is fetched as the grid's cursor nears the last row, with no cap.
-  The title says `1 500 rows · more…` while rows wait on the server, and `all 1 732 rows` once they all came; a result left 5 minutes without a page asked stops there, so its open transaction does not hold up the server, and a page the server fails says why in the status line.
+  The title says `first 1 500 rows · more…` while rows wait on the server, and `all 1 732 rows` once they all came; a result left 5 minutes without a page asked stops there, so its open transaction does not hold up the server, and a page the server fails says why in the status line.
   A connection that allows writes, and `pgbg run`, still keep the first 10 000 rows.
 - **Row detail** in the TUI: on the grid, press `⏎` or `space` to see the row under the cursor, one column after another with its type and its whole value, long ones wrapped, starting at the cursor's column.
   JSON shows indented and coloured; `j`/`k` scroll, `esc` goes back to the grid.
@@ -92,6 +92,10 @@ Each entry says what changed, then where, then how to use it.
 
 ### Fixed
 
+- **Copying a big result no longer freezes the TUI**: its text is built off the screen's loop, and a copy over 100 KB skips the terminal's clipboard, which the status line says (`through pbcopy only`).
+- **A copy as JSON keeps every column under its own name**: a name two columns share takes a suffix no other column has, so `count, count, count_2` gives `count`, `count_3` and `count_2`.
+- **A lone carriage return in a Markdown copy** becomes `<br>` too, so each row stays one line.
+- **Row counts read the same everywhere**: `first 1 500 rows · more…` in the title, `copied first 1 500 rows as CSV` after a copy, thousands apart in `pgbg run` too.
 - **A save whose keychain step fails keeps the connection the config took**: the connection form closes, the picker lists it, and the status line says the password did not reach the keychain (or the old item was not deleted); `pgbg password set` tries again.
 - **The connection form scrolls** on a short terminal, so the line with the cursor, such as `timeout`, stays in view.
 - **A pasted password keeps its tabs and other control characters**; only its line end is dropped.
@@ -146,7 +150,7 @@ Each entry says what changed, then where, then how to use it.
   The statement that met the dead link fails; press `⏎` to run it again.
 - **Opening a session gives up after 10 seconds** instead of waiting on a server that never answers, even one that takes the link and then stalls, as a tunnel does.
   Set `connect_timeout` in the connection's `url` to wait longer.
-- **A big result cannot fill the memory**: the TUI and `pgbg run` keep the first 10 000 rows, and say `first 10000 rows` when there were more.
+- **A big result cannot fill the memory**: the TUI and `pgbg run` keep the first 10 000 rows, and say `first 10 000 rows` when there were more.
   Add a `LIMIT` or a `WHERE` to see the rest.
 - **A cut result frees the session at once on a connection that allows writes**: the server stops after the first 10 000 rows instead of sending the whole table first.
   A statement that returns rows runs in its own transaction, committed once its rows are in; inside a transaction you began with `BEGIN`, it stays yours to end.

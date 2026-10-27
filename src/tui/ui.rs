@@ -146,7 +146,7 @@ fn failure(app: &App, err: &str, width: usize) -> Line<'static> {
 #[cfg(test)]
 mod tests {
     use super::super::app::queries::tests::{query, with_queries};
-    use super::super::app::tests::{app, app_on, connection, orders, to_shop, typed};
+    use super::super::app::tests::{app, app_on, connection, on_the_result, orders, to_shop, typed};
     use super::super::app::{Answer, App, Incoming, QueryAnswer, RunId};
     use super::super::styled;
     use super::*;
@@ -337,17 +337,9 @@ mod tests {
         assert!(footer.contains("✗ the tunnel `ssh` died"), "{footer}");
     }
 
-    fn result_in_focus() -> App {
-        let mut app = typed("SELECT 1");
-        app.handle_key(KeyEvent::from(KeyCode::Enter));
-        app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result: orders(), took: Duration::from_millis(38) }));
-        app.handle_key(KeyEvent::from(KeyCode::Tab));
-        app
-    }
-
     #[test]
     fn c_on_the_result_asks_for_the_format_on_the_footer() {
-        let mut app = result_in_focus();
+        let mut app = on_the_result(orders());
         app.handle_key(KeyEvent::from(KeyCode::Char('c')));
         let footer = footer_of(&render(&app, 100, 8));
         assert!(footer.contains("c CSV  j JSON  m Markdown  esc cancel"), "{footer}");
@@ -366,7 +358,7 @@ mod tests {
 
     #[test]
     fn a_copy_says_what_it_copied_in_the_status_line() {
-        let mut app = result_in_focus();
+        let mut app = on_the_result(orders());
         app.apply(Answer::Copied("copied row 1 as CSV".into()));
         assert!(footer_of(&render(&app, 100, 8)).contains("✓ copied row 1 as CSV"));
     }
