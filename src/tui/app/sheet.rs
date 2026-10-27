@@ -1,11 +1,12 @@
 //! One connection's sheet: its editor, the statement it ran and what came of it, and where its session stands.
 use super::editor::Editor;
-use super::grid::{Move, Room};
+use super::grid::{Clock, Move, Reading, Room};
 use super::{Action, Grid, Incoming, RunId, SessionId, TunnelState};
 use crate::chart::{self, ChartError, Series};
 use crate::connection::{Connection, ConnectionName, SchemaReading};
 use crate::db::guard;
 use crate::db::model::{Catalog, Extent, Page, ResultSet, Statement};
+use crate::format::{self, Format};
 use crate::query::{Header, Query};
 use std::sync::Arc;
 use std::time::Duration;
@@ -100,7 +101,7 @@ pub(in crate::tui) struct Sheet {
     pub(in crate::tui) opened: Option<Query>,
     /// Why the last query asked for could not be opened, until one opens.
     pub(in crate::tui) query_error: Option<String>,
-    /// The header of the editor's text: its `-- chart:` draws each result of the sheet.
+    /// The header of the editor's text: its `-- chart:` draws each result of the sheet, its `-- format:` reads it.
     pub(in crate::tui) header: Header,
     /// Whether the editor's text changed since it was opened or saved.
     pub(in crate::tui) is_dirty: bool,
@@ -268,7 +269,8 @@ impl Sheet {
         Some(sent.start? + offset)
     }
 
-    pub(super) fn apply(&mut self, incoming: Incoming) {
+    /// Takes what the session said; a result opens in the formats its header and `reading` give it.
+    pub(super) fn apply(&mut self, incoming: Incoming, reading: &Reading) {
         let is_closed = self.session == SessionState::Closed;
         match incoming {
             Incoming::Opened | Incoming::NotOpened(_) | Incoming::Closed(_) | Incoming::Tunnel(_) | Incoming::Schema(_) if is_closed => {}
@@ -282,7 +284,9 @@ impl Sheet {
             Incoming::Result { run, result, took } => {
                 let header_chart = self.header.chart.as_ref().and_then(|spec| Series::from_result(&result, spec).ok());
                 let view = header_chart.map_or(View::Grid, |series| View::Chart(Ok(series)));
-                self.run = Run::Done { run, grid: Box::new(Grid::new(&result)), result, took, view, is_page_asked: false };
+                let formats = format::opening(result.columns(), &self.header.formats, reading.mode);
+                let grid = Box::new(Grid::new(&result, formats, &reading.clock));
+                self.run = Run::Done { run, grid, result, took, view, is_page_asked: false };
             }
             Incoming::Page { run, .. } | Incoming::PageFailed { run, .. } if !self.is_waiting_on_page(run) => {}
             Incoming::Page { page, .. } => self.push_page(page),
@@ -309,6 +313,25 @@ impl Sheet {
         }
         *is_page_asked = true;
         vec![Action::NextPage { connection: self.connection.name().clone(), session: self.session_id, run: *run }]
+    }
+
+    /// Puts the column under the grid's cursor in its next format.
+    pub(super) fn step_format(&mut self, clock: &Clock) {
+        if let Run::Done { result, grid, .. } = &mut self.run {
+            grid.step_format(result, clock);
+        }
+    }
+
+    /// Puts every column of the grid raw, or readable when all are raw.
+    pub(super) fn switch_every_format(&mut self, clock: &Clock) {
+        if let Run::Done { result, grid, .. } = &mut self.run {
+            grid.switch_every_format(result, clock);
+        }
+    }
+
+    /// Whether the grid shows a column as the time from now, which reads differently as the clock moves.
+    pub(in crate::tui) fn shows_relative_time(&self) -> bool {
+        matches!(&self.run, Run::Done { grid, view: View::Grid, .. } if grid.formats.contains(&Format::Relative))
     }
 
     /// Whether the result of `run` waits on its next page.
@@ -339,7 +362,9 @@ mod tests {
     use super::*;
     use crate::db::model::{ColumnKind, Value};
     use crate::fixtures::{self, column, orders, page, shop_schema};
+    use crate::format::Mode;
     use crossterm::event::{KeyCode, KeyEvent};
+    use std::time::Duration;
 
     fn first_page() -> App {
         on_the_result(ResultSet::new(vec![column("n", ColumnKind::Int)], page(500, Extent::More)))
@@ -529,6 +554,47 @@ mod tests {
         let mut app = app();
         app.sheet_mut().close();
         assert_eq!(app.sheet_mut().want_schema(), []);
+    }
+
+    fn formats(app: &App) -> Vec<Format> {
+        let Run::Done { grid, .. } = &app.sheet().run else { panic!("no result") };
+        grid.formats.clone()
+    }
+
+    #[test]
+    fn f_puts_the_column_under_the_cursor_in_its_next_format() {
+        let mut app = on_the_result(orders());
+        press(&mut app, 'l');
+        press(&mut app, 'f');
+        assert_eq!(formats(&app), [Format::Raw, Format::Grouped, Format::Raw]);
+    }
+
+    #[test]
+    fn shift_f_puts_every_column_readable_then_raw_again() {
+        let mut app = on_the_result(orders());
+        press(&mut app, 'F');
+        assert_eq!(formats(&app), [Format::Grouped, Format::Grouped, Format::Raw]);
+        press(&mut app, 'F');
+        assert_eq!(formats(&app), [Format::Raw; 3]);
+    }
+
+    #[test]
+    fn a_result_opens_readable_when_the_config_says_so() {
+        let mut app = app().with_format_mode(Mode::Readable);
+        "SELECT 1".chars().for_each(|c| _ = press(&mut app, c));
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result: orders(), took: Duration::from_millis(38) }));
+        assert_eq!(formats(&app), [Format::Grouped, Format::Grouped, Format::Raw]);
+    }
+
+    #[test]
+    fn a_grid_showing_a_relative_time_says_so() {
+        let result = ResultSet::whole(vec![column("paid_at", ColumnKind::TimestampTz)], vec![]);
+        let mut app = on_the_result(result);
+        press(&mut app, 'f');
+        assert!(!app.sheet().shows_relative_time());
+        press(&mut app, 'f');
+        assert!(app.sheet().shows_relative_time());
     }
 
     #[test]

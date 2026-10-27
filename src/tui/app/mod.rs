@@ -2,13 +2,14 @@
 use super::theme::Theme;
 use crate::act::{self, Act, Pane};
 use crate::connection::Connection;
+use crate::format::Mode;
 use crossterm::event::{KeyCode, KeyEvent};
 use vtui::help::Help;
 
 pub(super) use detail::{Detail, DetailFit, DetailScroll, DrawnDetail, DrawnRow};
 pub(super) use form::{Form, PasswordFrom, Slot};
 use grid::Move;
-pub(super) use grid::{GAP, Grid, Room};
+pub(super) use grid::{Clock, GAP, Grid, Reading, Room};
 pub(super) use history::Recall;
 pub(super) use picker::{Note, Picker};
 pub(super) use protocol::{
@@ -124,6 +125,8 @@ pub(super) struct App {
     pub(super) config_failure: Option<String>,
     /// What the last copy came to; the status line says it until the next key.
     pub(super) note: Option<String>,
+    /// The format mode new results open in, and the clock the loop last read.
+    pub(super) reading: Reading,
 }
 
 impl App {
@@ -144,7 +147,18 @@ impl App {
             next_session: SessionId::FIRST.next(),
             config_failure: None,
             note: None,
+            reading: Reading { mode: Mode::Raw, clock: grid::clock_at_epoch() },
         }
+    }
+
+    /// The app with each new result opening in `mode`.
+    pub(super) fn with_format_mode(self, mode: Mode) -> Self {
+        Self { reading: Reading { mode, ..self.reading }, ..self }
+    }
+
+    /// Takes the clock the loop read for the next frame.
+    pub(super) fn set_clock(&mut self, clock: Clock) {
+        self.reading.clock = clock;
     }
 
     /// The sheet on screen.
@@ -258,6 +272,14 @@ impl App {
             Act::Find => return self.find(),
             Act::Connections => self.open_picker(),
             Act::Chart => self.sheet_mut().switch_view(),
+            Act::StepFormat => {
+                let clock = self.reading.clock;
+                self.sheet_mut().step_format(&clock);
+            }
+            Act::SwitchFormats => {
+                let clock = self.reading.clock;
+                self.sheet_mut().switch_every_format(&clock);
+            }
             Act::Open => return self.open_in_sidebar(),
             Act::Save => return self.save(),
             Act::EditOutside => return self.edit_outside(),
@@ -330,8 +352,9 @@ impl App {
     pub(super) fn apply(&mut self, answer: Answer) -> Vec<Action> {
         match answer {
             Answer::Session { connection, session, incoming } => {
+                let reading = self.reading;
                 if let Some(sheet) = self.sheet_of_mut(&connection).filter(|sheet| sheet.session_id == session) {
-                    sheet.apply(incoming);
+                    sheet.apply(incoming, &reading);
                 }
             }
             Answer::Queries(QueryAnswer::All(all)) => self.listed(all),
@@ -473,7 +496,7 @@ pub(super) mod tests {
             app.sheet().run,
             Run::Done {
                 run: RunId::FIRST,
-                grid: Box::new(Grid::new(&orders())),
+                grid: Box::new(Grid::raw(&orders())),
                 result: orders(),
                 took: Duration::from_millis(38),
                 view: View::Grid,

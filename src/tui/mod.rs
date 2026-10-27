@@ -20,12 +20,14 @@ mod theme;
 mod ui;
 
 use crate::connection::{Connection, ConnectionName};
+use crate::format::Mode;
 use crate::history::Store;
 use crate::query::{Places, Query, Roots};
 use crate::signal::Signals;
 use anyhow::Result;
-use app::{Action, Answer, App, Fit, QueryAnswer};
+use app::{Action, Answer, App, Clock, Fit, QueryAnswer};
 use backend::Backend;
+use chrono::{Local, Utc};
 use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures_util::StreamExt;
 use ratatui::DefaultTerminal;
@@ -38,13 +40,16 @@ use vtui::screen::Screen;
 
 /// How long the editor's text stays still before its colours are rebuilt, so typing never waits on them.
 const RECOLOUR_DELAY: Duration = Duration::from_millis(40);
+/// How often the screen is drawn again while a column reads as the time from now, so it stays true to the minute.
+const RELATIVE_TIME_REDRAW: Duration = Duration::from_secs(60);
 
 /// Runs the TUI on `first` until the user quits, with `connections` to switch to and the `config` file they come from,
-/// giving the terminal back on the way out; a signal while its sessions stop drops them at once, as a command does.
-pub(crate) async fn run(connections: Vec<Connection>, first: Connection, config: PathBuf) -> Result<()> {
+/// each result opening in `format`, giving the terminal back on the way out; a signal while its sessions stop drops them
+/// at once, as a command does.
+pub(crate) async fn run(connections: Vec<Connection>, first: Connection, config: PathBuf, format: Mode) -> Result<()> {
     let mut signals = Signals::listen()?;
     let theme = vtui::ground::ask().map_or_else(Theme::default, |ground| Theme::default().with_ground(ground));
-    let mut app = App::new(connections, &first, theme);
+    let mut app = App::new(connections, &first, theme).with_format_mode(format);
     let (answers, mut incoming) = mpsc::unbounded_channel();
     let mut backend = Backend::new(find_roots().await?, config, answers).with_history(Store::from_env());
     for action in app.start() {
@@ -106,6 +111,7 @@ async fn event_loop(
 ) -> Result<()> {
     let mut events = EventStream::new();
     while !app.should_quit {
+        app.set_clock(Clock { now: Utc::now(), zone: Local });
         let mut fit = Fit::default();
         screens.terminal.draw(|f| fit = ui::draw(f, app))?;
         app.fit(fit);
@@ -120,6 +126,7 @@ async fn event_loop(
                 app.recolour();
                 vec![]
             }
+            () = sleep(RELATIVE_TIME_REDRAW), if app.sheet().shows_relative_time() => vec![],
             stopped = signals.next() => {
                 for action in app.quit() {
                     backend.dispatch(action);

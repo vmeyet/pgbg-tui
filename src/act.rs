@@ -25,6 +25,8 @@ pub(crate) enum Act {
     Open,
     Close,
     Chart,
+    StepFormat,
+    SwitchFormats,
     Delete,
     CloseSession,
     Add,
@@ -57,6 +59,8 @@ impl Act {
                 | Self::Detail
                 | Self::CopyCell
                 | Self::CopyRow
+                | Self::StepFormat
+                | Self::SwitchFormats
         )
     }
 }
@@ -88,7 +92,9 @@ impl Act {
             Self::Find => Some(Self::Open),
             Self::Open => Some(Self::Close),
             Self::Close => Some(Self::Chart),
-            Self::Chart => Some(Self::Delete),
+            Self::Chart => Some(Self::StepFormat),
+            Self::StepFormat => Some(Self::SwitchFormats),
+            Self::SwitchFormats => Some(Self::Delete),
             Self::Delete => Some(Self::CloseSession),
             Self::CloseSession => Some(Self::Add),
             Self::Add => Some(Self::Edit),
@@ -222,6 +228,10 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::CopyRow, Pane::Result, &[key(KeyCode::Char('Y'))]).help("Y", "copy the row as CSV"),
     row(Act::CopyResult, Pane::Result, &[key(KeyCode::Char('c'))]).help("c", "copy the result as CSV, JSON or Markdown"),
     row(Act::Chart, Pane::Result, &[key(KeyCode::Char('v'))]).help("v", "the result as a grid or a chart").footer("v", "chart"),
+    row(Act::StepFormat, Pane::Result, &[key(KeyCode::Char('f'))])
+        .help("f", "the column in its next format: raw, then readable ones")
+        .footer("f", "format"),
+    row(Act::SwitchFormats, Pane::Result, &[key(KeyCode::Char('F'))]).help("F", "every column raw, or readable"),
     row(Act::Help, Pane::Result, &[key(KeyCode::Char('?'))]).help("?", "these keys; again for every key"),
     row(Act::Down, Pane::Queries, &[key(KeyCode::Char('j')), key(KeyCode::Down)]).help("j k", "next, previous query").footer("j/k", "move"),
     row(Act::Up, Pane::Queries, &[key(KeyCode::Char('k')), key(KeyCode::Up)]),

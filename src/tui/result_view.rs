@@ -20,7 +20,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) -> Room {
     f.render_widget(block, area);
     let body = match run {
         Run::Done { result, grid, view: View::Grid, .. } => {
-            return grid_view::draw(f, GridView { result, grid, theme: &app.theme, focused }, inside);
+            return grid_view::draw(f, GridView { result, grid, theme: &app.theme, focused, clock: &app.reading.clock }, inside);
         }
         Run::Done { view: View::Chart(chart), .. } => {
             chart_view::draw(f, chart, &app.theme, inside);

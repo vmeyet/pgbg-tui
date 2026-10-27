@@ -1,5 +1,6 @@
-//! `config.toml`: the connections, read once, with a warning for each key pgbg ignores.
+//! `config.toml`: the connections and how results read, read once, with a warning for each key pgbg ignores.
 use crate::connection::{Connection, Entry};
+use crate::format::Mode;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -19,6 +20,15 @@ const PATH_VARIABLE: &str = "PGBG_CONFIG";
 struct ConfigFile {
     #[serde(default)]
     connections: BTreeMap<String, Entry>,
+    #[serde(default)]
+    display: Display,
+}
+
+/// The `[display]` table.
+#[derive(Default, Deserialize)]
+struct Display {
+    #[serde(default)]
+    format: Mode,
 }
 
 /// The config, checked.
@@ -26,6 +36,8 @@ struct ConfigFile {
 pub(crate) struct Config {
     /// Sorted by name.
     pub(crate) connections: Vec<Connection>,
+    /// How the TUI's results open: raw, or each column readable.
+    pub(crate) format: Mode,
 }
 
 /// A config as read from its file.
@@ -68,7 +80,7 @@ fn parse(text: &str) -> Result<Loaded> {
         .into_iter()
         .map(|(name, entry)| Connection::new(&name, entry).with_context(|| format!("connection `{name}`")))
         .collect::<Result<_>>()?;
-    Ok(Loaded { config: Config { connections }, warnings })
+    Ok(Loaded { config: Config { connections, format: file.display.format }, warnings })
 }
 
 #[cfg(test)]
@@ -92,6 +104,12 @@ url = "postgres://nina@localhost:5432/shop"
     #[test]
     fn connections_load_sorted_by_name() {
         assert_eq!(names(&parse(SHOP).unwrap()), ["local", "staging"]);
+    }
+
+    #[test]
+    fn results_open_raw_unless_the_display_table_says_readable() {
+        assert_eq!(parse(SHOP).unwrap().config.format, Mode::Raw);
+        assert_eq!(parse(&format!("[display]\nformat = \"readable\"\n{SHOP}")).unwrap().config.format, Mode::Readable);
     }
 
     #[test]
