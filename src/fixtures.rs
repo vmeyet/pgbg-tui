@@ -33,6 +33,20 @@ while True:
 /// tunnel's port is checked for silence, another test's tunnel could take that port.
 pub(crate) static TUNNEL_PORTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+/// Taken shared around each statement a test sends that makes or drops a relation, and alone around each schema read:
+/// the server fails a read that meets a relation dropped since its snapshot began.
+static CATALOG: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
+
+/// Held while a test makes or drops relations; never while it holds [`reading_the_catalog`].
+pub(crate) async fn changing_the_catalog() -> tokio::sync::RwLockReadGuard<'static, ()> {
+    CATALOG.read().await
+}
+
+/// Held while a test reads the schema, so no relation is dropped under the read; after `TUNNEL_PORTS` when both are.
+pub(crate) async fn reading_the_catalog() -> tokio::sync::RwLockWriteGuard<'static, ()> {
+    CATALOG.write().await
+}
+
 /// How long a test waits on a child process: to write its pid, or to be gone.
 const PROCESS_WAIT: Duration = Duration::from_secs(5);
 const PROCESS_POLL: Duration = Duration::from_millis(20);

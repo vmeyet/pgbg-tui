@@ -207,6 +207,7 @@ mod tests {
 
     /// Runs `setup` as the test database's owner; each statement is safe to run twice.
     async fn as_owner(setup: &[String]) {
+        let _changing = fixtures::changing_the_catalog().await;
         let mut owner = session_as(None, "allowed").await;
         for sql in setup {
             owner.run(&guard::admit(Statement::new(sql.clone()), Params::default(), WritePolicy::Allowed).unwrap()).await.unwrap();

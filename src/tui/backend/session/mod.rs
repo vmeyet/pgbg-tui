@@ -340,6 +340,7 @@ mod tests {
     }
 
     async fn on_a_side_session_writing(sql: &str) {
+        let _changing = fixtures::changing_the_catalog().await;
         let mut session = Session::open(&connection(), Route::Direct).await.unwrap();
         session.run(&guard::admit(Statement::new(sql), Params::default(), WritePolicy::Allowed).unwrap()).await.unwrap();
     }
@@ -633,6 +634,7 @@ mod tests {
         let (backend, mut answers) = started();
         backend.run(&shop(), RunId::FIRST, Statement::new(SLEEP), ParamInput::default());
         until_sleeping().await;
+        let _reading = fixtures::reading_the_catalog().await;
         backend.read_schema(&shop(), SessionId::FIRST);
         let answer = next_answer(&mut answers).await;
         assert!(matches!(&answer, Incoming::Schema(Ok(catalog)) if !catalog.search_path.is_empty()), "{answer:?}");
@@ -642,6 +644,7 @@ mod tests {
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn the_completion_index_of_a_schema_read_follows_it() {
         let (backend, mut answers) = started();
+        let _reading = fixtures::reading_the_catalog().await;
         backend.read_schema(&shop(), SessionId::FIRST);
         let seen = answers_until(&mut answers, |answer| matches!(answer, Incoming::Index { .. })).await;
         let read = seen.iter().find_map(|answer| if let Incoming::Schema(Ok(catalog)) = answer { Some(catalog) } else { None });
@@ -656,6 +659,7 @@ mod tests {
         let _ports = fixtures::TUNNEL_PORTS.lock().await;
         let marker = "pgbg-test-schema-through-the-tunnel";
         let (backend, mut answers) = started_on(fixtures::tunnelled(marker));
+        let _reading = fixtures::reading_the_catalog().await;
         backend.read_schema(&shop(), SessionId::FIRST);
         let seen = answers_until(&mut answers, |answer| matches!(answer, Incoming::Schema(_))).await;
         let tunnels_started = seen.iter().filter(|answer| **answer == Incoming::Tunnel(TunnelState::Starting)).count();
@@ -674,6 +678,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let reads = dir.path().join("reads");
         let (backend, mut answers) = started_on(with_password_command("echo read >> \"$1\"; echo nina-password", &reads));
+        let _reading = fixtures::reading_the_catalog().await;
         backend.read_schema(&shop(), SessionId::FIRST);
         answers_until(&mut answers, |answer| matches!(answer, Incoming::Schema(_))).await;
         assert_eq!(std::fs::read_to_string(&reads).unwrap(), "read\nread\n");
@@ -685,6 +690,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let once = "[ -e \"$1\" ] && exit 1; touch \"$1\"; echo nina-password";
         let (backend, mut answers) = started_on(with_password_command(once, &dir.path().join("read")));
+        let _reading = fixtures::reading_the_catalog().await;
         backend.read_schema(&shop(), SessionId::FIRST);
         let seen = answers_until(&mut answers, |answer| matches!(answer, Incoming::Schema(_))).await;
         assert!(matches!(seen.last(), Some(Incoming::Schema(Err(_)))), "{seen:?}");
