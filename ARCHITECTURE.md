@@ -104,8 +104,8 @@ Running a statement with parameters (planned):
 
 1. `query::params` reads the `{{name}}` of the statement under the cursor from `db::lex`'s tokens, never inside a string, a comment or a quoted name, and the header's `-- param: since date = 2024-01-01`, `-- param: owner text optional`.
    A statement holding both a `$n` of its own and a `{{name}}` is refused, and a `{{` the lexer cannot read as a name is too: a doubt never runs.
-2. The parameter bar above the editor shows one field per name, filled with the last values given, else the default; `⏎` in a field runs.
-   A saved query keeps its values in `<data folder>/pgbg/params/<connection>.json` (`0600`), keyed by query path; unsaved text keeps them on its sheet until pgbg quits.
+2. The parameter bar above the editor shows one field per name, filled with the default; `⏎` in a field runs.
+   The values typed stay on the sheet until pgbg quits and are never written to disk.
 3. Each name becomes `$1`, `$2` (the same name the same number), so the guard classifies what the server gets; `admit` takes the values with the statement and refuses an `Admitted` whose count of values is not its count of `$n`.
    A name left empty, with no default and not `optional`, stops the run before anything is sent; an `optional` one is bound as NULL.
 4. Both ways of running bind them: the read-only portal and the one a connection that allows writes uses, which pass no parameters today.
@@ -129,7 +129,7 @@ Asking a command for SQL (planned):
 
 Formatting a cell (planned):
 
-1. A result opens with every column in the format the header's `-- format:` names, else the config's `[display] format` (`raw` or `readable`).
+1. A result opens with every column in the format the header's `-- format:` names, else the config's `[display] format` (`raw` or `readable`), else raw.
 2. `f` on a column steps through its kind's formats, `F` sets every column raw or readable; the sheet keeps the choice by column index with the result, and the grid widths are measured again on the first page.
 3. The loop passes the clock and the local time zone to the drawing, so `format/` stays pure; a relative time redraws each minute while one is shown.
 4. Formats are for reading only: `pgbg run`, `--json` and a copy give raw values.

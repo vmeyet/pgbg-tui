@@ -86,13 +86,13 @@ The MR that ships a step ticks its box.
 
 - [ ] `{{name}}` in a statement, outside strings and comments, and `-- param: name type = default` in the header; each name becomes `$n`, so the guard reads the statement as sent; one mixing `$n` and `{{name}}`, or a `{{` the lexer cannot read, is refused
 - [ ] Bound, never spliced, by both ways of running: `Admitted` carries the values and checks their count, each goes in text through one `ToSql` wrapper, typed by the server's inference or a bound `to_regtype`; `pgbg run --param` and `--params-file`
-- [ ] The parameter bar above the editor: one field per parameter of the statement under the cursor, `⏎` runs, an empty one without a default stops the run; the last values kept per query and connection, and on the sheet for unsaved text
+- [ ] The parameter bar above the editor: one field per parameter of the statement under the cursor, `⏎` runs, an empty one without a default stops the run; the values stay on the sheet while pgbg runs, never on disk
 
 ## 14. Formats
 
 - [ ] `format/`: each column kind's formats (timestamps local or relative, numbers grouped or as a size, UUID short, bytes as a size), pure, the clock passed in
 - [ ] The grid draws its visible cells through them: `f` cycles the column under the cursor, `F` sets every column raw or readable
-- [ ] `-- format: created_at=relative size=bytes` in the header, and a default in `config.toml`
+- [ ] `-- format: created_at=relative size=bytes` in the header, and a default in `config.toml`; raw when neither says
 
 ## 15. Asking a command for SQL
 
