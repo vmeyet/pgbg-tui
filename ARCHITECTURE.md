@@ -143,12 +143,12 @@ Asking a command for SQL (planned):
    The prompt holds only:
    - the instruction, sent as typed: whatever the user writes in it leaves the machine;
    - the statement under the cursor with every literal masked (a string as `'<literal 1>'`, a number as `<number 2>`, found with `db::lex`) and its comments stripped, a parameter as its `{{name}}`;
-   - a slice of the schema, names and types only: the tables the statement names, then those an instruction word of three letters or more starts or is started by, then those holding a column it names, with their columns;
+   - a slice of the schema, names and types only: the tables the statement names, then those an instruction word of three letters or more starts, or whose name of three letters or more starts that word, then those holding a column it names, with their columns;
    - the tier.
    It never holds a row, a value from a table, a default, the history, a server's words, nor the connection's name, host or URL; a test builds a prompt from a fixture holding each of them and finds none.
    The answer's markers are put back from the masked list before it is shown, and a marker of no literal, or of one of another kind, stops it; `[ai] literals = "sent"` sends the literals as typed, comments still stripped.
    A statement holding `PASSWORD` or a URL with a password, by the rule the history uses, is never sent: the ask stops and says why.
-   Nor is one holding a `{{` that opens no parameter, since no marker masks what follows it.
+   Nor is one holding a `{{` that opens no parameter, or a quoted name or string it never closes, since no marker masks what follows it.
    The prompt is capped at 16 KiB, the schema slice cut first, table by table, and the prompt says when it was.
 4. The command runs from a new empty temp folder, removed after, with a cleared environment: `PATH`, `HOME`, `LANG`, `TERM` and the names `[ai] env` lists, never a variable a connection's `password = { env = ... }` names, even when listed.
    It runs in its own process group in `groups.rs`, through a helper of its own there: stdin written by its own task then closed, stdout read at the same time and cut at 64 KiB, stderr's last lines kept, the group killed on a drop; `groups::output` would deadlock on a big prompt and keeps no cap.
