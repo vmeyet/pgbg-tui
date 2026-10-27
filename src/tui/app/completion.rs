@@ -7,7 +7,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use std::ops::Range;
 use vtui::toward::Toward;
 
-/// The candidates for the name before the cursor, and the one picked.
+/// The candidates for the name before the cursor, and the one picked; none left once typing narrowed past them all.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::tui) struct Completions {
     /// The editor bytes the taken name replaces, up to the cursor.
@@ -18,24 +18,26 @@ pub(in crate::tui) struct Completions {
 
 impl Completions {
     fn stepped(self, toward: Toward) -> Self {
+        if self.candidates.is_empty() {
+            return self;
+        }
         Self { selected: toward.wrapped(self.selected, 1, self.candidates.len()), ..self }
     }
 }
 
 impl Sheet {
     /// The list for the name before the cursor, from the index once there is one, else from the keywords; none when
-    /// nothing matches or the cursor is in a string or a comment.
+    /// the cursor is in a string or a comment.
     fn completions(&self) -> Option<Completions> {
         let (before, _, _) = self.editor.split();
         let ask = Ask::at(self.editor.text(), before.len())?;
         let index = self.index.as_deref().unwrap_or_else(|| Index::of_keywords());
-        let candidates = index.candidates(&ask);
-        (!candidates.is_empty()).then_some(Completions { typed: ask.typed, candidates, selected: 0 })
+        Some(Completions { candidates: index.candidates(&ask), typed: ask.typed, selected: 0 })
     }
 }
 
 impl App {
-    /// Opens the list for the name before the cursor, when anything matches it.
+    /// Opens the list for the name before the cursor, empty when nothing matches it.
     pub(super) fn open_completions(&mut self) -> Vec<Action> {
         let sheet = self.sheet_mut();
         let actions = sheet.want_schema_while_open();
@@ -45,8 +47,9 @@ impl App {
         actions
     }
 
-    /// Hands `key` to the open list: `↑↓` pick, `⏎` or `⇥` take, `esc` closes; any other key goes to the editor, and a
-    /// name key or a backspace opens the list again on what it typed.
+    /// Hands `key` to the open list: `↑↓` pick, `⏎` or `⇥` take, and do nothing on an empty list, so a half-typed name
+    /// never runs; `esc` closes; any other key goes to the editor, and a name key or a backspace opens the list again on
+    /// what it typed.
     pub(super) fn completions_key(&mut self, completions: Completions, key: KeyEvent) -> Vec<Action> {
         match act::act_for(key, Pane::Completion) {
             Some(Act::Down) => self.overlay = Some(Overlay::Completion(completions.stepped(Toward::Next))),
@@ -61,7 +64,16 @@ impl App {
 
     fn take_completion(&mut self, completions: Completions) {
         let Completions { typed, candidates, selected } = completions;
-        self.sheet_mut().put_name(typed, &candidates[selected].insert);
+        match candidates.get(selected) {
+            Some(candidate) => self.sheet_mut().put_name(typed, &candidate.insert),
+            None => self.overlay = Some(Overlay::Completion(Completions { typed, candidates, selected })),
+        }
+    }
+
+    /// Closes the list and pastes `text` in the editor.
+    pub(super) fn paste_past_completions(&mut self, text: &str) {
+        self.overlay = None;
+        self.sheet_mut().paste(text);
     }
 
     fn type_past_completions(&mut self, key: KeyEvent) -> Vec<Action> {
@@ -151,6 +163,36 @@ mod tests {
     }
 
     #[test]
+    fn narrowing_to_nothing_keeps_the_list_open_and_empty() {
+        let mut app = listing("SELECT * FROM o");
+        press(&mut app, KeyCode::Char('z'));
+        assert_eq!(listed(&app), Some((vec![], 0)));
+    }
+
+    #[test]
+    fn enter_or_tab_on_an_empty_list_does_nothing() {
+        for take in [KeyCode::Enter, KeyCode::Tab, KeyCode::Down] {
+            let mut app = listing("SELECT * FROM oz");
+            assert_eq!(app.handle_key(KeyEvent::from(take)), []);
+            assert_eq!((app.sheet().editor.text(), listed(&app)), ("SELECT * FROM oz", Some((vec![], 0))), "{take:?}");
+        }
+    }
+
+    #[test]
+    fn esc_closes_an_empty_list() {
+        let mut app = listing("SELECT * FROM oz");
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(listed(&app), None);
+    }
+
+    #[test]
+    fn a_paste_while_the_list_is_open_closes_it_and_goes_to_the_editor() {
+        let mut app = listing("SELECT * FROM o");
+        app.paste("rders");
+        assert_eq!((app.sheet().editor.text(), listed(&app)), ("SELECT * FROM orders", None));
+    }
+
+    #[test]
     fn a_key_that_types_no_name_closes_the_list_and_still_works() {
         let mut app = listing("SELECT * FROM o");
         press(&mut app, KeyCode::Char(' '));
@@ -158,7 +200,7 @@ mod tests {
     }
 
     #[test]
-    fn nothing_to_offer_opens_no_list() {
+    fn a_string_opens_no_list() {
         assert_eq!(listed(&listing("SELECT 'o")), None);
     }
 

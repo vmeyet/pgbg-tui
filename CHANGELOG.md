@@ -9,11 +9,12 @@ Each entry says what changed, then where, then how to use it.
 ### New
 
 - **The parameter bar** in the TUI: when the statement under the cursor holds a `{{name}}`, a line above the editor shows a field for each, an empty one with what it runs with: its `-- param:` default, `NULL` when `optional`, or `required`.
-  Press `⇥` from the editor to reach it, `⇥` and `⇧⇥` to move between fields, `⏎` to run, `esc` to go back to the editor; the values stay on the sheet until you quit, and are never written to disk.
+  Press `⇥` from the editor to reach it, `⇥` and `⇧⇥` to move between fields, `⏎` to run, `esc` to cancel a running statement or go back to the editor; the values stay on the sheet until you quit, and are never written to disk.
 - **Completion** in the TUI's editor: as you type a name, the rest of the best table, column or keyword shows faded after the cursor, and `→` takes it.
   It knows what the cursor wants from the statement under it: a table after `FROM` or `JOIN`, a column of `orders` after `o.` when the statement reads `FROM orders o`, else a column of the tables it names first.
   Tables in the search path come bare, the others with their schema, and a name that needs quotes goes in quoted; nothing shows inside a string or a comment.
   `ctrl-space` lists the names that fit at the cursor, close matches too: `↑↓` to pick, `⏎` or `⇥` to take, `esc` to close.
+  When no name fits, the list stays open saying `no match`, so `⏎` never runs a half-typed statement.
 - **`pgbg run --query` and `--file`**: run a saved query by its path, as `pgbg run shop --query orders/daily`, the project's `.pgbg/queries/` before your own, with the same checks as the TUI; or a statement from a file, `--file orders.sql`, or from stdin with `--file -`.
   The statement typed as an argument still works.
 - **Readable cells** in the TUI's grid: `f` puts the column under the cursor in its next format, `F` puts every column readable or raw again.

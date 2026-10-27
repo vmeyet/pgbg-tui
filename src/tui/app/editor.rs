@@ -1,5 +1,5 @@
 //! The SQL editor: its text, the editing keys and pastes that change it, and the syntax colours that follow it.
-use super::ghost::{is_name_key, is_take};
+use super::ghost::is_name_key;
 use super::{Action, Sheet};
 use crate::query::Header;
 use crate::syntax::{self, Spans};
@@ -108,14 +108,8 @@ pub(super) fn apply(field: &mut Field, key: KeyEvent) {
 }
 
 impl Sheet {
-    /// Applies `key` to the editor: `→` takes the ghost when one shows, and a name key asks for the next one.
+    /// Applies `key` to the editor; a name key asks for the next ghost.
     pub(super) fn edit(&mut self, key: KeyEvent) -> Vec<Action> {
-        if let Some(ghost) = self.ghost.take()
-            && is_take(key)
-        {
-            self.take_ghost(ghost);
-            return vec![];
-        }
         if self.editor.edit(key) != Edited::Text {
             return vec![];
         }

@@ -119,19 +119,24 @@ impl App {
         }
     }
 
-    pub(super) fn switch_tab(&mut self) {
+    /// Switches the sidebar's tab; switching to the schema reads it, opening a failed session again for it.
+    pub(super) fn switch_tab(&mut self) -> Vec<Action> {
         self.sidebar = match self.sidebar {
             SidebarTab::Queries => SidebarTab::Schema,
             SidebarTab::Schema => SidebarTab::Queries,
         };
+        if self.is_schema_shown() { self.sheet_mut().want_schema() } else { vec![] }
     }
 
-    /// `actions`, then a read of the schema when its tab is drawn and the sheet on screen has none, read or asked for:
-    /// the schema is read the moment it shows, on whichever sheet.
+    fn is_schema_shown(&self) -> bool {
+        self.sidebar == SidebarTab::Schema && self.fit.has_sidebar
+    }
+
+    /// `actions`, then a read of the schema when its tab is drawn, the session on screen is open and has none, read or
+    /// asked for: the schema is read the moment it shows, on whichever sheet, and a failed session stays failed.
     pub(super) fn and_the_schema_shown(&mut self, mut actions: Vec<Action>) -> Vec<Action> {
-        let is_shown = self.sidebar == SidebarTab::Schema && self.fit.has_sidebar;
-        if is_shown {
-            actions.extend(self.sheet_mut().want_schema());
+        if self.is_schema_shown() {
+            actions.extend(self.sheet_mut().want_schema_while_open());
         }
         actions
     }
@@ -226,7 +231,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::super::sheet::SchemaState;
+    use super::super::sheet::{SchemaState, SessionState};
     use super::super::tests::{app, app_on, shop, to_shop};
     use super::super::{Answer, Fit, Incoming, Run, RunId, SessionId};
     use super::*;
@@ -277,12 +282,37 @@ mod tests {
     }
 
     #[test]
-    fn a_sheet_opened_again_under_the_schema_tab_reads_its_schema_at_once() {
+    fn a_sheet_opened_again_under_the_schema_tab_reads_its_schema_once_its_session_opens() {
         let mut app = on_the_schema_tab();
         let connection = app.sheet().connection.clone();
         app.sheet_mut().reopen(connection, SessionId::FIRST.next());
         let read = Action::ReadSchema { connection: shop(), session: SessionId::FIRST.next() };
-        assert_eq!(app.apply(Answer::Copied("1 cell".to_owned())), [read]);
+        assert_eq!(app.apply(Answer::Copied("1 cell".to_owned())), []);
+        let opened = Answer::Session { connection: shop(), session: SessionId::FIRST.next(), incoming: Incoming::Opened };
+        assert_eq!(app.apply(opened), [read]);
+    }
+
+    fn failed_under_a_hidden_schema_tab() -> App {
+        let mut app = app();
+        app.sidebar = SidebarTab::Schema;
+        app.apply(to_shop(Incoming::NotOpened("connection refused".to_owned())));
+        app.fit(Fit { has_sidebar: true, ..Fit::default() });
+        app
+    }
+
+    #[test]
+    fn a_key_typed_once_the_schema_tab_shows_never_opens_a_failed_session_again() {
+        let mut app = failed_under_a_hidden_schema_tab();
+        assert_eq!(press(&mut app, KeyCode::Char('x')), []);
+        assert_eq!(app.sheet().session, SessionState::Failed("connection refused".to_owned()));
+    }
+
+    #[test]
+    fn switching_to_the_schema_tab_opens_a_failed_session_again_to_read_it() {
+        let mut app = failed_under_a_hidden_schema_tab();
+        app.sidebar = SidebarTab::Queries;
+        app.focus = Focus::Queries;
+        assert_eq!(press(&mut app, KeyCode::Char(']')), [Action::ReadSchema { connection: shop(), session: SessionId::FIRST }]);
     }
 
     #[test]

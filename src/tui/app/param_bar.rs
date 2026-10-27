@@ -1,7 +1,7 @@
 //! The parameter bar above the editor: one field per `{{name}}` of the statement under the cursor.
 use super::editor;
 use crate::query::params::{Given, ParamName};
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyCode, KeyEvent};
 use std::collections::BTreeMap;
 use vtui::field::Field;
 
@@ -30,8 +30,11 @@ impl ParamBar {
         true
     }
 
-    /// Applies `key` to the field of `name`.
+    /// Applies `key` to the field of `name`; a value holds one line, so `⏎` with any modifier types nothing.
     pub(super) fn edit(&mut self, name: &ParamName, key: KeyEvent) {
+        if key.code == KeyCode::Enter {
+            return;
+        }
         editor::apply(self.fields.entry(name.clone()).or_default(), key);
     }
 
@@ -57,10 +60,10 @@ pub(super) enum Direction {
 #[cfg(test)]
 mod tests {
     use super::super::tests::typed;
-    use super::super::{Action, App, Focus};
+    use super::super::{Action, App, Focus, RunId};
     use super::*;
     use crate::query::params::ParamInput;
-    use crossterm::event::{KeyCode, KeyModifiers};
+    use crossterm::event::KeyModifiers;
 
     fn press(app: &mut App, code: KeyCode) -> Vec<Action> {
         app.handle_key(KeyEvent::from(code))
@@ -124,6 +127,26 @@ mod tests {
         type_in(&mut app, "2025");
         press(&mut app, KeyCode::Esc);
         assert_eq!(app.focus, Focus::Editor);
+        assert_eq!(app.sheet().bar.field(&name("since")).map(Field::text), Some("2025"));
+    }
+
+    #[test]
+    fn esc_in_the_bar_while_a_statement_runs_cancels_it_and_keeps_the_keys() {
+        let mut app = typed(SINCE_AND_OWNER);
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Enter);
+        let connection = app.sheet().name().clone();
+        assert_eq!(press(&mut app, KeyCode::Esc), [Action::Cancel { connection, run: RunId::FIRST }]);
+        assert_eq!(app.focus, Focus::Params);
+    }
+
+    #[test]
+    fn a_modified_enter_types_no_line_end_in_a_value() {
+        let mut app = typed(SINCE_AND_OWNER);
+        press(&mut app, KeyCode::Tab);
+        type_in(&mut app, "2025");
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
         assert_eq!(app.sheet().bar.field(&name("since")).map(Field::text), Some("2025"));
     }
 
