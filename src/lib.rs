@@ -16,6 +16,7 @@ mod format;
 mod groups;
 mod history;
 pub mod log;
+mod program;
 mod query;
 mod render;
 mod secret;

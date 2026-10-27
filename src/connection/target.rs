@@ -12,8 +12,9 @@ const PASSWORD_IN_URL: &str =
 const HOSTADDR_IN_URL: &str = "`url` sets `hostaddr`: pgbg keeps it for the local port its tunnels open; name the host in the URL instead";
 
 /// Where the database is: a `postgres://` URL that never carries a password.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Target(Url);
+/// Its `Debug` shows only the place, since other query keys, such as `sslpassword`, may still hold a secret.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Target(Url);
 
 impl Target {
     /// The URL in `text`; its errors never repeat it, since a refused URL may hold a password.
@@ -112,6 +113,12 @@ impl fmt::Display for Target {
     }
 }
 
+impl fmt::Debug for Target {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Target").field(&self.place()).finish()
+    }
+}
+
 impl Serialize for Target {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(self.0.as_str())
@@ -130,6 +137,12 @@ mod tests {
     fn a_target_prints_as_its_url() {
         let url = "postgres://nina@db.example.com:5432/shop?sslmode=require";
         assert_eq!(Target::parse(url).unwrap().to_string(), url);
+    }
+
+    #[test]
+    fn a_target_debugs_as_its_place_only() {
+        let target = Target::parse("postgres://nina@db.example.com/shop?sslmode=require&sslpassword=hunter2").unwrap();
+        assert_eq!(format!("{target:?}"), r#"Target("db.example.com/shop")"#);
     }
 
     #[test]

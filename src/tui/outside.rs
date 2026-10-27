@@ -1,5 +1,6 @@
 //! A saved query in the user's own editor, `$VISUAL` or `$EDITOR`: the loop lends it the terminal, then reads the file
 //! again.
+use crate::program::Program;
 use anyhow::{Context, Result, bail};
 use std::path::Path;
 use std::process::Command;
@@ -9,7 +10,7 @@ const FALLBACK: &str = "vi";
 /// The editor to run, and the arguments it was configured with, as in `EDITOR="code -w"`.
 #[derive(Debug, PartialEq, Eq)]
 struct Editor {
-    program: String,
+    program: Program,
     args: Vec<String>,
 }
 
@@ -17,7 +18,7 @@ impl Editor {
     fn pick(visual: Option<String>, editor: Option<String>) -> Self {
         let command = visual.or(editor).unwrap_or_default();
         let mut words = command.split_whitespace();
-        let program = words.next().unwrap_or(FALLBACK).to_owned();
+        let program = Program::new(words.next().unwrap_or(FALLBACK));
         Self { program, args: words.map(str::to_owned).collect() }
     }
 }
@@ -46,7 +47,7 @@ mod tests {
     use super::*;
 
     fn editor(program: &str, args: &[&str]) -> Editor {
-        Editor { program: program.into(), args: args.iter().map(|arg| (*arg).to_owned()).collect() }
+        Editor { program: Program::new(program), args: args.iter().map(|arg| (*arg).to_owned()).collect() }
     }
 
     #[test]

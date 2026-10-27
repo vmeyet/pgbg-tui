@@ -6,9 +6,9 @@ use anyhow::{Context, Result, anyhow};
 use std::path::Path;
 
 /// Adds the connection `name` to the config.
-pub fn add(name: &ConnectionName, tier: Tier, url: &str, keys: &ConnectionKeys) -> Result<()> {
+pub fn add(name: &ConnectionName, tier: Tier, url: &Target, keys: &ConnectionKeys) -> Result<()> {
     let path = config::path();
-    let change = ConnectionChange { tier: Some(tier), url: Some(target(url)?), ..change_from(keys)? };
+    let change = ConnectionChange { tier: Some(tier), url: Some(url.clone()), ..change_from(keys)? };
     config::add_connection(&path, name, &change)?;
     println!("added `{name}` to {}", path.display());
     Ok(())
@@ -16,9 +16,9 @@ pub fn add(name: &ConnectionName, tier: Tier, url: &str, keys: &ConnectionKeys) 
 
 /// Sets the keys given on the connection `name`; a keychain item its new password replaces is deleted
 /// once the config is written, unless another connection names it.
-pub fn edit(name: &ConnectionName, tier: Option<Tier>, url: Option<&str>, keys: &ConnectionKeys) -> Result<()> {
+pub fn edit(name: &ConnectionName, tier: Option<Tier>, url: Option<&Target>, keys: &ConnectionKeys) -> Result<()> {
     let path = config::path();
-    let change = ConnectionChange { tier, url: url.map(target).transpose()?, ..change_from(keys)? };
+    let change = ConnectionChange { tier, url: url.cloned(), ..change_from(keys)? };
     let replaced = match &change.password {
         Some(source) => config::replaced_keychain_item(&super::load(&path)?.connections, name, source).cloned(),
         None => None,
@@ -59,10 +59,6 @@ fn delete_keychain_item(item: &KeychainItem) -> Result<()> {
     Keychain::PGBG.delete(item)?;
     println!("deleted the keychain item `{item}`");
     Ok(())
-}
-
-fn target(url: &str) -> Result<Target> {
-    Target::parse(url).context("in `--url`")
 }
 
 /// `text` split into words as a shell would, quotes kept together; a quoting error names `flag`.
