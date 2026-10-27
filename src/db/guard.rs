@@ -36,17 +36,55 @@ const EXPLAIN_OPTIONS: [&str; 23] = [
 ];
 /// The reads that are queries: what `EXPLAIN` may explain, since `ANALYZE` runs it, and what a cursor may hold.
 const QUERIES: [&str; 4] = ["SELECT", "WITH", "VALUES", "TABLE"];
-/// The words before a row lock's `UPDATE` or `SHARE`, which make it a lock rather than a statement of its own.
-const LOCK_OPENERS: [&str; 2] = ["FOR", "KEY"];
+/// The words that open a row lock before its `UPDATE` or `SHARE`, which make it a lock rather than a statement of its own.
+const LOCK_OPENINGS: [&[&str]; 3] = [&["FOR"], &["FOR", "KEY"], &["FOR", "NO", "KEY"]];
 /// The writes a confirmation names with the table or object they write to.
 const TARGETED: [&str; 12] =
     ["DELETE", "INSERT", "UPDATE", "MERGE", "INTO", "TRUNCATE", "DROP", "ALTER", "CREATE", "COPY", "VACUUM", "ANALYZE"];
 /// The statements that end, open or step through a transaction or a cursor: on a connection that allows writes they
-/// change nothing by themselves, so they run without asking.
+/// change no data by themselves, so they run without asking; one followed by `PREPARED` ends a prepared transaction,
+/// maybe another client's, so it asks.
 const UNASKED: [&str; 11] = ["BEGIN", "START", "COMMIT", "END", "ROLLBACK", "ABORT", "SAVEPOINT", "RELEASE", "FETCH", "CLOSE", "MOVE"];
-/// The words between such a write and its target: `DELETE FROM`, `DROP TABLE IF EXISTS`, `CREATE UNIQUE INDEX ON`.
-const BEFORE_TARGET: &str =
-    "FROM INTO ONLY TABLE VIEW MATERIALIZED INDEX SEQUENCE SCHEMA FUNCTION TYPE IF EXISTS NOT CONCURRENTLY UNIQUE ON";
+/// The words between such a write and its table: `DELETE FROM ONLY`, `TRUNCATE TABLE`, `SELECT INTO TEMP`.
+const BEFORE_TARGET: &str = "FROM INTO ONLY TABLE TEMP TEMPORARY UNLOGGED";
+/// The writes that change the schema: a confirmation names them with the kind of object they change and that object.
+const SCHEMA_CHANGES: [&str; 3] = ["CREATE", "DROP", "ALTER"];
+/// The options a change of the schema may take before its kind, left out of its name: `CREATE OR REPLACE`, `CREATE TEMP`.
+const BEFORE_KIND: [&str; 9] = ["OR", "REPLACE", "GLOBAL", "LOCAL", "TEMP", "TEMPORARY", "UNLOGGED", "UNIQUE", "RECURSIVE"];
+/// The words that open a kind of two words: `MATERIALIZED VIEW`, `FOREIGN TABLE`, `EVENT TRIGGER`.
+const KIND_OPENERS: [&str; 3] = ["MATERIALIZED", "FOREIGN", "EVENT"];
+/// The kinds of object a change of the schema names, its last word when it has two.
+const KINDS: [&str; 29] = [
+    "TABLE",
+    "VIEW",
+    "INDEX",
+    "SEQUENCE",
+    "SCHEMA",
+    "FUNCTION",
+    "PROCEDURE",
+    "ROUTINE",
+    "AGGREGATE",
+    "OPERATOR",
+    "TYPE",
+    "DOMAIN",
+    "CAST",
+    "COLLATION",
+    "CONVERSION",
+    "DATABASE",
+    "ROLE",
+    "USER",
+    "GROUP",
+    "EXTENSION",
+    "LANGUAGE",
+    "TRIGGER",
+    "POLICY",
+    "RULE",
+    "STATISTICS",
+    "TABLESPACE",
+    "SERVER",
+    "PUBLICATION",
+    "SUBSCRIPTION",
+];
 
 /// A statement cleared to run, the values bound to its `$n`, and how to run it; `admit` makes one.
 #[derive(Debug)]
@@ -226,11 +264,15 @@ fn not_read(tokens: &[Placed], words: &[&str]) -> Option<NotRead> {
 /// statement in `UNASKED`.
 fn named(sql: &str, tokens: &[Placed], words: &[&str], found: &NotRead) -> Option<Write> {
     let &NotRead::Word(first) = found else { return Some(Write::Several) };
-    if first == 0 && UNASKED.contains(&words[0]) {
+    if first == 0 && is_unasked(words) {
         return None;
     }
     let changes = change_starts(words, first).into_iter().map(|at| change(sql, tokens, words, at)).collect();
     Some(Write::Statement { changes, cascades: words.contains(&"CASCADE") })
+}
+
+fn is_unasked(words: &[&str]) -> bool {
+    UNASKED.contains(&words[0]) && words.get(1) != Some(&"PREPARED")
 }
 
 /// Where each write in `words` starts, from `first` on. A write word that belongs to another write does not count:
@@ -246,14 +288,51 @@ fn change_starts(words: &[&str], first: usize) -> Vec<usize> {
     std::iter::once(first).chain(later).collect()
 }
 
-/// The write that starts at the word counted `at`: a row lock alone, else its verb and the names it writes to.
+/// The write that starts at the word counted `at`: a row lock alone, from its `FOR`, the end of a prepared transaction
+/// alone, else its verb and the names it writes to.
 fn change(sql: &str, tokens: &[Placed], words: &[&str], at: usize) -> Change {
     let verb = words[at];
-    if let Some(&opener) = at.checked_sub(1).map(|before| &words[before]).filter(|before| LOCK_OPENERS.contains(before)) {
-        return Change { verb: format!("{opener} {verb}"), targets: vec![] };
+    if let Some(opening) = LOCK_OPENINGS.iter().find(|opening| words[..at].ends_with(opening)) {
+        return Change { verb: words[at - opening.len()..=at].join(" "), targets: vec![] };
     }
-    let verb_token = TARGETED.contains(&verb).then(|| word_token(tokens, at)).flatten();
-    Change { verb: verb.to_owned(), targets: verb_token.map(|index| targets_in(sql, &tokens[index + 1..])).unwrap_or_default() }
+    if words.get(at + 1) == Some(&"PREPARED") {
+        return Change { verb: format!("{verb} PREPARED"), targets: vec![] };
+    }
+    let Some(index) = TARGETED.contains(&verb).then(|| word_token(tokens, at)).flatten() else {
+        return Change { verb: verb.to_owned(), targets: vec![] };
+    };
+    if SCHEMA_CHANGES.contains(&verb) {
+        return schema_change(sql, verb, &tokens[index + 1..]);
+    }
+    Change { verb: verb.to_owned(), targets: targets_in(sql, &tokens[index + 1..]) }
+}
+
+/// A change of the schema, `verb` then `tokens`, named by place: its kind, then the names past its options, whatever
+/// they spell: `DROP TABLE IF EXISTS role`, `CREATE TRIGGER audit`.
+fn schema_change(sql: &str, verb: &str, tokens: &[Placed]) -> Change {
+    let upper: Vec<String> = tokens.iter().map_while(|placed| placed.word(sql)).map(str::to_ascii_uppercase).collect();
+    let words: Vec<&str> = upper.iter().map(String::as_str).collect();
+    let kind_start = words.iter().take_while(|word| BEFORE_KIND.contains(word)).count();
+    let kind_end = kind_start + kind_length(&words[kind_start..]);
+    let start = kind_end + options_after_kind(&words[kind_end..]);
+    let named = std::iter::once(verb).chain(words[kind_start..kind_end].iter().copied());
+    Change { verb: named.collect::<Vec<_>>().join(" "), targets: names_at(sql, &tokens[start..]) }
+}
+
+/// How many of `words` the kind they start with spans: an opener or none, then one of `KINDS`.
+fn kind_length(words: &[&str]) -> usize {
+    let openers = words.iter().take_while(|word| KIND_OPENERS.contains(word)).count();
+    openers + usize::from(words.get(openers).is_some_and(|word| KINDS.contains(word)))
+}
+
+/// How many of `words` are options between a kind and its object: `CONCURRENTLY`, `ONLY`, `ON`, `IF [NOT] EXISTS`.
+fn options_after_kind(words: &[&str]) -> usize {
+    match words {
+        ["CONCURRENTLY" | "ONLY" | "ON", rest @ ..] => 1 + options_after_kind(rest),
+        ["IF", "EXISTS", rest @ ..] => 2 + options_after_kind(rest),
+        ["IF", "NOT", "EXISTS", rest @ ..] => 3 + options_after_kind(rest),
+        _ => 0,
+    }
 }
 
 /// The place in `tokens` of the word at place `at` among the words alone.
@@ -261,16 +340,21 @@ fn word_token(tokens: &[Placed], at: usize) -> Option<usize> {
     tokens.iter().enumerate().filter(|(_, placed)| placed.token == Token::Word).nth(at).map(|(index, _)| index)
 }
 
-/// The names `tokens` start with once past `BEFORE_TARGET`, a `,` between each: `TRUNCATE orders, customers`.
+/// The names `tokens` start with once past `BEFORE_TARGET`: `DELETE FROM ONLY orders`.
 fn targets_in(sql: &str, tokens: &[Placed]) -> Vec<String> {
     let is_before_target = |placed: &Placed| {
         placed.word(sql).is_some_and(|word| BEFORE_TARGET.split_whitespace().any(|known| known.eq_ignore_ascii_case(word)))
     };
-    let Some(start) = tokens.iter().position(|placed| !is_before_target(placed)) else { return vec![] };
+    let start = tokens.iter().position(|placed| !is_before_target(placed)).unwrap_or(tokens.len());
+    names_at(sql, &tokens[start..])
+}
+
+/// The names `tokens` start with, a `,` between each: `orders, customers`.
+fn names_at(sql: &str, tokens: &[Placed]) -> Vec<String> {
     let mut targets = vec![];
-    let mut rest = &tokens[start..];
+    let mut rest = tokens;
     while let Some(length) = name_length(sql, rest) {
-        targets.push(sql[rest[0].range.start..rest[length - 1].range.end].to_owned());
+        targets.push(rest[..length].iter().map(|placed| &sql[placed.range.clone()]).collect());
         match rest.get(length) {
             Some(comma) if &sql[comma.range.clone()] == "," => rest = &rest[length + 1..],
             _ => break,
@@ -279,14 +363,17 @@ fn targets_in(sql: &str, tokens: &[Placed]) -> Vec<String> {
     targets
 }
 
-/// How many tokens the name at the start of `tokens` spans: words, quoted names and the `.` between them, with no space.
+/// How many tokens the name at the start of `tokens` spans: words, quoted names and the `.` between them, glued or
+/// with space around the `.`, as PostgreSQL reads `shop . orders`.
 fn name_length(sql: &str, tokens: &[Placed]) -> Option<usize> {
-    let is_part = |placed: &Placed| placed.token == Token::Word || matches!(sql[placed.range.clone()].chars().next(), Some('"' | '.'));
+    let is_dot = |placed: &Placed| &sql[placed.range.clone()] == ".";
+    let is_part = |placed: &Placed| placed.token == Token::Word || is_dot(placed) || sql[placed.range.clone()].starts_with('"');
     if !is_part(tokens.first()?) {
         return None;
     }
-    let is_glued = |pair: &[Placed]| pair[0].range.end == pair[1].range.start && is_part(&pair[1]);
-    Some(1 + tokens.windows(2).take_while(|pair| is_glued(pair)).count())
+    let is_joined =
+        |pair: &[Placed]| is_part(&pair[1]) && (pair[0].range.end == pair[1].range.start || is_dot(&pair[0]) || is_dot(&pair[1]));
+    Some(1 + tokens.windows(2).take_while(|pair| is_joined(pair)).count())
 }
 
 /// The bytes of the statement that holds the cursor at byte `at` of `sql`, without its `;` and the whitespace around
@@ -697,9 +784,9 @@ mod tests {
 
     #[test]
     fn a_change_of_the_schema_names_what_it_changes() {
-        assert_eq!(write("DROP TABLE IF EXISTS orders").as_deref(), Some("DROP orders"));
+        assert_eq!(write("DROP TABLE IF EXISTS orders").as_deref(), Some("DROP TABLE orders"));
         assert_eq!(write("TRUNCATE TABLE ONLY orders").as_deref(), Some("TRUNCATE orders"));
-        assert_eq!(write("CREATE INDEX ON orders (total)").as_deref(), Some("CREATE orders"));
+        assert_eq!(write("CREATE INDEX ON orders (total)").as_deref(), Some("CREATE INDEX orders"));
     }
 
     #[test]
@@ -710,7 +797,7 @@ mod tests {
 
     #[test]
     fn a_statement_led_by_its_own_verb_names_no_later_write() {
-        assert_eq!(write("CREATE TRIGGER audit AFTER INSERT ON orders EXECUTE FUNCTION audit()").as_deref(), Some("CREATE TRIGGER"));
+        assert_eq!(write("CREATE TRIGGER audit AFTER INSERT ON orders EXECUTE FUNCTION audit()").as_deref(), Some("CREATE TRIGGER audit"));
     }
 
     #[test]
@@ -725,12 +812,12 @@ mod tests {
     #[test]
     fn every_table_a_write_lists_is_named() {
         assert_eq!(write("TRUNCATE orders, shop.customers").as_deref(), Some("TRUNCATE orders, shop.customers"));
-        assert_eq!(write("DROP TABLE IF EXISTS orders, customers").as_deref(), Some("DROP orders, customers"));
+        assert_eq!(write("DROP TABLE IF EXISTS orders, customers").as_deref(), Some("DROP TABLE orders, customers"));
     }
 
     #[test]
     fn a_write_that_cascades_says_so() {
-        assert_eq!(write("DROP SCHEMA shop CASCADE").as_deref(), Some("DROP shop CASCADE"));
+        assert_eq!(write("DROP SCHEMA shop CASCADE").as_deref(), Some("DROP SCHEMA shop CASCADE"));
         assert_eq!(write("truncate orders cascade").as_deref(), Some("TRUNCATE orders CASCADE"));
     }
 
@@ -751,7 +838,53 @@ mod tests {
         assert_eq!(write("DISCARD ALL").as_deref(), Some("DISCARD"));
         assert_eq!(write("SET search_path = shop").as_deref(), Some("SET"));
         assert_eq!(write("SELECT * FROM orders FOR UPDATE NOWAIT").as_deref(), Some("FOR UPDATE"));
-        assert_eq!(write("SELECT * FROM orders FOR KEY SHARE").as_deref(), Some("KEY SHARE"));
+        assert_eq!(write("SELECT * FROM orders FOR KEY SHARE").as_deref(), Some("FOR KEY SHARE"));
+    }
+
+    #[test]
+    fn a_row_lock_is_named_from_its_for() {
+        assert_eq!(write("SELECT * FROM orders FOR NO KEY UPDATE").as_deref(), Some("FOR NO KEY UPDATE"));
+        assert_eq!(write("SELECT * FROM orders FOR SHARE").as_deref(), Some("FOR SHARE"));
+    }
+
+    #[test]
+    fn the_end_of_a_prepared_transaction_is_asked_for() {
+        assert_eq!(write("COMMIT PREPARED 'nightly'").as_deref(), Some("COMMIT PREPARED"));
+        assert_eq!(write("rollback prepared 'nightly'").as_deref(), Some("ROLLBACK PREPARED"));
+    }
+
+    #[test]
+    fn a_change_of_the_schema_names_its_object_past_its_kind_and_options() {
+        assert_eq!(write("CREATE OR REPLACE FUNCTION add1(int) RETURNS int RETURN 1").as_deref(), Some("CREATE FUNCTION add1"));
+        assert_eq!(write("CREATE TEMP TABLE scratch (id int)").as_deref(), Some("CREATE TABLE scratch"));
+        assert_eq!(write("CREATE UNLOGGED TABLE scratch (id int)").as_deref(), Some("CREATE TABLE scratch"));
+        assert_eq!(write("DROP DATABASE shop").as_deref(), Some("DROP DATABASE shop"));
+        assert_eq!(write("DROP ROLE IF EXISTS nina").as_deref(), Some("DROP ROLE nina"));
+        assert_eq!(write("DROP MATERIALIZED VIEW IF EXISTS shop . totals").as_deref(), Some("DROP MATERIALIZED VIEW shop.totals"));
+    }
+
+    #[test]
+    fn a_change_of_the_schema_names_its_object_by_place_whatever_it_spells() {
+        assert_eq!(write("DROP TABLE role").as_deref(), Some("DROP TABLE role"));
+        assert_eq!(write("DROP VIEW view").as_deref(), Some("DROP VIEW view"));
+        assert_eq!(write(r#"ALTER TABLE "table" ADD COLUMN note text"#).as_deref(), Some(r#"ALTER TABLE "table""#));
+    }
+
+    #[test]
+    fn a_select_into_a_temporary_table_names_that_table() {
+        assert_eq!(write("SELECT * INTO TEMP scratch FROM orders").as_deref(), Some("SELECT into scratch"));
+        assert_eq!(write("SELECT * INTO TEMPORARY TABLE scratch FROM orders").as_deref(), Some("SELECT into scratch"));
+    }
+
+    #[test]
+    fn a_dotted_name_is_read_across_spaces() {
+        assert_eq!(write("DELETE FROM shop . orders").as_deref(), Some("DELETE from shop.orders"));
+        assert_eq!(write(r#"UPDATE shop. "Orders" SET total = 0"#).as_deref(), Some(r#"UPDATE shop."Orders""#));
+    }
+
+    #[test]
+    fn a_table_named_like_a_kind_of_object_is_still_named() {
+        assert_eq!(write("DELETE FROM role WHERE id = 1").as_deref(), Some("DELETE from role"));
     }
 
     #[test]
