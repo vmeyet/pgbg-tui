@@ -34,7 +34,7 @@ const EXPLAIN_OPTIONS: [&str; 23] = [
     "NONE",
     "BINARY",
 ];
-/// The reads that are queries: what `EXPLAIN` may explain, since with `ANALYZE` it runs it, and what a cursor holds.
+/// The reads that are queries: what `EXPLAIN` may explain, since `ANALYZE` runs it, and what a cursor may hold.
 const QUERIES: [&str; 4] = ["SELECT", "WITH", "VALUES", "TABLE"];
 /// The words before a row lock's `UPDATE` or `SHARE`, which make it a lock rather than a statement of its own.
 const LOCK_OPENERS: [&str; 2] = ["FOR", "KEY"];
@@ -112,7 +112,7 @@ pub(super) enum TransactionStep {
 /// How a session runs an admitted statement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Mode {
-    /// Inside `BEGIN READ ONLY`, rolled back.
+    /// Inside `BEGIN READ ONLY`, always rolled back.
     ReadOnly,
     /// As is, on a connection that allows writes.
     Writes,
@@ -133,8 +133,8 @@ pub(crate) enum Refusal {
     },
 }
 
-/// `statement` with `params` bound to its `$n`, cleared for a connection of policy `writes`, or why it is not; more than one
-/// statement is refused whatever the policy, since the extended protocol runs one at a time.
+/// Clears `statement`, with `params` bound to its `$n`, for a connection of policy `writes`, or says why not.
+/// More than one statement is always refused, since the extended protocol runs one at a time.
 pub(crate) fn admit(statement: Statement, params: Params, writes: WritePolicy) -> Result<Admitted, Refusal> {
     let tokens = lex::tokens(statement.as_str());
     let upper = upper_case_words(statement.as_str(), &tokens);
@@ -168,8 +168,8 @@ fn transaction_step(words: &[&str]) -> TransactionStep {
     }
 }
 
-/// `rest`, the words after `COMMIT` or `ROLLBACK`: a chain opens the next transaction at once, and a rollback to a
-/// savepoint or the end of a prepared transaction leaves the open one as it is.
+/// What a `COMMIT` or `ROLLBACK` does, given `rest`, the words after it: a chain opens the next transaction at once,
+/// and a rollback to a savepoint or the end of a prepared transaction keeps the open one.
 fn step_after_an_ending(rest: &[&str]) -> TransactionStep {
     match rest {
         [] | ["AND", "NO", "CHAIN"] => TransactionStep::Ends,
@@ -179,8 +179,8 @@ fn step_after_an_ending(rest: &[&str]) -> TransactionStep {
     }
 }
 
-/// Only when values came: a statement without any may number `$n` of its own (`CREATE FUNCTION ... RETURN $1 + 1`),
-/// and the server judges those.
+/// Checks only when values came: a statement without any may hold `$n` of its own (`CREATE FUNCTION ... RETURN $1 + 1`),
+/// which the server checks.
 fn check_params(tokens: &[Placed], params: &Params) -> Result<(), Refusal> {
     if params.is_empty() {
         return Ok(());
@@ -220,10 +220,10 @@ fn named(sql: &str, tokens: &[Placed], words: &[&str], found: &NotRead) -> Optio
     Some(Write::Statement { changes, cascades: words.contains(&"CASCADE") })
 }
 
-/// Where each write of `words` starts, from `first` on: a write word that is no part of another write, as the `INTO` of
-/// `INSERT INTO` or the `UPDATE` of `ON CONFLICT DO UPDATE` and of a `MERGE`'s `THEN UPDATE` are. Only a read holds
-/// several, in its `WITH`: in a statement led by its own verb, a later one is part of it, as the `INSERT` of
-/// `CREATE TRIGGER ... AFTER INSERT`.
+/// Where each write in `words` starts, from `first` on. A write word that belongs to another write does not count:
+/// the `INTO` of `INSERT INTO`, the `UPDATE` of `ON CONFLICT DO UPDATE` or of a `MERGE`'s `THEN UPDATE`. Only a read
+/// holds several writes, in its `WITH`: in a statement led by its own verb, a later write word is part of it, as the
+/// `INSERT` of `CREATE TRIGGER ... AFTER INSERT`.
 fn change_starts(words: &[&str], first: usize) -> Vec<usize> {
     if !READS.contains(&words[0]) {
         return vec![first];
@@ -243,7 +243,7 @@ fn change(sql: &str, tokens: &[Placed], words: &[&str], at: usize) -> Change {
     Change { verb: verb.to_owned(), targets: verb_token.map(|index| targets_in(sql, &tokens[index + 1..])).unwrap_or_default() }
 }
 
-/// Where the word counted `at` among the words of `tokens` stands among all of them.
+/// The place in `tokens` of the word at place `at` among the words alone.
 fn word_token(tokens: &[Placed], at: usize) -> Option<usize> {
     tokens.iter().enumerate().filter(|(_, placed)| placed.token == Token::Word).nth(at).map(|(index, _)| index)
 }
@@ -266,7 +266,7 @@ fn targets_in(sql: &str, tokens: &[Placed]) -> Vec<String> {
     targets
 }
 
-/// How many tokens the name `tokens` start with spans: words, quoted names and the `.` between them, with no space.
+/// How many tokens the name at the start of `tokens` spans: words, quoted names and the `.` between them, with no space.
 fn name_length(sql: &str, tokens: &[Placed]) -> Option<usize> {
     let is_part = |placed: &Placed| placed.token == Token::Word || matches!(sql[placed.range.clone()].chars().next(), Some('"' | '.'));
     if !is_part(tokens.first()?) {
@@ -276,9 +276,9 @@ fn name_length(sql: &str, tokens: &[Placed]) -> Option<usize> {
     Some(1 + tokens.windows(2).take_while(|pair| is_glued(pair)).count())
 }
 
-/// Where the statement the cursor at byte `at` of `sql` stands in begins and ends, its `;` and the
-/// whitespace around it left out; `None` when `sql` holds no statement. A cursor right after a `;`, or on blank text after
-/// it, stands in the statement before it.
+/// The bytes of the statement that holds the cursor at byte `at` of `sql`, without its `;` and the whitespace around
+/// it; `None` when `sql` holds no statement. A cursor right after a `;`, or on blank text after it, belongs to the
+/// statement before it.
 pub(crate) fn statement_at(sql: &str, lexed: &Lexed, at: usize) -> Option<Range<usize>> {
     let pieces = pieces(lexed.tokens(), sql.len());
     let holding = pieces.iter().position(|piece| at <= piece.range.end + 1).unwrap_or(pieces.len() - 1);
@@ -320,8 +320,8 @@ fn holds_more_than_one_statement(tokens: &[Placed]) -> bool {
     after_first_end.any(|placed| placed.token != Token::End)
 }
 
-/// Where the statement `EXPLAIN` explains starts among `words`, past its options; it must be a read whatever the options,
-/// since a quoted `"analyze"` is no word and still runs it, so another statement is refused at its first word.
+/// Where the statement `EXPLAIN` explains starts among `words`, past its options. It must be a read whatever the
+/// options: a quoted `"analyze"` is not a word, yet still runs it. Any other statement is refused at its first word.
 fn explained(words: &[&str]) -> Result<usize, usize> {
     let options = words.iter().take_while(|word| EXPLAIN_OPTIONS.contains(word)).count();
     match words.get(options) {

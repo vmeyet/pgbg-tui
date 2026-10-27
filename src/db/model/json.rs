@@ -11,7 +11,7 @@ const INDENT: &str = "  ";
 pub(crate) struct JsonText(Box<RawValue>);
 
 impl JsonText {
-    /// `text`, JSON as the server spells it, without the blanks outside its strings.
+    /// `text`, JSON as the server wrote it, with the whitespace outside its strings removed.
     pub(crate) fn compacted(text: &str) -> serde_json::Result<Self> {
         let compact: String = outside_strings(text).filter(|&(c, is_outside)| !(is_outside && is_blank(c))).map(|(c, _)| c).collect();
         RawValue::from_string(compact).map(Self)
@@ -41,7 +41,7 @@ impl PartialEq for JsonText {
 
 impl Eq for JsonText {}
 
-/// As the JSON it holds, written as it is: a pretty printer keeps it on one line.
+/// Writes the JSON it holds as it is, so even a pretty printer keeps it on one line.
 impl Serialize for JsonText {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         self.0.serialize(serializer)

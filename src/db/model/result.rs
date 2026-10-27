@@ -26,7 +26,7 @@ pub(crate) struct ResultSet {
     columns: Vec<Column>,
     rows: Vec<Vec<Value>>,
     extent: Extent,
-    /// The pages its rows came in.
+    /// How many pages its rows came in.
     pages: usize,
 }
 

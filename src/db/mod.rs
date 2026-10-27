@@ -44,20 +44,20 @@ pub(crate) struct Session {
     marks: Marks,
 }
 
-/// What a read-only transaction sees: each statement the database as it is then, or all of them one snapshot.
+/// What a read-only transaction sees: each statement the database as it is when it starts, or all of them one snapshot.
 #[derive(Clone, Copy, Debug)]
 enum Isolation {
     EachStatement,
     OneSnapshot,
 }
 
-/// What the session's own statements left behind them.
+/// What the session's own statements leave behind.
 #[derive(Debug, Default)]
 struct Marks {
     /// A `ROLLBACK` failed, so the server may still hold the transaction open.
     has_failed_rollback: bool,
-    /// A statement or a page is on the server: a session dropped then cuts its link, so the server stops it instead of
-    /// the link finishing it.
+    /// A statement or a page is running on the server: dropping the session then cuts its link, so the server stops
+    /// that work instead of the link running it to its end.
     is_mid_statement: bool,
     user_transaction: UserTransaction,
 }
@@ -90,7 +90,7 @@ impl Drop for Session {
     }
 }
 
-/// Why the link `ended` watches ended, once it has.
+/// Waits until the link that `ended` watches ends, and says why.
 async fn why_ended(ended: &watch::Receiver<Option<String>>) -> String {
     let mut ended = ended.clone();
     match ended.wait_for(Option::is_some).await {

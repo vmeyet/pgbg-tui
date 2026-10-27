@@ -7,8 +7,8 @@ pub(crate) struct Schema {
     pub(crate) schemas: Vec<SchemaNode>,
 }
 
-/// The schema as one read gave it: the schemas the search path of the session that read it names, whose tables a
-/// statement names bare, and whether the read kept only the first tables by name.
+/// The schema as one read gave it, the search path of the session that read it, whose tables a statement may name
+/// without their schema, and whether the read kept only the first tables by name.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Catalog {
     pub(crate) schema: Schema,

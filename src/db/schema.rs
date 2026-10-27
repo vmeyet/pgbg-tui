@@ -8,9 +8,9 @@ use std::fmt;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::{Row, Transaction};
 
-/// The relations a statement reads from, outside the catalogs, that the role may read at least one column of, whose
-/// `schema.table` holds `$2` whatever its case, the first `$1` by name; a partition is left to its parent, which reads
-/// them all.
+/// The relations outside the catalogs a statement can read from: those where the role may read at least one column
+/// and whose `schema.table` holds `$2` whatever its case, the first `$1` by name. A partition is left out, since its
+/// parent reads them all.
 const VISIBLE: &str = "WITH visible AS (
     SELECT c.oid, n.nspname, c.relname, c.relkind, c.reltuples
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -43,8 +43,8 @@ const INDEXES: &str = "SELECT i.indrelid, c.relname, i.indisunique, i.indisprima
 const SEARCH_PATH: &str = "SELECT current_schemas(false)::text[]";
 const DROPPED_RELATION: &str = "could not open relation with OID";
 
-/// How many tables a read keeps, the first by name, so a database of many tenants cannot fill the memory nor slow
-/// every key of completion.
+/// How many tables a read keeps, the first by name, so a database of many tenants cannot fill the memory or slow
+/// down completion on every key.
 #[derive(Clone, Copy, Debug)]
 struct TableCap(usize);
 
@@ -90,7 +90,7 @@ impl Session {
         self.read_schema_capped(TABLE_CAP, "").await
     }
 
-    /// The same, of only the tables whose `schema.table` holds `filter`, whatever its case.
+    /// Like `read_schema`, but only the tables whose `schema.table` holds `filter`, whatever its case.
     pub(crate) async fn read_schema_matching(&mut self, filter: &str) -> Result<Catalog> {
         self.read_schema_capped(TABLE_CAP, filter).await
     }
@@ -120,8 +120,8 @@ impl ReadsCatalogOnce for Session {
     }
 }
 
-/// The schema of `connection`, read on a session of its own along `route`, its password read again for it; the
-/// session closes once read.
+/// Reads the schema of `connection` on a session of its own along `route`, reading the password again for it; the
+/// session closes once done.
 pub(crate) async fn read_schema_along(connection: &Connection, route: Route) -> Result<Catalog> {
     Session::open(connection, route).await?.read_schema().await
 }

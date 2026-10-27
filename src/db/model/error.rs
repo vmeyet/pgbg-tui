@@ -4,7 +4,7 @@ use std::fmt;
 /// An error the server reported, in its own words: `ERROR: relation "orders" does not exist`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ServerError {
-    /// `ERROR`, `FATAL`, or the server's word in its own language.
+    /// `ERROR`, `FATAL`, or the same word in the server's language.
     pub(crate) severity: String,
     pub(crate) message: String,
     pub(crate) detail: Option<String>,
@@ -38,8 +38,8 @@ impl fmt::Display for UnknownType {
 
 impl std::error::Error for UnknownType {}
 
-/// pgbg's own read-only transaction refused on a session where the user's `BEGIN` may have left one open: its
-/// `ROLLBACK` would end the user's.
+/// pgbg refused to open its own read-only transaction, since the user's `BEGIN` may have left one open on the
+/// session: its `ROLLBACK` would end the user's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct InsideUserTransaction;
 

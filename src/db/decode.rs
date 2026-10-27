@@ -26,7 +26,7 @@ fn column_kind(ty: &Type) -> ColumnKind {
     kind(base_type(ty))
 }
 
-/// The type a domain is built on, through every level; any other type as itself.
+/// The type a domain is built on, through domains of domains; any other type is returned as is.
 fn base_type(ty: &Type) -> &Type {
     match ty.kind() {
         Kind::Domain(base) => base_type(base),

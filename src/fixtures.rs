@@ -34,8 +34,8 @@ while True:
 /// tunnel's port is checked for silence, another test's tunnel could take that port.
 pub(crate) static TUNNEL_PORTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// Taken shared around each statement a test sends that makes or drops a relation, and alone around each schema read:
-/// the server fails a read that meets a relation dropped since its snapshot began.
+/// Shared by the tests that make or drop a relation, and held alone by each schema read: the server fails a read that
+/// meets a relation dropped since its snapshot began.
 static CATALOG: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
 
 /// Held while a test makes or drops relations; never while it holds [`reading_the_catalog`].
@@ -143,12 +143,12 @@ pub(crate) fn tunnelled(marker: &str) -> Connection {
     through_forwarder("\"python3\", \"-c\"", marker, WritePolicy::ReadOnly, Duration::ZERO)
 }
 
-/// Like `tunnelled`, each round trip through it about 30 ms long.
+/// Like `tunnelled`, with each round trip taking about 30 ms.
 pub(crate) fn tunnelled_slowly(marker: &str, writes: WritePolicy) -> Connection {
     through_forwarder("\"python3\", \"-c\"", marker, writes, SLOW_HOP)
 }
 
-/// Like `tunnelled`, the forwarder started once the shell line `first` succeeds, a tunnel that died when it fails.
+/// Like `tunnelled`, but the forwarder starts only once the shell line `first` succeeds; when it fails, the tunnel dies.
 pub(crate) fn tunnelled_after(marker: &str, first: &str, writes: WritePolicy) -> Connection {
     let script = format!("{first} || exit 1; exec python3 -c \"$0\" \"$@\"");
     through_forwarder(&format!("\"sh\", \"-c\", {script:?}"), marker, writes, Duration::ZERO)
@@ -168,7 +168,6 @@ pub(crate) fn column(name: &str, kind: ColumnKind) -> Column {
     Column { name: ColumnName::new(name), kind, type_name: TypeName::new("") }
 }
 
-/// Four orders: an id, a total and the customer, one of them `NULL`, one with a name past ASCII.
 /// `count` rows of one integer each, `0` and on.
 pub(crate) fn numbers(count: usize) -> Vec<Vec<Value>> {
     (0..count).map(|n| vec![Value::Int(n as i64)]).collect()
@@ -179,6 +178,7 @@ pub(crate) fn page(count: usize, extent: Extent) -> Page {
     Page { rows: numbers(count), extent }
 }
 
+/// Four orders: an id, a total and the customer, one of them `NULL`, one with a name past ASCII.
 pub(crate) fn orders() -> ResultSet {
     let row = |id: i64, total: &str, customer: Value| vec![Value::Int(id), Value::Numeric(total.into()), customer];
     ResultSet::whole(
