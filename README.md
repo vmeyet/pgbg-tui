@@ -64,6 +64,7 @@ ORDER BY 1;
 
 In the TUI, `ctrl-p` finds a query by a few letters of its path and opens it in the editor.
 `-- format: created_at=relative size=bytes` opens those columns readable; the formats are `raw`, `local`, `relative`, `grouped`, `bytes` and `short`.
+A `timestamp` without time zone has no zone to read it in, so it stays raw when every column reads readable; `f` or `-- format:` still put it `relative`, read as UTC.
 Queries of your own, for every project, go under `pgbg/queries/` in your config folder.
 
 ## License

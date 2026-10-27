@@ -13,6 +13,7 @@ Each entry says what changed, then where, then how to use it.
 - **Readable cells** in the TUI's grid: `f` puts the column under the cursor in its next format, `F` puts every column readable or raw again.
   A timestamp reads in your local time or as `3 h ago`, a number as `1 234 567` or a size like `1.5 KiB`, a UUID by its first eight digits, bytes by their size.
   `-- format: created_at=relative size=bytes` in a saved query's header opens those columns so, and `[display] format = "readable"` in `config.toml` opens every result readable.
+  A `timestamp` without time zone stays raw under `F` and `readable`, since pgbg cannot know its zone; `f` or `-- format:` read it relative as UTC.
   A copy, `--json` and `pgbg run` still give the values as the database gave them.
 - **Parameters** in `pgbg run`: write `{{name}}` in a statement, outside strings and comments, and give its value with `--param name=value`, or with `--params-file <file>`, one `name=value` a line, `-` for stdin, so a value need not sit in the shell's history.
   A value is always bound, never put in the statement's text, and the server reads it as the type it gives the parameter: `WHERE day > {{since}}::date`.

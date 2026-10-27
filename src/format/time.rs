@@ -4,6 +4,9 @@ use chrono::{DateTime, TimeZone, Utc};
 /// Each unit a relative time reads in, largest first, and its seconds: a month is 30 days, a year 365.
 const UNITS: [(u64, &str); 5] = [(365 * 86_400, "y"), (30 * 86_400, "mo"), (86_400, "d"), (3600, "h"), (60, "min")];
 
+/// The widest text `relative` gives for a time less than a year away.
+pub(super) const WIDEST_UNDER_A_YEAR: &str = "59 min ago";
+
 /// `at` in `zone`, to the second, without its offset: `2026-07-14 11:30:15`.
 pub(super) fn local<Tz: TimeZone>(at: DateTime<Utc>, zone: &Tz) -> String {
     at.with_timezone(zone).naive_local().format("%Y-%m-%d %H:%M:%S").to_string()
