@@ -183,6 +183,7 @@ fn is_subsequence(query: &str, key: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::lex::Lexed;
     use crate::db::model::Catalog;
     use crate::fixtures::{shop_catalog, shop_schema};
 
@@ -192,7 +193,8 @@ mod tests {
 
     fn ask(marked: &str) -> Ask {
         let cursor = marked.find('|').unwrap();
-        Ask::at(&marked.replace('|', ""), cursor).unwrap()
+        let text = marked.replace('|', "");
+        Ask::at(&text, &Lexed::of(&text), cursor).unwrap()
     }
 
     fn ghost(marked: &str) -> Option<String> {

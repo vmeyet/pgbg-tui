@@ -287,17 +287,21 @@ impl Sheet {
         self.running_run() == Some(run)
     }
 
+    /// Where the statement under the editor's cursor stands in the editor's text.
+    fn range_under_cursor(&self) -> Option<Range<usize>> {
+        let (before, _, _) = self.editor.split();
+        guard::statement_at(self.editor.text(), self.editor.lexed(), before.len())
+    }
+
     /// The statement under the editor's cursor, and where it stands in the editor's text.
     fn statement_under_cursor(&self) -> Option<(Range<usize>, Statement)> {
-        let (before, _, _) = self.editor.split();
-        let range = guard::statement_at(self.editor.text(), before.len())?;
-        let statement = Statement::new(&self.editor.text()[range.clone()]);
-        Some((range, statement))
+        let range = self.range_under_cursor()?;
+        Some((range.clone(), Statement::new(&self.editor.text()[range])))
     }
 
     /// The `{{name}}` of the statement under the cursor, each once; none when it has none or a `{{` it cannot read.
     pub(in crate::tui) fn param_names(&self) -> Vec<ParamName> {
-        let names = self.statement_under_cursor().map(|(_, statement)| params::names(&statement));
+        let names = self.range_under_cursor().map(|range| params::names(self.editor.lexed().tokens_in(range)));
         names.and_then(Result::ok).unwrap_or_default()
     }
 
@@ -332,7 +336,7 @@ impl Sheet {
     /// Runs the statement under the cursor with the values of the parameter bar, the editor's other statements left alone.
     pub(super) fn run_editor(&mut self) -> Vec<Action> {
         let Some((range, statement)) = self.statement_under_cursor() else { return vec![] };
-        let names = params::names(&statement).unwrap_or_default();
+        let names = params::names(self.editor.lexed().tokens_in(range.clone())).unwrap_or_default();
         let input = ParamInput { given: self.bar.given(&names), specs: self.header.params.clone() };
         self.run_statement(statement, Some(range.start), input)
     }

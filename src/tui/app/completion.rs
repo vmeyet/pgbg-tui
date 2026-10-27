@@ -36,7 +36,7 @@ impl Sheet {
     /// string or a comment.
     pub(super) fn ask(&self) -> Option<Asked<'_>> {
         let (before, _, _) = self.editor.split();
-        let ask = Ask::at(self.editor.text(), before.len())?;
+        let ask = Ask::at(self.editor.text(), self.editor.lexed(), before.len())?;
         Some(Asked { ask, index: self.index.as_deref().unwrap_or_else(|| Index::of_keywords()) })
     }
 

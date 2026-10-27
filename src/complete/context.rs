@@ -1,7 +1,7 @@
 //! What the cursor wants, read from the tokens of the statement under it alone.
 use super::keyword::is_keyword;
 use crate::db::guard;
-use crate::db::lex::{self, Placed, Span, Token};
+use crate::db::lex::{self, Lexed, Placed, Span, Token};
 use std::ops::Range;
 
 /// The words a table name follows.
@@ -38,10 +38,11 @@ struct TableRef {
 }
 
 impl Ask {
-    /// What the cursor at byte `cursor` of `text` wants; `None` inside a string, a comment, a quoted name or a `{{name}}`.
-    pub(crate) fn at(text: &str, cursor: usize) -> Option<Self> {
-        let statement = guard::statement_at(text, cursor).unwrap_or(cursor..cursor);
-        if lex::span_at(text, cursor) != Span::Code {
+    /// What the cursor at byte `cursor` of `text`, read as `lexed`, wants; `None` inside a string, a comment, a quoted
+    /// name or a `{{name}}`.
+    pub(crate) fn at(text: &str, lexed: &Lexed, cursor: usize) -> Option<Self> {
+        let statement = guard::statement_at(text, lexed, cursor).unwrap_or(cursor..cursor);
+        if lexed.span_at(cursor) != Span::Code {
             return None;
         }
         let start = statement.start.min(cursor);
@@ -62,7 +63,7 @@ fn wanted(before: &str, refs: &[TableRef]) -> (usize, Want) {
     let name_start = qualifier.as_ref().map_or(word_start, |qualifier| qualifier.start);
     let ahead = &head[..head.iter().take_while(|placed| placed.range.end <= name_start).count()];
     match (ahead.last(), qualifier) {
-        (Some(previous), _) if is_table_place(before, previous, last_clause(ahead)) => (name_start, Want::Table),
+        (Some(previous), _) if is_table_place(before, previous, last_clause(before, ahead)) => (name_start, Want::Table),
         (_, Some(qualifier)) => (word_start, Want::ColumnOf { table: table_of(&qualifier.name, refs) }),
         (None, None) => (word_start, Want::Keyword),
         (Some(_), None) => (word_start, Want::Column { tables: refs.iter().map(|table| table.name.clone()).collect() }),
@@ -93,7 +94,7 @@ fn table_of(qualifier: &str, refs: &[TableRef]) -> String {
 /// The tables the statement reads from, each named as it names it.
 fn table_refs(statement: &str) -> Vec<TableRef> {
     let tokens = lex::tokens(statement);
-    let places = (1..tokens.len()).filter(|&at| is_table_place(statement, &tokens[at - 1], last_clause(&tokens[..at])));
+    let places = (1..tokens.len()).filter(|&at| is_table_place(statement, &tokens[at - 1], last_clause(statement, &tokens[..at])));
     places.filter(|&at| is_word(&tokens[at])).map(|at| table_ref(statement, &tokens[at..])).collect()
 }
 
@@ -105,25 +106,27 @@ fn table_ref(statement: &str, tokens: &[Placed]) -> TableRef {
         [table, rest @ ..] => (text(table), rest),
         [] => (String::new(), tokens),
     };
-    let rest = if rest.first().and_then(|placed| placed.token.word()) == Some("AS") { &rest[1..] } else { rest };
-    let alias = rest.first().filter(|placed| placed.token.word().is_some_and(|word| !is_keyword(word))).map(text);
+    let is_as = rest.first().and_then(|placed| placed.word(statement)).is_some_and(|word| word.eq_ignore_ascii_case("AS"));
+    let rest = if is_as { &rest[1..] } else { rest };
+    let alias = rest.first().filter(|placed| placed.word(statement).is_some_and(|word| !is_keyword(word))).map(text);
     TableRef { name, alias }
 }
 
 /// Whether a table name goes after `previous`: a `FROM` or `JOIN`, or a `,` in a `FROM` list.
 fn is_table_place(text: &str, previous: &Placed, clause: Option<&str>) -> bool {
-    let is_after_word = previous.token.word().is_some_and(|word| TABLE_AFTER.contains(&word));
-    let is_in_list = &text[previous.range.clone()] == "," && clause.is_some_and(|clause| TABLE_AFTER.contains(&clause));
+    let is_after_word = previous.word(text).is_some_and(|word| lex::is_one_of(word, &TABLE_AFTER));
+    let is_in_list = &text[previous.range.clone()] == "," && clause.is_some_and(|clause| lex::is_one_of(clause, &TABLE_AFTER));
     is_after_word || is_in_list
 }
 
-/// The last keyword of `tokens` that opens a clause, `AS` aside.
-fn last_clause(tokens: &[Placed]) -> Option<&str> {
-    tokens.iter().rev().filter_map(|placed| placed.token.word()).find(|word| is_keyword(word) && *word != "AS")
+/// The last keyword of `tokens`, read out of `text`, that opens a clause, `AS` aside.
+fn last_clause<'a>(text: &'a str, tokens: &[Placed]) -> Option<&'a str> {
+    let is_clause = |word: &&str| is_keyword(word) && !word.eq_ignore_ascii_case("AS");
+    tokens.iter().rev().filter_map(|placed| placed.word(text)).find(is_clause)
 }
 
 fn is_word(placed: &Placed) -> bool {
-    matches!(placed.token, Token::Word(_))
+    placed.token == Token::Word
 }
 
 fn is_dot(text: &str, placed: &Placed) -> bool {
@@ -138,7 +141,7 @@ mod tests {
     fn asked(marked: &str) -> Option<(String, Want)> {
         let cursor = marked.find('|').unwrap();
         let text = marked.replace('|', "");
-        Ask::at(&text, cursor).map(|ask| (text[ask.typed].to_owned(), ask.want))
+        Ask::at(&text, &Lexed::of(&text), cursor).map(|ask| (text[ask.typed].to_owned(), ask.want))
     }
 
     fn columns_of(tables: &[&str]) -> Want {

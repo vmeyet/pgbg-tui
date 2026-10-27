@@ -13,8 +13,8 @@ pub(crate) struct Placed {
 /// what they hold.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Token {
-    /// A word, in upper case.
-    Word(String),
+    /// A word: its text is the bytes it spans, compared without regard to ASCII case as PostgreSQL does.
+    Word,
     /// A `;`.
     End,
     /// `{{name}}`, holding the name.
@@ -38,6 +38,21 @@ pub(crate) enum Span {
     Param,
 }
 
+/// SQL text read once: its tokens, and the lexemes that are not code, to say what kind of text a byte falls in.
+#[derive(Debug, Default)]
+pub(crate) struct Lexed {
+    tokens: Vec<Placed>,
+    not_code: Vec<SpanRun>,
+}
+
+/// A lexeme that is not code: its bytes, its kind of text, and whether text typed at its end still falls in it.
+#[derive(Debug)]
+struct SpanRun {
+    range: Range<usize>,
+    span: Span,
+    is_open: bool,
+}
+
 /// A token, a comment or a run of blanks, and whether text typed at its end would still fall in it: the end of a line
 /// comment, or of a string, a comment or a `{{` never closed.
 struct Lexeme {
@@ -54,28 +69,56 @@ enum Kind {
     Blank,
 }
 
-impl Token {
-    pub(crate) fn word(&self) -> Option<&str> {
-        match self {
-            Self::Word(word) => Some(word),
-            Self::End | Self::Param(_) | Self::Unreadable | Self::Numbered(_) | Self::Other => None,
+impl Placed {
+    /// The text of the word this token is, out of the `sql` it was read from.
+    pub(crate) fn word<'a>(&self, sql: &'a str) -> Option<&'a str> {
+        (self.token == Token::Word).then(|| &sql[self.range.clone()])
+    }
+}
+
+/// Whether `word` is one of `words`, ASCII case aside.
+pub(crate) fn is_one_of(word: &str, words: &[&str]) -> bool {
+    words.iter().any(|known| known.eq_ignore_ascii_case(word))
+}
+
+impl Lexed {
+    pub(crate) fn of(sql: &str) -> Self {
+        let mut lexed = Self::default();
+        for lexeme in lexemes(sql) {
+            let span = lexeme.span(&sql[lexeme.range.clone()]);
+            if span != Span::Code {
+                lexed.not_code.push(SpanRun { range: lexeme.range.clone(), span, is_open: lexeme.is_open });
+            }
+            if let Kind::Token(token) = lexeme.kind {
+                lexed.tokens.push(Placed { range: lexeme.range, token });
+            }
         }
+        lexed
+    }
+
+    /// Every token, in order.
+    pub(crate) fn tokens(&self) -> &[Placed] {
+        &self.tokens
+    }
+
+    /// The tokens within the bytes `range`, which starts and ends between tokens.
+    pub(crate) fn tokens_in(&self, range: Range<usize>) -> &[Placed] {
+        let start = self.tokens.partition_point(|placed| placed.range.start < range.start);
+        let end = self.tokens.partition_point(|placed| placed.range.end <= range.end);
+        &self.tokens[start..end.max(start)]
+    }
+
+    /// What kind of text a character typed at byte `at` would fall in.
+    pub(crate) fn span_at(&self, at: usize) -> Span {
+        let before = self.not_code.partition_point(|run| run.range.start < at);
+        let holds = |run: &&SpanRun| at < run.range.end || (at == run.range.end && run.is_open);
+        self.not_code[..before].last().filter(holds).map_or(Span::Code, |run| run.span)
     }
 }
 
 /// Every token of `sql`, in order.
 pub(crate) fn tokens(sql: &str) -> Vec<Placed> {
-    let placed = |lexeme: Lexeme| match lexeme.kind {
-        Kind::Token(token) => Some(Placed { range: lexeme.range, token }),
-        Kind::Comment | Kind::LineComment | Kind::Blank => None,
-    };
-    lexemes(sql).into_iter().filter_map(placed).collect()
-}
-
-/// What kind of text a character typed at byte `at` of `sql` would fall in.
-pub(crate) fn span_at(sql: &str, at: usize) -> Span {
-    let holds = |lexeme: &&Lexeme| lexeme.range.start < at && (at < lexeme.range.end || (at == lexeme.range.end && lexeme.is_open));
-    lexemes(sql).iter().find(holds).map_or(Span::Code, |lexeme| lexeme.span(&sql[lexeme.range.clone()]))
+    Lexed::of(sql).tokens
 }
 
 /// The lexemes of `sql`; a helper's `None` says its literal or comment runs to the end unclosed.
@@ -110,7 +153,7 @@ impl Lexeme {
         match &self.kind {
             Kind::Comment | Kind::LineComment => Span::Comment,
             Kind::Token(Token::Param(_) | Token::Unreadable) => Span::Param,
-            Kind::Token(Token::Word(_)) if is_escape_string => Span::String,
+            Kind::Token(Token::Word) if is_escape_string => Span::String,
             Kind::Token(Token::Other) if text.starts_with('"') => Span::QuotedName,
             Kind::Token(Token::Other) if text.starts_with('\'') || (text.starts_with('$') && text.len() > 1) => Span::String,
             Kind::Token(_) | Kind::Blank => Span::Code,
@@ -134,10 +177,9 @@ fn is_word_char(c: char) -> bool {
 /// A word at the start of `rest`, and an `E'...'` literal right after an `E`.
 fn word(rest: &str) -> (Kind, Option<&str>) {
     let end = rest.find(|c: char| !is_word_char(c)).unwrap_or(rest.len());
-    let word = rest[..end].to_uppercase();
     let next = &rest[end..];
-    let is_escape_string = word == "E" && next.starts_with('\'');
-    (Kind::Token(Token::Word(word)), if is_escape_string { after_escape_string(&next[1..]) } else { Some(next) })
+    let is_escape_string = rest[..end].eq_ignore_ascii_case("e") && next.starts_with('\'');
+    (Kind::Token(Token::Word), if is_escape_string { after_escape_string(&next[1..]) } else { Some(next) })
 }
 
 /// `{{name}}` at byte `at` of `sql`, spaces allowed around the name; anything else from `{{` on is unreadable.
@@ -294,19 +336,34 @@ mod tests {
     fn a_non_ascii_character_is_part_of_a_word() {
         assert_eq!(params("SELECT a\u{a0}{{since}}"), [Token::Unreadable]);
         assert_eq!(params("SELECT {{since}}\u{1f980}"), [Token::Unreadable]);
-        let words: Vec<Token> = tokens("SELECT\u{a0}\u{1f980}x").into_iter().map(|placed| placed.token).collect();
-        assert_eq!(words, [Token::Word("SELECT\u{a0}\u{1f980}X".into())]);
+        assert_eq!(words("SELECT\u{a0}\u{1f980}x"), ["SELECT\u{a0}\u{1f980}x"]);
     }
 
     #[test]
     fn only_ascii_blanks_part_words() {
-        let words: Vec<Token> = tokens("a \t\n\r\x0c\x0bb").into_iter().map(|placed| placed.token).collect();
-        assert_eq!(words, [Token::Word("A".into()), Token::Word("B".into())]);
+        assert_eq!(words("a \t\n\r\x0c\x0bb"), ["a", "b"]);
+    }
+
+    fn words(sql: &str) -> Vec<&str> {
+        tokens(sql).iter().filter_map(|placed| placed.word(sql)).collect()
+    }
+
+    #[test]
+    fn a_word_is_one_of_a_list_whatever_its_ascii_case() {
+        assert!(is_one_of("Select", &["SELECT"]));
+        assert!(!is_one_of("ſelect", &["SELECT"]));
     }
 
     /// The span a character typed at the `|` of `marked` would fall in.
     fn span(marked: &str) -> Span {
-        span_at(&marked.replace('|', ""), marked.find('|').unwrap())
+        Lexed::of(&marked.replace('|', "")).span_at(marked.find('|').unwrap())
+    }
+
+    #[test]
+    fn the_tokens_within_a_range_are_those_it_holds_whole() {
+        let lexed = Lexed::of("SELECT 1; SELECT 2");
+        let ranges: Vec<Range<usize>> = lexed.tokens_in(10..18).iter().map(|placed| placed.range.clone()).collect();
+        assert_eq!(ranges, [10..16, 17..18]);
     }
 
     #[test]
@@ -343,7 +400,8 @@ mod tests {
 
     #[test]
     fn comments_and_whitespace_leave_no_token() {
-        let words: Vec<Token> = tokens("-- note\n/* a /* b */ */ select").into_iter().map(|placed| placed.token).collect();
-        assert_eq!(words, [Token::Word("SELECT".into())]);
+        let sql = "-- note\n/* a /* b */ */ select";
+        assert_eq!(tokens(sql).into_iter().map(|placed| placed.token).collect::<Vec<_>>(), [Token::Word]);
+        assert_eq!(words(sql), ["select"]);
     }
 }
