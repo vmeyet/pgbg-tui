@@ -1,9 +1,8 @@
 //! The candidates for an ask, best first: vtui ranks each list of names, and this merges the lists, a prefix before a
 //! fuzzy match, a column of a table the statement names before any other name, and among prefixes the shorter first.
 use super::context::{Ask, Want};
-use super::index::{Index, ranked};
+use super::index::{Found, Index, Names};
 use std::collections::HashSet;
-use vtui::complete;
 
 /// How many candidates the list keeps.
 const MAX_LISTED: usize = 50;
@@ -36,7 +35,7 @@ pub(crate) struct Ghosted {
 /// Names of one kind an ask draws from, and whether they are columns of a table the statement names.
 #[derive(Clone, Copy)]
 struct Source<'a> {
-    names: &'a complete::Index,
+    names: &'a Names,
     kind: Kind,
     is_in_scope: bool,
 }
@@ -60,11 +59,11 @@ impl Index {
         let sources = self.sources(&ask.want);
         let best = |is_in_scope: bool| {
             let tier = sources.iter().filter(|source| source.is_in_scope == is_in_scope);
-            let rests = tier.filter_map(|source| Some((source.kind, source.rest_after(&ask.prefix)?)));
-            rests.min_by_key(|(_, rest)| rest.chars().count())
+            let found = tier.filter_map(|source| Some((source.kind, source.names.ghost(&ask.prefix)?)));
+            found.min_by_key(|(_, found)| found.rest.chars().count())
         };
-        let (kind, rest) = best(true).or_else(|| best(false))?;
-        let insert = self.candidate(kind, &format!("{}{rest}", ask.prefix), &ask.prefix).insert;
+        let (kind, Found { rest, name }) = best(true).or_else(|| best(false))?;
+        let insert = self.candidate(kind, &name, &ask.prefix).insert;
         let rest = if kind == Kind::Keyword { cased_as(&rest, &ask.prefix) } else { rest };
         Some(Ghosted { rest, insert })
     }
@@ -74,7 +73,7 @@ impl Index {
     pub(crate) fn candidates(&self, ask: &Ask) -> Vec<Candidate> {
         let mut seen = HashSet::new();
         let found = self.sources(&ask.want).into_iter().flat_map(|source| source.matches(&ask.prefix));
-        let mut found: Vec<Match> = found.filter(|found| seen.insert((found.kind, found.name.to_lowercase()))).collect();
+        let mut found: Vec<Match> = found.filter(|found| seen.insert((found.kind, found.name.clone()))).collect();
         found.sort_by_key(Match::rank);
         found.into_iter().take(MAX_LISTED).map(|found| self.candidate(found.kind, &found.name, &ask.prefix)).collect()
     }
@@ -103,14 +102,9 @@ impl Index {
 }
 
 impl Source<'_> {
-    /// What the ghost shows after `typed`: the rest of the best name it starts, or the first name when nothing was typed.
-    fn rest_after(&self, typed: &str) -> Option<String> {
-        if typed.is_empty() { self.names.cycle("").map(|cycle| cycle.current().to_owned()) } else { self.names.ghost(typed) }
-    }
-
     fn matches(self, typed: &str) -> impl Iterator<Item = Match> {
         let key = typed.to_lowercase();
-        ranked(self.names, typed).into_iter().map(move |name| Match {
+        self.names.ranked(typed).into_iter().map(move |name| Match {
             is_fuzzy: !name.to_lowercase().starts_with(&key),
             name,
             kind: self.kind,
@@ -212,5 +206,22 @@ mod tests {
         schema.schemas[1].tables[0].name = "Orders".to_owned();
         let index = Index::new(&Catalog { schema, search_path: vec!["public".to_owned()], is_cut: false });
         assert_eq!(index.ghost(&ask("SELECT * FROM or|")).map(|ghosted| ghosted.insert).as_deref(), Some("\"Orders\""));
+    }
+
+    #[test]
+    fn the_ghost_takes_the_table_vtui_found_beside_one_that_differs_only_in_case() {
+        let mut schema = shop_schema();
+        schema.schemas[1].tables[1].name = "Orders".to_owned();
+        let index = Index::new(&Catalog { schema, search_path: vec!["public".to_owned()], is_cut: false });
+        assert_eq!(index.ghost(&ask("SELECT * FROM Or|")).map(|ghosted| ghosted.insert).as_deref(), Some("orders"));
+    }
+
+    #[test]
+    fn the_list_offers_both_tables_that_differ_only_in_case_each_as_spelled() {
+        let mut schema = shop_schema();
+        schema.schemas[1].tables[1].name = "Orders".to_owned();
+        let index = Index::new(&Catalog { schema, search_path: vec!["public".to_owned()], is_cut: false });
+        let inserts: Vec<String> = index.candidates(&ask("SELECT * FROM ord|")).into_iter().map(|found| found.insert).collect();
+        assert_eq!(inserts[..2], ["orders", "\"Orders\""]);
     }
 }

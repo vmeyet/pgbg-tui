@@ -181,7 +181,7 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use std::sync::Arc;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     fn render(app: &App, width: u16, height: u16) -> Terminal<TestBackend> {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -189,30 +189,34 @@ mod tests {
         terminal
     }
 
-    const STATEMENT: &str = "SELECT id, customer, total\nFROM orders\nWHERE customer = {{owner}} AND total > 10 -- recent\nLIMIT 50;\n";
-    const KEYS_TYPED: u32 = 200;
-    /// The step takes 0.15 ms in a release build and 6.5 ms in a debug build, which CI runs.
-    const KEY_AND_FRAME_BUDGET: Duration = if cfg!(debug_assertions) { Duration::from_millis(20) } else { Duration::from_millis(1) };
+    /// The wall clock, read in a release build only, by CI's own step: `cargo test --release --lib -- --ignored budget::`.
+    #[cfg(not(debug_assertions))]
+    mod budget {
+        use super::*;
+        use crate::fixtures::best_of;
 
-    /// How long one key and the frame after it take at the end of a 1 000-line editor.
-    fn key_and_frame_took() -> Duration {
-        let mut app = app();
-        app.paste(&STATEMENT.repeat(250));
-        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
-        let started = Instant::now();
-        for _ in 0..KEYS_TYPED {
-            app.handle_key(KeyEvent::from(KeyCode::Char('x')));
-            let mut fit = Fit::default();
-            terminal.draw(|f| fit = draw(f, &app)).unwrap();
-            app.fit(fit);
+        const STATEMENT: &str = "SELECT id, customer, total\nFROM orders\nWHERE customer = {{owner}} AND total > 10 -- recent\nLIMIT 50;\n";
+        const KEYS_TYPED: u32 = 200;
+        /// One key and its frame take 0.17 ms on a laptop, CI about four times that: ten times slower fails.
+        const KEY_AND_FRAME_BUDGET: Duration = Duration::from_micros(1_500);
+
+        #[test]
+        #[ignore = "reads the wall clock: CI runs it in release"]
+        fn one_key_and_its_frame_on_a_thousand_line_editor_stay_within_the_budget() {
+            let mut app = app();
+            app.paste(&STATEMENT.repeat(250));
+            let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+            let mut type_keys = || {
+                for _ in 0..KEYS_TYPED {
+                    app.handle_key(KeyEvent::from(KeyCode::Char('x')));
+                    let mut fit = Fit::default();
+                    terminal.draw(|f| fit = draw(f, &app)).unwrap();
+                    app.fit(fit);
+                }
+            };
+            let took = best_of(&mut type_keys) / KEYS_TYPED;
+            assert!(took < KEY_AND_FRAME_BUDGET, "took {took:?}");
         }
-        started.elapsed() / KEYS_TYPED
-    }
-
-    #[test]
-    fn one_key_and_its_frame_on_a_thousand_line_editor_stay_within_the_budget() {
-        let took = key_and_frame_took();
-        assert!(took < KEY_AND_FRAME_BUDGET, "took {took:?}");
     }
 
     #[test]

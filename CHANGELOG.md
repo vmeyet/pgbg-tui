@@ -127,6 +127,7 @@ Each entry says what changed, then where, then how to use it.
 ### Fixed
 
 - **A write inside a function call asks first**, on a connection that allows writes, in the TUI and `pgbg run`: `SELECT archive_orders()` or `SELECT setval(...)` runs with writes refused, then asks `this statement tried to write: run it?`.
+- **Completion puts in the table or column it shows** in the TUI's editor, when two names differ only in case, as `orders` and `"Orders"`: it took the other one.
 - **A write's question names every write it holds and every table it lists**, in the TUI's footer and `pgbg run`: `WITH moved AS (INSERT INTO archived_orders ...) DELETE FROM orders ...` asks `INSERT into archived_orders and DELETE from orders?`, and `TRUNCATE orders, customers CASCADE` names both tables and the `CASCADE`.
 - **`BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT` and the cursor statements `FETCH`, `MOVE` and `CLOSE` run without asking** on a connection that allows writes, since they change no data by themselves.
 - **More than one statement is refused before pgbg asks about it** in `pgbg run`; it asked `y/N`, then the server refused it anyway.
