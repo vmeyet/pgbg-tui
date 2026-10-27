@@ -157,7 +157,7 @@ impl Sheet {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::app;
+    use super::super::fixtures::app;
     use super::*;
     use crate::syntax::{Painted, Token};
 

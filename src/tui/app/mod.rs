@@ -35,6 +35,8 @@ mod copy;
 mod detail;
 mod diff;
 mod editor;
+#[cfg(test)]
+pub(super) mod fixtures;
 pub(super) mod form;
 mod ghost;
 mod grid;
@@ -339,75 +341,14 @@ impl App {
 }
 
 #[cfg(test)]
-pub(super) mod tests {
+mod tests {
+    use super::fixtures::{app, enter, first_run, press, shop, to_shop, typed, view, with_result};
     use super::sheet::LOST_SESSION;
     use super::*;
-    use crate::connection::ConnectionName;
-    use crate::db::model::{ResultSet, Statement};
     use crate::failure::{Failure, Lost};
-    use crate::fixtures;
-    use crate::query::params::ParamInput;
+    use crate::fixtures::orders;
     use crossterm::event::{KeyCode, KeyEvent};
     use std::time::Duration;
-
-    pub(crate) use crate::fixtures::orders;
-
-    pub(crate) fn connection(tier: &str, writes: &str) -> Connection {
-        fixtures::connection(&format!("tier = \"{tier}\"\nurl = \"postgres://nina@localhost/shop\"\nwrites = \"{writes}\"\n"))
-    }
-
-    pub(crate) fn app_on(connection: &Connection) -> App {
-        App::new(vec![connection.clone()], connection, Theme::default())
-    }
-
-    /// The app with the keys on `focus`, whatever the frame drew.
-    pub(crate) fn with_focus(app: App, focus: Focus) -> App {
-        App { focus, ..app }
-    }
-
-    pub(crate) fn app() -> App {
-        app_on(&connection("local", "read-only"))
-    }
-
-    pub(crate) fn shop() -> ConnectionName {
-        "shop".parse().unwrap()
-    }
-
-    pub(crate) fn to_shop(incoming: Incoming) -> Answer {
-        Answer::Session { connection: shop(), session: SessionId::FIRST, incoming }
-    }
-
-    /// The app with `result` from `SELECT 1` on screen, the keys on it.
-    pub(crate) fn on_the_result(result: ResultSet) -> App {
-        let mut app = typed("SELECT 1");
-        app.handle_key(KeyEvent::from(KeyCode::Enter));
-        app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result, took: Duration::from_millis(38) }));
-        app.handle_key(KeyEvent::from(KeyCode::Tab));
-        app
-    }
-
-    pub(crate) fn typed(text: &str) -> App {
-        let mut app = app();
-        for c in text.chars() {
-            app.handle_key(KeyEvent::from(KeyCode::Char(c)));
-        }
-        app
-    }
-
-    /// The first run of `sql` on `connection`, with no parameter.
-    pub(crate) fn first_run(connection: &ConnectionName, sql: &str) -> Action {
-        Action::Run {
-            connection: connection.clone(),
-            run: RunId::FIRST,
-            statement: Statement::new(sql),
-            input: ParamInput::default(),
-            confirmed: None,
-        }
-    }
-
-    pub(crate) fn enter(app: &mut App) -> Vec<Action> {
-        app.handle_key(KeyEvent::from(KeyCode::Enter))
-    }
 
     #[test]
     fn enter_runs_the_text_of_the_editor() {
@@ -475,22 +416,6 @@ pub(super) mod tests {
                 is_page_asked: false
             }
         );
-    }
-
-    pub(crate) fn with_result() -> App {
-        let mut app = typed("SELECT 1");
-        enter(&mut app);
-        app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result: orders(), took: Duration::from_millis(38) }));
-        app
-    }
-
-    pub(crate) fn press(app: &mut App, code: KeyCode) {
-        app.handle_key(KeyEvent::from(code));
-    }
-
-    pub(crate) fn view(app: &App) -> &View {
-        let Run::Done { view, .. } = &app.sheet().run else { panic!("no result") };
-        view
     }
 
     #[test]

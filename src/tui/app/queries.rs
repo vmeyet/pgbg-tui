@@ -94,10 +94,11 @@ impl App {
 
 #[cfg(test)]
 pub(in crate::tui) mod tests {
-    use super::super::tests::{app, orders, shop, to_shop, typed};
+    use super::super::fixtures::{app, shop, to_shop, typed};
     use super::super::{Answer, Fit, Incoming, QueryAnswer, Room, Run, RunId, View};
     use super::*;
     use crate::chart::Series;
+    use crate::fixtures::orders;
     use crate::format::Format;
     use crate::query::{QueryPath, Source};
     use crossterm::event::{KeyCode, KeyModifiers};

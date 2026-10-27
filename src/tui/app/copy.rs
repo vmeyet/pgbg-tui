@@ -82,8 +82,9 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::super::Answer;
-    use super::super::tests::{on_the_result, orders, typed};
+    use super::super::fixtures::{on_the_result, typed};
     use super::*;
+    use crate::fixtures::orders;
     use crossterm::event::{KeyCode, KeyModifiers};
 
     fn with_an_undecodable_name() -> App {

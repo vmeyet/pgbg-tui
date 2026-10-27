@@ -99,7 +99,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{to_shop, typed};
+    use super::super::fixtures::{to_shop, typed};
     use super::super::{Incoming, Overlay};
     use super::*;
     use crate::complete::Index;

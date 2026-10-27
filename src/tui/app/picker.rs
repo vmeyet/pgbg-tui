@@ -224,12 +224,12 @@ fn on_screen(name: &ConnectionName) -> Note {
 
 #[cfg(test)]
 pub(in crate::tui) mod tests {
-    use super::super::tests::{first_run, orders};
+    use super::super::fixtures::first_run;
     use super::super::{Answer, ConfigAnswer, Incoming, QueryAnswer, Run, RunId, SessionId, SessionState};
     use super::*;
     use crate::connection::WritePolicy;
     use crate::failure::{Failure, Lost};
-    use crate::fixtures::named;
+    use crate::fixtures::{named, orders};
     use crate::tui::theme::Theme;
     use crossterm::event::KeyModifiers;
     use std::time::Duration;

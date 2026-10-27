@@ -114,12 +114,12 @@ fn painted_spans(theme: &Theme, line: &str, painted: &[Painted]) -> Vec<Span<'st
 
 #[cfg(test)]
 mod tests {
-    use super::super::app::tests::{orders, to_shop, typed};
+    use super::super::app::fixtures::{to_shop, typed};
     use super::super::app::{Fit, Incoming, RunId};
     use super::super::styled;
     use super::*;
     use crate::db::model::{ColumnKind, JsonText, ResultSet, TypeName};
-    use crate::fixtures::column;
+    use crate::fixtures::{column, orders};
     use crossterm::event::{KeyCode, KeyEvent};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;

@@ -62,7 +62,7 @@ fn ghost_of(index: &Index, ask: &Ask) -> Option<Ghost> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{shop, to_shop, typed};
+    use super::super::fixtures::{shop, to_shop, typed};
     use super::super::{Incoming, SchemaState};
     use super::*;
     use crate::db::model::Catalog;

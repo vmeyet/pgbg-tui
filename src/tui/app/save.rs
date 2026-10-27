@@ -122,8 +122,8 @@ impl App {
 }
 #[cfg(test)]
 mod tests {
+    use super::super::fixtures::{shop, typed};
     use super::super::queries::tests::{query, with_queries};
-    use super::super::tests::{shop, typed};
     use super::super::{Answer, QueryAnswer};
     use super::*;
 

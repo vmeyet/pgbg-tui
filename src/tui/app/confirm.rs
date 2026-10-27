@@ -47,7 +47,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{app_on, connection, first_run, shop, to_shop, with_focus};
+    use super::super::fixtures::{app_on, connection, first_run, shop, to_shop, with_focus};
     use super::super::{Focus, Incoming, Run, RunId};
     use super::*;
     use crate::db::model::Statement;

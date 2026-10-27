@@ -241,7 +241,7 @@ fn badge(app: &App) -> Span<'static> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::app::tests::{typed, with_focus};
+    use super::super::app::fixtures::{typed, with_focus};
     use super::*;
     use crate::syntax;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};

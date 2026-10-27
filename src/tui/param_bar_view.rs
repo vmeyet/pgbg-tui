@@ -85,7 +85,7 @@ fn fallback_text(app: &App, name: &ParamName) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::super::app::tests::typed;
+    use super::super::app::fixtures::typed;
     use super::super::styled;
     use super::super::ui;
     use super::*;

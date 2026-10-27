@@ -176,13 +176,14 @@ fn failure(app: &App, err: &str, width: usize) -> Line<'static> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::app::fixtures::{app, app_on, connection, on_the_result, to_shop, typed};
     use super::super::app::queries::tests::{query, with_queries};
-    use super::super::app::tests::{app, app_on, connection, on_the_result, orders, to_shop, typed};
     use super::super::app::{Answer, App, Incoming, QueryAnswer, RunId};
     use super::super::styled;
     use super::*;
     use crate::db::model::{Catalog, Extent, LocalPort, Page, ResultSet};
     use crate::failure::{Failure, Lost};
+    use crate::fixtures::orders;
     use crate::tui::theme::Theme;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
