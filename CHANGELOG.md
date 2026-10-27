@@ -130,6 +130,7 @@ Each entry says what changed, then where, then how to use it.
 
 ### Fixed
 
+- **A relative time over a month counts calendar months and years**, in a `relative` column: a day short of a year reads `11 mo ago`, not `12 mo ago`, and a span of years no longer drifts with leap days.
 - **A `before` or password command leaves nothing running**, in `config.toml`: a helper it started in the background is stopped once it ends.
 - **Completion and `ctrl-g` follow a closed connection you edited**, in the TUI: once picked again, it reads the schema of the connection as it now stands, where it kept the old one's tables.
 - **A password or a secret connection key inside a dollar-quoted string is kept out of the history and never sent to the AI**, as in `SELECT dblink_connect($$password=... host=...$$)` or `$q$sslpassword=...$q$`.
