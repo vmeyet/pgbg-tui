@@ -24,6 +24,25 @@ pub(in crate::tui) struct SchemaTab {
     pub(in crate::tui) filter: Field,
 }
 
+/// A table the sidebar or the `ctrl-t` finder picked, by its schema and its name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::tui) struct PickedTable {
+    pub(in crate::tui) schema: String,
+    pub(in crate::tui) name: String,
+}
+
+impl PickedTable {
+    /// The table as a statement writes it.
+    fn sql_name(&self) -> String {
+        qualified(&self.schema, &self.name)
+    }
+
+    fn in_catalog<'a>(&self, catalog: &'a Catalog) -> Option<&'a Table> {
+        let node = catalog.schema.schemas.iter().find(|node| node.name == self.schema)?;
+        node.tables.iter().find(|table| table.name == self.name)
+    }
+}
+
 /// One line of the schema tab.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::tui) enum SchemaRow<'a> {
@@ -123,8 +142,12 @@ impl App {
             Act::Down => self.step_schema(1),
             Act::Up => self.step_schema(-1),
             Act::Open => self.open_schema_row(),
-            Act::Preview => return Some(self.preview_table()),
-            Act::Insert => self.insert_table(),
+            Act::Preview => return Some(self.selected_table().map(|table| self.preview_table(&table)).unwrap_or_default()),
+            Act::Insert => {
+                if let Some(table) = self.selected_table() {
+                    self.insert_table(&table);
+                }
+            }
             Act::Filter => self.overlay = Some(Overlay::SchemaFilter),
             Act::ReadAgain => return Some(self.sheet_mut().read_schema_again()),
             _ => return None,
@@ -145,10 +168,9 @@ impl App {
         self.schema_tab.rows(self.sheet().catalog()?).get(self.schema_tab.selected).copied()
     }
 
-    /// The table under the cursor, as a statement names it.
-    fn selected_table_name(&self) -> Option<String> {
+    fn selected_table(&self) -> Option<PickedTable> {
         let Some(SchemaRow::Table { schema, table }) = self.selected_row() else { return None };
-        Some(qualified(schema, &table.name))
+        Some(PickedTable { schema: schema.to_owned(), name: table.name.clone() })
     }
 
     /// Folds or unfolds the schema under the cursor, or shows the columns and indexes of the table there.
@@ -160,24 +182,29 @@ impl App {
                 _ = if is_open { closed.insert(name) } else { closed.remove(&name) };
             }
             Some(SchemaRow::Table { schema, table }) => {
-                let (title, result, reading) = (described_title(schema, table), described(table), self.reading);
-                self.sheet_mut().show(title, result, &reading);
+                let picked = PickedTable { schema: schema.to_owned(), name: table.name.clone() };
+                self.describe_table(&picked);
             }
             None => {}
         }
     }
 
-    /// Runs `SELECT * FROM` the table under the cursor, its first rows, as the editor's statements run.
-    fn preview_table(&mut self) -> Vec<Action> {
-        let Some(name) = self.selected_table_name() else { return vec![] };
-        let preview = Statement::new(format!("SELECT * FROM {name} LIMIT {PREVIEW_ROWS}"));
+    /// Shows the columns and indexes of `picked` in the result pane.
+    pub(super) fn describe_table(&mut self, picked: &PickedTable) {
+        let Some(table) = self.sheet().catalog().and_then(|catalog| picked.in_catalog(catalog)) else { return };
+        let (title, result, reading) = (described_title(&picked.schema, table), described(table), self.reading);
+        self.sheet_mut().show(title, result, &reading);
+    }
+
+    /// Runs `SELECT * FROM` `picked`, its first rows, as the editor's statements run.
+    pub(super) fn preview_table(&mut self, picked: &PickedTable) -> Vec<Action> {
+        let preview = Statement::new(format!("SELECT * FROM {} LIMIT {PREVIEW_ROWS}", picked.sql_name()));
         self.sheet_mut().run_statement(preview, None, ParamInput::default())
     }
 
-    /// Puts the name of the table under the cursor in the editor at its cursor, and gives the editor the keys.
-    fn insert_table(&mut self) {
-        let Some(name) = self.selected_table_name() else { return };
-        self.sheet_mut().paste(&name);
+    /// Puts the name of `picked` in the editor at its cursor, and gives the editor the keys.
+    pub(super) fn insert_table(&mut self, picked: &PickedTable) {
+        self.sheet_mut().paste(&picked.sql_name());
         self.focus = Focus::Editor;
     }
 

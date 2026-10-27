@@ -2,7 +2,7 @@
 use super::app::{App, Fit, Overlay, SessionState, SidebarTab, TunnelState};
 use super::{
     completion_view, detail_view, editor_view, finder_view, form_view, help_view, history_view, param_bar_view, picker_view, prompt_view,
-    result_view, sidebar_view,
+    result_view, sidebar_view, table_finder_view,
 };
 use crate::act::{self, Hint, Pane};
 use crate::render::printable;
@@ -46,6 +46,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> Fit {
     completion_view::draw(f, app, areas.editor);
     footer(f, app, areas.footer);
     finder_view::draw(f, app);
+    table_finder_view::draw(f, app);
     picker_view::draw(f, app);
     history_view::draw(f, app);
     form_view::draw(f, app);
@@ -316,6 +317,16 @@ mod tests {
         }
         app.handle_key(KeyEvent::from(KeyCode::Enter));
         insta::assert_snapshot!("schema_table", render(&app, 100, 14).backend());
+    }
+
+    #[test]
+    fn ctrl_t_opens_the_table_finder_over_the_screen() {
+        let mut app = app();
+        app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+        let catalog = Catalog { schema: crate::fixtures::shop_schema(), search_path: vec!["public".to_owned()], is_cut: false };
+        app.apply(to_shop(Incoming::Schema(Ok(Arc::new(catalog)))));
+        app.handle_key(KeyEvent::from(KeyCode::Char('o')));
+        insta::assert_snapshot!("table_finder", render(&app, 60, 16).backend());
     }
 
     #[test]

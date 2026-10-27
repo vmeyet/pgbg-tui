@@ -26,6 +26,8 @@ Each entry says what changed, then where, then how to use it.
   Lines heading the statement declare them: `-- param: since date = 2024-01-01` gives a type and a default, `-- param: owner text optional` binds NULL when left empty; a type the server does not know stops the run.
   One file may serve several queries: a name in it the statement lacks is left alone, while a `--param` for one is refused as a typo.
   A name with no value, or a statement mixing its own `$1` with `{{name}}` stops the run before anything is sent; the history keeps `{{name}}`, never the value.
+- **`ctrl-t` finds a table** in the TUI, from anywhere: type a few letters of `schema.table`, then `⏎` shows its columns and indexes, `ctrl-r` runs its first 100 rows, `⇥` puts its name in the editor.
+  It reads the schema the first time, like the sidebar's schema tab.
 - **The schema** in the TUI's sidebar: on the sidebar, `]` or `[` switches from the saved queries to the schema of the connection on screen, its schemas and their tables; `⏎` folds a schema, `/` keeps the tables whose name holds what you type, `r` reads it again.
   On a table, `p` runs `SELECT * FROM` it `LIMIT 100`, `i` puts its name in the editor at the cursor, quoted when it needs it, and `⏎` shows its columns, their types, defaults and indexes in the result pane.
   The sidebar shows on a terminal of 80 columns or more, saved queries or not; the schema is read the moment its tab shows, on a second, short login along the same tunnel, so a running statement never waits on it; the first 20 000 tables by name are kept, and the status line says when there are more.
