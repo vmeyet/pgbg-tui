@@ -127,6 +127,8 @@ Each entry says what changed, then where, then how to use it.
 
 - **A table named like a write, as `delete` or `update`, previews again** with `p` and `^r` in the TUI's schema, and goes in quoted from `i`, `⇥` and completion.
   pgbg quotes such a name, so its guard no longer takes the read for a write.
+- **JSON keeps its keys in the order the server gives them**, in the grid, the row's detail, copies and `pgbg run`, as `psql` shows them: as written for `json`, shorter keys first for `jsonb`.
+  A JSON value inside `--json` or a JSON copy stays on one line, and a big one no longer slows the row's detail.
 - **Reading the schema no longer fails with `could not open relation with OID`** when another session drops a table during the read, in the TUI's sidebar and `pgbg schema`.
   pgbg names plain index columns from its own snapshot, and reads once more if an expression index still loses the race.
 - **A result read inside your own transaction never ends it**, on a connection that allows writes: pgbg reads the first 10 000 rows of a query through a cursor there, so a transaction that failed stays failed until your `COMMIT` or `ROLLBACK`, as in `psql`.

@@ -637,6 +637,14 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn json_keeps_its_keys_in_the_order_the_server_gives_them() {
+        let result = run(WritePolicy::ReadOnly, r#"SELECT '{"z": 1, "a": 2}'::json, '{"aa": 1, "b": 2}'::jsonb"#).await.unwrap();
+        let shown: Vec<String> = result.rows()[0].iter().map(Value::to_string).collect();
+        assert_eq!(shown, [r#"{"z":1,"a":2}"#, r#"{"b":2,"aa":1}"#]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn infinite_dates_and_special_floats_decode_in_their_row() {
         let sql = "SELECT 'infinity'::date, '-infinity'::timestamptz, 'NaN'::float8, pg_sleep(0), 7";
         let result = run(WritePolicy::ReadOnly, sql).await.unwrap();
