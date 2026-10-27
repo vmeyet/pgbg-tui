@@ -28,7 +28,7 @@ impl SchemaReader {
             let read = read_schema_along(&self.connection, route).await;
             self.answers.say(Incoming::Schema(answer(&self.connection, read)));
         }
-        std::future::pending().await
+        std::future::pending::<()>().await;
     }
 
     /// The route of the session once it is open; none once the session task is gone.
