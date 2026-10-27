@@ -59,7 +59,7 @@ impl Target {
         query_values(&self.0, "sslmode").next()
     }
 
-    /// True when every host the URL names, in its authority or a `host` query key, is this machine.
+    /// Whether every host the URL names, in its authority or a `host` query key, is this machine.
     pub(crate) fn is_local(&self) -> bool {
         let queried = query_values(&self.0, "host");
         self.0.host_str().map(str::to_owned).into_iter().chain(queried).all(|host| is_local_host(&host))

@@ -59,8 +59,8 @@ impl StatementTimeout {
     }
 }
 
-/// The timeout a connection asks for: one it chose, which always holds, or its tier's, which a stricter one the
-/// server already applies wins over.
+/// The timeout a connection asks for: one it chose, which always holds, or its tier's.
+/// A stricter timeout the server already applies wins over the tier's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TimeoutChoice {
     Own(StatementTimeout),
