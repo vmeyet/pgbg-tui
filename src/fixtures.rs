@@ -226,3 +226,14 @@ pub(crate) fn shop_schema() -> Schema {
     let billing = SchemaNode { name: "billing".to_owned(), tables: vec![invoices] };
     Schema { schemas: vec![billing, public] }
 }
+
+/// The shortest of five runs of `step`, so a busy machine slows one run, not the measure.
+#[cfg(not(debug_assertions))]
+pub(crate) fn best_of<T>(mut step: impl FnMut() -> T) -> Duration {
+    let mut timed = || {
+        let started = std::time::Instant::now();
+        std::hint::black_box(step());
+        started.elapsed()
+    };
+    (0..5).map(|_| timed()).min().unwrap_or_default()
+}

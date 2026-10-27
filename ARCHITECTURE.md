@@ -115,7 +115,8 @@ Completing a name:
 3. The ghost is prefix only, a binary search in each of vtui's indexes: the rest of the shortest name longer than what was typed shows dimmed after the cursor, and `→` at the end of the word takes it, quoted when its name needs it; any other key drops it, one that acts (`⏎`, `⇥`, `esc`, `ctrl-s`) too, and it shows only while the editor has the keys.
 4. `ctrl-space` opens the list in a popup at the cursor, where a fuzzy match joins the prefix ones: vtui ranks each list (prefix matches shortest first, then fuzzy ones by score, only to fill 50), and pgbg merges them: a prefix before a fuzzy match, a column of a table the statement names before any other, the shorter prefix match first, each name once; at most 50 are kept; `↑↓` pick, `⏎` or `⇥` take, `esc` closes, and typing on narrows it, while `⇥` outside it still switches panes.
    When no name fits, it opens or stays open saying `no match` and `⏎` and `⇥` do nothing, so a half-typed name never runs; a paste closes it and goes to the editor.
-5. A test holds the budget: 20 000 tables and 200 000 columns, one key, under a millisecond in a release build.
+5. A timing test holds the budget: 20 000 tables and 200 000 columns, one key, under 2.5 ms in a release build, best of five runs.
+   It reads the wall clock, so it is `#[ignore]`d and built in release only, and CI runs it in a step of its own.
 
 Running a statement with parameters:
 

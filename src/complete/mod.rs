@@ -15,16 +15,14 @@ mod tests {
     use super::*;
     use crate::db::lex::Lexed;
     use crate::db::model::{Catalog, Schema, SchemaColumn, SchemaNode, Table, TableKind, TypeName};
-    use std::time::{Duration, Instant};
 
     const TABLE_COUNT: usize = 20_000;
     const COLUMNS_PER_TABLE: usize = 10;
     const WORDS: [&str; 10] = ["orders", "customers", "invoices", "payments", "refunds", "carts", "items", "stocks", "shipments", "notes"];
     const COLUMN_WORDS: [&str; 10] =
         ["id", "created_at", "updated_at", "customer_id", "status", "total", "currency", "note", "code", "count"];
-    /// A release build takes 0.27 ms at worst (`SELECT c|`, 40 000 columns to weigh), CI about four times that: ten times slower fails.
-    /// Only a release build is timed: debug codegen of the ranking swings with the machine, and CI runs these tests in release too.
-    const BUDGET: Duration = Duration::from_micros(2_500);
+    const KEYS: [&str; 5] =
+        ["SELECT * FROM o|", "SELECT o.| FROM orders_40 o", "SELECT st| FROM orders_40", "SELECT c|", "SELECT cr| FROM missing"];
 
     fn large_catalog() -> Catalog {
         let column = |name: String| SchemaColumn { name, type_name: TypeName::new("integer"), is_nullable: false, default: None };
@@ -39,44 +37,64 @@ mod tests {
         Catalog { schema: Schema { schemas: vec![public] }, search_path: vec!["public".to_owned()], is_cut: false }
     }
 
-    fn ghost_took(index: &Index, marked: &str) -> Duration {
+    fn ask(marked: &str) -> Option<Ask> {
         let cursor = marked.find('|').unwrap();
         let text = marked.replace('|', "");
-        let started = Instant::now();
-        let ghost: Option<Ghosted> = Ask::at(&text, &Lexed::of(&text), cursor).and_then(|ask| index.ghost(&ask));
-        let took = started.elapsed();
-        assert!(ghost.is_some(), "{marked} offers a ghost");
-        took
+        Ask::at(&text, &Lexed::of(&text), cursor)
     }
 
-    fn list_took(index: &Index, marked: &str) -> Duration {
-        let cursor = marked.find('|').unwrap();
-        let text = marked.replace('|', "");
-        let started = Instant::now();
-        let listed = Ask::at(&text, &Lexed::of(&text), cursor).map(|ask| index.candidates(&ask)).unwrap_or_default();
-        let took = started.elapsed();
-        assert!(!listed.is_empty(), "{marked} lists a name");
-        took
+    fn ghost(index: &Index, marked: &str) -> Option<Ghosted> {
+        ask(marked).and_then(|ask| index.ghost(&ask))
     }
 
-    const KEYS: [&str; 5] =
-        ["SELECT * FROM o|", "SELECT o.| FROM orders_40 o", "SELECT st| FROM orders_40", "SELECT c|", "SELECT cr| FROM missing"];
+    fn listed(index: &Index, marked: &str) -> Vec<Candidate> {
+        ask(marked).map(|ask| index.candidates(&ask)).unwrap_or_default()
+    }
 
     #[test]
-    fn one_key_on_twenty_thousand_tables_finds_its_ghost_within_the_budget() {
+    fn one_key_on_twenty_thousand_tables_finds_its_ghost() {
         let index = Index::new(&large_catalog());
         for marked in KEYS {
-            let took = ghost_took(&index, marked);
-            assert!(cfg!(debug_assertions) || took < BUDGET, "{marked} took {took:?}");
+            assert!(ghost(&index, marked).is_some(), "{marked} offers a ghost");
         }
     }
 
     #[test]
-    fn one_key_on_twenty_thousand_tables_fills_its_list_within_the_budget() {
+    fn one_key_on_twenty_thousand_tables_fills_its_list() {
         let index = Index::new(&large_catalog());
         for marked in KEYS {
-            let took = list_took(&index, marked);
-            assert!(cfg!(debug_assertions) || took < BUDGET, "{marked} took {took:?}");
+            assert!(!listed(&index, marked).is_empty(), "{marked} lists a name");
+        }
+    }
+
+    /// The wall clock, read in a release build only, by CI's own step: `cargo test --release --lib -- --ignored budget::`.
+    #[cfg(not(debug_assertions))]
+    mod budget {
+        use super::*;
+        use crate::fixtures::best_of;
+        use std::time::Duration;
+
+        /// The worst key takes 0.23 ms on a laptop (`SELECT c|`, 40 000 columns to weigh), CI about four times that: ten times slower fails.
+        const BUDGET: Duration = Duration::from_micros(2_500);
+
+        #[test]
+        #[ignore = "reads the wall clock: CI runs it in release"]
+        fn one_key_on_twenty_thousand_tables_finds_its_ghost_within_the_budget() {
+            let index = Index::new(&large_catalog());
+            for marked in KEYS {
+                let took = best_of(|| ghost(&index, marked));
+                assert!(took < BUDGET, "{marked} took {took:?}");
+            }
+        }
+
+        #[test]
+        #[ignore = "reads the wall clock: CI runs it in release"]
+        fn one_key_on_twenty_thousand_tables_fills_its_list_within_the_budget() {
+            let index = Index::new(&large_catalog());
+            for marked in KEYS {
+                let took = best_of(|| listed(&index, marked));
+                assert!(took < BUDGET, "{marked} took {took:?}");
+            }
         }
     }
 }

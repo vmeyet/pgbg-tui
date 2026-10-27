@@ -10,16 +10,30 @@ use vtui::toward::Toward;
 #[derive(Debug)]
 pub(crate) struct Index {
     /// Each table bare when its schema is the first of the search path to hold that name, else `schema.table`.
-    pub(super) tables: complete::Index,
+    pub(super) tables: Names,
     /// The columns of each table, by its place in `by_name`.
-    table_columns: Vec<complete::Index>,
+    table_columns: Vec<Names>,
     /// The columns of every table, each name once.
-    pub(super) columns: complete::Index,
-    pub(super) keywords: complete::Index,
+    pub(super) columns: Names,
+    pub(super) keywords: Names,
     /// Each table by its completion name and by `schema.table`, lowercased.
     by_name: HashMap<String, usize>,
-    /// The names that need quotes, by their lowercase text: every other name is its lowercase text.
+    /// The names that need quotes, as spelled: every other name goes in as it is.
     quoted: HashMap<String, Box<str>>,
+}
+
+/// One list of names: vtui's index of it, and how to spell back a name vtui found.
+#[derive(Debug)]
+pub(super) struct Names {
+    index: complete::Index,
+    /// The first name of the list holding each lowercase text, when it is not that text: vtui ranks it before the others.
+    spellings: HashMap<String, Box<str>>,
+}
+
+/// The name the ghost found: what shows after what was typed, and the name as the catalog spells it.
+pub(super) struct Found {
+    pub(super) rest: String,
+    pub(super) name: String,
 }
 
 /// An index is never compared by content: two are equal only when they are the same one, as the `Arc` a sheet keeps.
@@ -43,30 +57,29 @@ impl Index {
     pub(crate) fn new(catalog: &Catalog) -> Self {
         let named = named_tables(catalog);
         let by_name = named.iter().enumerate().flat_map(|(at, table)| [(table.name.to_lowercase(), at), (table.qualified.clone(), at)]);
-        let table_columns = named.iter().map(|table| complete::Index::new(column_names(table.table))).collect();
+        let table_columns = named.iter().map(|table| Names::new(column_names(table.table).collect())).collect();
         let columns = distinct(named.iter().flat_map(|table| column_names(table.table)));
-        let quoted_tables = named.iter().filter_map(|table| Some((table.name.to_lowercase(), table.quoted.clone()?.into())));
+        let quoted_tables = named.iter().filter_map(|table| Some((table.name.clone(), table.quoted.clone()?.into())));
         let quoted_columns = named.iter().flat_map(|table| column_names(table.table)).filter(|name| needs_quotes(name));
-        let quoted = quoted_tables.chain(quoted_columns.map(|name| (name.to_lowercase(), sql_name(name).into()))).collect();
+        let quoted = quoted_tables.chain(quoted_columns.map(|name| (name.to_owned(), sql_name(name).into()))).collect();
         Self {
-            tables: complete::Index::new(named.iter().map(|table| table.name.as_str())),
+            tables: Names::new(named.iter().map(|table| table.name.as_str()).collect()),
             table_columns,
-            columns: complete::Index::new(columns),
-            keywords: complete::Index::new(keywords()),
+            columns: Names::new(columns),
+            keywords: Names::new(keywords().collect()),
             by_name: by_name.collect(),
             quoted,
         }
     }
 
     /// The columns of the table a statement names `name`, lowercased, bare or with its schema.
-    pub(super) fn columns_of(&self, name: &str) -> Option<&complete::Index> {
+    pub(super) fn columns_of(&self, name: &str) -> Option<&Names> {
         self.by_name.get(name).map(|&at| &self.table_columns[at])
     }
 
-    /// What goes in the editor for the table or column `name`: quoted when it needs quotes.
+    /// What goes in the editor for the table or column `name`, spelled as the catalog does: quoted when it needs quotes.
     pub(super) fn insert(&self, name: &str) -> String {
-        let key = name.to_lowercase();
-        self.quoted.get(&key).map_or(key, ToString::to_string)
+        self.quoted.get(name).map_or_else(|| name.to_owned(), ToString::to_string)
     }
 
     /// The index of no catalog, the keywords alone, for a sheet whose schema is not read.
@@ -76,18 +89,45 @@ impl Index {
     }
 }
 
-/// The names vtui ranks for `token` in `names`, best first, at most 50.
-pub(super) fn ranked(names: &complete::Index, token: &str) -> Vec<String> {
-    let Some(first) = names.cycle(token) else { return vec![] };
-    let mut cycle = first.clone();
-    let mut ranked = vec![];
-    loop {
-        ranked.push(cycle.current().to_owned());
-        cycle.advance(Toward::Next);
-        if cycle == first {
-            return ranked;
+impl Names {
+    fn new(names: Vec<&str>) -> Self {
+        Self { spellings: spellings(&names), index: complete::Index::new(names) }
+    }
+
+    /// The best name `typed` starts, or the first name when nothing was typed.
+    pub(super) fn ghost(&self, typed: &str) -> Option<Found> {
+        if typed.is_empty() {
+            let name = self.index.cycle("")?.current().to_owned();
+            return Some(Found { rest: name.clone(), name });
+        }
+        let rest = self.index.ghost(typed)?;
+        let key = format!("{typed}{rest}").to_lowercase();
+        let name = self.spellings.get(&key).map_or(key, ToString::to_string);
+        Some(Found { rest, name })
+    }
+
+    /// The names vtui ranks for `token`, best first, at most 50.
+    pub(super) fn ranked(&self, token: &str) -> Vec<String> {
+        let Some(first) = self.index.cycle(token) else { return vec![] };
+        let mut cycle = first.clone();
+        let mut ranked = vec![];
+        loop {
+            ranked.push(cycle.current().to_owned());
+            cycle.advance(Toward::Next);
+            if cycle == first {
+                return ranked;
+            }
         }
     }
+}
+
+/// The first of `names` to hold each lowercase text, when it is not that text.
+fn spellings(names: &[&str]) -> HashMap<String, Box<str>> {
+    let mut first = HashMap::new();
+    for name in names {
+        first.entry(name.to_lowercase()).or_insert(*name);
+    }
+    first.into_iter().filter(|(key, name)| key != name).map(|(key, name)| (key, name.into())).collect()
 }
 
 fn column_names(table: &Table) -> impl Iterator<Item = &str> {
@@ -132,8 +172,8 @@ mod tests {
         Index::new(&Catalog { schema: shop_schema(), search_path, is_cut: false })
     }
 
-    fn all(names: &complete::Index) -> Vec<String> {
-        ranked(names, "")
+    fn all(names: &Names) -> Vec<String> {
+        names.ranked("")
     }
 
     #[test]
@@ -174,5 +214,23 @@ mod tests {
         assert_eq!(index.insert("order"), "\"order\"");
         assert_eq!(index.insert("Billing.invoices"), "\"Billing\".invoices");
         assert_eq!(index.insert("orders"), "orders");
+    }
+
+    #[test]
+    fn a_table_goes_in_as_spelled_beside_one_that_differs_only_in_case() {
+        let mut schema = shop_schema();
+        schema.schemas[1].tables[1].name = "Orders".to_owned();
+        let index = Index::new(&Catalog { schema, search_path: vec!["public".to_owned()], is_cut: false });
+        assert_eq!(index.insert("orders"), "orders");
+        assert_eq!(index.insert("Orders"), "\"Orders\"");
+    }
+
+    #[test]
+    fn a_column_goes_in_as_spelled_beside_one_that_differs_only_in_case() {
+        let mut schema = shop_schema();
+        schema.schemas[1].tables[1].columns[1].name = "ID".to_owned();
+        let index = Index::new(&Catalog { schema, search_path: vec!["public".to_owned()], is_cut: false });
+        assert_eq!(index.insert("id"), "id");
+        assert_eq!(index.insert("ID"), "\"ID\"");
     }
 }

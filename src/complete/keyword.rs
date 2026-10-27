@@ -1,5 +1,5 @@
 //! The SQL keywords completion offers.
-//! No alias can be one of them, and a name that is one needs quotes.
+//! No alias can be one of them; a name that PostgreSQL reserves needs quotes.
 
 /// In upper case.
 const KEYWORDS: &str = "ALL AND AS ASC BETWEEN BY CASE CROSS DESC DISTINCT ELSE END EXCEPT EXISTS EXPLAIN FALSE FETCH FOR FROM FULL GROUP \
