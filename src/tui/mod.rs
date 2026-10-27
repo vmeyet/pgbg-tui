@@ -53,6 +53,7 @@ pub(crate) async fn run(connections: Vec<Connection>, first: Connection, config:
     let mut signals = Signals::listen()?;
     let theme = vtui::ground::ask().map_or_else(Theme::default, |ground| Theme::default().with_ground(ground));
     let mut app = App::new(connections, &first, theme).with_format_mode(format);
+    // Unbounded: each answer follows an action, a page only once the grid asks for it, and the loop takes one per turn.
     let (answers, mut incoming) = mpsc::unbounded_channel();
     let mut backend = Backend::new(Roots::find_here().await?, config, answers).with_history(Store::from_env());
     for action in app.start() {

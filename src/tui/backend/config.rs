@@ -11,6 +11,7 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 /// The handle to the task that changes the config one change at a time, so answers come back in the order asked.
 #[derive(Debug)]
 pub(in crate::tui) struct ConfigFile {
+    /// Unbounded: the user saves or removes one connection per key press.
     changes: UnboundedSender<Change>,
 }
 

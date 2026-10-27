@@ -36,7 +36,9 @@ impl SessionAnswers {
 #[derive(Debug)]
 pub(in crate::tui::backend) struct SessionLink {
     pub(in crate::tui::backend) session: SessionId,
+    /// Unbounded: a sheet sends one run at a time and asks a page only once the last one came.
     jobs: UnboundedSender<Job>,
+    /// Unbounded: a sheet sends one cancel per run, as the run turns to cancelling.
     cancels: UnboundedSender<RunId>,
     /// Shared with the schema reader, which it wakes at each ask.
     schema_asks: Arc<Notify>,
