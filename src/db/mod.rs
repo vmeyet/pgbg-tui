@@ -60,6 +60,8 @@ struct Marks {
     /// the link finishing it.
     is_mid_statement: bool,
     user_transaction: UserTransaction,
+    /// The cursors pgbg declared, so each takes a name no earlier one holds, even one left open.
+    cursors_declared: u64,
 }
 
 impl Session {
