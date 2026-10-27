@@ -104,13 +104,8 @@ mod tests {
     use crate::connection::{Connection, WritePolicy};
     use crate::db::model::{Params, ResultSet, Route, Statement, Value};
     use crate::db::{Session, guard};
-    use crate::fixtures;
+    use crate::fixtures::{self, run_on, session};
     use url::Url;
-
-    async fn session(writes: WritePolicy) -> Session {
-        let writes = if writes == WritePolicy::Allowed { "allowed" } else { "read-only" };
-        Session::open(&fixtures::test_database("local", &format!("writes = \"{writes}\"\n")), Route::Direct).await.unwrap()
-    }
 
     #[test]
     fn no_idle_timeout_on_the_server_leaves_the_backstop() {
@@ -168,10 +163,6 @@ mod tests {
             let result = session.run(&admitted).await.unwrap();
             assert_eq!(result.rows(), [[Value::Text(r"\".into())]], "{writes:?}");
         }
-    }
-
-    async fn run_on(session: &mut Session, sql: &str) -> ResultSet {
-        session.run(&guard::admit(Statement::new(sql), Params::default(), WritePolicy::Allowed).unwrap()).await.unwrap()
     }
 
     async fn session_on(tier: &str, extra: &str) -> Session {

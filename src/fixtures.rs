@@ -1,9 +1,10 @@
 //! Invented fixtures the tests share: the connection `shop`, the test database, tunnels to it, and results of `orders`.
 use crate::connection::{Connection, Entry, WritePolicy};
 use crate::db::model::{
-    Catalog, Column, ColumnKind, ColumnName, Extent, Index, Page, ResultSet, Schema, SchemaColumn, SchemaNode, Table, TableKind, TypeName,
-    Value,
+    Catalog, Column, ColumnKind, ColumnName, Extent, Index, Page, Params, ResultSet, Route, Schema, SchemaColumn, SchemaNode, Statement,
+    Table, TableKind, TypeName, Value,
 };
+use crate::db::{Session, guard};
 use rustix::process::{Pid, test_kill_process};
 use std::path::Path;
 use std::time::Duration;
@@ -105,6 +106,29 @@ pub(crate) fn test_database_as(name: &str) -> Connection {
 /// `shop` on the test database, of `tier`, with the keys of `extra` too.
 pub(crate) fn test_database(tier: &str, extra: &str) -> Connection {
     connection(&format!("tier = \"{tier}\"\nurl = \"{}\"\n{extra}", test_database_url()))
+}
+
+/// A session on `shop`, the test database, a local connection of policy `writes`.
+pub(crate) async fn session(writes: WritePolicy) -> Session {
+    let writes = if writes == WritePolicy::Allowed { "allowed" } else { "read-only" };
+    Session::open(&test_database("local", &format!("writes = \"{writes}\"\n")), Route::Direct).await.unwrap()
+}
+
+/// `sql` run alone on a new session of policy `writes`; it may make or drop a relation, so no schema read runs meanwhile.
+pub(crate) async fn run(writes: WritePolicy, sql: &str) -> anyhow::Result<ResultSet> {
+    let admitted = guard::admit(Statement::new(sql), Params::default(), writes).unwrap();
+    let _changing = changing_the_catalog().await;
+    session(writes).await.run(&admitted).await
+}
+
+/// `sql` run on `session`, a connection that allows writes.
+pub(crate) async fn try_on(session: &mut Session, sql: &str) -> anyhow::Result<ResultSet> {
+    session.run(&guard::admit(Statement::new(sql), Params::default(), WritePolicy::Allowed).unwrap()).await
+}
+
+/// Like `try_on`, failing the test when the statement fails.
+pub(crate) async fn run_on(session: &mut Session, sql: &str) -> ResultSet {
+    try_on(session, sql).await.unwrap()
 }
 
 /// `shop` on the test database logged in as `user`, a local one, with the keys of `extra` too.

@@ -126,20 +126,10 @@ fn server_error(err: tokio_postgres::Error) -> anyhow::Error {
 mod tests {
     use super::*;
     use crate::connection::WritePolicy;
-    use crate::fixtures;
-    use model::{Params, ResultSet, Route, Statement};
+    use crate::fixtures::{run, session};
+    use model::{Params, Statement};
     use std::time::Duration;
     use tokio::time::timeout;
-
-    async fn session(writes: WritePolicy) -> Session {
-        let writes = if writes == WritePolicy::Allowed { "allowed" } else { "read-only" };
-        Session::open(&fixtures::test_database("local", &format!("writes = \"{writes}\"\n")), Route::Direct).await.unwrap()
-    }
-
-    async fn run(writes: WritePolicy, sql: &str) -> Result<ResultSet> {
-        let admitted = guard::admit(Statement::new(sql), Params::default(), writes).unwrap();
-        session(writes).await.run(&admitted).await
-    }
 
     async fn ended_on_the_server() -> Session {
         let mut doomed = session(WritePolicy::ReadOnly).await;

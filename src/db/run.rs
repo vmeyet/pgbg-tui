@@ -245,8 +245,8 @@ mod tests {
     use super::*;
     use crate::connection::WritePolicy;
     use crate::db::guard;
-    use crate::db::model::{self, ParamValue, Route, Statement};
-    use crate::fixtures;
+    use crate::db::model::{self, ParamValue, Statement};
+    use crate::fixtures::{run, run_on, session, try_on};
 
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
@@ -258,17 +258,6 @@ mod tests {
             })
             .await;
         assert_eq!(isolation.unwrap(), "repeatable read");
-    }
-
-    async fn session(writes: WritePolicy) -> Session {
-        let writes = if writes == WritePolicy::Allowed { "allowed" } else { "read-only" };
-        Session::open(&fixtures::test_database("local", &format!("writes = \"{writes}\"\n")), Route::Direct).await.unwrap()
-    }
-
-    async fn run(writes: WritePolicy, sql: &str) -> Result<ResultSet> {
-        let admitted = guard::admit(Statement::new(sql), Params::default(), writes).unwrap();
-        let _changing = fixtures::changing_the_catalog().await;
-        session(writes).await.run(&admitted).await
     }
 
     fn numbers_up_to(count: usize) -> String {
@@ -294,14 +283,6 @@ mod tests {
     async fn a_result_on_a_connection_that_allows_writes_is_cut_too() {
         let result = run(WritePolicy::Allowed, &numbers_up_to(ROW_CAP + 1)).await.unwrap();
         assert_eq!((result.rows().len(), result.is_whole()), (ROW_CAP, false));
-    }
-
-    async fn try_on(session: &mut Session, sql: &str) -> Result<ResultSet> {
-        session.run(&guard::admit(Statement::new(sql), Params::default(), WritePolicy::Allowed).unwrap()).await
-    }
-
-    async fn run_on(session: &mut Session, sql: &str) -> ResultSet {
-        try_on(session, sql).await.unwrap()
     }
 
     #[tokio::test]
