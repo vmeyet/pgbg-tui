@@ -191,7 +191,8 @@ So the server reads strings the same way, every read-only transaction sets `SET 
 That session setting is the one gap, on `Mode::Writes` only: a transaction pooler keeps it on the server link it reached alone, and the user's own `SET standard_conforming_strings = off` turns it off, so there the server can read a backslash in a string as the guard does not.
 
 On a connection that allows writes, a statement runs as typed, except that one returning rows goes through a portal in its own committed transaction, unless the user's own `BEGIN` left one open.
-The session tracks that transaction from the first words of each statement the server ran (`BEGIN`, `START`, `COMMIT`, `END`, `ROLLBACK`, `ABORT`, `PREPARE TRANSACTION`, with `AND CHAIN` and `TO SAVEPOINT` read too); when one of those failed, never got its answer or reads unclear, a `SAVEPOINT` probe asks the server once.
+The session tracks that transaction from the first words of each statement the server ran (`BEGIN`, `START`, `COMMIT`, `END`, `ROLLBACK`, `ABORT`, `PREPARE TRANSACTION`, with `AND CHAIN` and `TO SAVEPOINT` read too); when one of those failed, never got its answer or reads unclear, or after a `CALL` or a `DO` block, which may commit inside, a `SAVEPOINT` probe asks the server once.
+pgbg's own read-only transaction (`Session::read_only`) is refused with `InsideUserTransaction` while the user's is open, since its `ROLLBACK` would end it.
 
 `pgbg doctor <connection>` checks the role and says what it can write.
 

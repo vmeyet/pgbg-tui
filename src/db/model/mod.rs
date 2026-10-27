@@ -1,6 +1,6 @@
 //! The neutral model of what a statement returns: code outside `db/` never sees a driver type.
 pub(crate) use cancel::CancelToken;
-pub(crate) use error::{ServerError, UnknownType};
+pub(crate) use error::{InsideUserTransaction, ServerError, UnknownType};
 pub(crate) use name::{needs_quotes, qualified, sql_name};
 pub(crate) use result::{Extent, Page, ResultSet};
 pub(crate) use route::{LocalPort, Route};

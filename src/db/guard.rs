@@ -28,7 +28,7 @@ pub(super) enum TransactionStep {
     Keeps,
     Opens,
     Ends,
-    /// It ends one in a way the guard cannot read.
+    /// It ends one in a way the guard cannot read, or runs code that may end one inside (a procedure, a `DO` block).
     Unsure,
 }
 
@@ -69,6 +69,7 @@ fn transaction_step(tokens: &[Token]) -> TransactionStep {
     let words: Vec<&str> = tokens.iter().filter_map(Token::word).collect();
     match words.as_slice() {
         ["BEGIN" | "START", ..] => TransactionStep::Opens,
+        ["CALL" | "DO", ..] => TransactionStep::Unsure,
         ["PREPARE", "TRANSACTION", ..] => TransactionStep::Ends,
         ["COMMIT" | "END" | "ROLLBACK" | "ABORT", "WORK" | "TRANSACTION", rest @ ..]
         | ["COMMIT" | "END" | "ROLLBACK" | "ABORT", rest @ ..] => step_after_an_ending(rest),
@@ -423,8 +424,13 @@ mod tests {
     #[test]
     fn any_other_statement_keeps_it() {
         assert_eq!(step("INSERT INTO orders VALUES (1) RETURNING id"), TransactionStep::Keeps);
-        assert_eq!(step("DO $$ BEGIN COMMIT; END $$"), TransactionStep::Keeps);
         assert_eq!(step("-- COMMIT\nSELECT 1"), TransactionStep::Keeps);
+    }
+
+    #[test]
+    fn a_procedure_or_a_do_block_is_unsure_since_it_may_commit_inside() {
+        assert_eq!(step("CALL close_orders()"), TransactionStep::Unsure);
+        assert_eq!(step("do $$ BEGIN COMMIT; END $$"), TransactionStep::Unsure);
     }
 
     #[test]
