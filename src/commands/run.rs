@@ -1,5 +1,6 @@
 use crate::cli::StatementArgs;
 use crate::connection::{Connection, ConnectionName};
+use crate::db::guard::{Admitted, Refusal, Write};
 use crate::db::model::{ResultSet, Statement};
 use crate::history::{Entry, Outcome, Store};
 use crate::query::params::{self, Assignment, Given};
@@ -7,6 +8,7 @@ use crate::query::{Header, Roots};
 use crate::render;
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::Utc;
+use std::io::IsTerminal;
 use std::path::Path;
 use std::time::Instant;
 
@@ -15,20 +17,25 @@ const STDIN: &str = "-";
 
 /// Runs one statement on the connection named `connection`, its `{{name}}` bound to the values of `assignments` and of
 /// the `name=value` lines of `params_file`, adds it to the connection's history, and prints its result: a plain table,
-/// or JSON with `json`.
+/// or JSON with `json`. A write is sent once `yes` or the terminal says so.
 pub async fn run(
     connection: &ConnectionName,
     statement: &StatementArgs,
     assignments: &[Assignment],
     params_file: Option<&Path>,
+    yes: bool,
     json: bool,
 ) -> Result<()> {
     let connection = super::connection(Some(connection))?;
     check_one_reader_of_stdin(statement.file.as_deref(), params_file)?;
     let sql = &statement_text(statement).await?;
     let given = given(assignments, params_file).await?;
+    let admitted = admit(&connection, sql, &given, yes).await;
     let (started_at, clock) = (Utc::now(), Instant::now());
-    let result = run_statement(&connection, sql, &given).await;
+    let result = match admitted {
+        Ok(admitted) => super::on_session(&connection, async |session| session.run(&admitted).await).await,
+        Err(err) => Err(err),
+    };
     let took_ms = u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX);
     let entry =
         Entry { statement: sql.to_owned(), connection: connection.name().clone(), started_at, took_ms, outcome: Outcome::of(&result) };
@@ -83,13 +90,27 @@ async fn read_text(path: &Path, what: &str) -> Result<String> {
     tokio::fs::read_to_string(path).await.with_context(|| format!("reading {}", path.display()))
 }
 
-async fn run_statement(connection: &Connection, sql: &str, given: &Given) -> Result<ResultSet> {
+/// `sql` with `given` bound, cleared for `connection`; a write only once `yes` or the terminal says so.
+async fn admit(connection: &Connection, sql: &str, given: &Given, yes: bool) -> Result<Admitted> {
     let header = Header::parse(sql);
     for warning in &header.warnings {
         super::warn(warning);
     }
     let admitted = params::admit(&Statement::new(sql), given, &header.params, connection.writes())?;
-    super::on_session(connection, async |session| session.run(&admitted).await).await
+    match admitted.write() {
+        Some(write) if !yes && !is_confirmed_at_the_terminal(write).await? => Err(Refusal::Unconfirmed(write.clone()).into()),
+        _ => Ok(admitted),
+    }
+}
+
+/// Whether the user answers `y` to `write` on the terminal; no when stdin is not one.
+async fn is_confirmed_at_the_terminal(write: &Write) -> Result<bool> {
+    if !std::io::stdin().is_terminal() {
+        return Ok(false);
+    }
+    eprint!("{write}? [y/N] ");
+    let answer = tokio::task::spawn_blocking(|| std::io::stdin().lines().next().transpose()).await??;
+    Ok(answer.is_some_and(|answer| matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")))
 }
 
 fn print(result: &ResultSet, json: bool) -> Result<()> {

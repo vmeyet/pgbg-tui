@@ -1,6 +1,7 @@
-//! The prompt on the footer line: the path of a new query as it is typed, or whether to open a query over unsaved text.
+//! The prompt on the footer line: the path of a new query as it is typed, whether to open a query over unsaved text, or
+//! whether to send a write.
 use super::app::{App, Prompt};
-use crate::act::{self, Pane};
+use crate::act;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -24,9 +25,12 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, prompt: &Prompt, area: Rect) {
         Prompt::OpenOverUnsaved(query) => {
             vec![Span::styled(format!(" the editor's text is not saved: open {} over it? ", query.path), Style::default().fg(theme.warn))]
         }
+        Prompt::SendWrite(waiting) => {
+            vec![Span::styled(format!(" {}? ", waiting.write), Style::default().fg(theme.danger).add_modifier(Modifier::BOLD))]
+        }
     };
     let hints =
-        act::footer(Pane::Prompt).map(|hint| Span::styled(format!(" {} {} ", hint.keys, hint.does), Style::default().fg(theme.muted)));
+        act::footer(prompt.pane()).map(|hint| Span::styled(format!(" {} {} ", hint.keys, hint.does), Style::default().fg(theme.muted)));
     spans.extend(hints);
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }

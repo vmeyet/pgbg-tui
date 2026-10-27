@@ -117,7 +117,7 @@ A performance step measures before and after, and the MR gives the numbers.
 
 ## 16. Confirm a write
 
-- [ ] A statement the guard classifies as a write asks before it is sent, on every tier: the footer says its verb and target (`DELETE from orders?`), `y` sends it, any other key cancels and nothing is sent; only a connection that allows writes ever gets that far, a read-only one still refuses it
+- [x] A statement the guard classifies as a write asks before it is sent, on every tier: the footer says its verb and target (`DELETE from orders?`), `y` sends it, any other key cancels and nothing is sent; only a connection that allows writes ever gets that far, a read-only one still refuses it
 
 ## 17. Asking a command for SQL
 

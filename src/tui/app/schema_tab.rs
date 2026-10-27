@@ -39,6 +39,10 @@ impl PickedTable {
         qualified(&self.schema, &self.name)
     }
 
+    fn preview(&self) -> Statement {
+        Statement::new(format!("SELECT * FROM {} LIMIT {PREVIEW_ROWS}", self.sql_name()))
+    }
+
     fn in_catalog<'a>(&self, catalog: &'a Catalog) -> Option<&'a Table> {
         let node = catalog.schema.schemas.iter().find(|node| node.name == self.schema)?;
         node.tables.iter().find(|table| table.name == self.name)
@@ -204,10 +208,10 @@ impl App {
         self.sheet_mut().show(title, result, &reading);
     }
 
-    /// Runs `SELECT * FROM` `picked`, its first rows, as the editor's statements run.
+    /// Runs `SELECT * FROM` `picked`, its first rows, as the editor's statements run; a read whatever the table's name,
+    /// so it never asks as a write does.
     pub(super) fn preview_table(&mut self, picked: &PickedTable) -> Vec<Action> {
-        let preview = Statement::new(format!("SELECT * FROM {} LIMIT {PREVIEW_ROWS}", picked.sql_name()));
-        self.sheet_mut().run_statement(preview, None, ParamInput::default())
+        self.sheet_mut().run_statement(picked.preview(), None, ParamInput::default())
     }
 
     /// Puts the name of `picked` in the editor at its cursor, and gives the editor the keys.
@@ -238,6 +242,9 @@ mod tests {
     use super::super::tests::{app, app_on, shop, to_shop};
     use super::super::{Answer, Fit, Incoming, Run, RunId, SessionId};
     use super::*;
+    use crate::connection::WritePolicy;
+    use crate::db::model::Params;
+    use crate::db::{guard, lex};
     use crate::fixtures::{self, shop_catalog};
     use crossterm::event::KeyCode;
     use std::sync::Arc;
@@ -356,6 +363,17 @@ mod tests {
             press(&mut on_orders(), KeyCode::Char('p')),
             [Action::Run { connection: shop(), run: RunId::FIRST, statement, input: ParamInput::default() }]
         );
+    }
+
+    #[test]
+    fn the_preview_of_a_table_is_a_read_whatever_its_name() {
+        let names = ["delete", "update", "insert", "merge", "share", "for update", "x; DROP TABLE orders", "Orders\"; DELETE"];
+        for (schema, name) in ["public", "key"].into_iter().flat_map(|schema| names.map(|name| (schema, name))) {
+            let preview = PickedTable { schema: schema.into(), name: name.into() }.preview();
+            let sql = preview.as_str();
+            assert_eq!(guard::write_in(sql, &lex::tokens(sql)), None, "{sql}");
+            assert!(guard::admit(preview.clone(), Params::default(), WritePolicy::ReadOnly).is_ok(), "{sql}");
+        }
     }
 
     #[test]

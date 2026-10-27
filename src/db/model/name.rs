@@ -1,4 +1,5 @@
-//! A name as a statement must write it: bare when PostgreSQL reads it back the same, else in double quotes.
+//! A name as a statement must write it: bare when PostgreSQL and the guard read it back the same, else in double quotes.
+use crate::db::guard;
 use std::borrow::Cow;
 
 /// The keywords PostgreSQL reserves, which a table or a schema can only be named by in quotes.
@@ -14,12 +15,12 @@ fn is_reserved(name: &str) -> bool {
     RESERVED.split_whitespace().any(|word| word == name)
 }
 
-/// Whether PostgreSQL reads `name` back as written only between double quotes: an upper-case letter, a sign, a space
-/// or a reserved keyword.
+/// Whether `name` reads back as written only between double quotes: an upper-case letter, a sign, a space, a reserved
+/// keyword, or a word the guard takes for a write (`delete`), which would turn a read of it into a write.
 pub(crate) fn needs_quotes(name: &str) -> bool {
     let is_plain = name.chars().next().is_some_and(|first| first.is_ascii_lowercase() || first == '_')
         && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '$');
-    !is_plain || is_reserved(name)
+    !is_plain || is_reserved(name) || guard::reads_as_write(name)
 }
 
 /// `name` bare when PostgreSQL reads it back the same, else quoted with its quotes doubled.
@@ -54,6 +55,12 @@ mod tests {
     #[test]
     fn a_keyword_postgresql_takes_as_a_table_name_stays_bare() {
         assert_eq!((sql_name("values"), sql_name("user")), ("values".into(), "\"user\"".into()));
+    }
+
+    #[test]
+    fn a_name_the_guard_reads_as_a_write_is_quoted() {
+        assert_eq!(qualified("key", "delete"), "\"key\".\"delete\"");
+        assert_eq!(sql_name("deleted"), "deleted");
     }
 
     #[test]
