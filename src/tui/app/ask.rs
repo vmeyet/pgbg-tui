@@ -1,7 +1,7 @@
 //! `ctrl-g`: an instruction typed on the footer line, the `[ai] command` asked about the statement under the cursor,
 //! and its answer, which `tab` puts in the editor; nothing of it ever runs by itself.
 use super::diff::{self, DiffLine};
-use super::editor::Edited;
+use super::editor::{Edited, Revision};
 use super::save::typed_into;
 use super::{Action, App, AskFailure, AskId, Overlay, Sheet};
 use crate::act::{self, Act, Pane};
@@ -20,8 +20,8 @@ use vtui::field::Field;
 pub(in crate::tui) enum AskStep {
     /// The instruction, as typed so far.
     Instruction(Field),
-    /// The command runs on this ask; `esc` drops it.
-    Waiting(AskId),
+    /// The command runs on `ask`, asked about the editor at `revision`; `esc` drops it.
+    Waiting { ask: AskId, revision: Revision },
     /// The answer, until `tab` takes it or `esc` drops it.
     Answered(Suggestion),
 }
@@ -29,6 +29,8 @@ pub(in crate::tui) enum AskStep {
 /// An answer, and the statement under the cursor it would replace.
 #[derive(Debug, PartialEq, Eq)]
 pub(in crate::tui) struct Suggestion {
+    /// The editor it was asked about; `replaces` fits that one only.
+    revision: Revision,
     /// The editor bytes it replaces: the statement under the cursor, or none to go in at the cursor.
     replaces: Option<Range<usize>>,
     /// The answer's statements, one after the other.
@@ -66,7 +68,7 @@ impl AskStep {
     pub(in crate::tui) const fn pane(&self) -> Pane {
         match self {
             Self::Instruction(_) => Pane::Instruction,
-            Self::Waiting(_) => Pane::Asking,
+            Self::Waiting { .. } => Pane::Asking,
             Self::Answered(_) => Pane::Answer,
         }
     }
@@ -75,12 +77,8 @@ impl AskStep {
 impl App {
     /// Opens the instruction line, or says why asking is off; the schema is read meanwhile, for the prompt's slice.
     pub(super) fn open_ask(&mut self) -> Vec<Action> {
-        if self.sheet().connection.ai() == AiAsking::Off {
-            self.asks.failure = Some(AskFailure::Off);
-            return vec![];
-        }
-        if self.asks.settings.is_none() {
-            self.asks.failure = Some(AskFailure::NoCommand);
+        if let Some(why) = self.why_asking_is_off() {
+            self.asks.failure = Some(why);
             return vec![];
         }
         self.overlay = Some(Overlay::Ask(AskStep::Instruction(Field::default())));
@@ -92,11 +90,11 @@ impl App {
     pub(super) fn ask_key(&mut self, step: AskStep, key: KeyEvent) -> Vec<Action> {
         match (act::act_for(key, step.pane()), step) {
             (Some(Act::Quit), _) => self.quit(),
-            (Some(Act::Close), AskStep::Waiting(ask)) => vec![Action::DropAsk(ask)],
+            (Some(Act::Close), AskStep::Waiting { ask, .. }) => vec![Action::DropAsk(ask)],
             (Some(Act::Close), _) => vec![],
             (Some(Act::Open), AskStep::Instruction(instruction)) => self.send_ask(instruction),
             (Some(Act::Insert), AskStep::Answered(suggestion)) => {
-                self.sheet_mut().take_suggestion(suggestion);
+                self.take_suggestion(suggestion);
                 vec![]
             }
             (_, AskStep::Instruction(mut instruction)) => {
@@ -113,6 +111,10 @@ impl App {
 
     /// Asks with `instruction` unless it is blank, or says why the prompt is not sent.
     fn send_ask(&mut self, instruction: Field) -> Vec<Action> {
+        if let Some(why) = self.why_asking_is_off() {
+            self.asks.failure = Some(why);
+            return vec![];
+        }
         let Some(settings) = self.asks.settings.as_ref().filter(|_| !instruction.text().trim().is_empty()) else {
             self.overlay = Some(Overlay::Ask(AskStep::Instruction(instruction)));
             return vec![];
@@ -125,24 +127,44 @@ impl App {
             }
             Ok(prompt) => {
                 let ask = self.asks.take_id();
-                self.overlay = Some(Overlay::Ask(AskStep::Waiting(ask)));
+                self.overlay = Some(Overlay::Ask(AskStep::Waiting { ask, revision: self.sheet().editor.revision() }));
                 vec![Action::Ask { ask, prompt, settings }]
             }
         }
     }
 
-    /// Shows the answer to `ask` while the footer still waits on it; a late answer is dropped.
+    /// Shows the answer to `ask` while the footer still waits on it; a late answer is dropped, and so is one whose
+    /// editor changed meanwhile.
     pub(super) fn asked(&mut self, ask: AskId, answer: Result<Vec<Statement>, AskFailure>) {
-        if self.overlay != Some(Overlay::Ask(AskStep::Waiting(ask))) {
+        let Some(Overlay::Ask(AskStep::Waiting { ask: waiting, revision })) = self.overlay else { return };
+        if waiting != ask {
             return;
         }
+        let answer = answer.and_then(|statements| self.sheet().suggestion(revision, &statements));
         match answer {
-            Ok(statements) => self.overlay = Some(Overlay::Ask(AskStep::Answered(self.sheet().suggestion(&statements)))),
+            Ok(suggestion) => self.overlay = Some(Overlay::Ask(AskStep::Answered(suggestion))),
             Err(failure) => {
                 self.overlay = None;
                 self.asks.failure = Some(failure);
             }
         }
+    }
+
+    /// Why `ctrl-g` asks nothing on the sheet on screen, as the config stands now.
+    fn why_asking_is_off(&self) -> Option<AskFailure> {
+        if self.sheet().connection.ai() == AiAsking::Off {
+            return Some(AskFailure::Off);
+        }
+        self.asks.settings.is_none().then_some(AskFailure::NoCommand)
+    }
+
+    /// Puts `suggestion` in the editor, unless the editor changed since it was asked about.
+    fn take_suggestion(&mut self, suggestion: Suggestion) {
+        if suggestion.revision != self.sheet().editor.revision() {
+            self.asks.failure = Some(AskFailure::EditorChanged);
+            return;
+        }
+        self.sheet_mut().take_suggestion(suggestion);
     }
 
     pub(in crate::tui) fn ask_failure(&self) -> Option<&AskFailure> {
@@ -160,13 +182,17 @@ impl Sheet {
         ai::prompt(&ai::Ask { instruction: &instruction, statement: statement.as_ref(), catalog, tier: self.connection.tier(), literals })
     }
 
-    /// `statements` against the statement under the cursor, which they would replace.
-    fn suggestion(&self, statements: &[Statement]) -> Suggestion {
+    /// `statements` against the statement under the cursor, which they would replace, unless the editor is no longer
+    /// at `revision`, the one they were asked about.
+    fn suggestion(&self, revision: Revision, statements: &[Statement]) -> Result<Suggestion, AskFailure> {
+        if revision != self.editor.revision() {
+            return Err(AskFailure::EditorChanged);
+        }
         let write = statements.iter().find_map(|statement| guard::write_in(statement.as_str(), &lex::tokens(statement.as_str())));
         let text = statements.iter().map(Statement::as_str).collect::<Vec<_>>().join(";\n");
         let replaces = self.range_under_cursor();
         let lines = diff::lines(replaces.clone().map_or("", |range| &self.editor.text()[range]), &text);
-        Suggestion { replaces, text, lines, write }
+        Ok(Suggestion { revision, replaces, text, lines, write })
     }
 
     /// Puts the answer in the editor as one paste, in place of the statement it was asked about.
@@ -183,8 +209,9 @@ impl Sheet {
 
 #[cfg(test)]
 pub(in crate::tui) mod tests {
-    use super::super::fixtures::{app_on, connection, to_shop};
-    use super::super::{Answer, Incoming, Run};
+    use super::super::fixtures::{app_on, connection, shop, to_shop};
+    use super::super::queries::tests::query;
+    use super::super::{Answer, Incoming, QueryAnswer, Run};
     use super::*;
     use crate::fixtures::{self, shop_catalog};
     use crossterm::event::{KeyCode, KeyModifiers};
@@ -248,7 +275,7 @@ pub(in crate::tui) mod tests {
         let sent = press(&mut app, KeyCode::Enter);
         let [Action::Ask { ask, prompt, .. }] = &*sent else { panic!("{sent:?}") };
         assert!(prompt.text().contains("only the ids") && prompt.text().contains("total > <number 1>"), "{}", prompt.text());
-        assert_eq!(step(&app), Some(&AskStep::Waiting(*ask)));
+        assert!(matches!(step(&app), Some(AskStep::Waiting { ask: waiting, .. }) if waiting == ask));
     }
 
     #[test]
@@ -376,6 +403,36 @@ pub(in crate::tui) mod tests {
         app.apply(Answer::Asked { ask: AskId::FIRST, answer: Ok(reads) });
         let Some(AskStep::Answered(suggestion)) = step(&app) else { panic!("no answer") };
         assert_eq!((suggestion.text.as_str(), &suggestion.write), ("SELECT 1;\nSELECT 2", &None));
+    }
+
+    fn open_in_the_editor(app: &mut App, text: &str) {
+        app.apply(Answer::Queries(QueryAnswer::Opened { connection: shop(), query: query("customers.sql"), text: text.into() }));
+    }
+
+    #[test]
+    fn an_answer_that_comes_after_the_editor_changed_is_dropped_and_says_why() {
+        let mut app = waiting("SELECT * FROM orders WHERE total > 10", "only the ids");
+        open_in_the_editor(&mut app, "SELECT 1");
+        app.apply(Answer::Asked { ask: AskId::FIRST, answer: Ok(vec![Statement::new("SELECT id FROM orders")]) });
+        assert_eq!((step(&app), app.ask_failure()), (None, Some(&AskFailure::EditorChanged)));
+    }
+
+    #[test]
+    fn tab_on_an_answer_whose_editor_changed_since_drops_it_and_says_why() {
+        let mut app = answered("SELECT * FROM orders WHERE total > 10", "SELECT id FROM orders");
+        open_in_the_editor(&mut app, "SELECT 1");
+        press(&mut app, KeyCode::Tab);
+        assert_eq!((app.sheet().editor.text(), app.ask_failure()), ("SELECT 1", Some(&AskFailure::EditorChanged)));
+    }
+
+    #[test]
+    fn enter_on_an_instruction_sends_nothing_once_the_connection_says_ai_off() {
+        let mut app = asking_on("SELECT 1");
+        ctrl_g(&mut app);
+        type_in(&mut app, "ids");
+        app.sheet_mut().connection = fixtures::connection("tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\nai = \"off\"\n");
+        assert_eq!(press(&mut app, KeyCode::Enter), []);
+        assert_eq!((step(&app), app.ask_failure()), (None, Some(&AskFailure::Off)));
     }
 
     #[test]

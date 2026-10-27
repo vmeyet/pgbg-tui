@@ -15,11 +15,16 @@ pub(super) enum Edited {
     Cursor,
 }
 
+/// How many times the editor's text changed; an answer asked about one revision fits no other.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::tui) struct Revision(u64);
+
 /// The editor's text, its tokens and its colours.
 /// The tokens are updated on each change; the colours are rebuilt by `recolour` after the text changes.
 #[derive(Debug, Default)]
 pub(in crate::tui) struct Editor {
     field: Field,
+    revision: Revision,
     lexed: Lexed,
     colours: Vec<Spans>,
     has_stale_colours: bool,
@@ -29,7 +34,16 @@ impl Editor {
     /// An editor on `text`, not coloured yet: the loop colours it later, so opening a big query never waits on
     /// tree-sitter.
     pub(super) fn new(text: &str) -> Self {
-        Self { field: Field::new(text), lexed: Lexed::of(text), colours: vec![], has_stale_colours: true }
+        Self { field: Field::new(text), revision: Revision::default(), lexed: Lexed::of(text), colours: vec![], has_stale_colours: true }
+    }
+
+    /// Puts `text` in place of the whole text, the cursor at its end.
+    pub(super) fn reload(&mut self, text: &str) {
+        *self = Self { revision: self.revision.next(), ..Self::new(text) };
+    }
+
+    pub(super) fn revision(&self) -> Revision {
+        self.revision
     }
 
     pub(in crate::tui) fn text(&self) -> &str {
@@ -87,8 +101,7 @@ impl Editor {
         let mut field = Field::joined(&self.field.text()[..range.start], &self.field.text()[range.end..]);
         field.paste(text);
         self.field = field;
-        self.lexed = Lexed::of(self.field.text());
-        self.has_stale_colours = true;
+        self.text_changed();
         Edited::Text
     }
 
@@ -97,10 +110,21 @@ impl Editor {
         edit(&mut self.field);
         let edited = if self.field.revision() == revision { Edited::Cursor } else { Edited::Text };
         if edited == Edited::Text {
-            self.lexed = Lexed::of(self.field.text());
-            self.has_stale_colours = true;
+            self.text_changed();
         }
         edited
+    }
+
+    fn text_changed(&mut self) {
+        self.revision = self.revision.next();
+        self.lexed = Lexed::of(self.field.text());
+        self.has_stale_colours = true;
+    }
+}
+
+impl Revision {
+    const fn next(self) -> Self {
+        Self(self.0.wrapping_add(1))
     }
 }
 

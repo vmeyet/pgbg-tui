@@ -19,7 +19,7 @@ pub(super) fn footer(f: &mut Frame<'_>, app: &App, step: &AskStep, area: Rect) {
             Span::raw(instruction.text().to_owned()),
             Span::styled("▌ ", Style::default().fg(theme.accent)),
         ],
-        AskStep::Waiting(_) => vec![Span::styled(" asking the [ai] command… ", Style::default().fg(theme.warn))],
+        AskStep::Waiting { .. } => vec![Span::styled(" asking the [ai] command… ", Style::default().fg(theme.warn))],
         AskStep::Answered(_) => {
             vec![Span::styled(" the [ai] command answered: ", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))]
         }

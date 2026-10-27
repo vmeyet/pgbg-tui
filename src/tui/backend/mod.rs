@@ -160,8 +160,10 @@ impl Backend {
         session.cancel(run);
     }
 
-    /// Stops every session task at once, so quitting waits `STOP_WAIT` at most.
+    /// Kills the `[ai] command` of the ask waiting, then stops every session task at once, so quitting waits `STOP_WAIT`
+    /// at most.
     pub(super) async fn stop(self) {
+        drop(self.asks);
         future::join_all(self.sessions.into_values().map(SessionLink::stop)).await;
     }
 }
