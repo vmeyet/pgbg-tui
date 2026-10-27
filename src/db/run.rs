@@ -13,7 +13,7 @@ use tokio_postgres::{Client, IsolationLevel, Portal, RowStream, Statement as Pre
 pub(super) const ROW_CAP: usize = 10_000;
 const PROBE_SAVEPOINT: &str = "SAVEPOINT pgbg_probe";
 const RELEASE_PROBE: &str = "RELEASE SAVEPOINT pgbg_probe";
-/// The cursor a result inside the user's transaction is read through.
+/// The start of the name of a cursor a result inside the user's transaction is read through.
 const CURSOR: &str = "pgbg_result";
 
 /// How many rows one fetch from a portal asks for: never 0, which the protocol reads as every row.
@@ -123,14 +123,16 @@ impl Session {
 
     /// A cursor of SQL, since the driver binds a portal only in a transaction handle of its own, whose start or drop
     /// would roll the user's back.
-    async fn fetch_through_cursor(&self, statement: &Prepared, admitted: &Admitted) -> Result<ResultSet> {
-        let declare = format!("DECLARE {CURSOR} NO SCROLL CURSOR FOR {}", admitted.statement.as_str());
+    async fn fetch_through_cursor(&mut self, statement: &Prepared, admitted: &Admitted) -> Result<ResultSet> {
+        self.marks.cursors_declared += 1;
+        let cursor = format!("{CURSOR}_{}", self.marks.cursors_declared);
+        let declare = format!("DECLARE {cursor} NO SCROLL CURSOR FOR {}", admitted.statement.as_str());
         let declare = self.client.prepare_typed(&declare, statement.params()).await.map_err(server_error)?;
         self.client.execute_raw(&declare, bind::as_text(&admitted.params)).await.map_err(server_error)?;
-        let fetch = format!("FETCH FORWARD {} FROM {CURSOR}", CAPPED_FETCH.rows());
-        let rows = self.client.query_raw(&fetch, std::iter::empty::<&str>()).await.map_err(server_error)?;
-        let first = first_rows(rows).await?;
-        self.client.batch_execute(&format!("CLOSE {CURSOR}")).await.map_err(server_error)?;
+        let first = fetch_cursor(&self.client, &cursor).await;
+        let closed = self.client.batch_execute(&format!("CLOSE {cursor}")).await.map_err(server_error);
+        let first = first?;
+        closed?;
         Ok(ResultSet::new(columns(statement), first))
     }
 
@@ -207,6 +209,12 @@ pub(super) async fn bind_portal(transaction: &Transaction<'_>, statement: &Prepa
 async fn fetch(client: &Client, statement: &Prepared, params: &Params) -> Result<ResultSet> {
     let rows = client.query_raw(statement, bind::as_text(params)).await.map_err(server_error)?;
     Ok(ResultSet::new(columns(statement), first_rows(rows).await?))
+}
+
+/// The first `ROW_CAP` rows of `cursor`; one more says the result is cut.
+async fn fetch_cursor(client: &Client, cursor: &str) -> Result<Page> {
+    let fetch = format!("FETCH FORWARD {} FROM {cursor}", CAPPED_FETCH.rows());
+    first_rows(client.query_raw(&fetch, std::iter::empty::<&str>()).await.map_err(server_error)?).await
 }
 
 pub(super) fn columns(statement: &Prepared) -> Vec<Column> {
@@ -501,6 +509,27 @@ mod tests {
         let params = Params::new(vec![Some(ParamValue::new("41"))], vec![]);
         let admitted = guard::admit(Statement::new("SELECT $1::int4 + 1"), params, WritePolicy::Allowed).unwrap();
         assert_eq!(writer.run(&admitted).await.unwrap().rows(), [[Value::Int(42)]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_read_inside_a_transaction_of_the_user_leaves_the_users_own_cursors_alone() {
+        let mut writer = session(WritePolicy::Allowed).await;
+        run_on(&mut writer, "BEGIN").await;
+        run_on(&mut writer, "DECLARE pgbg_result CURSOR FOR SELECT 1").await;
+        assert_eq!(run_on(&mut writer, "SELECT 2").await.rows(), [[Value::Int(2)]]);
+        assert_eq!(run_on(&mut writer, "FETCH 1 FROM pgbg_result").await.rows(), [[Value::Int(1)]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_read_inside_a_transaction_of_the_user_leaves_no_cursor_open() {
+        let mut writer = session(WritePolicy::Allowed).await;
+        run_on(&mut writer, "BEGIN").await;
+        run_on(&mut writer, "SELECT 2").await;
+        run_on(&mut writer, "SELECT 3").await;
+        run_on(&mut writer, "DECLARE open_cursors CURSOR FOR SELECT count(*)::int4 FROM pg_cursors WHERE name LIKE 'pgbg%'").await;
+        assert_eq!(run_on(&mut writer, "FETCH 1 FROM open_cursors").await.rows(), [[Value::Int(0)]]);
     }
 
     #[tokio::test]
