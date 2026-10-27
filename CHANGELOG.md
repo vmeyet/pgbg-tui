@@ -14,6 +14,7 @@ Each entry says what changed, then where, then how to use it.
   A copy, `--json` and `pgbg run` still give the values as the database gave them.
 - **Parameters** in `pgbg run`: write `{{name}}` in a statement, outside strings and comments, and give its value with `--param name=value`, or with `--params-file <file>`, one `name=value` a line, `-` for stdin, so a value need not sit in the shell's history.
   A value is always bound, never put in the statement's text, and the server reads it as the type it gives the parameter: `WHERE day > {{since}}::date`.
+  Lines heading the statement declare them: `-- param: since date = 2024-01-01` gives a type and a default, `-- param: owner text optional` binds NULL when left empty; a type the server does not know stops the run; put `--` before a statement that starts with one, as in `pgbg run shop -- "$(cat orders.sql)"`.
   One file may serve several queries: a name in it the statement lacks is left alone, while a `--param` for one is refused as a typo.
   A name with no value, or a statement mixing its own `$1` with `{{name}}` stops the run before anything is sent; the history keeps `{{name}}`, never the value.
 - **Big results page in** in the TUI: a result comes 500 rows at a time, and the next page is fetched as the grid's cursor nears the last row, with no cap.

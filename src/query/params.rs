@@ -2,7 +2,7 @@
 use crate::connection::WritePolicy;
 use crate::db::guard::{self, Admitted};
 use crate::db::lex::{self, Token};
-use crate::db::model::{Params, Statement};
+use crate::db::model::{Params, Statement, TypeName};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::ops::Range;
@@ -20,6 +20,26 @@ pub(crate) struct ParamName(String);
 pub struct Assignment {
     name: ParamName,
     value: String,
+}
+
+/// What a header's `-- param: since date = 2024-01-01` says of one parameter.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ParamSpec {
+    pub(crate) name: ParamName,
+    /// The type the server looks up, else it infers one from where the parameter stands.
+    pub(crate) type_name: Option<TypeName>,
+    pub(crate) fallback: Fallback,
+}
+
+/// What a parameter left empty takes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Fallback {
+    /// Nothing: the run stops.
+    Required,
+    /// `= 2024-01-01`.
+    Default(String),
+    /// `optional`: NULL.
+    Optional,
 }
 
 /// The values given for a run, by name.
@@ -77,19 +97,22 @@ pub(crate) fn assignments(text: &str) -> Result<Vec<Assignment>, String> {
     lines.map(|(at, line)| line.parse().map_err(|err| format!("line {}: {err}", at + 1))).collect()
 }
 
-/// `template` with each `{{name}}` replaced by `$n`, the same name the same number, and the value given for each.
-pub(crate) fn fill(template: &Statement, given: &Given) -> Result<Filled, ParamError> {
+/// `template` with each `{{name}}` replaced by `$n`, the same name the same number, and the value given for each,
+/// else what `specs` says it falls back to; each `$n` of the type `specs` names.
+pub(crate) fn fill(template: &Statement, given: &Given, specs: &[ParamSpec]) -> Result<Filled, ParamError> {
     let text = template.as_str();
     let placed = named_params(text)?;
     let names = distinct(&placed);
     check_known(given, &names)?;
-    let values = names.iter().map(|name| value_of(given, name)).collect::<Result<_, _>>()?;
-    Ok(Filled { statement: Statement::new(numbered(text, &placed, &names)), params: Params::new(values) })
+    let specs: Vec<Option<&ParamSpec>> = names.iter().map(|name| specs.iter().rev().find(|spec| spec.name == *name)).collect();
+    let values = names.iter().zip(&specs).map(|(name, spec)| value_of(given, name, *spec)).collect::<Result<_, _>>()?;
+    let types = specs.iter().map(|spec| spec.and_then(|spec| spec.type_name.clone())).collect();
+    Ok(Filled { statement: Statement::new(numbered(text, &placed, &names)), params: Params::new(values, types) })
 }
 
-/// `template` filled with `given`, then cleared for a connection of policy `writes`, or why it is not.
-pub(crate) fn admit(template: &Statement, given: &Given, writes: WritePolicy) -> anyhow::Result<Admitted> {
-    let Filled { statement, params } = fill(template, given)?;
+/// `template` filled with `given` and `specs`, then cleared for a connection of policy `writes`, or why it is not.
+pub(crate) fn admit(template: &Statement, given: &Given, specs: &[ParamSpec], writes: WritePolicy) -> anyhow::Result<Admitted> {
+    let Filled { statement, params } = fill(template, given, specs)?;
     Ok(guard::admit(statement, params, writes)?)
 }
 
@@ -137,10 +160,14 @@ fn check_known(given: &Given, names: &[ParamName]) -> Result<(), ParamError> {
     }
 }
 
-fn value_of(given: &Given, name: &ParamName) -> Result<Option<String>, ParamError> {
-    match given.values.get(name) {
-        Some(value) if !value.is_empty() => Ok(Some(value.clone())),
-        _ => Err(ParamError::Missing(name.clone())),
+fn value_of(given: &Given, name: &ParamName, spec: Option<&ParamSpec>) -> Result<Option<String>, ParamError> {
+    if let Some(value) = given.values.get(name).filter(|value| !value.is_empty()) {
+        return Ok(Some(value.clone()));
+    }
+    match spec.map(|spec| &spec.fallback) {
+        Some(Fallback::Default(default)) => Ok(Some(default.clone())),
+        Some(Fallback::Optional) => Ok(None),
+        Some(Fallback::Required) | None => Err(ParamError::Missing(name.clone())),
     }
 }
 
@@ -173,6 +200,31 @@ impl fmt::Display for ParamName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
     }
+}
+
+impl FromStr for ParamSpec {
+    type Err = String;
+
+    /// `since date = 2024-01-01`, `owner text optional`, `limit`: a name, then a type, then a default or `optional`.
+    fn from_str(text: &str) -> Result<Self, String> {
+        let (declared, fallback) = match text.split_once('=') {
+            Some((declared, default)) => (declared, default_of(default)?),
+            None => match text.trim_end().strip_suffix(OPTIONAL) {
+                Some(declared) if declared.ends_with(char::is_whitespace) || declared.is_empty() => (declared, Fallback::Optional),
+                _ => (text, Fallback::Required),
+            },
+        };
+        let (name, type_name) = declared.trim().split_once(char::is_whitespace).unwrap_or((declared.trim(), ""));
+        let type_name = Some(type_name.trim()).filter(|type_name| !type_name.is_empty()).map(TypeName::new);
+        Ok(Self { name: name.parse()?, type_name, fallback })
+    }
+}
+
+const OPTIONAL: &str = "optional";
+
+fn default_of(text: &str) -> Result<Fallback, String> {
+    let default = text.trim();
+    if default.is_empty() { Err("a default goes after `=`".to_owned()) } else { Ok(Fallback::Default(default.to_owned())) }
 }
 
 impl FromStr for Assignment {
@@ -211,7 +263,7 @@ mod tests {
     }
 
     fn filled(sql: &str, pairs: &[&str]) -> Result<(String, Vec<Option<String>>), ParamError> {
-        let Filled { statement, params } = fill(&Statement::new(sql), &given(pairs))?;
+        let Filled { statement, params } = fill(&Statement::new(sql), &given(pairs), &[])?;
         Ok((statement.as_str().to_owned(), params.values().to_vec()))
     }
 
@@ -273,7 +325,7 @@ mod tests {
     #[test]
     fn a_params_file_may_hold_names_the_statement_lacks() {
         let given = Given::new(parsed(&["since=1"]), parsed(&["owner=nina", "region=eu"])).unwrap();
-        let Filled { statement, params } = fill(&Statement::new("SELECT {{since}}, {{owner}}"), &given).unwrap();
+        let Filled { statement, params } = fill(&Statement::new("SELECT {{since}}, {{owner}}"), &given, &[]).unwrap();
         assert_eq!((statement.as_str(), params.len()), ("SELECT $1, $2", 2));
     }
 
@@ -292,5 +344,61 @@ mod tests {
     #[test]
     fn a_params_file_line_that_is_no_assignment_says_its_number() {
         assert!(assignments("since=1\nowner\n").unwrap_err().starts_with("line 2:"));
+    }
+
+    fn spec(text: &str) -> ParamSpec {
+        text.parse().unwrap()
+    }
+
+    #[test]
+    fn a_spec_names_a_type_and_a_default() {
+        let since = spec("since date = 2024-01-01");
+        assert_eq!((since.type_name, since.fallback), (Some(TypeName::new("date")), Fallback::Default("2024-01-01".into())));
+    }
+
+    #[test]
+    fn a_spec_type_may_take_several_words() {
+        assert_eq!(spec("at timestamp with time zone optional").type_name, Some(TypeName::new("timestamp with time zone")));
+    }
+
+    #[test]
+    fn a_spec_may_say_only_its_name_or_that_it_is_optional() {
+        assert_eq!(spec("limit"), ParamSpec { name: name("limit"), type_name: None, fallback: Fallback::Required });
+        assert_eq!(spec("owner optional").fallback, Fallback::Optional);
+        assert_eq!(spec("owner text").fallback, Fallback::Required);
+    }
+
+    #[test]
+    fn a_spec_with_an_empty_default_or_a_bad_name_is_refused() {
+        assert!("since date =".parse::<ParamSpec>().is_err());
+        assert!("1st date".parse::<ParamSpec>().is_err());
+    }
+
+    fn filled_with(sql: &str, pairs: &[&str], specs: &[&str]) -> Result<Params, ParamError> {
+        let specs: Vec<ParamSpec> = specs.iter().map(|text| spec(text)).collect();
+        fill(&Statement::new(sql), &given(pairs), &specs).map(|filled| filled.params)
+    }
+
+    #[test]
+    fn a_name_left_empty_takes_its_default_and_an_optional_one_binds_null() {
+        let params = filled_with("SELECT {{since}}, {{owner}}", &["since="], &["since date = 2024-01-01", "owner text optional"]).unwrap();
+        assert_eq!(params.values(), [Some("2024-01-01".to_owned()), None]);
+    }
+
+    #[test]
+    fn a_value_given_wins_over_the_default() {
+        let params = filled_with("SELECT {{since}}", &["since=2025-06-01"], &["since date = 2024-01-01"]).unwrap();
+        assert_eq!(params.values(), [Some("2025-06-01".to_owned())]);
+    }
+
+    #[test]
+    fn each_parameter_takes_the_type_its_spec_names() {
+        let params = filled_with("SELECT {{owner}}, {{since}}", &["owner=nina", "since=1"], &["since date"]).unwrap();
+        assert_eq!(params.types(), [None, Some(TypeName::new("date"))]);
+    }
+
+    #[test]
+    fn a_required_spec_still_needs_a_value() {
+        assert_eq!(filled_with("SELECT {{since}}", &[], &["since date"]), Err(ParamError::Missing(name("since"))));
     }
 }

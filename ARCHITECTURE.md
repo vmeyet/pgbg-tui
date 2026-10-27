@@ -25,10 +25,10 @@ When a boundary or a flow changes, change this page in the same MR.
 | `db/server.rs` | What the server says of a session (`ServerFacts`: user, version, the `statement_timeout` in effect and the server's own, from `pg_settings`) and what its role can write (`RoleRights`: for the login role, each role it may `SET ROLE` to and `PUBLIC`, the flags, `pg_write_all_data`, database `CREATE`, and the schemas, tables and sequences each may write, read from the ACLs so each grant names its role), read with `Session::read_only` like the schema |
 | `db/lex.rs` | The tokenizer: words, `;`, `{{name}}` and `$n`, each with the bytes it spans, strings, comments, dollar quotes and quoted names hiding what they hold; a `{{` that opens no name, or one glued to a word, is unreadable; the guard and parameters read its tokens, and completion will (planned) |
 | `db/guard.rs` | Classifies a statement before it is sent: read, write, or more than one statement; `admit` turns a statement and its `Params` into an `Admitted`, the only kind a session runs, refused when the count of values is not the count of its `$n`; `statement_at` finds the statement under the editor's cursor with the same tokenizer |
-| `db/bind.rs` | `AsText`, the one `ToSql` a value is bound through: any parameter type, sent as text for the server to read with that type's input, `None` as NULL |
+| `db/bind.rs` | `AsText`, the one `ToSql` a value is bound through: any parameter type, sent as text for the server to read with that type's input, `None` as NULL; `prepare` looks up each type a header names (`to_regtype`, the name bound) and leaves the others to the server (id 0) |
 | `db/decode.rs` | Wire values to `Value`, by column type, a domain by its base type; a value it cannot decode is `Unsupported`, never an error |
-| `query/` | Saved queries: the `.pgbg/queries/` tree, the header (`-- name:`, `-- connection:`, `-- chart:`, `-- format:`, and `-- param:` (planned)), load, and save |
-| `query/params.rs` | Parameters, pure: the `{{name}}` of a statement turned into `$n`, and the values `Given` by name (`--param`, a `--params-file` line, the parameter bar (planned)) into the `Params` its run binds, then `admit`ted by the guard |
+| `query/` | Saved queries: the `.pgbg/queries/` tree, the header (`-- name:`, `-- connection:`, `-- chart:`, `-- format:` and `-- param:`), load, and save |
+| `query/params.rs` | Parameters, pure: the `{{name}}` of a statement turned into `$n`, and the values `Given` by name (`--param`, a `--params-file` line, the parameter bar (planned)) into the `Params` its run binds, a name left empty taking its `-- param:` default, or NULL when `optional`, then `admit`ted by the guard |
 | `complete/` (planned) | Completion, pure: the `Index` built once from a `Schema` (names lowercased and sorted, so a prefix is a binary search; names in the session's `current_schemas(false)` bare, the others as `schema.table`), the `Context` at the cursor from the tokens of the statement under it, never of the whole editor (a table after `FROM` or `JOIN`, a column of `orders` after `o.` when `FROM orders o`, a keyword at a statement's start), and the ranked candidates |
 | `ai/` (planned) | Asking a command for SQL, pure: the `Prompt` (instruction, statement, schema slice, tier) as the text on the command's stdin, and its answer read back as statements; the backend runs the command |
 | `format/` | Formats, pure: for each `ColumnKind`, the ways a cell can read (raw first), the step to the next one, and the text of one cell in one of them, the clock and the time zone passed in as a `Clock`; `number.rs` groups digits and reads sizes, `time.rs` reads timestamps local or relative |
@@ -106,7 +106,7 @@ Completing a name (planned):
 4. `ctrl-space` opens the list, where a fuzzy match joins the prefix ones: a prefix before a fuzzy match, a column of a table the statement names before any other, then shorter first; at most 50 are kept.
 5. A test holds the budget: 20 000 tables and 200 000 columns, one key, under a millisecond in a release build.
 
-Running a statement with parameters (the header and the parameter bar planned):
+Running a statement with parameters (the parameter bar planned):
 
 1. `query::params` reads the `{{name}}` of the statement under the cursor from `db::lex`'s tokens, never inside a string, a comment or a quoted name, and the header's `-- param: since date = 2024-01-01`, `-- param: owner text optional`.
    A statement holding both a `$n` of its own and a `{{name}}` is refused, and a `{{` the lexer cannot read as a name is too: a doubt never runs.
@@ -119,7 +119,7 @@ Running a statement with parameters (the header and the parameter bar planned):
    The statement is prepared with unknown types (id 0) where the header names none, so the server infers them; a header type is looked up first with `SELECT to_regtype($1)::oid`, the name itself bound, and a type the server does not know stops the run.
    Each value goes through one `ToSql` wrapper that accepts any type and encodes as text (`encode_format`): the server parses it with that type's own input, and a value it cannot read fails with its words.
 5. The history keeps the statement with its `{{name}}`, never the values.
-6. `pgbg run` takes `--param name=value`, `--params-file <file>` (one `name=value` a line) or `--params-file -` on stdin, so a value need not sit in argv or the shell's history.
+6. `pgbg run` reads the `-- param:` lines heading its statement, and takes `--param name=value`, `--params-file <file>` (one `name=value` a line) or `--params-file -` on stdin, so a value need not sit in argv or the shell's history.
 
 Asking a command for SQL (planned):
 
@@ -222,7 +222,7 @@ On a connection that allows writes, a statement runs as typed, except that one r
 - Listing walks the folders on a blocking thread, keeps only plain files, and never follows a link, so nothing outside the root is listed.
 - Opening reads the file through `tokio::fs`, again only when it is a plain file whose real path stays inside its root, and only up to 1 MiB; a bigger one is too big for the editor.
 - A query path is drawn with its control characters and text-reversing marks escaped.
-- An optional header of `--` lines sets the name, the default connection, the chart, the formats, and the parameters (planned); a file without a header is still a query.
+- An optional header of `--` lines sets the name, the default connection, the chart, the formats and the parameters; a file without a header is still a query.
 - The header is read again whenever the editor's text changes; a line it cannot read is a warning in the editor's title, never a failure.
 - `-- connection:` only suggests: the editor's title names it, in red when it is a production connection, and a statement always runs on the session on screen.
 - The file is the source of truth: pgbg reads it when it is opened and writes it back when it is saved, nothing else.

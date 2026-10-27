@@ -87,7 +87,7 @@ The MR that ships a step ticks its box.
 
 - [x] Bound, never spliced, by both ways of running: `Admitted` carries the values and checks their count against the statement's `$n`, each goes in text through one `ToSql` wrapper, typed by the server's inference
 - [x] `{{name}}` in a statement, outside strings and comments; each name becomes `$n`, so the guard reads the statement as sent; one mixing `$n` and `{{name}}`, or a `{{` the lexer cannot read, is refused; `pgbg run --param` and `--params-file`
-- [ ] `-- param: name type = default` and `-- param: name type optional` in the header: a type looked up with a bound `to_regtype`, an unknown one stopping the run; an `optional` one left empty bound as NULL
+- [x] `-- param: name type = default` and `-- param: name type optional` in the header: a type looked up with a bound `to_regtype`, an unknown one stopping the run; an `optional` one left empty bound as NULL
 - [ ] The parameter bar above the editor: one field per parameter of the statement under the cursor, `⏎` runs, an empty one without a default stops the run; the values stay on the sheet while pgbg runs, never on disk
 
 ## 14. Formats

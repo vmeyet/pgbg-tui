@@ -307,7 +307,7 @@ mod tests {
     }
 
     fn admitted_with(sql: &str, values: usize, writes: WritePolicy) -> Result<Mode, Refusal> {
-        let params = Params::new(vec![Some("7".to_owned()); values]);
+        let params = Params::new(vec![Some("7".to_owned()); values], vec![]);
         admit(Statement::new(sql), params, writes).map(|admitted| admitted.mode)
     }
 

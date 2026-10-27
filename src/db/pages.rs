@@ -1,7 +1,7 @@
 //! A result shown a page at a time: its portal stays open between pages, in its `BEGIN READ ONLY` transaction.
 use super::guard::{Admitted, Mode};
 use super::model::{Column, Extent, Page, ResultSet};
-use super::{FetchSize, Marks, Session, begin_read_only, bind_portal, columns, fetch_page, roll_back, server_error, why_ended};
+use super::{FetchSize, Marks, Session, begin_read_only, bind_portal, columns, fetch_page, roll_back, why_ended};
 use anyhow::Result;
 use std::time::Duration;
 use tokio::sync::watch;
@@ -102,7 +102,7 @@ impl Marks {
 }
 
 async fn bind(transaction: &Transaction<'_>, admitted: &Admitted) -> Result<Bound> {
-    let statement = transaction.prepare(admitted.statement.as_str()).await.map_err(server_error)?;
+    let statement = super::bind::prepare(transaction, admitted).await?;
     let portal = bind_portal(transaction, &statement, &admitted.params).await?;
     Ok(Bound { columns: columns(&statement), portal })
 }
@@ -157,7 +157,7 @@ mod tests {
         let mut session = session("").await;
         let admitted = guard::admit(
             Statement::new("SELECT generate_series(1, $1::int4)"),
-            Params::new(vec![Some("700".into())]),
+            Params::new(vec![Some("700".into())], vec![]),
             WritePolicy::ReadOnly,
         );
         let Started { rest, .. } = session.start(&admitted.unwrap()).await.unwrap();
