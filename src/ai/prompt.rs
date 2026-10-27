@@ -1,6 +1,6 @@
 //! The text sent on a command's stdin: the instruction, the masked statement, a slice of the schema and the tier.
 use super::answer::{self, AnswerError};
-use super::mask::{Literals, masked};
+use super::mask::{LiteralPolicy, Literals, masked};
 use super::slice::slice;
 use crate::connection::Tier;
 use crate::db::lex::{Lexed, Span, Token};
@@ -11,6 +11,8 @@ use std::fmt;
 /// The most bytes a prompt holds, so a big schema never makes a slow or costly ask.
 const MAX_BYTES: usize = 16 * 1024;
 const CUT_NOTE: &str = "(The schema was cut to fit: more tables exist.)\n";
+const MASKING_NOTE: &str = "The statement's values are masked: keep each '<literal n>' and <number n> where its value stays, and pgbg \
+                            puts the values back. Never write a marker the statement does not hold.\n";
 
 /// What the user asked for, sent as typed: whatever it holds leaves the machine.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,6 +26,7 @@ pub(crate) struct Ask<'a> {
     pub(crate) statement: Option<&'a Statement>,
     pub(crate) catalog: &'a Catalog,
     pub(crate) tier: Tier,
+    pub(crate) literals: LiteralPolicy,
 }
 
 /// The text for the command's stdin, and the literals it masked, to put back in the answer.
@@ -55,7 +58,7 @@ impl Instruction {
 pub(crate) fn prompt(ask: &Ask<'_>) -> Result<Prompt, NotSent> {
     let sql = ask.statement.map_or("", Statement::as_str);
     refuse_unsafe(sql)?;
-    let masked = masked(sql);
+    let masked = masked(sql, ask.literals);
     let head = head(ask, &masked.text);
     let room = MAX_BYTES.checked_sub(head.len() + CUT_NOTE.len()).ok_or(NotSent::TooLong)?;
     let schema = fitted(slice(ask.catalog, sql, &ask.instruction.0), room);
@@ -76,10 +79,13 @@ fn refuse_unsafe(sql: &str) -> Result<(), NotSent> {
 
 fn head(ask: &Ask<'_>, statement: &str) -> String {
     let statement = if statement.is_empty() { "(none)" } else { statement };
+    let masking = match ask.literals {
+        LiteralPolicy::Masked => MASKING_NOTE,
+        LiteralPolicy::Sent => "",
+    };
     format!(
         "You write PostgreSQL for pgbg, a SQL editor. Answer with SQL statements only, in one ```sql fence.\n\
-         The statement's values are masked: keep each '<literal n>' and <number n> where its value stays, and pgbg puts \
-         the values back. Never write a marker the statement does not hold.\n\
+         {masking}\
          Keep each {{{{name}}}} parameter as it is.\n\
          The database is a {} one.\n\n\
          Instruction:\n{}\n\n\
@@ -139,10 +145,14 @@ mod tests {
     use crate::db::model::{SchemaNode, Table, TableKind};
     use crate::fixtures::shop_catalog;
 
-    fn prompt_for(statement: &str, instruction: &str, catalog: &Catalog) -> Result<Prompt, NotSent> {
+    fn prompt_with(statement: &str, instruction: &str, catalog: &Catalog, literals: LiteralPolicy) -> Result<Prompt, NotSent> {
         let instruction = Instruction::new(instruction);
         let statement = Statement::new(statement);
-        prompt(&Ask { instruction: &instruction, statement: Some(&statement), catalog, tier: Tier::Production })
+        prompt(&Ask { instruction: &instruction, statement: Some(&statement), catalog, tier: Tier::Production, literals })
+    }
+
+    fn prompt_for(statement: &str, instruction: &str, catalog: &Catalog) -> Result<Prompt, NotSent> {
+        prompt_with(statement, instruction, catalog, LiteralPolicy::Masked)
     }
 
     fn text(statement: &str, instruction: &str) -> String {
@@ -162,6 +172,19 @@ mod tests {
     fn no_literal_or_comment_of_the_statement_reaches_the_prompt() {
         let sql = "SELECT 'nina-s', E'nina-e\\'', $q$nina-d$q$, 4217 /* nina-c /* nina-n */ */ -- nina-l\nFROM orders";
         assert!(!text(sql, "fix it").contains("nina") && !text(sql, "fix it").contains("4217"));
+    }
+
+    #[test]
+    fn literals_sent_reach_the_prompt_as_typed_without_the_masking_note() {
+        let text = prompt_with("SELECT * FROM orders WHERE total > 10 -- big ones", "", &shop_catalog(), LiteralPolicy::Sent).unwrap();
+        assert!(text.text().contains("Statement under the cursor:\nSELECT * FROM orders WHERE total > 10\n"));
+        assert!(!text.text().contains("masked"));
+    }
+
+    #[test]
+    fn a_statement_holding_a_password_is_never_sent_even_with_literals_sent() {
+        let refused = prompt_with("ALTER ROLE nina PASSWORD 'x'", "", &shop_catalog(), LiteralPolicy::Sent);
+        assert_eq!(refused.unwrap_err(), NotSent::HoldsPassword);
     }
 
     #[test]

@@ -1,6 +1,16 @@
 //! The statement as a prompt shows it: each string and number literal a numbered marker, its comments gone.
 use crate::db::lex::{self, Token};
+use serde::Deserialize;
 use std::fmt;
+
+/// Whether a prompt masks the statement's literals, the default, or sends them as typed (`[ai] literals = "sent"`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum LiteralPolicy {
+    #[default]
+    Masked,
+    Sent,
+}
 
 /// The literals a masked statement left out, marker `n` at place `n - 1`.
 pub(super) struct Literals(Vec<Literal>);
@@ -33,15 +43,16 @@ struct Marker {
     len: usize,
 }
 
-/// `sql` with each string and number literal a marker and each comment a blank; a `{{name}}` stays as it is.
-pub(super) fn masked(sql: &str) -> Masked {
+/// `sql` with each comment a blank and, unless `policy` sends them, each string and number literal a marker; a
+/// `{{name}}` stays as it is.
+pub(super) fn masked(sql: &str, policy: LiteralPolicy) -> Masked {
     let mut text = String::new();
     let mut literals = vec![];
     let mut end = 0;
     for placed in lex::tokens(sql) {
         text.push_str(without_comments(&sql[end..placed.range.start]));
         let token = &sql[placed.range.clone()];
-        match literal_kind(token, &placed.token) {
+        match literal_kind(token, &placed.token).filter(|_| policy == LiteralPolicy::Masked) {
             Some(kind) => {
                 literals.push(Literal { kind, text: token.to_owned() });
                 text.push_str(&kind.marker(literals.len()));
@@ -139,7 +150,7 @@ mod tests {
     use super::*;
 
     fn text(sql: &str) -> String {
-        masked(sql).text
+        masked(sql, LiteralPolicy::Masked).text
     }
 
     #[test]
@@ -191,6 +202,12 @@ mod tests {
     }
 
     #[test]
+    fn literals_sent_stay_as_typed_and_comments_still_go() {
+        let sent = masked("SELECT 'nina', 42 -- big\nFROM orders", LiteralPolicy::Sent);
+        assert_eq!((sent.text.as_str(), format!("{:?}", sent.literals)), ("SELECT 'nina', 42\nFROM orders", "Literals(0)".to_owned()));
+    }
+
+    #[test]
     fn what_follows_a_number_stays() {
         assert_eq!(text("SELECT 1::int, 1.2.3"), "SELECT <number 1>::int, <number 2>.<number 3>");
     }
@@ -201,7 +218,7 @@ mod tests {
     }
 
     fn put_back(sql: &str, answer: &str) -> Result<String, UnknownMarker> {
-        masked(sql).literals.put_back(answer)
+        masked(sql, LiteralPolicy::Masked).literals.put_back(answer)
     }
 
     #[test]
@@ -235,6 +252,6 @@ mod tests {
 
     #[test]
     fn debug_never_shows_a_literal() {
-        assert_eq!(format!("{:?}", masked("SELECT 'nina'").literals), "Literals(1)");
+        assert_eq!(format!("{:?}", masked("SELECT 'nina'", LiteralPolicy::Masked).literals), "Literals(1)");
     }
 }

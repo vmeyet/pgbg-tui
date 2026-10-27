@@ -35,6 +35,8 @@ pub(crate) struct Entry {
     statement_timeout: Option<String>,
     #[serde(default)]
     schema: SchemaReading,
+    #[serde(default)]
+    ai: AiAsking,
 }
 
 /// A named database target: where it is, how to reach it, how to log in, and whether it takes writes.
@@ -54,6 +56,7 @@ pub(crate) struct Connection {
     tls_setting: Option<Tls>,
     statement_timeout: TimeoutChoice,
     schema: SchemaReading,
+    ai: AiAsking,
 }
 
 /// The name a connection has under `[connections.<name>]`, typed on the command line.
@@ -66,6 +69,16 @@ pub struct ConnectionName(String);
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum SchemaReading {
+    #[default]
+    On,
+    Off,
+}
+
+/// Whether `ctrl-g` may ask the `[ai] command` about a connection: on whatever its tier, since a prompt never holds a
+/// row, a value or the connection's name; `ai = "off"` keeps even its table names on this machine.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum AiAsking {
     #[default]
     On,
     Off,
@@ -92,7 +105,7 @@ pub enum WritePolicy {
 impl Connection {
     /// The connection `[connections.<name>]` describes, or why it is refused.
     pub(crate) fn new(name: &str, entry: Entry) -> Result<Self> {
-        let Entry { tier, url, password, tunnel, writes, tls, statement_timeout, schema } = entry;
+        let Entry { tier, url, password, tunnel, writes, tls, statement_timeout, schema, ai } = entry;
         let url = Target::parse(&url)?;
         let statement_timeout = statement_timeout.as_deref().map(StatementTimeout::parse).transpose()?;
         Ok(Self {
@@ -106,6 +119,7 @@ impl Connection {
             writes,
             statement_timeout: statement_timeout.map_or_else(|| TimeoutChoice::Tier(tier.statement_timeout()), TimeoutChoice::Own),
             schema,
+            ai,
         })
     }
 
@@ -149,6 +163,11 @@ impl Connection {
 
     pub(crate) fn schema(&self) -> SchemaReading {
         self.schema
+    }
+
+    #[cfg_attr(not(test), expect(dead_code, reason = "`ctrl-g` reads it, the next step"))]
+    pub(crate) fn ai(&self) -> AiAsking {
+        self.ai
     }
 }
 
@@ -311,6 +330,17 @@ mod tests {
     #[test]
     fn a_connection_reads_its_schema_unless_it_says_off() {
         assert_eq!((shop("").unwrap().schema(), shop("schema = \"off\"").unwrap().schema()), (SchemaReading::On, SchemaReading::Off));
+    }
+
+    #[test]
+    fn a_connection_may_be_asked_about_on_every_tier_unless_it_says_off() {
+        let production = connection("shop", "tier = \"production\"\nurl = \"postgres://nina@db.example.com/shop?sslmode=require\"\n");
+        assert_eq!((production.unwrap().ai(), shop("ai = \"off\"").unwrap().ai()), (AiAsking::On, AiAsking::Off));
+    }
+
+    #[test]
+    fn an_unknown_ai_setting_is_refused() {
+        assert!(shop("ai = \"maybe\"").is_err());
     }
 
     #[test]
