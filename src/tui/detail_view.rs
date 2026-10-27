@@ -1,6 +1,6 @@
 //! The row's detail over the screen: each column's name and type, its whole value under it, wrapped, JSON indented
 //! and coloured; every piece of text drawn through `render::printable`.
-use super::app::{App, DetailFit, DetailScroll, Overlay, Run};
+use super::app::{App, DetailFit, DetailScroll, DrawnDetail, DrawnRow, Overlay, Run};
 use super::theme;
 use crate::act::{self, Pane};
 use crate::db::model::{Column, Value};
@@ -19,36 +19,49 @@ const VALUE_MAX_CHARS: usize = 64 * 1024;
 const INDENT: &str = "  ";
 const SHARE_OF_SCREEN_PCT: u16 = 80;
 
-/// The detail when it is open; returns the line it started at and how far it scrolls.
+/// The detail when it is open; returns the line it started at, how far it scrolls, and its lines when it built them.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> DetailFit {
     let Some(Overlay::Detail(detail)) = &app.overlay else { return DetailFit::default() };
-    let Run::Done { result, grid, .. } = &app.sheet().run else { return DetailFit::default() };
+    let Run::Done { run, result, grid, .. } = &app.sheet().run else { return DetailFit::default() };
     let Some(row) = result.rows().get(grid.row) else { return DetailFit::default() };
     let area = centred(f.area());
     let block = pane::framed(&app.theme, &format!("Row {} of {}", grid.row + 1, result.rows().len()), true);
     let [body, footer] = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(block.inner(area));
-    let columns: Vec<Vec<Line<'static>>> =
-        result.columns().iter().zip(row).map(|(column, value)| column_lines(&app.theme, column, value, body.width)).collect();
-    let column_starts: Vec<usize> = columns.iter().scan(0, |start, lines| Some(std::mem::replace(start, *start + lines.len()))).collect();
-    let lines: Vec<Line<'static>> = columns.into_iter().flatten().collect();
+    let of = DrawnRow { connection: app.sheet().name().clone(), run: *run, row: grid.row, width: body.width };
+    let kept = app.drawn_detail.as_ref().filter(|drawn| drawn.of == of);
+    let built = kept.is_none().then(|| drawn(&app.theme, result.columns(), row, of));
+    let Some(DrawnDetail { lines, column_starts, .. }) = kept.or(built.as_ref()) else { return DetailFit::default() };
     let last_scroll = lines.len().saturating_sub(usize::from(body.height));
     let wanted = match detail.scroll {
         DetailScroll::ToColumn(column) => column_starts.get(column).copied().unwrap_or_default(),
         DetailScroll::Lines(line) => line,
     };
     let first_line = wanted.min(last_scroll);
-    let shown: Vec<Line<'static>> = lines.into_iter().skip(first_line).take(usize::from(body.height)).collect();
+    let shown: Vec<Line<'static>> = lines.iter().skip(first_line).take(usize::from(body.height)).cloned().collect();
     f.render_widget(Clear, area);
     f.render_widget(block.style(Style::default().bg(app.theme.surface)), area);
     f.render_widget(Paragraph::new(shown), body);
     f.render_widget(Paragraph::new(Line::styled(hints(), Style::default().fg(app.theme.faded))), footer);
-    DetailFit { first_line, last_scroll }
+    DetailFit { first_line, last_scroll, drawn: built }
+}
+
+/// Every column of `row` as lines `of.width` columns wide.
+fn drawn(theme: &Theme, columns: &[Column], row: &[Value], of: DrawnRow) -> DrawnDetail {
+    let by_column: Vec<Vec<Line<'static>>> =
+        columns.iter().zip(row).map(|(column, value)| column_lines(theme, column, value, of.width)).collect();
+    let column_starts = by_column.iter().scan(0, |start, lines| Some(std::mem::replace(start, *start + lines.len()))).collect();
+    DrawnDetail { of, lines: by_column.into_iter().flatten().collect(), column_starts }
 }
 
 fn centred(area: Rect) -> Rect {
-    let width = area.width * SHARE_OF_SCREEN_PCT / 100;
-    let height = area.height * SHARE_OF_SCREEN_PCT / 100;
+    let width = share_of_screen(area.width);
+    let height = share_of_screen(area.height);
     Rect { x: area.x + (area.width - width) / 2, y: area.y + (area.height - height) / 2, width, height }
+}
+
+/// `SHARE_OF_SCREEN_PCT` of `cells`, counted wide enough for any screen.
+fn share_of_screen(cells: u16) -> u16 {
+    u16::try_from(u32::from(cells) * u32::from(SHARE_OF_SCREEN_PCT) / 100).unwrap_or(cells)
 }
 
 fn hints() -> String {
@@ -185,7 +198,7 @@ mod tests {
     #[test]
     fn a_scrolled_detail_starts_further_down() {
         let mut app = detail_of(a_note());
-        app.fit(Fit { detail: DetailFit { first_line: 0, last_scroll: 9 }, ..Fit::default() });
+        app.fit(Fit { detail: DetailFit { first_line: 0, last_scroll: 9, ..DetailFit::default() }, ..Fit::default() });
         (0..3).for_each(|_| _ = app.handle_key(KeyEvent::from(KeyCode::Char('j'))));
         insta::assert_snapshot!("detail_scrolled", render(&app, 40, 10).0.backend());
     }
@@ -197,9 +210,24 @@ mod tests {
         (0..3).for_each(|_| _ = app.handle_key(KeyEvent::from(KeyCode::Char('l'))));
         app.handle_key(KeyEvent::from(KeyCode::Enter));
         let (_, fit) = render(&app, 40, 20);
-        assert_eq!(fit, DetailFit { first_line: 1, last_scroll: 1 });
+        assert_eq!((fit.first_line, fit.last_scroll), (1, 1));
         let (terminal, fit) = render(&app, 40, 30);
         assert_eq!(fit.first_line, 0, "{:?}", terminal.backend());
+    }
+
+    #[test]
+    fn the_popup_takes_its_share_of_a_screen_wider_than_820_columns() {
+        assert_eq!(centred(Rect::new(0, 0, 1000, 50)), Rect::new(100, 5, 800, 40));
+    }
+
+    #[test]
+    fn a_frame_that_changes_nothing_builds_no_lines_and_a_new_width_builds_them_again() {
+        let mut app = detail_of(a_note());
+        let (_, first) = render(&app, 40, 20);
+        assert!(first.drawn.is_some());
+        app.fit(Fit { detail: first, ..Fit::default() });
+        assert!(render(&app, 40, 20).1.drawn.is_none());
+        assert!(render(&app, 50, 20).1.drawn.is_some());
     }
 
     #[test]

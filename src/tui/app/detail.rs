@@ -1,7 +1,9 @@
 //! `⏎` on the grid: the row under the cursor over the screen, one column after another, scrolled with `j`/`k`.
-use super::{Action, App, Overlay, Run};
+use super::{Action, App, Overlay, Run, RunId};
 use crate::act::{self, Act, Pane};
+use crate::connection::ConnectionName;
 use crossterm::event::KeyEvent;
+use ratatui::text::Line;
 
 /// The open detail of the grid's row, and where it is scrolled to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,14 +19,44 @@ pub(in crate::tui) enum DetailScroll {
     Lines(usize),
 }
 
-/// Where the detail just drawn started, and how far it scrolls before its last line is at the bottom.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Where the detail just drawn started, how far it scrolls before its last line is at the bottom, and its lines when
+/// that frame had to build them.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(in crate::tui) struct DetailFit {
     pub(in crate::tui) first_line: usize,
     pub(in crate::tui) last_scroll: usize,
+    pub(in crate::tui) drawn: Option<DrawnDetail>,
+}
+
+/// The detail's lines as built for one row at one width, kept so the next frames build none: indenting, colouring and
+/// wrapping a long value costs more than the rest of a frame.
+#[derive(Clone, Debug, PartialEq)]
+pub(in crate::tui) struct DrawnDetail {
+    pub(in crate::tui) of: DrawnRow,
+    pub(in crate::tui) lines: Vec<Line<'static>>,
+    /// The first line of each column.
+    pub(in crate::tui) column_starts: Vec<usize>,
+}
+
+/// Which row the lines were built for, and at what width.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::tui) struct DrawnRow {
+    pub(in crate::tui) connection: ConnectionName,
+    pub(in crate::tui) run: RunId,
+    pub(in crate::tui) row: usize,
+    pub(in crate::tui) width: u16,
 }
 
 impl App {
+    /// Keeps the lines a frame just built, and lets them go once the detail closes.
+    pub(super) fn keep_drawn_detail(&mut self, built: Option<DrawnDetail>) {
+        if !matches!(self.overlay, Some(Overlay::Detail(_))) {
+            self.drawn_detail = None;
+        } else if built.is_some() {
+            self.drawn_detail = built;
+        }
+    }
+
     /// Opens the detail of the grid's row at the cursor's column, when the result has a row.
     pub(super) fn open_detail(&mut self) {
         let Run::Done { result, grid, .. } = &self.sheet().run else { return };
@@ -99,7 +131,7 @@ mod tests {
     #[test]
     fn j_scrolls_down_no_further_than_the_frame_drew() {
         let mut app = on_the_result();
-        app.fit(Fit { detail: DetailFit { first_line: 0, last_scroll: 2 }, ..Fit::default() });
+        app.fit(Fit { detail: DetailFit { first_line: 0, last_scroll: 2, ..DetailFit::default() }, ..Fit::default() });
         press(&mut app, KeyCode::Enter);
         (0..4).for_each(|_| _ = press(&mut app, KeyCode::Char('j')));
         press(&mut app, KeyCode::Char('k'));
@@ -118,7 +150,7 @@ mod tests {
     fn once_drawn_the_detail_scrolls_from_the_line_the_frame_started_at() {
         let mut app = on_the_result();
         press(&mut app, KeyCode::Enter);
-        app.fit(Fit { detail: DetailFit { first_line: 3, last_scroll: 5 }, ..Fit::default() });
+        app.fit(Fit { detail: DetailFit { first_line: 3, last_scroll: 5, ..DetailFit::default() }, ..Fit::default() });
         press(&mut app, KeyCode::Char('j'));
         assert_eq!(app.overlay, Some(Overlay::Detail(Detail { scroll: DetailScroll::Lines(4) })));
     }

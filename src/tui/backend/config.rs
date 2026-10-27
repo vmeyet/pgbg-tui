@@ -4,7 +4,7 @@ use super::super::app::{Answer, ConfigAnswer, ConfigChangeId, KeychainPassword, 
 use crate::config::{self, Config};
 use crate::connection::ConnectionName;
 use crate::secret::{Keychain, KeychainItem};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
@@ -74,21 +74,34 @@ impl Change {
     }
 }
 
-/// What `save` came to; a failure hands the password typed back, so the form keeps it.
+/// What `save` came to: a config that did not take it hands the password typed back, so the form keeps it; once it
+/// did, its connections come back, with a warning when the keychain did not follow.
 fn save_answer(path: &Path, save: SaveConnection, keychain: &Keychain) -> ConfigAnswer {
-    match changed(path, |path| saved(path, &save, keychain)) {
-        ConfigAnswer::Failed { why, .. } => ConfigAnswer::Failed { why, password: save.password.map(|typed| typed.password) },
-        ConfigAnswer::Changed(connections) => ConfigAnswer::Changed(connections),
+    let replaced = match written(path, &save) {
+        Ok(replaced) => replaced,
+        Err(err) => return ConfigAnswer::Failed { why: format!("{err:#}"), password: save.password.map(|typed| typed.password) },
+    };
+    let warning = keychain_followed(&save, replaced, keychain).err().map(|err| format!("saved `{}`, but {err:#}", save.name));
+    match changed(path, |_| Ok(())) {
+        ConfigAnswer::Changed { connections, .. } => ConfigAnswer::Changed { connections, warning },
+        failed @ ConfigAnswer::Failed { .. } => failed,
     }
 }
 
-fn saved(path: &Path, save: &SaveConnection, keychain: &Keychain) -> Result<()> {
+/// Writes the connection, and gives the keychain item an edit stops naming, which no other connection names.
+fn written(path: &Path, save: &SaveConnection) -> Result<Option<KeychainItem>> {
     let replaced = replaced_item(path, save)?;
     write_connection(path, save)?;
+    Ok(replaced)
+}
+
+/// Writes the password typed to its item, then deletes the item `replaced`.
+fn keychain_followed(save: &SaveConnection, replaced: Option<KeychainItem>, keychain: &Keychain) -> Result<()> {
     if let Some(KeychainPassword { item, password }) = &save.password {
-        keychain.write(item, password)?;
+        keychain.write(item, password).context("the password did not reach the keychain")?;
     }
-    replaced.map_or(Ok(()), |item| keychain.delete(&item))
+    let Some(item) = replaced else { return Ok(()) };
+    keychain.delete(&item).with_context(|| format!("the keychain item `{item}` it no longer names was not deleted"))
 }
 
 /// The keychain item an edit stops naming, which no other connection names; none for a new connection.
@@ -116,7 +129,7 @@ fn remove(path: &Path, name: &ConnectionName) -> Result<()> {
 /// What `change` came to: the connections read back, or why it failed.
 fn changed(path: &Path, change: impl FnOnce(&Path) -> Result<()>) -> ConfigAnswer {
     match change(path).and_then(|()| Config::read(path)) {
-        Ok(loaded) => ConfigAnswer::Changed(loaded.config.connections),
+        Ok(loaded) => ConfigAnswer::Changed { connections: loaded.config.connections, warning: None },
         Err(err) => ConfigAnswer::Failed { why: format!("{err:#}"), password: None },
     }
 }
@@ -144,7 +157,7 @@ mod tests {
     fn a_removed_connection_comes_back_as_the_connections_left() {
         let (_dir, path) = config(SHOP);
         let answer = changed(&path, |path| remove(path, &"replica".parse().unwrap()));
-        let ConfigAnswer::Changed(connections) = answer else { panic!("{answer:?}") };
+        let ConfigAnswer::Changed { connections, .. } = answer else { panic!("{answer:?}") };
         assert_eq!(connections.iter().map(|c| c.name().to_string()).collect::<Vec<_>>(), ["local"]);
     }
 
@@ -163,7 +176,7 @@ mod tests {
         file.remove(ConfigChangeId::FIRST.next(), name);
         let mut counts = vec![];
         for _ in 0..2 {
-            let Some(Answer::Config { id, answer: ConfigAnswer::Changed(connections) }) = answers.recv().await else {
+            let Some(Answer::Config { id, answer: ConfigAnswer::Changed { connections, .. } }) = answers.recv().await else {
                 panic!("not changed")
             };
             counts.push((id, connections.len()));
@@ -181,7 +194,7 @@ mod tests {
         };
         let save =
             SaveConnection { id: ConfigChangeId::FIRST, name: "staging".parse().unwrap(), saving: Saving::Add, change, password: None };
-        let ConfigAnswer::Changed(connections) = changed(&path, |path| saved(path, &save, &Keychain::TEST)) else { panic!("not saved") };
+        let ConfigAnswer::Changed { connections, .. } = save_answer(&path, save, &Keychain::TEST) else { panic!("not saved") };
         assert_eq!(connections.len(), 3);
     }
 
@@ -196,11 +209,31 @@ mod tests {
         let password = Some(KeychainPassword { item: item.clone(), password: typed });
         let change = config::ConnectionChange { password: Some(crate::secret::SecretSource::Keychain(item.clone())), ..Default::default() };
         let save = SaveConnection { id: ConfigChangeId::FIRST, name: "local".parse().unwrap(), saving: Saving::Add, change, password };
-        let answer = changed(&path, |path| saved(path, &save, &Keychain::TEST));
+        let answer = save_answer(&path, save, &Keychain::TEST);
         let read = Keychain::TEST.read(&item).await;
         Keychain::TEST.delete(&item).unwrap();
         assert!(matches!(&answer, ConfigAnswer::Failed { why, .. } if why.contains("already")), "{answer:?}");
         assert!(read.is_err(), "the keychain item was written");
+    }
+
+    #[test]
+    fn a_save_the_keychain_refuses_still_takes_the_config_change_and_says_so() {
+        let (_dir, path) = config(SHOP);
+        let item: KeychainItem = "probe-too-long".parse().unwrap();
+        let mut typed = crate::secret::Secret::default();
+        "x".repeat(5000).chars().for_each(|c| typed.push(c));
+        let change = config::ConnectionChange {
+            tier: Some(crate::connection::Tier::Local),
+            url: Some(crate::connection::Target::parse("postgres://nina@localhost/shop_archive").unwrap()),
+            password: Some(crate::secret::SecretSource::Keychain(item.clone())),
+            ..Default::default()
+        };
+        let password = Some(KeychainPassword { item, password: typed });
+        let save = SaveConnection { id: ConfigChangeId::FIRST, name: "archive".parse().unwrap(), saving: Saving::Add, change, password };
+        let answer = save_answer(&path, save, &Keychain::TEST);
+        let ConfigAnswer::Changed { connections, warning: Some(warning) } = answer else { panic!("{answer:?}") };
+        assert_eq!(connections.len(), 3);
+        assert!(warning.contains("saved `archive`") && warning.contains("too long"), "{warning}");
     }
 
     #[test]

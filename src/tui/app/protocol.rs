@@ -122,8 +122,9 @@ pub(in crate::tui) enum Answer {
 /// What changing the config came to.
 #[derive(Debug, PartialEq, Eq)]
 pub(in crate::tui) enum ConfigAnswer {
-    /// Its connections once changed, read back from the file.
-    Changed(Vec<Connection>),
+    /// Its connections once changed, read back from the file, and what failed after the file took the change (the
+    /// keychain step of a save), for the status line.
+    Changed { connections: Vec<Connection>, warning: Option<String> },
     /// The change was refused or failed, in the error's words; the file is as it was, and the password typed for it
     /// comes back to the form.
     Failed { why: String, password: Option<Secret> },
