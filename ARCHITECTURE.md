@@ -57,6 +57,7 @@ Running a statement:
 
 1. The editor hands `App` the statement under the cursor; `App` returns `Action::Run { connection, run, statement }`, and every answer about it carries the same connection and `RunId`, so a late one never lands on another connection or the next run.
 2. `db::guard` classifies it; a write on a read-only connection comes back as `Incoming::Refused` in an `Answer` and never reaches the server.
+   A write on a connection that allows writes asks first (planned): the footer names its verb and target (`DELETE from orders?`), `y` sends it, any other key cancels it unsent, on every tier.
 3. The session opens `BEGIN READ ONLY` and binds the statement to a portal (`Transaction::bind`).
    A portal takes any statement the guard admits; `DECLARE CURSOR` takes only a `SELECT` or `VALUES`, not `SHOW` or `EXPLAIN`.
 4. The first page (`query_portal(&portal, 500)`) comes back in `Incoming::Result`; the grid paints it, and once its cursor is 100 rows from the last one it has, `Action::NextPage` asks for the next, which comes back as `Incoming::Page`.
@@ -130,10 +131,15 @@ Asking a command for SQL (planned):
 
 1. `[ai] command` in `config.toml` names any program that reads a prompt on stdin and writes SQL on stdout (`llm`, a wrapper around ollama, `claude -p`); without it, or with a program that cannot be run, the feature is off and the keys say so.
    The `claude` example turns its tools off (`["claude", "-p", "--tools", "", "--strict-mcp-config"]`): a table or column name can carry instructions to the model, and any process of the user, the command included, can read pgbg's keychain items.
-2. A connection says `ai = "on"` or `"off"`; one on production or one that allows writes is off unless it says on, since the schema slice leaves the machine with the command and an answer may be a write.
-3. `ctrl-g` in the editor asks for an instruction on the footer line; the prompt holds it, the statement under the cursor, the tier, and a slice of the schema: the tables the statement names and the closest matches in the index to the instruction's words, with their columns and types.
-   It never holds a row, a default, the history, a server's words, the connection's name, host or URL, nor a parameter's value: a parameter goes as its `{{name}}`.
-   Each string literal of the statement goes as `'<literal 1>'`, `'<literal 2>'`, found with `db::lex`, and the answer's markers are put back from that list before it is shown; `[ai] literals = "sent"` sends them as typed.
+2. A connection says `ai = "off"` to turn it off; it is on otherwise, on every tier and whether the connection allows writes, because of the invariant below.
+3. `ctrl-g` in the editor asks for an instruction on the footer line.
+   The prompt holds only:
+   - the instruction, sent as typed: whatever the user writes in it leaves the machine;
+   - the statement under the cursor with every literal masked (a string as `'<literal 1>'`, a number as `<number 2>`, found with `db::lex`) and its comments stripped, a parameter as its `{{name}}`;
+   - a slice of the schema, names and types only: the tables the statement names and the closest matches in the index to the instruction's words, with their columns;
+   - the tier.
+   It never holds a row, a value from a table, a default, the history, a server's words, nor the connection's name, host or URL; a test builds a prompt from a fixture holding each of them and finds none.
+   The answer's markers are put back from the masked list before it is shown; `[ai] literals = "sent"` sends the literals as typed, comments still stripped.
    A statement holding `PASSWORD` or a URL with a password, by the rule the history uses, is never sent: the ask stops and says why.
    The prompt is capped at 16 KiB, the schema slice cut first, table by table, and the prompt says when it was.
 4. The command runs from a new empty temp folder, removed after, with a cleared environment: `PATH`, `HOME`, `LANG`, `TERM` and the names `[ai] env` lists, never a variable a connection's `password = { env = ... }` names, even when listed.
@@ -190,7 +196,7 @@ The guard reads a backslash in a string as itself, and blanks as PostgreSQL does
 So the server reads strings the same way, every read-only transaction sets `SET LOCAL standard_conforming_strings = on` with its other limits, and a connection that allows writes sets it for its session.
 That session setting is the one gap, on `Mode::Writes` only: a transaction pooler keeps it on the server link it reached alone, and the user's own `SET standard_conforming_strings = off` turns it off, so there the server can read a backslash in a string as the guard does not.
 
-On a connection that allows writes, a statement runs as typed, except that one returning rows goes through a portal in its own committed transaction, or, when the user's own `BEGIN` left one open, in that one: the driver's `BEGIN` there only warns, and its transaction handle is never dropped, so pgbg sends no `COMMIT` or `ROLLBACK` of the user's.
+On a connection that allows writes, a write runs only once `y` confirms it (planned); a statement runs as typed, except that one returning rows goes through a portal in its own committed transaction, or, when the user's own `BEGIN` left one open, in that one: the driver's `BEGIN` there only warns, and its transaction handle is never dropped, so pgbg sends no `COMMIT` or `ROLLBACK` of the user's.
 The session tracks that transaction from the first words of each statement the server ran (`BEGIN`, `START`, `COMMIT`, `END`, `ROLLBACK`, `ABORT`, `PREPARE TRANSACTION`, with `AND CHAIN` and `TO SAVEPOINT` read too); when one of those failed, never got its answer or reads unclear, or after a `CALL` or a `DO` block, which may commit inside, a `SAVEPOINT` probe asks the server once.
 pgbg's own read-only transaction (`Session::read_only`) is refused with `InsideUserTransaction` while the user's is open, since its `ROLLBACK` would end it.
 
