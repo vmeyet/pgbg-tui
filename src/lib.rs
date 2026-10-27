@@ -3,7 +3,6 @@ mod act;
 mod chart;
 pub mod cli;
 pub mod commands;
-#[cfg_attr(not(test), expect(dead_code, reason = "the completion list takes the rest, the next step"))]
 mod complete;
 mod config;
 mod connection;

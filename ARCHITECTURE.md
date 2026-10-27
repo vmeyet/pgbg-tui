@@ -91,7 +91,7 @@ Switching connection:
 
 Reading the schema:
 
-1. The schema is read once it is first needed: the schema tab drawn, for whichever sheet is on screen, `ctrl-t` (planned), or a first completion asked (planned); `schema = "off"` on a connection never reads it, and `r` in the schema tab reads it again.
+1. The schema is read once it is first needed: the schema tab drawn, for whichever sheet is on screen, `ctrl-t` (planned), or a first completion asked while the session is open, since typing never opens a session again; `schema = "off"` on a connection never reads it, and `r` in the schema tab reads it again.
    `Action::ReadSchema` asks the session task, which opens its session first unless it is open; its `SchemaReader` waits for the route that session took, opens a second session along it, reading the password again from its source (a command runs again), reads the schema and `current_schemas(false)`, closes it and answers `Incoming::Schema`; no password is kept between the two opens, and a failed read is a warning, never a lost session.
    A session that does not open, or is lost, fails a read waiting on it, so `r` asks again; asking on a failed session shows it opening again, since the ask opens it.
    The reader is a future of the session task polled beside its statements, so a statement never waits on it, nor it on a statement, and it goes when the task stops.
@@ -102,9 +102,9 @@ Reading the schema:
 Completing a name:
 
 1. Once the schema reader answers `Incoming::Schema`, it builds the `complete::Index` from that `Catalog` on a blocking thread and answers `Incoming::Index` with both; the sheet keeps the index behind an `Arc` while the catalog it was built from is still the one read.
-2. Only a key that types an identifier character or `.` asks for candidates, and only when the cursor ends the word; the first ask reads the schema, and until the index comes the keywords alone complete; the context comes from the tokens of the statement under the cursor alone.
+2. Only a key that types an identifier character or `.` asks for candidates, and only when the cursor ends the word; the first ask reads the schema while the session is open, and a failed or closed session stays so, and until the index comes the keywords alone complete; the context comes from the tokens of the statement under the cursor alone.
 3. The ghost is prefix only, a binary search in the index: the rest of the first candidate shows dimmed after the cursor, and `→` at the end of the word takes it, quoted when its name needs it; any other key drops it.
-4. `ctrl-space` opens the list (planned), where a fuzzy match joins the prefix ones: a prefix before a fuzzy match, a column of a table the statement names before any other, then shorter first; at most 50 are kept.
+4. `ctrl-space` opens the list in a popup at the cursor, where a fuzzy match joins the prefix ones: a prefix before a fuzzy match, a column of a table the statement names before any other, then shorter first; at most 50 are kept; `↑↓` pick, `⏎` or `⇥` take, `esc` closes, and typing on narrows it, while `⇥` outside it still switches panes.
 5. A test holds the budget: 20 000 tables and 200 000 columns, one key, under a millisecond in a release build.
 
 Running a statement with parameters:

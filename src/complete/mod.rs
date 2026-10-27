@@ -2,6 +2,7 @@
 //! candidates ranked for the ghost and the list.
 pub(crate) use context::Ask;
 pub(crate) use index::Index;
+pub(crate) use rank::{Candidate, Kind};
 
 mod context;
 mod index;
@@ -39,7 +40,7 @@ mod tests {
         let cursor = marked.find('|').unwrap();
         let text = marked.replace('|', "");
         let started = Instant::now();
-        let ghost: Option<rank::Candidate> = Ask::at(&text, cursor).and_then(|ask| index.ghost(&ask));
+        let ghost: Option<Candidate> = Ask::at(&text, cursor).and_then(|ask| index.ghost(&ask));
         let took = started.elapsed();
         assert!(ghost.is_some(), "{marked} offers a ghost");
         took

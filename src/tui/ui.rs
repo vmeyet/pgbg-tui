@@ -1,8 +1,8 @@
 //! Drawing: the frame in the tier's colour, the panes inside it, and the key hints under them.
 use super::app::{App, Fit, Overlay, SessionState, SidebarTab, TunnelState};
 use super::{
-    detail_view, editor_view, finder_view, form_view, help_view, history_view, param_bar_view, picker_view, prompt_view, result_view,
-    sidebar_view,
+    completion_view, detail_view, editor_view, finder_view, form_view, help_view, history_view, param_bar_view, picker_view, prompt_view,
+    result_view, sidebar_view,
 };
 use crate::act::{self, Hint, Pane};
 use crate::render::printable;
@@ -43,6 +43,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> Fit {
     }
     editor_view::draw(f, app, areas.editor);
     let grid = result_view::draw(f, app, areas.result);
+    completion_view::draw(f, app, areas.editor);
     footer(f, app, areas.footer);
     finder_view::draw(f, app);
     picker_view::draw(f, app);
@@ -89,6 +90,7 @@ fn footer(f: &mut Frame<'_>, app: &App, area: Rect) {
     let pane = match app.overlay {
         Some(Overlay::CopyAs) => Pane::CopyAs,
         Some(Overlay::SchemaFilter) => Pane::SchemaFilter,
+        Some(Overlay::Completion(_)) => Pane::Completion,
         _ => app.pane(),
     };
     f.render_widget(Paragraph::new(hints(app, pane, usize::from(hints_area.width))), hints_area);

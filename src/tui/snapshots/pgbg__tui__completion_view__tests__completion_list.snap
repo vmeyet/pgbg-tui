@@ -1,0 +1,25 @@
+---
+source: src/tui/completion_view.rs
+assertion_line: 78
+expression: terminal.backend()
+---
+"╭ ● shop · local ──────────────────────────────────────────╮"
+"│╭ Editor ─ READ ONLY ────────────────────────────────────╮│"
+"││ SELECT o                                               ││"
+"││        ╭──────────────╮                                ││"
+"││        │on     keyword│                                ││"
+"││        │or     keyword│                                ││"
+"││        │order  keyword│                                ││"
+"│╰────────│outer  keyword│────────────────────────────────╯│"
+"│╭ Result │offset keyword│────────────────────────────────╮│"
+"││ ⏎ runs │for    keyword│der the cursor                  ││"
+"││        │not    keyword│                                ││"
+"││        │from   keyword│                                ││"
+"││        ╰──────────────╯                                ││"
+"││                                                        ││"
+"││                                                        ││"
+"││                                                        ││"
+"││                                                        ││"
+"│╰────────────────────────────────────────────────────────╯│"
+"│ ↑↓ pick  ⏎ takes  esc closes                 connecting… │"
+"╰──────────────────────────────────────────────────────────╯"

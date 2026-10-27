@@ -13,6 +13,7 @@ Each entry says what changed, then where, then how to use it.
 - **Completion** in the TUI's editor: as you type a name, the rest of the best table, column or keyword shows faded after the cursor, and `→` takes it.
   It knows what the cursor wants from the statement under it: a table after `FROM` or `JOIN`, a column of `orders` after `o.` when the statement reads `FROM orders o`, else a column of the tables it names first.
   Tables in the search path come bare, the others with their schema, and a name that needs quotes goes in quoted; nothing shows inside a string or a comment.
+  `ctrl-space` lists the names that fit at the cursor, close matches too: `↑↓` to pick, `⏎` or `⇥` to take, `esc` to close.
 - **`pgbg run --query` and `--file`**: run a saved query by its path, as `pgbg run shop --query orders/daily`, the project's `.pgbg/queries/` before your own, with the same checks as the TUI; or a statement from a file, `--file orders.sql`, or from stdin with `--file -`.
   The statement typed as an argument still works.
 - **Readable cells** in the TUI's grid: `f` puts the column under the cursor in its next format, `F` puts every column readable or raw again.
