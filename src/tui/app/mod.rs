@@ -12,7 +12,8 @@ pub(super) use grid::{GAP, Grid, Room};
 pub(super) use history::Recall;
 pub(super) use picker::{Note, Picker};
 pub(super) use protocol::{
-    Action, Answer, ConfigAnswer, ConfigChangeId, Incoming, KeychainPassword, QueryAnswer, RunId, SaveConnection, Saving, TunnelState,
+    Action, Answer, ConfigAnswer, ConfigChangeId, Incoming, KeychainPassword, QueryAnswer, RunId, SaveConnection, Saving, SessionId,
+    TunnelState,
 };
 pub(super) use queries::{Finder, Queries};
 pub(super) use save::Prompt;
@@ -115,6 +116,8 @@ pub(super) struct App {
     pub(super) should_quit: bool,
     /// The id the next change to the config takes.
     next_config_change: ConfigChangeId,
+    /// The id the next session opened takes.
+    next_session: SessionId,
     /// Why a change to the config failed when no form waits on it; the status line says it until the next key.
     pub(super) config_failure: Option<String>,
     /// What the last copy came to; the status line says it until the next key.
@@ -127,7 +130,7 @@ impl App {
         Self {
             theme,
             connections,
-            sheets: vec![Sheet::new(first)],
+            sheets: vec![Sheet::new(first, SessionId::FIRST)],
             shown: 0,
             focus: Focus::Editor,
             overlay: None,
@@ -135,6 +138,7 @@ impl App {
             fit: Fit::default(),
             should_quit: false,
             next_config_change: ConfigChangeId::FIRST,
+            next_session: SessionId::FIRST.next(),
             config_failure: None,
             note: None,
         }
@@ -149,9 +153,10 @@ impl App {
         &mut self.sheets[self.shown]
     }
 
-    /// What the runner should do as the TUI starts.
-    pub(super) fn start() -> Vec<Action> {
-        vec![Action::ListQueries]
+    /// What the runner should do as the TUI starts: open the first sheet's session, list the queries.
+    pub(super) fn start(&self) -> Vec<Action> {
+        let first = &self.sheets[0];
+        vec![Action::Open { connection: first.connection.clone(), session: first.session_id }, Action::ListQueries]
     }
 
     /// Takes one key; returns what the runner should do about it.
@@ -293,6 +298,13 @@ impl App {
         self.sheet_mut().step_grid(step, room)
     }
 
+    /// A new id for a session about to open, so the words of the one before it are dropped.
+    fn new_session(&mut self) -> SessionId {
+        let id = self.next_session;
+        self.next_session = id.next();
+        id
+    }
+
     /// A new id for a change to the config, so its answer reaches only what asked for it.
     fn new_config_change(&mut self) -> ConfigChangeId {
         let id = self.next_config_change;
@@ -310,8 +322,8 @@ impl App {
     /// returns what the runner should do about it.
     pub(super) fn apply(&mut self, answer: Answer) -> Vec<Action> {
         match answer {
-            Answer::Session { connection, incoming } => {
-                if let Some(sheet) = self.sheet_of_mut(&connection) {
+            Answer::Session { connection, session, incoming } => {
+                if let Some(sheet) = self.sheet_of_mut(&connection).filter(|sheet| sheet.session_id == session) {
                     sheet.apply(incoming);
                 }
             }
@@ -363,7 +375,7 @@ pub(super) mod tests {
     }
 
     pub(crate) fn to_shop(incoming: Incoming) -> Answer {
-        Answer::Session { connection: shop(), incoming }
+        Answer::Session { connection: shop(), session: SessionId::FIRST, incoming }
     }
 
     pub(crate) fn typed(text: &str) -> App {
@@ -647,8 +659,11 @@ pub(super) mod tests {
     fn an_answer_from_the_session_of_another_connection_is_dropped() {
         let mut app = typed("SELECT 1");
         enter(&mut app);
-        let other =
-            Answer::Session { connection: "prod".parse().unwrap(), incoming: Incoming::Refused { run: RunId::FIRST, why: "no".into() } };
+        let other = Answer::Session {
+            connection: "prod".parse().unwrap(),
+            session: SessionId::FIRST,
+            incoming: Incoming::Refused { run: RunId::FIRST, why: "no".into() },
+        };
         app.apply(other);
         assert_eq!(app.sheet().run, Run::Running { run: RunId::FIRST });
     }

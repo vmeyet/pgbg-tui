@@ -85,7 +85,7 @@ fn session_state(app: &App, connection: &Connection) -> (&'static str, Style) {
 #[cfg(test)]
 mod tests {
     use super::super::app::picker::tests::{ctrl, on_local, press};
-    use super::super::app::{Answer, App, Incoming};
+    use super::super::app::{Answer, App, Incoming, SessionId};
     use super::super::ui;
     use crate::fixtures::named;
     use crossterm::event::{KeyCode, KeyEvent};
@@ -141,7 +141,7 @@ mod tests {
     #[test]
     fn the_picker_shows_each_connection_its_place_its_writes_and_its_session() {
         let mut app = on_local();
-        app.apply(Answer::Session { connection: "local".parse().unwrap(), incoming: Incoming::Opened });
+        app.apply(Answer::Session { connection: "local".parse().unwrap(), session: SessionId::FIRST, incoming: Incoming::Opened });
         ctrl(&mut app, 'o');
         let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
         terminal.draw(|f| _ = ui::draw(f, &app)).unwrap();
@@ -151,7 +151,7 @@ mod tests {
     #[test]
     fn the_picker_asks_before_removing_a_connection() {
         let mut app = on_local();
-        app.apply(Answer::Session { connection: "local".parse().unwrap(), incoming: Incoming::Opened });
+        app.apply(Answer::Session { connection: "local".parse().unwrap(), session: SessionId::FIRST, incoming: Incoming::Opened });
         ctrl(&mut app, 'o');
         app.handle_key(KeyEvent::from(KeyCode::Down));
         ctrl(&mut app, 'd');

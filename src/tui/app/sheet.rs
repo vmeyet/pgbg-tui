@@ -1,7 +1,7 @@
 //! One connection's sheet: its editor, the statement it ran and what came of it, and where its session stands.
 use super::editor::Editor;
 use super::grid::{Move, Room};
-use super::{Action, Grid, Incoming, RunId, TunnelState};
+use super::{Action, Grid, Incoming, RunId, SessionId, TunnelState};
 use crate::chart::{self, ChartError, Series};
 use crate::connection::{Connection, ConnectionName};
 use crate::db::guard;
@@ -73,6 +73,8 @@ pub(in crate::tui) struct Sheet {
     pub(in crate::tui) connection: Connection,
     pub(in crate::tui) editor: Editor,
     pub(in crate::tui) session: SessionState,
+    /// The session whose words the sheet takes; another one's are dropped.
+    pub(in crate::tui) session_id: SessionId,
     /// The connection's tunnel, once it has one and its task said where it stands.
     pub(in crate::tui) tunnel: Option<TunnelState>,
     pub(in crate::tui) run: Run,
@@ -93,11 +95,12 @@ pub(in crate::tui) struct Sheet {
 }
 
 impl Sheet {
-    pub(super) fn new(connection: &Connection) -> Self {
+    pub(super) fn new(connection: &Connection, session_id: SessionId) -> Self {
         Self {
             connection: connection.clone(),
             editor: Editor::default(),
             session: SessionState::Opening,
+            session_id,
             tunnel: None,
             run: Run::Idle,
             sent: None,
@@ -125,9 +128,10 @@ impl Sheet {
         self.connection.name()
     }
 
-    /// Takes `connection` as it is now and waits for its new session; the editor and the last run stay.
-    pub(super) fn reopen(&mut self, connection: Connection) {
+    /// Takes `connection` as it is now and waits for its new session `session_id`; the editor and the last run stay.
+    pub(super) fn reopen(&mut self, connection: Connection, session_id: SessionId) {
         self.connection = connection;
+        self.session_id = session_id;
         self.session = SessionState::Opening;
         self.tunnel = None;
     }
@@ -234,7 +238,7 @@ impl Sheet {
             return vec![];
         }
         *is_page_asked = true;
-        vec![Action::NextPage { connection: self.connection.name().clone(), run: *run }]
+        vec![Action::NextPage { connection: self.connection.name().clone(), session: self.session_id, run: *run }]
     }
 
     /// Adds `page` to the result of `of`, the grid's widths kept from the first page; a page of another run is dropped.
@@ -295,7 +299,7 @@ mod tests {
     }
 
     fn next_page() -> Vec<Action> {
-        vec![Action::NextPage { connection: shop(), run: RunId::FIRST }]
+        vec![Action::NextPage { connection: shop(), session: SessionId::FIRST, run: RunId::FIRST }]
     }
 
     #[test]

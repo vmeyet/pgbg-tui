@@ -31,15 +31,27 @@ impl ConfigChangeId {
     }
 }
 
+/// Which of the sessions opened on a connection an answer comes from, so the words of one closed never reach the next.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::tui) struct SessionId(u64);
+
+impl SessionId {
+    pub(in crate::tui) const FIRST: Self = Self(1);
+
+    pub(in crate::tui) fn next(self) -> Self {
+        Self(self.0 + 1)
+    }
+}
+
 /// What the app asks the runner to do.
 #[derive(Debug, PartialEq, Eq)]
 pub(in crate::tui) enum Action {
-    /// Open a session on this connection; one already open stays as it is.
-    Open(Connection),
+    /// Open the session `session` on this connection; one already open stays as it is.
+    Open { connection: Connection, session: SessionId },
     /// Run this statement on the connection's session.
     Run { connection: ConnectionName, run: RunId, statement: Statement },
-    /// Fetch the next page of this run's result, if its portal is still open.
-    NextPage { connection: ConnectionName, run: RunId },
+    /// Fetch the next page of this run's result, if its portal is still open on the session `session`.
+    NextPage { connection: ConnectionName, session: SessionId, run: RunId },
     /// Cancel this run if the connection's session is still on it.
     Cancel { connection: ConnectionName, run: RunId },
     /// List every saved query.
@@ -55,8 +67,8 @@ pub(in crate::tui) enum Action {
     EditOutside { connection: ConnectionName, query: Query },
     /// Close the connection's session and its tunnel; nothing when it has none.
     Close(ConnectionName),
-    /// Close the connection's session and open one on it as the config now says.
-    Reopen(Connection),
+    /// Close the connection's session and open `session` on it as the config now says.
+    Reopen { connection: Connection, session: SessionId },
     /// Remove the connection from the config, with the keychain item no other connection names.
     RemoveConnection { id: ConfigChangeId, connection: ConnectionName },
     /// Write a connection the form filled in.
@@ -95,8 +107,8 @@ pub(in crate::tui) enum Saving {
 /// What the backend answers.
 #[derive(Debug, PartialEq)]
 pub(in crate::tui) enum Answer {
-    /// From the session of `connection`, so an answer from one never lands on another.
-    Session { connection: ConnectionName, incoming: Incoming },
+    /// From the session `session` of `connection`, so an answer from one never lands on another.
+    Session { connection: ConnectionName, session: SessionId, incoming: Incoming },
     /// About the saved queries: the list every connection shares, or a query read for one sheet.
     Queries(QueryAnswer),
     /// About the change to the config `id` names.
