@@ -34,6 +34,7 @@ const PASSWORD_KEPT_AS: &str = "-- not kept: it holds a password";
 pub(crate) enum Outcome {
     Rows {
         count: usize,
+        /// More rows were left on the server than came back with the first answer: cut, or waiting for the grid.
         is_cut: bool,
     },
     /// pgbg's guard kept it from the server.
@@ -46,7 +47,7 @@ pub(crate) enum Outcome {
 impl Outcome {
     pub(crate) fn of(result: &anyhow::Result<ResultSet>) -> Self {
         match result {
-            Ok(result) => Self::Rows { count: result.rows().len(), is_cut: result.is_cut() },
+            Ok(result) => Self::Rows { count: result.rows().len(), is_cut: !result.is_whole() },
             Err(err) if err.is::<Refusal>() => Self::Refused,
             Err(err) if err.is::<ServerError>() => Self::ServerError,
             Err(_) => Self::LinkError,

@@ -52,6 +52,11 @@ struct SessionLink {
 #[derive(Debug)]
 enum Job {
     Run(Queued),
+    /// Fetch the next page of this run's result, while its portal is open.
+    NextPage {
+        #[expect(dead_code, reason = "the session task serves the pages of a result in the next step")]
+        run: RunId,
+    },
     /// Open the session again, unless it is open.
     Open,
 }
@@ -86,6 +91,7 @@ impl Backend {
         match action {
             Action::Open(connection) => self.open(connection),
             Action::Run { connection, run, statement } => self.run(&connection, run, statement),
+            Action::NextPage { connection, run } => self.next_page(&connection, run),
             Action::Cancel { connection, run } => self.cancel(&connection, run),
             Action::ListQueries => self.queries.list(),
             Action::OpenQuery { connection, query } => self.queries.open(connection, query),
@@ -143,6 +149,13 @@ impl Backend {
             return;
         };
         session.send(Job::Run(Queued { run, statement }));
+    }
+
+    /// Asks the session of `connection` for the next page of `run`; nothing comes when its portal is closed.
+    fn next_page(&self, connection: &ConnectionName, run: RunId) {
+        if let Some(session) = self.sessions.get(connection) {
+            session.send(Job::NextPage { run });
+        }
     }
 
     /// Cancels `run` on the session of `connection`; see `SessionLink::cancel`.
@@ -231,6 +244,7 @@ impl SessionTask {
             match self.woken(&mut queue).await {
                 Woken::Queued(Some(_)) if queue.is_closed() => {}
                 Woken::Queued(Some(Job::Run(queued))) => self.run(queued).await,
+                Woken::Queued(Some(Job::NextPage { .. })) => {}
                 Woken::Queued(Some(Job::Open)) if self.session.is_none() => self.open_or_fail_queued(&mut queue).await,
                 Woken::Queued(Some(Job::Open)) => {}
                 Woken::Queued(None) => break,

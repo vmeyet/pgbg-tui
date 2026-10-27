@@ -87,7 +87,7 @@ impl Series {
             positions: kept.iter().map(|point| point.position).collect(),
             labels: rows.iter().map(|&row| result.rows()[row][x].prefix(MAX_LABEL_CHARS)).collect(),
             y: y.iter().map(|&column| y_values(result, column, &rows)).collect(),
-            is_cut: result.is_cut() || kept.len() < result.rows().len(),
+            is_cut: !result.is_whole() || kept.len() < result.rows().len(),
         };
         if series.has_no_value() {
             return Err(ChartError::Empty);
