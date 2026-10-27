@@ -86,6 +86,17 @@ fn a_password_in_a_url_stops_pgbg_without_printing_it() {
 }
 
 #[test]
+fn an_sslpassword_in_a_url_stops_pgbg_without_printing_it() {
+    let output = pgbg(
+        "[connections.prod]\ntier = \"production\"\nurl = \"postgres://nina@db.example.com/shop?sslmode=require&sslpassword=hunter2\"\n",
+        &["connections"],
+    );
+    assert!(!output.status.success());
+    let err = stderr(&output);
+    assert!(err.contains("connection `prod`") && err.contains("sslpassword") && !err.contains("hunter2"), "{err}");
+}
+
+#[test]
 fn an_error_prints_the_control_characters_it_quotes_escaped() {
     let output = pgbg("[connections.\"shop\\u001b[2J\"]\ntier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\n", &["connections"]);
     let err = stderr(&output);

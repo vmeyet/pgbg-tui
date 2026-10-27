@@ -9,10 +9,12 @@ const SCHEMES: [&str; 2] = ["postgres", "postgresql"];
 const LOCAL_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "[::1]"];
 const PASSWORD_IN_URL: &str =
     "`url` carries a password: take it out and set `password = { keychain = \"...\" }`, `{ env = \"...\" }` or `{ command = [...] }`";
+/// The libpq query keys whose value is a secret; `password` is refused on its own, as it has a source to point to.
+const SECRET_KEYS: [&str; 2] = ["sslpassword", "oauth_client_secret"];
 const HOSTADDR_IN_URL: &str = "`url` sets `hostaddr`: pgbg keeps it for the local port its tunnels open; name the host in the URL instead";
 
-/// Where the database is: a `postgres://` URL that never carries a password.
-/// Its `Debug` shows only the place, since other query keys, such as `sslpassword`, may still hold a secret.
+/// Where the database is: a `postgres://` URL that never carries a password or another secret.
+/// Its `Debug` shows only the place, so a log line never carries the rest of the URL.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Target(Url);
 
@@ -25,6 +27,9 @@ impl Target {
         }
         if has_password(&url) {
             bail!(PASSWORD_IN_URL);
+        }
+        if let Some(key) = SECRET_KEYS.into_iter().find(|key| has_query_key(&url, key)) {
+            bail!("`url` sets `{key}`, a secret: pgbg never keeps one in a URL; take it out");
         }
         if has_query_key(&url, "hostaddr") {
             bail!(HOSTADDR_IN_URL);
@@ -141,7 +146,7 @@ mod tests {
 
     #[test]
     fn a_target_debugs_as_its_place_only() {
-        let target = Target::parse("postgres://nina@db.example.com/shop?sslmode=require&sslpassword=hunter2").unwrap();
+        let target = Target::parse("postgres://nina@db.example.com/shop?sslmode=require&application_name=nina").unwrap();
         assert_eq!(format!("{target:?}"), r#"Target("db.example.com/shop")"#);
     }
 
@@ -163,6 +168,18 @@ mod tests {
     fn a_password_in_the_query_is_refused_too() {
         let err = refusal("postgres://nina@db.example.com/shop?password=hunter2");
         assert!(err.contains("password") && !err.contains("hunter2"), "{err}");
+    }
+
+    #[test]
+    fn an_sslpassword_in_the_query_is_refused_without_repeating_it() {
+        let err = refusal("postgres://nina@db.example.com/shop?sslmode=require&sslpassword=hunter2");
+        assert!(err.contains("`sslpassword`") && !err.contains("hunter2"), "{err}");
+    }
+
+    #[test]
+    fn an_oauth_client_secret_in_the_query_is_refused_without_repeating_it() {
+        let err = refusal("postgres://nina@db.example.com/shop?oauth_client_secret=hunter2");
+        assert!(err.contains("`oauth_client_secret`") && !err.contains("hunter2"), "{err}");
     }
 
     #[test]
