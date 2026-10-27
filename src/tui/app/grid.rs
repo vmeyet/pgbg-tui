@@ -147,7 +147,7 @@ fn column_widths(result: &ResultSet, formats: &[Format], clock: &Clock) -> Vec<u
 }
 
 fn column_width(result: &ResultSet, column: usize, format: Format, clock: &Clock) -> usize {
-    let header = render::width(&render::printable(&result.columns()[column].name));
+    let header = render::width(&render::printable(result.columns()[column].name.as_str()));
     let cells = result.rows().iter().take(WIDTH_SAMPLE_ROWS).filter_map(|row| row.get(column));
     let widest_cell = cells.map(|value| render::width(&format::cell(value, format, clock, MAX_COLUMN_WIDTH))).max().unwrap_or(0);
     header.max(widest_cell).max(format::least_width(format)).min(MAX_COLUMN_WIDTH)

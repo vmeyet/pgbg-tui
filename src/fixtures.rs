@@ -1,7 +1,8 @@
 //! Invented fixtures the tests share: the connection `shop`, the test database, tunnels to it, and results of `orders`.
 use crate::connection::{Connection, Entry, WritePolicy};
 use crate::db::model::{
-    Catalog, Column, ColumnKind, Extent, Index, Page, ResultSet, Schema, SchemaColumn, SchemaNode, Table, TableKind, Value,
+    Catalog, Column, ColumnKind, ColumnName, Extent, Index, Page, ResultSet, Schema, SchemaColumn, SchemaNode, Table, TableKind, TypeName,
+    Value,
 };
 use rustix::process::{Pid, test_kill_process};
 use std::path::Path;
@@ -126,7 +127,7 @@ fn through_forwarder(program: &str, marker: &str, writes: WritePolicy, hop: Dura
 }
 
 pub(crate) fn column(name: &str, kind: ColumnKind) -> Column {
-    Column { name: name.to_owned(), kind, type_name: String::new() }
+    Column { name: ColumnName::new(name), kind, type_name: TypeName::new("") }
 }
 
 /// Four orders: an id, a total and the customer, one of them `NULL`, one with a name past ASCII.

@@ -66,7 +66,7 @@ fn header<'a>(view: GridView<'a>, shown: &[Shown]) -> Line<'a> {
     let cells = shown.iter().map(|column| {
         let name = &view.result.columns()[column.index];
         let style = if column.index == view.grid.column { cursor_style } else { style };
-        (aligned(&render::printable(&name.name), name, column.width), style)
+        (aligned(&render::printable(name.name.as_str()), name, column.width), style)
     });
     line(Span::raw(NO_CURSOR), cells.collect())
 }

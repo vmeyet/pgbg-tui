@@ -76,7 +76,7 @@ fn before_cursor_width(field: &Field) -> usize {
 fn fallback_text(app: &App, name: &ParamName) -> String {
     let spec = app.sheet().header.params.iter().rev().find(|spec| spec.name == *name);
     match spec.map(|spec| &spec.fallback) {
-        Some(Fallback::Default(default)) => render::printable(default).into_owned(),
+        Some(Fallback::Default(default)) => render::printable(default.as_str()).into_owned(),
         Some(Fallback::Optional) => OPTIONAL.to_owned(),
         Some(Fallback::Required) | None => REQUIRED.to_owned(),
     }

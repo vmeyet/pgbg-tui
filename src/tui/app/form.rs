@@ -48,7 +48,17 @@ enum Turn {
 }
 
 /// A line refused, and why.
-type Refusal = (Slot, String);
+#[derive(Clone, Debug, PartialEq)]
+struct RefusedLine {
+    slot: Slot,
+    why: String,
+}
+
+impl RefusedLine {
+    fn new(slot: Slot, why: impl Into<String>) -> Self {
+        Self { slot, why: why.into() }
+    }
+}
 
 /// The form while it is open: what each line holds, the line with the cursor, and what was refused.
 #[derive(Debug, PartialEq)]
@@ -74,7 +84,7 @@ pub(in crate::tui) struct Form {
     /// Empty for the tier's.
     statement_timeout: Field,
     /// Why a line is refused, each beside its line.
-    errors: Vec<Refusal>,
+    errors: Vec<RefusedLine>,
     /// The save on its way, until its answer comes.
     sent: Option<ConfigChangeId>,
     /// Why the last save failed.
@@ -220,7 +230,7 @@ impl Form {
     }
 
     pub(in crate::tui) fn error(&self, slot: Slot) -> Option<&str> {
-        self.errors.iter().find(|(refused, _)| *refused == slot).map(|(_, why)| why.as_str())
+        self.errors.iter().find(|refused| refused.slot == slot).map(|refused| refused.why.as_str())
     }
 
     /// Types `text` on the line with the cursor as vtui cleans a paste, on one line, but on the password line, which takes
@@ -298,7 +308,7 @@ impl Form {
     /// name of one in `connections`.
     fn submit(&mut self, id: ConfigChangeId, connections: &[Connection]) -> Option<SaveConnection> {
         let name = self.checked_name(connections);
-        let url = Target::parse(self.url.text()).map_err(|err| (Slot::Url, format!("{err:#}")));
+        let url = Target::parse(self.url.text()).map_err(|err| RefusedLine::new(Slot::Url, format!("{err:#}")));
         let (tunnel, password) = (self.checked_tunnel(), self.checked_password());
         let (tls, statement_timeout) = (self.checked_tls(), self.checked_statement_timeout());
         let refused = [name.as_ref().err(), url.as_ref().err(), tunnel.as_ref().err(), password.as_ref().err()];
@@ -341,36 +351,40 @@ impl Form {
         }
     }
 
-    fn checked_name(&self, connections: &[Connection]) -> Result<ConnectionName, Refusal> {
-        let name: ConnectionName = self.name.text().trim().parse().map_err(|err| (Slot::Name, format!("{err:#}")))?;
+    fn checked_name(&self, connections: &[Connection]) -> Result<ConnectionName, RefusedLine> {
+        let name: ConnectionName = self.name.text().trim().parse().map_err(|err| RefusedLine::new(Slot::Name, format!("{err:#}")))?;
         let is_taken = self.saving == Saving::Add && connections.iter().any(|connection| *connection.name() == name);
         if is_taken {
-            return Err((Slot::Name, format!("`{name}` is already a connection: `ctrl-e` in the picker edits it")));
+            return Err(RefusedLine::new(Slot::Name, format!("`{name}` is already a connection: `ctrl-e` in the picker edits it")));
         }
         Ok(name)
     }
 
-    fn checked_tunnel(&self) -> Result<Option<TunnelSpec>, Refusal> {
+    fn checked_tunnel(&self) -> Result<Option<TunnelSpec>, RefusedLine> {
         let was = self.was.as_ref().and_then(Connection::tunnel);
         let command = match self.tunnel.text().trim() {
-            "" if was.is_some() => return Err((Slot::Tunnel, CANNOT_CLEAR.to_owned())),
+            "" if was.is_some() => return Err(RefusedLine::new(Slot::Tunnel, CANNOT_CLEAR)),
             "" => return Ok(None),
-            text => shell_words::split(text).context("splitting the command").map_err(|err| (Slot::Tunnel, format!("{err:#}")))?,
+            text => shell_words::split(text)
+                .context("splitting the command")
+                .map_err(|err| RefusedLine::new(Slot::Tunnel, format!("{err:#}")))?,
         };
         let before = self.checked_tunnel_before(was)?;
-        TunnelSpec::new(command, before).map(Some).map_err(|err| (Slot::Tunnel, format!("{err:#}")))
+        TunnelSpec::new(command, before).map(Some).map_err(|err| RefusedLine::new(Slot::Tunnel, format!("{err:#}")))
     }
 
-    fn checked_tunnel_before(&self, was: Option<&TunnelSpec>) -> Result<Option<Vec<String>>, Refusal> {
+    fn checked_tunnel_before(&self, was: Option<&TunnelSpec>) -> Result<Option<Vec<String>>, RefusedLine> {
         let had = was.is_some_and(|tunnel| tunnel.before().is_some());
         match self.tunnel_before.text().trim() {
-            "" if had => Err((Slot::TunnelBefore, CANNOT_CLEAR.to_owned())),
+            "" if had => Err(RefusedLine::new(Slot::TunnelBefore, CANNOT_CLEAR)),
             "" => Ok(None),
-            text => shell_words::split(text).map(Some).map_err(|err| (Slot::TunnelBefore, format!("splitting the command: {err}"))),
+            text => shell_words::split(text)
+                .map(Some)
+                .map_err(|err| RefusedLine::new(Slot::TunnelBefore, format!("splitting the command: {err}"))),
         }
     }
 
-    fn checked_password(&self) -> Result<Option<SecretSource>, Refusal> {
+    fn checked_password(&self) -> Result<Option<SecretSource>, RefusedLine> {
         let had = self.was.as_ref().is_some_and(|c| c.password().is_some());
         let text = self.password_where.text().trim();
         let source = match self.password_from {
@@ -384,25 +398,25 @@ impl Form {
         };
         let problem = source.as_ref().ok().and_then(Option::as_ref).and_then(SecretSource::problem);
         match problem {
-            Some(problem) => Err((Slot::PasswordWhere, problem.to_owned())),
-            None => source.map_err(|err| (Slot::PasswordWhere, format!("{err:#}"))),
+            Some(problem) => Err(RefusedLine::new(Slot::PasswordWhere, problem)),
+            None => source.map_err(|err| RefusedLine::new(Slot::PasswordWhere, format!("{err:#}"))),
         }
     }
 
-    fn checked_tls(&self) -> Result<Option<Tls>, Refusal> {
+    fn checked_tls(&self) -> Result<Option<Tls>, RefusedLine> {
         let had = self.was.as_ref().and_then(Connection::tls_setting).is_some();
         match self.tls {
-            None if had => Err((Slot::Tls, CANNOT_CLEAR.to_owned())),
+            None if had => Err(RefusedLine::new(Slot::Tls, CANNOT_CLEAR)),
             tls => Ok(tls),
         }
     }
 
-    fn checked_statement_timeout(&self) -> Result<Option<StatementTimeout>, Refusal> {
+    fn checked_statement_timeout(&self) -> Result<Option<StatementTimeout>, RefusedLine> {
         let had = self.was.as_ref().and_then(|c| c.statement_timeout().own()).is_some();
         match self.statement_timeout.text().trim() {
-            "" if had => Err((Slot::StatementTimeout, CANNOT_CLEAR.to_owned())),
+            "" if had => Err(RefusedLine::new(Slot::StatementTimeout, CANNOT_CLEAR)),
             "" => Ok(None),
-            text => text.parse().map(Some).map_err(|err| (Slot::StatementTimeout, format!("{err:#}"))),
+            text => text.parse().map(Some).map_err(|err| RefusedLine::new(Slot::StatementTimeout, format!("{err:#}"))),
         }
     }
 }
@@ -527,7 +541,7 @@ mod tests {
         adding(&mut app);
         press(&mut app, "my shop");
         assert_eq!(key(&mut app, KeyCode::Enter), []);
-        let refused: Vec<Slot> = form(&app).errors.iter().map(|(slot, _)| *slot).collect();
+        let refused: Vec<Slot> = form(&app).errors.iter().map(|refused| refused.slot).collect();
         assert_eq!(refused, [Slot::Name, Slot::Url]);
     }
 

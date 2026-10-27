@@ -113,7 +113,7 @@ mod tests {
     use super::*;
     use crate::connection::WritePolicy;
     use crate::db::guard;
-    use crate::db::model::{Params, Route, Statement, Value};
+    use crate::db::model::{ParamValue, Params, Route, Statement, Value};
     use crate::db::run::ROW_CAP;
     use crate::fixtures;
 
@@ -159,7 +159,7 @@ mod tests {
         let mut session = session("").await;
         let admitted = guard::admit(
             Statement::new("SELECT generate_series(1, $1::int4)"),
-            Params::new(vec![Some("700".into())], vec![]),
+            Params::new(vec![Some(ParamValue::new("700"))], vec![]),
             WritePolicy::ReadOnly,
         );
         let Started { rest, .. } = session.start(&admitted.unwrap()).await.unwrap();

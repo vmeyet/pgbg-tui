@@ -44,7 +44,7 @@ pub(crate) fn result(result: &ResultSet, format: Format) -> String {
 /// A header line of the column names, then one line per row; a NULL is an empty field, as `COPY ... CSV` writes it.
 /// A value starting with `=`, `+`, `-` or `@` is copied as it is: a spreadsheet may read it as a formula.
 fn csv(result: &ResultSet) -> String {
-    let header = csv_line(result.columns().iter().map(|column| csv_quoted(&column.name)));
+    let header = csv_line(result.columns().iter().map(|column| csv_quoted(column.name.as_str())));
     let rows = result.rows().iter().map(|values| row(values));
     std::iter::once(header).chain(rows).collect()
 }
@@ -90,8 +90,8 @@ fn unique_names(columns: &[Column]) -> Vec<String> {
     let mut taken = BTreeSet::new();
     let mut names = vec![];
     for column in columns {
-        let is_free = |name: &String| !taken.contains(name) && (*name == column.name || !real.contains(name.as_str()));
-        let name = (1..=2 * columns.len()).map(|nth| nth_name(&column.name, nth)).find(is_free).unwrap_or_default();
+        let is_free = |name: &String| !taken.contains(name) && (name == column.name.as_str() || !real.contains(name.as_str()));
+        let name = (1..=2 * columns.len()).map(|nth| nth_name(column.name.as_str(), nth)).find(is_free).unwrap_or_default();
         taken.insert(name.clone());
         names.push(name);
     }
@@ -119,7 +119,7 @@ impl Serialize for RowObject<'_> {
 
 /// A table with a header row; a `|` in a cell is escaped and a line end becomes `<br>`, so each row stays one line.
 fn markdown(result: &ResultSet) -> String {
-    let header = markdown_line(result.columns().iter().map(|column| markdown_cell(&column.name)));
+    let header = markdown_line(result.columns().iter().map(|column| markdown_cell(column.name.as_str())));
     let rule = markdown_line(result.columns().iter().map(|_| "---".to_owned()));
     let rows = result.rows().iter().map(|values| markdown_line(values.iter().map(|value| markdown_cell(&value.to_string()))));
     [header, rule].into_iter().chain(rows).collect()

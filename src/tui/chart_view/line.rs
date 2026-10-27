@@ -63,7 +63,7 @@ fn x_labels(series: &Series, x: [f64; 2], width: u16) -> Vec<Line<'static>> {
 mod tests {
     use super::super::tests::{render, series};
     use super::*;
-    use crate::db::model::{ColumnKind, ResultSet, Value};
+    use crate::db::model::{ColumnKind, ColumnName, ResultSet, Value};
     use crate::fixtures::column;
 
     fn daily(orders: &[Option<i64>]) -> ResultSet {
@@ -74,7 +74,7 @@ mod tests {
 
     #[test]
     fn a_missing_value_breaks_the_line() {
-        let y = YColumn { name: "orders".into(), values: vec![Some(1.0), None, Some(3.0), Some(4.0)] };
+        let y = YColumn { name: ColumnName::new("orders"), values: vec![Some(1.0), None, Some(3.0), Some(4.0)] };
         assert_eq!(segments(&[0.0, 1.0, 2.0, 3.0], &y), [vec![(0.0, 1.0)], vec![(2.0, 3.0), (3.0, 4.0)]]);
     }
 

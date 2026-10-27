@@ -1,6 +1,6 @@
 use super::axis::XAxis;
 use super::{ChartColumns, ChartKind, ChartSpec, default_x, default_y, is_numeric};
-use crate::db::model::{Column, ResultSet, Value};
+use crate::db::model::{Column, ColumnName, ResultSet, Value};
 use std::fmt;
 
 /// The longest x label kept: a 10 MB text cell costs no more than a short one.
@@ -11,7 +11,7 @@ const MAX_LABEL_CHARS: usize = 32;
 pub(crate) struct Series {
     pub(crate) kind: ChartKind,
     /// The x column's name, the axis title.
-    pub(crate) x: String,
+    pub(crate) x: ColumnName,
     pub(crate) axis: XAxis,
     /// Each point's place on the axis, ascending.
     pub(crate) positions: Vec<f64>,
@@ -31,7 +31,7 @@ struct Placed {
 /// One y column's values, one per point; `None` where there is nothing to draw: NULL, NaN or infinity.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct YColumn {
-    pub(crate) name: String,
+    pub(crate) name: ColumnName,
     pub(crate) values: Vec<Option<f64>>,
 }
 
@@ -41,7 +41,7 @@ pub(crate) enum ChartError {
     UnknownColumn(String),
     /// More columns than one answer to the name: `count`, `?column?`.
     AmbiguousColumn(String),
-    NotNumeric(String),
+    NotNumeric(ColumnName),
     /// No x was given and the result has no text, date or time column.
     NoX,
     /// No y was given and the result has no numeric column.
@@ -141,8 +141,8 @@ fn find_numbers(columns: &[Column], names: &[String]) -> Result<Vec<usize>, Char
 }
 
 fn find(columns: &[Column], name: &str) -> Result<usize, ChartError> {
-    let exact = matching(columns, |column| column.name == name);
-    let folded = matching(columns, |column| column.name.eq_ignore_ascii_case(name));
+    let exact = matching(columns, |column| column.name.as_str() == name);
+    let folded = matching(columns, |column| column.name.as_str().eq_ignore_ascii_case(name));
     match (exact.as_slice(), folded.as_slice()) {
         ([index], _) | ([], [index]) => Ok(*index),
         ([], []) => Err(ChartError::UnknownColumn(name.to_owned())),
@@ -213,14 +213,14 @@ mod tests {
     fn a_full_spec_gives_one_label_and_one_value_per_row() {
         let series = Series::from_result(&orders(), &spec("bar x=customer y=total")).unwrap();
         assert_eq!(series.labels, ["nina", "NULL"]);
-        assert_eq!(series.y, [YColumn { name: "total".into(), values: vec![Some(12.5), Some(1499.0)] }]);
+        assert_eq!(series.y, [YColumn { name: ColumnName::new("total"), values: vec![Some(12.5), Some(1499.0)] }]);
         assert!(!series.is_cut);
     }
 
     #[test]
     fn a_spec_without_x_or_y_fills_them_from_the_result() {
         let series = Series::from_result(&orders(), &spec("line")).unwrap();
-        assert_eq!(series.x, "customer");
+        assert_eq!(series.x.as_str(), "customer");
         assert_eq!(series.y.iter().map(|column| column.name.as_str()).collect::<Vec<_>>(), ["orders", "total"]);
         assert_eq!(series.kind, ChartKind::Line);
     }
@@ -238,7 +238,7 @@ mod tests {
 
     #[test]
     fn a_y_that_does_not_hold_numbers_is_refused() {
-        assert_eq!(Series::from_result(&orders(), &spec("bar y=customer")), Err(ChartError::NotNumeric("customer".into())));
+        assert_eq!(Series::from_result(&orders(), &spec("bar y=customer")), Err(ChartError::NotNumeric(ColumnName::new("customer"))));
     }
 
     #[test]
@@ -321,7 +321,7 @@ mod tests {
 
     #[test]
     fn a_name_matches_whatever_its_case() {
-        assert_eq!(Series::from_result(&orders(), &spec("bar x=Customer y=TOTAL")).unwrap().y[0].name, "total");
+        assert_eq!(Series::from_result(&orders(), &spec("bar x=Customer y=TOTAL")).unwrap().y[0].name.as_str(), "total");
     }
 
     #[test]
