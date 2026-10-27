@@ -5,7 +5,7 @@ use crate::connection::ConnectionName;
 use crate::query::{Query, QueryPath, Roots, Write};
 use tokio::sync::mpsc::UnboundedSender;
 
-/// The folders of saved queries, and the loop's channel for what is read in them.
+/// The folders of saved queries, and the loop's channel for what is read from them.
 #[derive(Debug)]
 pub(in crate::tui) struct QueryFiles {
     pub(super) roots: Roots,
@@ -37,7 +37,7 @@ impl QueryFiles {
     }
 
     /// Writes `text` over `query` on a blocking thread; `QueryAnswer::Saved` comes back for the sheet of `connection`,
-    /// then the new list.
+    /// followed by the new list.
     pub(in crate::tui) fn save(&self, connection: ConnectionName, query: Query, text: String) {
         let (roots, answers) = (self.roots.clone(), self.answers.clone());
         tokio::task::spawn_blocking(move || {
@@ -57,7 +57,7 @@ impl QueryFiles {
     }
 }
 
-/// What a save of `text` at `path` for the sheet of `connection` came to.
+/// The outcome of saving `text` at `path` for the sheet of `connection`.
 struct Saving {
     connection: ConnectionName,
     path: QueryPath,
@@ -72,7 +72,7 @@ fn saved_answer(Saving { connection, path, saved, text }: Saving) -> QueryAnswer
     }
 }
 
-/// Sends `answer`, then the queries listed again, so a new file shows in the sidebar and the finder.
+/// Sends `answer`, then the list of queries again, so a new file shows in the sidebar and the finder.
 fn answer_saved(answers: &UnboundedSender<Answer>, answer: QueryAnswer, roots: &Roots) {
     send(answers, Answer::Queries(answer));
     send(answers, Answer::Queries(QueryAnswer::All(roots.list())));
