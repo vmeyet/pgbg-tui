@@ -27,6 +27,7 @@ A tunnel's `command` forwards the port pgbg puts in place of `{port}`; pgbg then
 A connection with a tunnel needs `sslmode=require`, or `tls = "off"` on purpose, even when its `url` says `localhost`: another program could answer on that port.
 For ssh, keep `ControlPath=none`, so the forward dies with pgbg instead of living on in a shared connection, and `ExitOnForwardFailure=yes`, so ssh stops when it cannot take the port.
 An optional `before` command, such as one that wakes the bastion, runs once before each tunnel starts, so it must be safe to run twice.
+The TUI reads a connection's schema for its sidebar on a second, short login, the first time it needs it; `schema = "off"` on the connection never does, for a pooler or a `CONNECTION LIMIT` with no login to spare.
 Each session gets a statement timeout from its tier: none on local, a minute on staging, 30 seconds on production; `statement_timeout = "2min"` on a connection sets its own, and a stricter one the server sets is kept.
 `[display]` with `format = "readable"` opens every result in the TUI readable, as `F` does; the default is `raw`.
 `pgbg connection add|edit|remove` and `pgbg password set <connection>` write this file for you and keep your comments.

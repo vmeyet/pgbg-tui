@@ -3,7 +3,7 @@ source: src/tui/ui.rs
 expression: "render(&app, 80, 10).backend()"
 ---
 "╭ ● shop · local ──────────────────────────────────────────────────────────────╮"
-"│╭ Queries ───────────────────╮╭ Editor · orders/daily.sql ─ READ ONLY ───────╮│"
+"│╭ [Queries] Schema ──────────╮╭ Editor · orders/daily.sql ─ READ ONLY ───────╮│"
 "││  ▾ orders/                 ││ SELECT 1                                     ││"
 "││    ● daily.sql             │╰──────────────────────────────────────────────╯│"
 "││      weekly.sql            │╭ Result ──────────────────────────────────────╮│"

@@ -1,5 +1,5 @@
 //! Drawing: the frame in the tier's colour, the panes inside it, and the key hints under them.
-use super::app::{App, Fit, Overlay, SessionState, TunnelState};
+use super::app::{App, Fit, Overlay, SessionState, SidebarTab, TunnelState};
 use super::{
     detail_view, editor_view, finder_view, form_view, help_view, history_view, picker_view, prompt_view, result_view, sidebar_view,
 };
@@ -18,6 +18,7 @@ const SIDEBAR_COLUMNS: u16 = 30;
 const STATUS_SHARE_OF_ROW: u16 = 2;
 /// A terminal narrower than this leaves the sidebar out, so the editor and the grid keep their room.
 const SIDEBAR_MIN_SCREEN_COLUMNS: u16 = 80;
+const CUT_SCHEMA: &str = "first 20 000 tables";
 
 /// Where each part of the screen goes.
 struct Areas {
@@ -29,7 +30,8 @@ struct Areas {
 
 /// The whole screen for `app`; returns what it had room for.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> Fit {
-    let has_sidebar = !app.queries.all.is_empty() && f.area().width >= SIDEBAR_MIN_SCREEN_COLUMNS;
+    let has_tab = !app.queries.all.is_empty() || app.sidebar == SidebarTab::Schema;
+    let has_sidebar = has_tab && f.area().width >= SIDEBAR_MIN_SCREEN_COLUMNS;
     let areas = layout(framed(f, app), has_sidebar);
     if let Some(sidebar) = areas.sidebar {
         sidebar_view::draw(f, app, sidebar);
@@ -76,7 +78,11 @@ fn footer(f: &mut Frame<'_>, app: &App, area: Rect) {
     let status = status(app, usize::from(area.width / STATUS_SHARE_OF_ROW));
     let status_columns = u16::try_from(status.width()).unwrap_or(area.width);
     let [hints_area, status_area] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(status_columns)]).areas(area);
-    let pane = if app.overlay == Some(Overlay::CopyAs) { Pane::CopyAs } else { app.focus.pane() };
+    let pane = match app.overlay {
+        Some(Overlay::CopyAs) => Pane::CopyAs,
+        Some(Overlay::SchemaFilter) => Pane::SchemaFilter,
+        _ => app.pane(),
+    };
     f.render_widget(Paragraph::new(hints(app, pane, usize::from(hints_area.width))), hints_area);
     f.render_widget(Paragraph::new(status), status_area);
 }
@@ -117,7 +123,14 @@ fn status(app: &App, width: usize) -> Line<'static> {
         (Some(tunnel), session) => format!("{} · {} ", tunnel_text(tunnel), session_text(session)),
         (None, session) => format!("{} ", session_text(session)),
     };
+    let text = if is_cut_schema_shown(app) { format!("{CUT_SCHEMA} · {text}") } else { text };
     Line::styled(truncate(&text, width), muted)
+}
+
+/// Whether the schema tab shows a schema whose read kept only the first tables.
+fn is_cut_schema_shown(app: &App) -> bool {
+    let is_cut = app.sheet().catalog().is_some_and(|catalog| catalog.is_cut);
+    app.sidebar == SidebarTab::Schema && is_cut
 }
 
 fn tunnel_text(tunnel: &TunnelState) -> String {
@@ -150,11 +163,12 @@ mod tests {
     use super::super::app::{Answer, App, Incoming, QueryAnswer, RunId};
     use super::super::styled;
     use super::*;
-    use crate::db::model::{Extent, LocalPort, Page, ResultSet};
+    use crate::db::model::{Catalog, Extent, LocalPort, Page, ResultSet};
     use crate::tui::theme::Theme;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use std::sync::Arc;
     use std::time::Duration;
 
     fn render(app: &App, width: u16, height: u16) -> Terminal<TestBackend> {
@@ -258,6 +272,36 @@ mod tests {
             text: "SELECT 1".into(),
         }));
         insta::assert_snapshot!("sidebar", render(&app, 80, 10).backend());
+    }
+
+    fn on_the_schema_tab(is_cut: bool) -> App {
+        let mut app = app();
+        app.fit(Fit { has_sidebar: true, ..Fit::default() });
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        app.handle_key(KeyEvent::from(KeyCode::Char(']')));
+        app.apply(to_shop(Incoming::Opened));
+        let catalog = Catalog { schema: crate::fixtures::shop_schema(), search_path: vec!["public".to_owned()], is_cut };
+        app.apply(to_shop(Incoming::Schema(Ok(Arc::new(catalog)))));
+        app
+    }
+
+    #[test]
+    fn the_schema_tab_shows_each_schema_and_its_tables() {
+        insta::assert_snapshot!("schema_tab", render(&on_the_schema_tab(false), 80, 10).backend());
+    }
+
+    #[test]
+    fn the_schema_tab_shows_the_filter_being_typed_above_the_tables_it_keeps() {
+        let mut app = on_the_schema_tab(false);
+        "/ord".chars().for_each(|c| _ = app.handle_key(KeyEvent::from(KeyCode::Char(c))));
+        insta::assert_snapshot!("schema_filter", render(&app, 80, 10).backend());
+    }
+
+    #[test]
+    fn a_cut_schema_says_so_in_the_status_line() {
+        let screen = format!("{:?}", render(&on_the_schema_tab(true), 100, 10).backend());
+        assert!(screen.contains("first 20 000 tables · connected"), "{screen}");
     }
 
     #[test]

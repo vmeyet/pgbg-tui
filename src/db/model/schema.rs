@@ -112,9 +112,13 @@ impl Schema {
 
 impl SchemaNode {
     fn matching(self, filter: &str) -> Self {
-        let is_kept = |table: &Table| self.qualified(table).to_lowercase().contains(filter);
-        let tables = self.tables.iter().filter(|table| is_kept(table)).cloned().collect();
+        let tables = self.tables.iter().filter(|table| self.holds(table, filter)).cloned().collect();
         Self { name: self.name, tables }
+    }
+
+    /// Whether `schema.table` holds `filter`, which is lowercase, whatever the name's case.
+    pub(crate) fn holds(&self, table: &Table, filter: &str) -> bool {
+        self.qualified(table).to_lowercase().contains(filter)
     }
 
     fn qualified(&self, table: &Table) -> String {

@@ -173,8 +173,15 @@ impl Sheet {
         }
     }
 
+    /// The schema last read, when one was.
+    pub(in crate::tui) fn catalog(&self) -> Option<&Catalog> {
+        match &self.schema {
+            SchemaState::Read(catalog) => Some(catalog),
+            _ => None,
+        }
+    }
+
     /// Asks for the schema the first time something needs it; nothing once asked.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the schema sidebar asks for it, the next step"))]
     pub(super) fn want_schema(&mut self) -> Vec<Action> {
         if self.schema != SchemaState::NotRead {
             return vec![];

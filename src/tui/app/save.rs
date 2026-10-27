@@ -25,7 +25,7 @@ fn with_extension(typed: &str) -> String {
     if typed.ends_with(EXTENSION) { typed.to_owned() } else { format!("{typed}{EXTENSION}") }
 }
 
-fn typed_into(path: &mut Field, key: KeyEvent) {
+pub(super) fn typed_into(path: &mut Field, key: KeyEvent) {
     match key.code {
         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => path.insert(c),
         KeyCode::Backspace => path.backspace(),

@@ -6,6 +6,6 @@ use ratatui::Frame;
 /// The overlay when it is open.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App) {
     if let Some(Overlay::Help(help)) = app.overlay {
-        vtui::help::draw(f, &app.theme, f.area(), help, &act::sections(app.focus.pane(), help.every_key));
+        vtui::help::draw(f, &app.theme, f.area(), help, &act::sections(app.pane(), help.every_key));
     }
 }

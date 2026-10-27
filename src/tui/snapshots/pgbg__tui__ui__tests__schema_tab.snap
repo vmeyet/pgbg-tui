@@ -1,0 +1,14 @@
+---
+source: src/tui/ui.rs
+expression: "render(&on_the_schema_tab(false), 80, 10).backend()"
+---
+"╭ ● shop · local ──────────────────────────────────────────────────────────────╮"
+"│╭ Queries [Schema] ──────────╮╭ Editor ─ READ ONLY ──────────────────────────╮│"
+"││ ▎▾ billing                 ││                                              ││"
+"││      invoices              │╰──────────────────────────────────────────────╯│"
+"││  ▾ public                  │╭ Result ──────────────────────────────────────╮│"
+"││      orders                ││ ⏎ runs the statement under the cursor        ││"
+"││      customers             ││                                              ││"
+"│╰────────────────────────────╯╰──────────────────────────────────────────────╯│"
+"│ j/k move  / filter  [] queries  ^p find  ⇥ pane  F1 keys  ^c quit  connected │"
+"╰──────────────────────────────────────────────────────────────────────────────╯"
