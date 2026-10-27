@@ -110,10 +110,9 @@ fn aligned(text: &str, column: &Column, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::super::app::Grid;
-    use super::super::app::tests::orders;
     use super::super::styled;
     use super::*;
-    use crate::fixtures::column;
+    use crate::fixtures::{column, orders};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 

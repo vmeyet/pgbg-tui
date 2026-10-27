@@ -202,9 +202,10 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{app, enter, orders, press, shop, typed, view, with_result};
+    use super::super::fixtures::{app, enter, press, shop, typed, view, with_result};
     use super::*;
     use crate::chart;
+    use crate::fixtures::orders;
     use crate::tui::app::{Run, RunId, View};
     use crossterm::event::KeyModifiers;
 

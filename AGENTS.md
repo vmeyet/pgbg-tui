@@ -75,6 +75,7 @@ cargo insta review                           # after a deliberate rendering chan
 Every module ships its tests in the same file; snapshot tests render on `TestBackend`.
 Fixtures are invented: database `shop`, tables `orders` and `customers`, user `nina`, host `db.example.com`.
 The ones several modules share live in `src/fixtures.rs`, compiled for tests only; a test takes one from there before it writes its own.
+Fixtures built from types private to a module live in a `fixtures.rs` child of that module, as `tui/app/` and `tui/backend/` do.
 
 ## Security
 

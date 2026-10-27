@@ -183,7 +183,7 @@ impl Sheet {
 
 #[cfg(test)]
 pub(in crate::tui) mod tests {
-    use super::super::tests::{app_on, connection, to_shop};
+    use super::super::fixtures::{app_on, connection, to_shop};
     use super::super::{Answer, Incoming, Run};
     use super::*;
     use crate::fixtures::{self, shop_catalog};

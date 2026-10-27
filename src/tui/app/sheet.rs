@@ -539,7 +539,7 @@ impl Sheet {
 #[cfg(test)]
 mod tests {
     use super::super::App;
-    use super::super::tests::{app, app_on, on_the_result, shop, to_shop};
+    use super::super::fixtures::{app, app_on, on_the_result, shop, to_shop};
     use super::*;
     use crate::db::model::{ColumnKind, Value};
     use crate::failure::{Failure, Lost};

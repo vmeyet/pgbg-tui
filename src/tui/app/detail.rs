@@ -85,9 +85,10 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{on_the_result, orders, to_shop, typed};
+    use super::super::fixtures::{on_the_result, to_shop, typed};
     use super::super::{Fit, Incoming, RunId};
     use super::*;
+    use crate::fixtures::orders;
     use crossterm::event::{KeyCode, KeyModifiers};
     use std::time::Duration;
 

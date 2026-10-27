@@ -46,7 +46,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::app::tests::{app, shop};
+    use super::super::app::fixtures::{app, shop};
     use super::super::app::{Action, Answer};
     use super::*;
     use crate::db::model::Statement;

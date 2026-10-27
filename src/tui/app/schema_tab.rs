@@ -238,8 +238,8 @@ impl App {
 
 #[cfg(test)]
 mod tests {
+    use super::super::fixtures::{app, app_on, shop, to_shop};
     use super::super::sheet::{SchemaState, SessionState};
-    use super::super::tests::{app, app_on, shop, to_shop};
     use super::super::{Answer, Fit, Incoming, Run, RunId, SessionId};
     use super::*;
     use crate::connection::WritePolicy;

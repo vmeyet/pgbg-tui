@@ -61,7 +61,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::super::Answer;
-    use super::super::tests::{app, shop, typed};
+    use super::super::fixtures::{app, shop, typed};
     use super::*;
     use crate::db::model::Statement;
     use crate::history::Outcome;

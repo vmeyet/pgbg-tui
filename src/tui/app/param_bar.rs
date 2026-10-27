@@ -65,7 +65,7 @@ pub(super) enum Direction {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::typed;
+    use super::super::fixtures::typed;
     use super::super::{Action, App, Focus, RunId};
     use super::*;
     use crate::query::params::ParamInput;

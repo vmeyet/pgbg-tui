@@ -67,7 +67,7 @@ fn to_cells(count: usize) -> u16 {
 
 #[cfg(test)]
 mod tests {
-    use super::super::app::tests::typed;
+    use super::super::app::fixtures::typed;
     use super::super::ui;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
