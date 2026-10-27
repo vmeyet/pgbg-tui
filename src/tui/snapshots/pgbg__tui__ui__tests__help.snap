@@ -1,6 +1,5 @@
 ---
 source: src/tui/ui.rs
-assertion_line: 201
 expression: "render(&app, 60, 20).backend()"
 ---
 "╭ ● shop · local ──────────────────────────────────────────╮"
@@ -15,11 +14,11 @@ expression: "render(&app, 60, 20).backend()"
 "││ │                                                    │ ││"
 "││ │  ANYWHERE                                          │ ││"
 "││ │      ^p  find a saved query                        │ ││"
+"││ │      ^t  find a table of the schema                │ ││"
 "││ │     esc  cancel the running statement              │ ││"
 "││ │     tab  next pane: editor, result, sidebar        │ ││"
 "││ │      F1  these keys, from the editor too           │ ││"
 "││ │      ^s  save the query, naming a new one          │ ││"
-"││ │      ^r  search the statements run on this conne…  │ ││"
 "│╰─│                                                    │─╯│"
-"│ ⏎╰─ 1–14 of 16 · j k scroll · ? every key · esc close ╯… │"
+"│ ⏎╰─ 1–14 of 17 · j k scroll · ? every key · esc close ╯… │"
 "╰──────────────────────────────────────────────────────────╯"

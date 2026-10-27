@@ -18,6 +18,7 @@ mod result_view;
 mod sidebar_view;
 #[cfg(test)]
 mod styled;
+mod table_finder_view;
 mod theme;
 mod ui;
 

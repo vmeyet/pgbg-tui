@@ -23,6 +23,7 @@ pub(super) use save::Prompt;
 pub(super) use schema_tab::{SchemaRow, SchemaTab, SidebarTab};
 pub(super) use search::Search;
 pub(super) use sheet::{Run, SchemaState, SessionState, Sheet, View};
+pub(super) use table_finder::TableFinder;
 
 mod completion;
 mod copy;
@@ -40,6 +41,7 @@ mod save;
 mod schema_tab;
 mod search;
 mod sheet;
+mod table_finder;
 
 /// The pane that has the keys.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -101,6 +103,8 @@ pub(super) enum Overlay {
     SchemaFilter,
     /// The `ctrl-space` list of names for the one before the cursor.
     Completion(Completions),
+    /// The `ctrl-t` finder of the schema's tables.
+    TableFinder(Box<TableFinder>),
 }
 
 /// The help after `key`: `?` lists every key, `j`/`k` scroll, any other key closes it.
@@ -227,6 +231,10 @@ impl App {
             finder.paste(text, &self.queries.all);
             return vec![];
         }
+        if let Some(Overlay::TableFinder(finder)) = self.overlay.as_mut() {
+            finder.search.paste(text, &finder.all);
+            return vec![];
+        }
         if let Some(Overlay::Recall(recall)) = self.overlay.as_mut() {
             recall.search.paste(text, &recall.all);
             return vec![];
@@ -272,6 +280,7 @@ impl App {
             }
             Overlay::Picker(picker) => self.picker_key(picker, key),
             Overlay::Recall(recall) => self.recall_key(recall, key),
+            Overlay::TableFinder(finder) => self.table_finder_key(*finder, key),
             Overlay::Form(form) => self.form_key(*form, key),
             Overlay::Prompt(prompt) => {
                 let (prompt, actions) = self.prompt_after(prompt, key);
@@ -329,6 +338,7 @@ impl App {
             Act::Save => return self.save(),
             Act::EditOutside => return self.edit_outside(),
             Act::History => return self.recall(),
+            Act::FindTable => return self.find_table(),
             Act::Detail => self.open_detail(),
             Act::CopyCell => return self.copy_cell(),
             Act::CopyRow => return self.copy_row(),
@@ -421,6 +431,7 @@ impl App {
     /// returns what the runner should do about it.
     pub(super) fn apply(&mut self, answer: Answer) -> Vec<Action> {
         let actions = self.take_answer(answer);
+        self.fill_table_finder();
         self.and_the_schema_shown(actions)
     }
 

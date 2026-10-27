@@ -48,6 +48,7 @@ pub(crate) enum Act {
     Complete,
     Preview,
     Insert,
+    FindTable,
 }
 
 impl Act {
@@ -122,7 +123,8 @@ impl Act {
             Self::TakeGhost => Some(Self::Complete),
             Self::Complete => Some(Self::Preview),
             Self::Preview => Some(Self::Insert),
-            Self::Insert => None,
+            Self::Insert => Some(Self::FindTable),
+            Self::FindTable => None,
         }
     }
 
@@ -165,6 +167,8 @@ pub(crate) enum Pane {
     Schema,
     /// The line that filters the schema's tables: while open it takes every key.
     SchemaFilter,
+    /// The `ctrl-t` finder over every table of the schema, a popup like the `ctrl-p` one.
+    TableFinder,
     /// The `ctrl-p` finder over every saved query: while open it takes every key, and only its own work.
     Finder,
     /// The `ctrl-o` connection picker, a popup like the finder.
@@ -290,6 +294,14 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Quit, Pane::Finder, &[control('c')]).help("^c", "quit"),
     row(Act::Close, Pane::Finder, &[key(KeyCode::Esc)]).help("esc", "close the finder").footer("esc", "closes"),
     row(Act::Find, Pane::Anywhere, &[control('p')]).help("^p", "find a saved query").footer("^p", "find"),
+    row(Act::FindTable, Pane::Anywhere, &[control('t')]).help("^t", "find a table of the schema"),
+    row(Act::Down, Pane::TableFinder, &[key(KeyCode::Down), control('n')]).help("↓ ^n", "next, previous table").footer("↑↓", "pick"),
+    row(Act::Up, Pane::TableFinder, &[key(KeyCode::Up), control('p')]),
+    row(Act::Open, Pane::TableFinder, &[key(KeyCode::Enter)]).help("⏎", "its columns and indexes").footer("⏎", "columns"),
+    row(Act::Preview, Pane::TableFinder, &[control('r')]).help("^r", "run SELECT * FROM it LIMIT 100").footer("^r", "preview"),
+    row(Act::Insert, Pane::TableFinder, &[key(KeyCode::Tab)]).help("⇥", "put its name in the editor").footer("⇥", "insert"),
+    row(Act::Close, Pane::TableFinder, &[key(KeyCode::Esc)]).help("esc", "close the finder").footer("esc", "closes"),
+    row(Act::Quit, Pane::TableFinder, &[control('c')]).help("^c", "quit"),
     row(Act::Cancel, Pane::Anywhere, &[key(KeyCode::Esc)]).help("esc", "cancel the running statement"),
     row(Act::SwitchPane, Pane::Anywhere, &[key(KeyCode::Tab)]).help("tab", "next pane: editor, result, sidebar").footer("⇥", "pane"),
     row(Act::Help, Pane::Anywhere, &[key(KeyCode::F(1))]).help("F1", "these keys, from the editor too").footer("F1", "keys"),
@@ -344,6 +356,7 @@ fn works_in(row: &Row, pane: Pane) -> bool {
             && !matches!(
                 pane,
                 Pane::Finder
+                    | Pane::TableFinder
                     | Pane::Picker
                     | Pane::Form
                     | Pane::Prompt
@@ -400,6 +413,7 @@ pub(crate) fn sections(pane: Pane, every_key: bool) -> Vec<Section> {
         (Pane::Schema, "schema"),
         (Pane::SchemaFilter, "schema filter"),
         (Pane::Finder, "finder"),
+        (Pane::TableFinder, "table finder"),
         (Pane::Picker, "picker"),
         (Pane::Form, "form"),
         (Pane::Prompt, "prompt"),
@@ -472,6 +486,7 @@ mod tests {
             Pane::Schema,
             Pane::SchemaFilter,
             Pane::Finder,
+            Pane::TableFinder,
             Pane::Picker,
             Pane::Form,
             Pane::Prompt,
@@ -520,6 +535,6 @@ mod tests {
     fn the_first_help_lists_the_focused_pane_and_what_works_anywhere() {
         let titles: Vec<&str> = sections(Pane::Result, false).iter().map(|section| section.title).collect();
         assert_eq!(titles, ["result", "anywhere"]);
-        assert_eq!(sections(Pane::Result, true).len(), 14);
+        assert_eq!(sections(Pane::Result, true).len(), 15);
     }
 }
