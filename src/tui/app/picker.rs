@@ -98,7 +98,7 @@ impl App {
                 None => None,
             },
             Act::Delete => name.map(|name| self.removal(name)),
-            Act::CloseSession => match name.filter(|name| self.sheet_of(name).is_some_and(|sheet| sheet.session != SessionState::Closed)) {
+            Act::CloseSession => match name.filter(|name| self.has_session(name)) {
                 Some(name) if name != *self.sheet().name() => return Picked::CloseSession { search, name },
                 Some(name) => Some(on_screen(&name)),
                 None => None,
@@ -106,6 +106,11 @@ impl App {
             _ => None,
         };
         Picked::Stay(Picker { search, note })
+    }
+
+    /// Whether `name` has a sheet whose session was not closed.
+    fn has_session(&self, name: &ConnectionName) -> bool {
+        self.sheet_of(name).is_some_and(|sheet| sheet.session != SessionState::Closed)
     }
 
     /// The question before removing `name`; the connection on screen cannot go.
