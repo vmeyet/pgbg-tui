@@ -60,7 +60,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> Fit {
 fn framed(f: &mut Frame<'_>, app: &App) -> Rect {
     let sheet = app.sheet();
     let tier = sheet.connection.tier();
-    let colour = app.theme.tier(tier);
+    let colour = app.theme().tier(tier);
     let pill = Span::styled(format!(" ● {} · {tier} ", sheet.name()), Style::default().fg(colour).add_modifier(Modifier::BOLD));
     let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(colour)).title(pill);
     let inside = block.inner(f.area());
@@ -82,13 +82,13 @@ fn layout(area: Rect, has_sidebar: bool, has_params: bool) -> Areas {
 /// The session's state on the right, as wide as it needs up to half the row, and the keys that fit on the left; an open
 /// prompt takes the whole row.
 fn footer(f: &mut Frame<'_>, app: &App, area: Rect) {
-    if let Some(Overlay::Prompt(prompt)) = &app.overlay {
+    if let Some(Overlay::Prompt(prompt)) = app.overlay() {
         return prompt_view::draw(f, app, prompt, area);
     }
     let status = status(app, usize::from(area.width / STATUS_SHARE_OF_ROW));
     let status_columns = u16::try_from(status.width()).unwrap_or(area.width);
     let [hints_area, status_area] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(status_columns)]).areas(area);
-    let pane = match app.overlay {
+    let pane = match app.overlay() {
         Some(Overlay::CopyAs) => Pane::CopyAs,
         Some(Overlay::SchemaFilter) => Pane::SchemaFilter,
         Some(Overlay::Completion(_)) => Pane::Completion,
@@ -99,8 +99,8 @@ fn footer(f: &mut Frame<'_>, app: &App, area: Rect) {
 }
 
 fn hints(app: &App, pane: Pane, columns: usize) -> Line<'static> {
-    let key = Style::default().fg(app.theme.accent).add_modifier(Modifier::BOLD);
-    let does = Style::default().fg(app.theme.muted);
+    let key = Style::default().fg(app.theme().accent).add_modifier(Modifier::BOLD);
+    let does = Style::default().fg(app.theme().muted);
     let width = |hint: Hint| hint_text(hint).iter().map(|text| text.chars().count()).sum();
     let spans = act::footer_within(pane, columns, width).into_iter().flat_map(|hint| {
         let [keys, what] = hint_text(hint);
@@ -117,17 +117,17 @@ fn hint_text(hint: Hint) -> [String; 2] {
 /// One chain: the tunnel then the session, `⇄ :49213 · connected`, or the one reason they are down, in `width` columns;
 /// a change to the config that just failed says why first.
 fn status(app: &App, width: usize) -> Line<'static> {
-    if let Some(why) = &app.config_failure {
+    if let Some(why) = app.config_failure() {
         return failure(app, why, width);
     }
-    if let Some(note) = &app.note {
-        return Line::styled(truncate(&format!("✓ {} ", printable(note)), width), Style::default().fg(app.theme.muted));
+    if let Some(note) = app.note() {
+        return Line::styled(truncate(&format!("✓ {} ", printable(note)), width), Style::default().fg(app.theme().muted));
     }
     let sheet = app.sheet();
     if let Some(why) = &sheet.page_failure {
         return failure(app, why, width);
     }
-    let muted = Style::default().fg(app.theme.muted);
+    let muted = Style::default().fg(app.theme().muted);
     let text = match (&sheet.tunnel, &sheet.session) {
         (Some(TunnelState::Died(how)), _) => return failure(app, how, width),
         (_, SessionState::Failed(err)) => return failure(app, err, width),
@@ -141,7 +141,7 @@ fn status(app: &App, width: usize) -> Line<'static> {
 /// Whether the schema tab shows a schema whose read kept only the first tables.
 fn is_cut_schema_shown(app: &App) -> bool {
     let is_cut = app.sheet().catalog().is_some_and(|catalog| catalog.is_cut);
-    app.sidebar == SidebarTab::Schema && is_cut
+    app.sidebar() == SidebarTab::Schema && is_cut
 }
 
 fn tunnel_text(tunnel: &TunnelState) -> String {
@@ -164,7 +164,7 @@ fn session_text(session: &SessionState) -> &'static str {
 /// The first line of `err` after a `✗`, cut to `width`.
 fn failure(app: &App, err: &str, width: usize) -> Line<'static> {
     let first_line = err.lines().next().unwrap_or_default();
-    Line::styled(truncate(&format!("✗ {} ", printable(first_line)), width), Style::default().fg(app.theme.danger))
+    Line::styled(truncate(&format!("✗ {} ", printable(first_line)), width), Style::default().fg(app.theme().danger))
 }
 
 #[cfg(test)]

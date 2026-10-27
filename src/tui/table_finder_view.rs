@@ -24,8 +24,8 @@ fn nothing_listed(app: &App) -> String {
 
 /// The finder over the whole screen when it is open.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App) {
-    let Some(Overlay::TableFinder(finder)) = &app.overlay else { return };
-    let theme = &app.theme;
+    let Some(Overlay::TableFinder(finder)) = app.overlay() else { return };
+    let theme = app.theme();
     let in_view = finder.search.in_view(MAX_SHOWN);
     let labels: Vec<String> = in_view.iter().map(|table| printable(&format!("{}.{}", table.schema, table.name)).into_owned()).collect();
     let picks: Vec<Pick<'_>> =

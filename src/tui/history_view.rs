@@ -12,7 +12,7 @@ const WHEN_FORMAT: &str = "%m-%d %H:%M";
 
 /// A statement on one line, beside when it ran and what came of it.
 fn pick<'a>(app: &App, label: &'a str, detail: &'a str) -> Pick<'a> {
-    Pick { icon: "↺", colour: app.theme.accent, label, detail: view::faded(&app.theme, detail) }
+    Pick { icon: "↺", colour: app.theme().accent, label, detail: view::faded(app.theme(), detail) }
 }
 
 fn detail(entry: &Entry) -> String {
@@ -25,8 +25,8 @@ fn one_line(statement: &str) -> String {
 
 /// The search over the whole screen when it is open.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App) {
-    let Some(Overlay::Recall(recall)) = &app.overlay else { return };
-    let theme = &app.theme;
+    let Some(Overlay::Recall(recall)) = app.overlay() else { return };
+    let theme = app.theme();
     let in_view = recall.search.in_view(MAX_SHOWN);
     let labels: Vec<String> = in_view.iter().map(|entry| one_line(&entry.statement)).collect();
     let details: Vec<String> = in_view.iter().map(detail).collect();

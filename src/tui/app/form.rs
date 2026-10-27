@@ -53,32 +53,32 @@ type Refusal = (Slot, String);
 /// The form while it is open: what each line holds, the line with the cursor, and what was refused.
 #[derive(Debug, PartialEq)]
 pub(in crate::tui) struct Form {
-    pub(in crate::tui) saving: Saving,
+    saving: Saving,
     /// The connection as the config had it, when the form edits one.
     was: Option<Connection>,
-    pub(in crate::tui) at: Slot,
-    pub(in crate::tui) name: Field,
-    pub(in crate::tui) tier: Tier,
-    pub(in crate::tui) url: Field,
-    pub(in crate::tui) password_from: PasswordFrom,
+    at: Slot,
+    name: Field,
+    tier: Tier,
+    url: Field,
+    password_from: PasswordFrom,
     /// The keychain item, the variable or the command, as `password_from` says.
-    pub(in crate::tui) password_where: Field,
+    password_where: Field,
     /// Typed for the keychain item, which saving writes; nothing typed leaves the item as it is.
-    pub(in crate::tui) password: Secret,
-    pub(in crate::tui) tunnel: Field,
+    password: Secret,
+    tunnel: Field,
     /// The command the tunnel runs first, once.
-    pub(in crate::tui) tunnel_before: Field,
-    pub(in crate::tui) writes: WritePolicy,
+    tunnel_before: Field,
+    writes: WritePolicy,
     /// The `tls` key; none leaves it to the url's `sslmode`.
-    pub(in crate::tui) tls: Option<Tls>,
+    tls: Option<Tls>,
     /// Empty for the tier's.
-    pub(in crate::tui) statement_timeout: Field,
+    statement_timeout: Field,
     /// Why a line is refused, each beside its line.
     errors: Vec<Refusal>,
     /// The save on its way, until its answer comes.
     sent: Option<ConfigChangeId>,
     /// Why the last save failed.
-    pub(in crate::tui) failure: Option<String>,
+    failure: Option<String>,
 }
 
 impl Form {
@@ -143,7 +143,12 @@ impl Form {
 
     /// The text of the line with the cursor, when it is a text line.
     pub(in crate::tui) fn field(&self) -> Option<&Field> {
-        match self.at {
+        self.field_of(self.at)
+    }
+
+    /// The text of `slot`, when it is a text line.
+    pub(in crate::tui) fn field_of(&self, slot: Slot) -> Option<&Field> {
+        match slot {
             Slot::Name => Some(&self.name),
             Slot::Url => Some(&self.url),
             Slot::PasswordWhere => Some(&self.password_where),
@@ -152,6 +157,46 @@ impl Form {
             Slot::StatementTimeout => Some(&self.statement_timeout),
             Slot::Tier | Slot::PasswordFrom | Slot::Password | Slot::Writes | Slot::Tls => None,
         }
+    }
+
+    pub(in crate::tui) fn saving(&self) -> Saving {
+        self.saving
+    }
+
+    /// The line with the cursor.
+    pub(in crate::tui) fn at(&self) -> Slot {
+        self.at
+    }
+
+    pub(in crate::tui) fn name(&self) -> &str {
+        self.name.text()
+    }
+
+    pub(in crate::tui) fn tier(&self) -> Tier {
+        self.tier
+    }
+
+    pub(in crate::tui) fn password_from(&self) -> PasswordFrom {
+        self.password_from
+    }
+
+    /// How many characters of a password were typed, never what they are.
+    pub(in crate::tui) fn typed_password_count(&self) -> usize {
+        self.password.typed_count()
+    }
+
+    pub(in crate::tui) fn writes(&self) -> WritePolicy {
+        self.writes
+    }
+
+    /// The `tls` key; none leaves it to the url's `sslmode`.
+    pub(in crate::tui) fn tls(&self) -> Option<Tls> {
+        self.tls
+    }
+
+    /// Why the last save failed.
+    pub(in crate::tui) fn failure(&self) -> Option<&str> {
+        self.failure.as_deref()
     }
 
     pub(in crate::tui) fn is_saving(&self) -> bool {

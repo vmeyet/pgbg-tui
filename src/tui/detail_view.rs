@@ -20,15 +20,15 @@ const SHARE_OF_SCREEN_PCT: u16 = 80;
 
 /// The detail when it is open; returns the line it started at, how far it scrolls, and its lines when it built them.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> DetailFit {
-    let Some(Overlay::Detail(detail)) = &app.overlay else { return DetailFit::default() };
+    let Some(Overlay::Detail(detail)) = app.overlay() else { return DetailFit::default() };
     let Run::Done { run, result, grid, .. } = &app.sheet().run else { return DetailFit::default() };
     let Some(row) = result.rows().get(grid.row) else { return DetailFit::default() };
     let area = centred(f.area());
-    let block = pane::framed(&app.theme, &format!("Row {} of {}", grid.row + 1, result.rows().len()), true);
+    let block = pane::framed(app.theme(), &format!("Row {} of {}", grid.row + 1, result.rows().len()), true);
     let [body, footer] = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(block.inner(area));
     let of = DrawnRow { connection: app.sheet().name().clone(), run: *run, row: grid.row, width: body.width };
-    let kept = app.drawn_detail.as_ref().filter(|drawn| drawn.of == of);
-    let built = kept.is_none().then(|| drawn(&app.theme, result.columns(), row, of));
+    let kept = app.drawn_detail().filter(|drawn| drawn.of == of);
+    let built = kept.is_none().then(|| drawn(app.theme(), result.columns(), row, of));
     let Some(DrawnDetail { lines, column_starts, .. }) = kept.or(built.as_ref()) else { return DetailFit::default() };
     let last_scroll = lines.len().saturating_sub(usize::from(body.height));
     let wanted = match detail.scroll {
@@ -38,9 +38,9 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> DetailFit {
     let first_line = wanted.min(last_scroll);
     let shown: Vec<Line<'static>> = lines.iter().skip(first_line).take(usize::from(body.height)).cloned().collect();
     f.render_widget(Clear, area);
-    f.render_widget(block.style(Style::default().bg(app.theme.surface)), area);
+    f.render_widget(block.style(Style::default().bg(app.theme().surface)), area);
     f.render_widget(Paragraph::new(shown), body);
-    f.render_widget(Paragraph::new(Line::styled(hints(), Style::default().fg(app.theme.faded))), footer);
+    f.render_widget(Paragraph::new(Line::styled(hints(), Style::default().fg(app.theme().faded))), footer);
     DetailFit { first_line, last_scroll, drawn: built }
 }
 

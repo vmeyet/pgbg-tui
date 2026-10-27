@@ -9,7 +9,7 @@ use ratatui::widgets::Paragraph;
 
 /// The prompt over the footer in `area`, its keys after it.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App, prompt: &Prompt, area: Rect) {
-    let theme = &app.theme;
+    let theme = app.theme();
     let mut spans = match prompt {
         Prompt::SaveAs { path, error } => {
             let (before, under, after) = path.split();

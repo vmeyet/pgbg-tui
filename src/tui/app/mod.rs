@@ -121,32 +121,32 @@ fn help_after(help: Help, key: KeyEvent, pane: Pane) -> Option<Help> {
 /// The whole TUI state; `handle_key`, `apply` and `fit` are the only ways it changes.
 #[derive(Debug)]
 pub(super) struct App {
-    pub(super) theme: Theme,
+    theme: Theme,
     /// Every connection of the config, by name, for the picker.
-    pub(super) connections: Vec<Connection>,
+    connections: Vec<Connection>,
     /// A sheet for each connection opened since pgbg started, in the order they were opened.
     sheets: Vec<Sheet>,
     /// The index in `sheets` of the one on screen.
     shown: usize,
-    pub(super) focus: Focus,
-    pub(super) overlay: Option<Overlay>,
-    pub(super) queries: Queries,
-    pub(super) sidebar: SidebarTab,
-    pub(super) schema_tab: SchemaTab,
+    focus: Focus,
+    overlay: Option<Overlay>,
+    queries: Queries,
+    sidebar: SidebarTab,
+    schema_tab: SchemaTab,
     fit: Fit,
     /// The row's detail as a frame last built it.
-    pub(super) drawn_detail: Option<DrawnDetail>,
-    pub(super) should_quit: bool,
+    drawn_detail: Option<DrawnDetail>,
+    should_quit: bool,
     /// The id the next change to the config takes.
     next_config_change: ConfigChangeId,
     /// The id the next session opened takes.
     next_session: SessionId,
     /// Why a change to the config failed when no form waits on it; the status line says it until the next key.
-    pub(super) config_failure: Option<String>,
+    config_failure: Option<String>,
     /// What the last copy came to; the status line says it until the next key.
-    pub(super) note: Option<String>,
+    note: Option<String>,
     /// The format mode new results open in, and the clock the loop last read.
-    pub(super) reading: Reading,
+    reading: Reading,
 }
 
 impl App {
@@ -181,6 +181,60 @@ impl App {
     /// Takes the clock the loop read for the next frame.
     pub(super) fn set_clock(&mut self, clock: Clock) {
         self.reading.clock = clock;
+    }
+
+    pub(super) fn theme(&self) -> &Theme {
+        &self.theme
+    }
+
+    /// Every connection of the config.
+    pub(super) fn connections(&self) -> &[Connection] {
+        &self.connections
+    }
+
+    /// The pane that has the keys.
+    pub(super) fn focus(&self) -> Focus {
+        self.focus
+    }
+
+    pub(super) fn overlay(&self) -> Option<&Overlay> {
+        self.overlay.as_ref()
+    }
+
+    pub(super) fn queries(&self) -> &Queries {
+        &self.queries
+    }
+
+    pub(super) fn sidebar(&self) -> SidebarTab {
+        self.sidebar
+    }
+
+    pub(super) fn schema_tab(&self) -> &SchemaTab {
+        &self.schema_tab
+    }
+
+    /// The row's detail as a frame last built it.
+    pub(super) fn drawn_detail(&self) -> Option<&DrawnDetail> {
+        self.drawn_detail.as_ref()
+    }
+
+    pub(super) fn should_quit(&self) -> bool {
+        self.should_quit
+    }
+
+    /// Why a change to the config failed, until the next key.
+    pub(super) fn config_failure(&self) -> Option<&str> {
+        self.config_failure.as_deref()
+    }
+
+    /// What the last copy came to, until the next key.
+    pub(super) fn note(&self) -> Option<&str> {
+        self.note.as_deref()
+    }
+
+    /// The clock the loop last read.
+    pub(super) fn clock(&self) -> &Clock {
+        &self.reading.clock
     }
 
     /// The sheet on screen.
@@ -228,39 +282,25 @@ impl App {
 
     /// Takes text the terminal pasted: the editor, the finder or the form gets it whole, so its line ends run nothing.
     pub(super) fn paste(&mut self, text: &str) -> Vec<Action> {
-        if let Some(Overlay::Form(form)) = self.overlay.as_mut() {
-            form.paste(text);
-            return vec![];
+        match &mut self.overlay {
+            Some(Overlay::Form(form)) => form.paste(text),
+            Some(Overlay::Finder(finder)) => finder.paste(text, &self.queries.all),
+            Some(Overlay::TableFinder(finder)) => finder.search.paste(text, &finder.all),
+            Some(Overlay::Recall(recall)) => recall.search.paste(text, &recall.all),
+            Some(Overlay::SchemaFilter) => self.schema_tab.filter.paste(text),
+            Some(Overlay::Completion(_)) => self.paste_past_completions(text),
+            Some(Overlay::Help(_) | Overlay::Picker(_) | Overlay::Prompt(_) | Overlay::Detail(_) | Overlay::CopyAs) => {}
+            None => self.paste_in_focus(text),
         }
-        if let Some(Overlay::Finder(finder)) = self.overlay.as_mut() {
-            finder.paste(text, &self.queries.all);
-            return vec![];
-        }
-        if let Some(Overlay::TableFinder(finder)) = self.overlay.as_mut() {
-            finder.search.paste(text, &finder.all);
-            return vec![];
-        }
-        if let Some(Overlay::Recall(recall)) = self.overlay.as_mut() {
-            recall.search.paste(text, &recall.all);
-            return vec![];
-        }
-        if self.overlay == Some(Overlay::SchemaFilter) {
-            self.schema_tab.filter.paste(text);
-            return vec![];
-        }
-        if let Some(Overlay::Completion(_)) = self.overlay {
-            self.paste_past_completions(text);
-            return vec![];
-        }
-        if self.overlay.is_some() {
-            return vec![];
-        }
+        vec![]
+    }
+
+    fn paste_in_focus(&mut self, text: &str) {
         match self.focus {
             Focus::Editor => self.sheet_mut().paste(text),
             Focus::Params => self.sheet_mut().paste_in_bar(text),
             Focus::Result | Focus::Queries => {}
         }
-        vec![]
     }
 
     /// Whether the editor on screen waits for `recolour`.
@@ -493,6 +533,11 @@ pub(super) mod tests {
 
     pub(crate) fn app_on(connection: &Connection) -> App {
         App::new(vec![connection.clone()], connection, Theme::default())
+    }
+
+    /// The app with the keys on `focus`, whatever the frame drew.
+    pub(crate) fn with_focus(app: App, focus: Focus) -> App {
+        App { focus, ..app }
     }
 
     pub(crate) fn app() -> App {
