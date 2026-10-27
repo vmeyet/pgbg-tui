@@ -221,7 +221,7 @@ pgbg's own read-only transaction (`Session::read_only`) is refused with `InsideU
 - A connection names where its password comes from: `password = { keychain = "pgbg/prod" }`, `{ env = "PROD_PGPASSWORD" }` or `{ command = ["gcloud", "secrets", "versions", "access", ...] }`.
 - The password is read when the session opens, kept in a `Secret`, and dropped once connected.
   `tokio_postgres`'s `Config` keeps its own copy until the session is open, and that copy is not wiped; nor is what `security` or a password command leaves in the memory of the process that read its output.
-- The config loader refuses a plain `password`, and a URL with a password in it.
+- The config loader refuses a plain `password`, and a URL with a password, an `sslpassword` or an `oauth_client_secret` in it.
 - Keychain items live under the service `pgbg`, one account per item; `security -g` reads one on a pipe, in hex when it is not printable ASCII, and `security -i` writes one so the password never shows in argv; an error quotes `security`'s exit status only.
 - `pgbg password set <connection>` takes the password typed hidden or piped in, never as a flag.
 - `pgbg connection remove` deletes the connection's keychain item before its table, unless `--keep-password` or another connection names the same item.
