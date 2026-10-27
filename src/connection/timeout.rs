@@ -76,6 +76,14 @@ impl TimeoutChoice {
         }
     }
 
+    /// The timeout the connection chose, if it chose one.
+    pub(crate) fn own(self) -> Option<StatementTimeout> {
+        match self {
+            Self::Own(own) => Some(own),
+            Self::Tier(_) => None,
+        }
+    }
+
     fn timeout(self) -> StatementTimeout {
         match self {
             Self::Own(timeout) | Self::Tier(timeout) => timeout,

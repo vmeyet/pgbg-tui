@@ -3,13 +3,18 @@
 use super::{Action, App, ConfigChangeId, KeychainPassword, Overlay, SaveConnection, Saving};
 use crate::act::{self, Act, Pane};
 use crate::config::ConnectionChange;
-use crate::connection::{Connection, ConnectionName, Target, Tier, TunnelSpec, WritePolicy};
+use crate::connection::{Connection, ConnectionName, StatementTimeout, Target, Tier, Tls, TunnelSpec, WritePolicy};
+use crate::render;
 use crate::secret::{KeychainItem, Secret, SecretSource};
-use anyhow::{Context, Result};
+use anyhow::{Context, anyhow};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use vtui::field::Field;
 
 const CANNOT_CLEAR: &str = "pgbg cannot take a key out of the config yet: edit config.toml for that";
+const TIERS: [Tier; 3] = [Tier::Local, Tier::Staging, Tier::Production];
+const WRITE_POLICIES: [WritePolicy; 2] = [WritePolicy::ReadOnly, WritePolicy::Allowed];
+const PASSWORD_FROM: [PasswordFrom; 4] = [PasswordFrom::Nowhere, PasswordFrom::Keychain, PasswordFrom::Env, PasswordFrom::Command];
+const TLS_SETTINGS: [Option<Tls>; 3] = [None, Some(Tls::On), Some(Tls::Off)];
 
 /// One line of the form.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,6 +27,8 @@ pub(in crate::tui) enum Slot {
     Password,
     Tunnel,
     Writes,
+    Tls,
+    StatementTimeout,
 }
 
 /// Where the password comes from, as the form offers it.
@@ -32,6 +39,16 @@ pub(in crate::tui) enum PasswordFrom {
     Env,
     Command,
 }
+
+/// Which way a choice line turns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Turn {
+    Forward,
+    Back,
+}
+
+/// A line refused, and why.
+type Refusal = (Slot, String);
 
 /// The form while it is open: what each line holds, the line with the cursor, and what was refused.
 #[derive(Clone, Debug, PartialEq)]
@@ -50,8 +67,12 @@ pub(in crate::tui) struct Form {
     pub(in crate::tui) password: Secret,
     pub(in crate::tui) tunnel: Field,
     pub(in crate::tui) writes: WritePolicy,
+    /// The `tls` key; none leaves it to the url's `sslmode`.
+    pub(in crate::tui) tls: Option<Tls>,
+    /// Empty for the tier's.
+    pub(in crate::tui) statement_timeout: Field,
     /// Why a line is refused, each beside its line.
-    pub(in crate::tui) errors: Vec<(Slot, String)>,
+    errors: Vec<Refusal>,
     /// The save on its way, until its answer comes.
     sent: Option<ConfigChangeId>,
     /// Why the last save failed.
@@ -73,6 +94,8 @@ impl Form {
             password: Secret::default(),
             tunnel: Field::default(),
             writes: WritePolicy::ReadOnly,
+            tls: None,
+            statement_timeout: Field::default(),
             errors: vec![],
             sent: None,
             failure: None,
@@ -93,6 +116,8 @@ impl Form {
             password_where: Field::new(password_where),
             tunnel: Field::new(connection.tunnel().map(|tunnel| shell_words::join(tunnel.command())).unwrap_or_default()),
             writes: connection.writes(),
+            tls: connection.tls_setting(),
+            statement_timeout: Field::new(connection.statement_timeout().own().map(|own| own.to_string()).unwrap_or_default()),
             ..Self::adding()
         }
     }
@@ -103,8 +128,22 @@ impl Form {
         let has_where = self.password_from != PasswordFrom::Nowhere;
         let has_password = self.password_from == PasswordFrom::Keychain;
         let shown = [(Slot::Name, is_new), (Slot::Tier, true), (Slot::Url, true), (Slot::PasswordFrom, true)];
-        let rest = [(Slot::PasswordWhere, has_where), (Slot::Password, has_password), (Slot::Tunnel, true), (Slot::Writes, true)];
-        shown.into_iter().chain(rest).filter(|&(_, is_shown)| is_shown).map(|(slot, _)| slot).collect()
+        let password = [(Slot::PasswordWhere, has_where), (Slot::Password, has_password)];
+        let rest = [(Slot::Tunnel, true), (Slot::Writes, true), (Slot::Tls, true), (Slot::StatementTimeout, true)];
+        let all = shown.into_iter().chain(password).chain(rest);
+        all.filter(|&(_, is_shown)| is_shown).map(|(slot, _)| slot).collect()
+    }
+
+    /// The text of the line with the cursor, when it is a text line.
+    pub(in crate::tui) fn field(&self) -> Option<&Field> {
+        match self.at {
+            Slot::Name => Some(&self.name),
+            Slot::Url => Some(&self.url),
+            Slot::PasswordWhere => Some(&self.password_where),
+            Slot::Tunnel => Some(&self.tunnel),
+            Slot::StatementTimeout => Some(&self.statement_timeout),
+            Slot::Tier | Slot::PasswordFrom | Slot::Password | Slot::Writes | Slot::Tls => None,
+        }
     }
 
     pub(in crate::tui) fn is_saving(&self) -> bool {
@@ -126,6 +165,22 @@ impl Form {
         self.errors.iter().find(|(refused, _)| *refused == slot).map(|(_, why)| why.as_str())
     }
 
+    /// Types the printable characters of `text` on the line with the cursor; a choice line takes none.
+    pub(super) fn paste(&mut self, text: &str) {
+        text.chars().filter(|&c| !render::is_unprintable(c)).for_each(|c| self.type_char(c));
+    }
+
+    fn field_mut(&mut self) -> Option<&mut Field> {
+        match self.at {
+            Slot::Name => Some(&mut self.name),
+            Slot::Url => Some(&mut self.url),
+            Slot::PasswordWhere => Some(&mut self.password_where),
+            Slot::Tunnel => Some(&mut self.tunnel),
+            Slot::StatementTimeout => Some(&mut self.statement_timeout),
+            Slot::Tier | Slot::PasswordFrom | Slot::Password | Slot::Writes | Slot::Tls => None,
+        }
+    }
+
     fn step(&mut self, by: isize) {
         let slots = self.slots();
         let at = slots.iter().position(|&slot| slot == self.at).unwrap_or_default();
@@ -134,18 +189,42 @@ impl Form {
 
     /// `key` on the line with the cursor: a choice turns with `←` `→` or space, a text line edits.
     fn type_key(&mut self, key: KeyEvent) {
-        let is_turn = matches!(key.code, KeyCode::Left | KeyCode::Right | KeyCode::Char(' '));
-        let forward = key.code != KeyCode::Left;
-        match self.at {
-            Slot::Tier if is_turn => self.tier = turned(&[Tier::Local, Tier::Staging, Tier::Production], self.tier, forward),
-            Slot::Writes if is_turn => self.writes = turned(&[WritePolicy::ReadOnly, WritePolicy::Allowed], self.writes, forward),
-            Slot::PasswordFrom if is_turn => self.password_from = turned(&PASSWORD_FROM, self.password_from, forward),
-            Slot::Password => typed_secret(&mut self.password, key),
-            Slot::Name => typed(&mut self.name, key),
-            Slot::Url => typed(&mut self.url, key),
-            Slot::PasswordWhere => typed(&mut self.password_where, key),
-            Slot::Tunnel => typed(&mut self.tunnel, key),
-            Slot::Tier | Slot::Writes | Slot::PasswordFrom => {}
+        match (turn_of(key), self.at) {
+            (Some(turn), Slot::Tier) => self.tier = turned(&TIERS, self.tier, turn),
+            (Some(turn), Slot::Writes) => self.writes = turned(&WRITE_POLICIES, self.writes, turn),
+            (Some(turn), Slot::PasswordFrom) => self.password_from = turned(&PASSWORD_FROM, self.password_from, turn),
+            (Some(turn), Slot::Tls) => self.tls = turned(&TLS_SETTINGS, self.tls, turn),
+            _ => self.edit_line(key),
+        }
+    }
+
+    fn edit_line(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Char(c) if is_typed(key) => self.type_char(c),
+            KeyCode::Backspace if self.at == Slot::Password => self.password.pop(),
+            _ => self.move_in_line(key),
+        }
+    }
+
+    fn type_char(&mut self, c: char) {
+        if self.at == Slot::Password {
+            return self.password.push(c);
+        }
+        if let Some(field) = self.field_mut() {
+            field.insert(c);
+        }
+    }
+
+    fn move_in_line(&mut self, key: KeyEvent) {
+        let Some(field) = self.field_mut() else { return };
+        match key.code {
+            KeyCode::Backspace => field.backspace(),
+            KeyCode::Delete => field.delete(),
+            KeyCode::Left => field.left(),
+            KeyCode::Right => field.right(),
+            KeyCode::Home => field.start(),
+            KeyCode::End => field.end(),
+            _ => {}
         }
     }
 
@@ -153,16 +232,21 @@ impl Form {
     /// name of one in `connections`.
     fn submit(&mut self, id: ConfigChangeId, connections: &[Connection]) -> Option<SaveConnection> {
         let name = self.checked_name(connections);
-        let url = Target::parse(self.url.text()).map_err(|err| format!("{err:#}"));
-        let tunnel = self.checked_tunnel();
-        let password = self.checked_password();
-        let refused = [(Slot::Name, name.as_ref().err()), (Slot::Url, url.as_ref().err())];
-        let refused = refused.into_iter().chain([(Slot::Tunnel, tunnel.as_ref().err()), (Slot::PasswordWhere, password.as_ref().err())]);
-        self.errors = refused.filter_map(|(slot, why)| Some((slot, why?.clone()))).collect();
-        let (Ok(name), Ok(url), Ok(tunnel), Ok(password)) = (name, url, tunnel, password) else { return None };
+        let url = Target::parse(self.url.text()).map_err(|err| (Slot::Url, format!("{err:#}")));
+        let (tunnel, password) = (self.checked_tunnel(), self.checked_password());
+        let (tls, statement_timeout) = (self.checked_tls(), self.checked_statement_timeout());
+        let refused = [name.as_ref().err(), url.as_ref().err(), tunnel.as_ref().err(), password.as_ref().err()];
+        let refused = refused.into_iter().chain([tls.as_ref().err(), statement_timeout.as_ref().err()]);
+        self.errors = refused.flatten().cloned().collect();
+        let (Ok(name), Ok(url), Ok(tunnel), Ok(password), Ok(tls), Ok(statement_timeout)) =
+            (name, url, tunnel, password, tls, statement_timeout)
+        else {
+            return None;
+        };
         let typed = self.typed_password(password.as_ref());
+        let keys = Keys { url, tunnel, password, tls, statement_timeout };
         self.sent = Some(id);
-        Some(SaveConnection { id, name, saving: self.saving, change: self.change(url, tunnel, password), password: typed })
+        Some(SaveConnection { id, name, saving: self.saving, change: self.change(keys), password: typed })
     }
 
     /// The password typed, for the keychain item `source` names, whether the config already names that item or not.
@@ -177,42 +261,43 @@ impl Form {
     }
 
     /// Every key for a new connection; for one edited, only those that differ from the config.
-    fn change(&self, url: Target, tunnel: Option<TunnelSpec>, password: Option<SecretSource>) -> ConnectionChange {
+    fn change(&self, keys: Keys) -> ConnectionChange {
         let was = self.was.as_ref();
         ConnectionChange {
             tier: differs(self.tier, was.map(Connection::tier)),
-            url: differs(url, was.map(|c| c.target().clone())),
-            tunnel: tunnel.and_then(|tunnel| differs(tunnel, was.and_then(Connection::tunnel).cloned())),
-            password: password.and_then(|source| differs(source, was.and_then(Connection::password).cloned())),
+            url: differs(keys.url, was.map(|c| c.target().clone())),
+            tunnel: keys.tunnel.and_then(|tunnel| differs(tunnel, was.and_then(Connection::tunnel).cloned())),
+            password: keys.password.and_then(|source| differs(source, was.and_then(Connection::password).cloned())),
             writes: differs(self.writes, was.map(Connection::writes)),
-            ..ConnectionChange::default()
+            tls: keys.tls.and_then(|tls| differs(tls, was.and_then(Connection::tls_setting))),
+            statement_timeout: keys.statement_timeout.and_then(|own| differs(own, was.and_then(|c| c.statement_timeout().own()))),
         }
     }
 
-    fn checked_name(&self, connections: &[Connection]) -> Result<ConnectionName, String> {
-        let name: ConnectionName = self.name.text().trim().parse().map_err(|err| format!("{err:#}"))?;
+    fn checked_name(&self, connections: &[Connection]) -> Result<ConnectionName, Refusal> {
+        let name: ConnectionName = self.name.text().trim().parse().map_err(|err| (Slot::Name, format!("{err:#}")))?;
         let is_taken = self.saving == Saving::Add && connections.iter().any(|connection| *connection.name() == name);
         if is_taken {
-            return Err(format!("`{name}` is already a connection: `ctrl-e` in the picker edits it"));
+            return Err((Slot::Name, format!("`{name}` is already a connection: `ctrl-e` in the picker edits it")));
         }
         Ok(name)
     }
 
-    fn checked_tunnel(&self) -> Result<Option<TunnelSpec>, String> {
+    fn checked_tunnel(&self) -> Result<Option<TunnelSpec>, Refusal> {
         let had = self.was.as_ref().is_some_and(|c| c.tunnel().is_some());
         let parsed = match self.tunnel.text().trim() {
-            "" if had => Err(anyhow::anyhow!(CANNOT_CLEAR)),
+            "" if had => Err(anyhow!(CANNOT_CLEAR)),
             "" => Ok(None),
             text => shell_words::split(text).context("splitting the command").and_then(TunnelSpec::new).map(Some),
         };
-        parsed.map_err(|err| format!("{err:#}"))
+        parsed.map_err(|err| (Slot::Tunnel, format!("{err:#}")))
     }
 
-    fn checked_password(&self) -> Result<Option<SecretSource>, String> {
+    fn checked_password(&self) -> Result<Option<SecretSource>, Refusal> {
         let had = self.was.as_ref().is_some_and(|c| c.password().is_some());
         let text = self.password_where.text().trim();
         let source = match self.password_from {
-            PasswordFrom::Nowhere if had => Err(anyhow::anyhow!(CANNOT_CLEAR)),
+            PasswordFrom::Nowhere if had => Err(anyhow!(CANNOT_CLEAR)),
             PasswordFrom::Nowhere => Ok(None),
             PasswordFrom::Keychain => text.parse::<KeychainItem>().map(|item| Some(SecretSource::Keychain(item))),
             PasswordFrom::Env => Ok(Some(SecretSource::Env(text.to_owned()))),
@@ -222,40 +307,60 @@ impl Form {
         };
         let problem = source.as_ref().ok().and_then(Option::as_ref).and_then(SecretSource::problem);
         match problem {
-            Some(problem) => Err(problem.to_owned()),
-            None => source.map_err(|err| format!("{err:#}")),
+            Some(problem) => Err((Slot::PasswordWhere, problem.to_owned())),
+            None => source.map_err(|err| (Slot::PasswordWhere, format!("{err:#}"))),
+        }
+    }
+
+    fn checked_tls(&self) -> Result<Option<Tls>, Refusal> {
+        let had = self.was.as_ref().and_then(Connection::tls_setting).is_some();
+        match self.tls {
+            None if had => Err((Slot::Tls, CANNOT_CLEAR.to_owned())),
+            tls => Ok(tls),
+        }
+    }
+
+    fn checked_statement_timeout(&self) -> Result<Option<StatementTimeout>, Refusal> {
+        let had = self.was.as_ref().and_then(|c| c.statement_timeout().own()).is_some();
+        match self.statement_timeout.text().trim() {
+            "" if had => Err((Slot::StatementTimeout, CANNOT_CLEAR.to_owned())),
+            "" => Ok(None),
+            text => text.parse().map(Some).map_err(|err| (Slot::StatementTimeout, format!("{err:#}"))),
         }
     }
 }
 
-const PASSWORD_FROM: [PasswordFrom; 4] = [PasswordFrom::Nowhere, PasswordFrom::Keychain, PasswordFrom::Env, PasswordFrom::Command];
+/// The keys the form's text lines gave, once each checks.
+struct Keys {
+    url: Target,
+    tunnel: Option<TunnelSpec>,
+    password: Option<SecretSource>,
+    tls: Option<Tls>,
+    statement_timeout: Option<StatementTimeout>,
+}
+
+/// A character typed as it is, not a key with `ctrl` or `alt` held.
+fn is_typed(key: KeyEvent) -> bool {
+    key.modifiers.difference(KeyModifiers::SHIFT).is_empty()
+}
+
+/// How `key` turns a choice line, if it does.
+fn turn_of(key: KeyEvent) -> Option<Turn> {
+    match key.code {
+        KeyCode::Left => Some(Turn::Back),
+        KeyCode::Right | KeyCode::Char(' ') => Some(Turn::Forward),
+        _ => None,
+    }
+}
 
 /// The value after `now` among `choices`, or before it, going round.
-fn turned<T: Copy + PartialEq>(choices: &[T], now: T, forward: bool) -> T {
+fn turned<T: Copy + PartialEq>(choices: &[T], now: T, turn: Turn) -> T {
     let at = choices.iter().position(|&choice| choice == now).unwrap_or_default();
-    let next = if forward { at + 1 } else { at + choices.len() - 1 };
+    let next = match turn {
+        Turn::Forward => at + 1,
+        Turn::Back => at + choices.len() - 1,
+    };
     choices[next % choices.len()]
-}
-
-fn typed(field: &mut Field, key: KeyEvent) {
-    match key.code {
-        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => field.insert(c),
-        KeyCode::Backspace => field.backspace(),
-        KeyCode::Delete => field.delete(),
-        KeyCode::Left => field.left(),
-        KeyCode::Right => field.right(),
-        KeyCode::Home => field.start(),
-        KeyCode::End => field.end(),
-        _ => {}
-    }
-}
-
-fn typed_secret(password: &mut Secret, key: KeyEvent) {
-    match key.code {
-        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => password.push(c),
-        KeyCode::Backspace => password.pop(),
-        _ => {}
-    }
 }
 
 /// `now`, unless the config already says it.
@@ -453,6 +558,104 @@ mod tests {
         press(&mut app, "postgres://nina@localhost/shop");
         assert_eq!(key(&mut app, KeyCode::Enter), []);
         assert!(form(&app).error(Slot::Name).is_some_and(|why| why.contains("already")), "{:?}", form(&app).errors);
+    }
+
+    fn to(app: &mut App, slot: Slot) {
+        for _ in 0..form(app).slots().len() {
+            if form(app).at == slot {
+                return;
+            }
+            key(app, KeyCode::Tab);
+        }
+        panic!("no line {slot:?} in {:?}", form(app).slots());
+    }
+
+    fn adding_tunnelled(app: &mut App) {
+        adding(app);
+        press(app, "bastioned");
+        to(app, Slot::Url);
+        press(app, "postgres://nina@localhost/shop");
+        to(app, Slot::Tunnel);
+        press(app, "ssh -N -L 127.0.0.1:{port}:localhost:5432 bastion");
+    }
+
+    #[test]
+    fn a_paste_lands_on_the_line_with_the_cursor_without_its_control_characters() {
+        let mut app = on_local();
+        adding(&mut app);
+        press(&mut app, "rep");
+        app.paste("li\u{1b}ca\u{202e}\n");
+        assert_eq!(form(&app).name.text(), "replica");
+    }
+
+    #[test]
+    fn a_paste_on_the_password_line_goes_into_the_password() {
+        let mut app = on_local();
+        ctrl(&mut app, 'o');
+        ctrl(&mut app, 'e');
+        to(&mut app, Slot::PasswordFrom);
+        key(&mut app, KeyCode::Right);
+        to(&mut app, Slot::PasswordWhere);
+        press(&mut app, "pgbg/local");
+        to(&mut app, Slot::Password);
+        app.paste("hunter2\r\n");
+        let save = saved(key(&mut app, KeyCode::Enter));
+        assert_eq!(save.password.map(|typed| typed.password.expose().to_owned()).as_deref(), Some("hunter2"));
+    }
+
+    #[test]
+    fn a_new_connection_through_a_tunnel_may_talk_in_clear_on_purpose() {
+        let mut app = on_local();
+        adding_tunnelled(&mut app);
+        to(&mut app, Slot::Tls);
+        key(&mut app, KeyCode::Left);
+        let save = saved(key(&mut app, KeyCode::Enter));
+        assert_eq!(save.change.tls, Some(Tls::Off));
+        assert!(save.change.tunnel.is_some());
+    }
+
+    #[test]
+    fn a_statement_timeout_typed_is_saved() {
+        let mut app = on_local();
+        ctrl(&mut app, 'o');
+        ctrl(&mut app, 'e');
+        to(&mut app, Slot::StatementTimeout);
+        press(&mut app, "2min");
+        let save = saved(key(&mut app, KeyCode::Enter));
+        assert_eq!(save.change, ConnectionChange { statement_timeout: Some("2min".parse().unwrap()), ..ConnectionChange::default() });
+    }
+
+    #[test]
+    fn a_misspelt_statement_timeout_is_refused_beside_its_line() {
+        let mut app = on_local();
+        ctrl(&mut app, 'o');
+        ctrl(&mut app, 'e');
+        to(&mut app, Slot::StatementTimeout);
+        press(&mut app, "soon");
+        assert_eq!(key(&mut app, KeyCode::Enter), []);
+        assert!(form(&app).error(Slot::StatementTimeout).is_some());
+    }
+
+    #[test]
+    fn an_edit_cannot_take_out_a_statement_timeout_the_config_has() {
+        let timed = named("local", "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\nstatement_timeout = \"5s\"\n");
+        let mut app = App::new(vec![timed.clone()], &timed, vtui::theme::Theme::default());
+        ctrl(&mut app, 'o');
+        ctrl(&mut app, 'e');
+        to(&mut app, Slot::StatementTimeout);
+        assert_eq!(form(&app).statement_timeout.text(), "5s");
+        key(&mut app, KeyCode::Backspace);
+        key(&mut app, KeyCode::Backspace);
+        assert_eq!(key(&mut app, KeyCode::Enter), []);
+        assert!(form(&app).error(Slot::StatementTimeout).is_some_and(|why| why.contains("config.toml")));
+    }
+
+    #[test]
+    fn an_alt_letter_types_nothing() {
+        let mut app = on_local();
+        adding(&mut app);
+        app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::ALT));
+        assert_eq!(form(&app).name.text(), "");
     }
 
     #[test]

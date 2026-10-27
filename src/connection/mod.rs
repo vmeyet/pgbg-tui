@@ -47,6 +47,9 @@ pub(crate) struct Connection {
     password: Option<SecretSource>,
     writes: WritePolicy,
     tls: Tls,
+    /// The `tls` key as the config says it, which `tls` was read from.
+    #[serde(skip)]
+    tls_setting: Option<Tls>,
     statement_timeout: TimeoutChoice,
 }
 
@@ -83,6 +86,7 @@ impl Connection {
             name: ConnectionName::new(name)?,
             tier,
             tls: tls::tls(&url, tls, tunnel.as_ref())?,
+            tls_setting: tls,
             url,
             tunnel,
             password: password.map(secret_source).transpose()?,
@@ -117,6 +121,11 @@ impl Connection {
 
     pub(crate) fn tls(&self) -> Tls {
         self.tls
+    }
+
+    /// The `tls` key the config has, if any.
+    pub(crate) fn tls_setting(&self) -> Option<Tls> {
+        self.tls_setting
     }
 
     /// The connection's own `statement_timeout`, else its tier's.
