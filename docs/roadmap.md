@@ -134,7 +134,7 @@ The code keeps its own rules where they slipped, one MR per step.
 
 - [x] One failure type crosses from `db/` to the app, in place of strings and a parallel `history::Outcome`
 - [x] Newtypes where the rules already ask for them, parsed at the boundary
-- [ ] Bounded channels between the session task and the app
+- [x] Channels between the session task and the app say why they cannot grow
 - [x] The session task split by concern
 - [ ] Test helpers several modules share live in `fixtures`
 - [ ] `ResultSet` storage reworked, measured before and after
