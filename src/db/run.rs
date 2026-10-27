@@ -1,5 +1,5 @@
 //! Running one statement alone and reading its first `ROW_CAP` rows; a read-only one is always rolled back.
-use super::guard::{Admitted, Mode};
+use super::guard::{Admitted, Mode, TransactionStep};
 use super::limits::ReadLimits;
 use super::model::{Column, Extent, Page, Params, ResultSet, Value};
 use super::{Isolation, Session, bind, decode, roll_back, server_error};
@@ -32,6 +32,29 @@ impl FetchSize {
 /// One row past the cap, so a result that has more says it is cut.
 const CAPPED_FETCH: FetchSize = FetchSize::new(ROW_CAP as i32 + 1);
 
+/// Whether a transaction the user began is open on the session; a write that returns rows outside one commits its
+/// own, and inside one must never end it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum UserTransaction {
+    #[default]
+    None,
+    Open,
+    /// A statement that opens or ends one failed, or never got its answer: the server knows.
+    Unsure,
+}
+
+impl UserTransaction {
+    /// The transaction once the server ran a statement taking `step`, or refused it.
+    fn after(self, step: TransactionStep, has_run: bool) -> Self {
+        match (step, has_run) {
+            (TransactionStep::Keeps, _) => self,
+            (TransactionStep::Opens, true) => Self::Open,
+            (TransactionStep::Ends, true) => Self::None,
+            (TransactionStep::Opens | TransactionStep::Ends, false) | (TransactionStep::Unsure, _) => Self::Unsure,
+        }
+    }
+}
+
 impl Session {
     /// Runs `admitted` alone and returns its first `ROW_CAP` rows; a read-only one is always rolled back.
     pub(crate) async fn run(&mut self, admitted: &Admitted) -> Result<ResultSet> {
@@ -44,9 +67,21 @@ impl Session {
         result
     }
 
+    /// Runs `admitted` as `run_writes_alone` does, and keeps track of the transaction the user began; until the server
+    /// answers a statement that opens or ends one, the session is unsure of it.
+    async fn run_writes(&mut self, admitted: &Admitted) -> Result<ResultSet> {
+        let step = admitted.transaction_step;
+        if step != TransactionStep::Keeps {
+            self.marks.user_transaction = UserTransaction::Unsure;
+        }
+        let result = self.run_writes_alone(admitted).await;
+        self.marks.user_transaction = self.marks.user_transaction.after(step, result.is_ok());
+        result
+    }
+
     /// A statement that returns rows goes through a portal in its own committed transaction, so the
     /// server sends no row past the cap; one inside a transaction the user began, or one without rows, runs as is.
-    async fn run_writes(&mut self, admitted: &Admitted) -> Result<ResultSet> {
+    async fn run_writes_alone(&mut self, admitted: &Admitted) -> Result<ResultSet> {
         let statement = bind::prepare(&self.client, admitted).await?;
         if statement.columns().is_empty() || self.is_in_user_transaction().await? {
             return fetch(&self.client, &statement, &admitted.params).await;
@@ -58,11 +93,25 @@ impl Session {
         Ok(ResultSet::new(columns(&statement), first))
     }
 
-    /// Whether a `BEGIN` the user ran left a transaction open: only there does a savepoint take.
-    async fn is_in_user_transaction(&self) -> Result<bool> {
+    /// Whether a `BEGIN` the user ran left a transaction open, asking the server only when the session is unsure.
+    async fn is_in_user_transaction(&mut self) -> Result<bool> {
+        match self.marks.user_transaction {
+            UserTransaction::None => Ok(false),
+            UserTransaction::Open => Ok(true),
+            UserTransaction::Unsure => {
+                let is_open = self.probe_user_transaction().await?;
+                self.marks.user_transaction = if is_open { UserTransaction::Open } else { UserTransaction::None };
+                Ok(is_open)
+            }
+        }
+    }
+
+    /// Only inside a transaction does a savepoint take, or fail for the transaction having failed.
+    async fn probe_user_transaction(&self) -> Result<bool> {
         match self.client.batch_execute(PROBE_SAVEPOINT).await {
             Ok(()) => self.client.batch_execute(RELEASE_PROBE).await.map(|()| true).map_err(server_error),
             Err(err) if err.code() == Some(&SqlState::NO_ACTIVE_SQL_TRANSACTION) => Ok(false),
+            Err(err) if err.code() == Some(&SqlState::IN_FAILED_SQL_TRANSACTION) => Ok(true),
             Err(err) => Err(server_error(err)),
         }
     }
@@ -239,6 +288,122 @@ mod tests {
         run_on(&mut writer, "ROLLBACK").await;
         let seen = run(WritePolicy::ReadOnly, "SELECT count(*)::int4 FROM orders_undone").await.unwrap();
         assert_eq!(seen.rows(), [[Value::Int(0)]]);
+    }
+
+    /// Runs `opening` then, on a fresh `table`, an insert and a select that returns rows, and the user's `ROLLBACK`;
+    /// gives the rows the table keeps.
+    async fn kept_after_the_users_rollback(table: &str, opening: &[&str]) -> Vec<Vec<Value>> {
+        run(WritePolicy::Allowed, &format!("DROP TABLE IF EXISTS {table}")).await.unwrap();
+        run(WritePolicy::Allowed, &format!("CREATE TABLE {table} (id int)")).await.unwrap();
+        let mut writer = session(WritePolicy::Allowed).await;
+        for sql in opening {
+            run_on(&mut writer, sql).await;
+        }
+        run_on(&mut writer, &format!("INSERT INTO {table} VALUES (7)")).await;
+        run_on(&mut writer, &format!("SELECT id FROM {table}")).await;
+        run_on(&mut writer, "ROLLBACK").await;
+        run(WritePolicy::ReadOnly, &format!("SELECT count(*)::int4 FROM {table}")).await.unwrap().rows().to_vec()
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_select_after_start_transaction_leaves_it_to_the_user() {
+        assert_eq!(kept_after_the_users_rollback("orders_started", &["START TRANSACTION"]).await, [[Value::Int(0)]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_select_after_commit_and_chain_leaves_the_next_transaction_to_the_user() {
+        assert_eq!(kept_after_the_users_rollback("orders_chained", &["BEGIN", "COMMIT AND CHAIN"]).await, [[Value::Int(0)]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_select_after_rollback_and_chain_leaves_the_next_transaction_to_the_user() {
+        assert_eq!(kept_after_the_users_rollback("orders_rechained", &["BEGIN", "ROLLBACK AND CHAIN"]).await, [[Value::Int(0)]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_select_after_a_rollback_to_a_savepoint_leaves_it_to_the_user() {
+        let opening = ["BEGIN", "SAVEPOINT before_orders", "ROLLBACK TO SAVEPOINT before_orders"];
+        assert_eq!(kept_after_the_users_rollback("orders_saved", &opening).await, [[Value::Int(0)]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_session_unsure_of_the_users_transaction_asks_the_server() {
+        run(WritePolicy::Allowed, "DROP TABLE IF EXISTS orders_unsure").await.unwrap();
+        run(WritePolicy::Allowed, "CREATE TABLE orders_unsure (id int)").await.unwrap();
+        let mut writer = session(WritePolicy::Allowed).await;
+        run_on(&mut writer, "BEGIN").await;
+        run_on(&mut writer, "INSERT INTO orders_unsure VALUES (7)").await;
+        writer.marks.user_transaction = UserTransaction::Unsure;
+        run_on(&mut writer, "SELECT id FROM orders_unsure").await;
+        run_on(&mut writer, "ROLLBACK").await;
+        let seen = run(WritePolicy::ReadOnly, "SELECT count(*)::int4 FROM orders_unsure").await.unwrap();
+        assert_eq!(seen.rows(), [[Value::Int(0)]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_select_in_a_failed_transaction_of_the_user_fails_with_the_servers_words() {
+        let mut writer = session(WritePolicy::Allowed).await;
+        run_on(&mut writer, "BEGIN").await;
+        assert!(writer.run(&guard::admit(Statement::new("SELECT 1 / 0"), Params::default(), WritePolicy::Allowed).unwrap()).await.is_err());
+        writer.marks.user_transaction = UserTransaction::Unsure;
+        let admitted = guard::admit(Statement::new("SELECT 1"), Params::default(), WritePolicy::Allowed).unwrap();
+        let err = writer.run(&admitted).await.unwrap_err();
+        assert!(err.to_string().contains("current transaction is aborted"), "{err}");
+    }
+
+    async fn after_the_user_ends(ending: &str) -> UserTransaction {
+        let mut writer = session(WritePolicy::Allowed).await;
+        run_on(&mut writer, "BEGIN").await;
+        run_on(&mut writer, ending).await;
+        writer.marks.user_transaction
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_begin_tells_the_session_the_user_has_a_transaction_open() {
+        let mut writer = session(WritePolicy::Allowed).await;
+        run_on(&mut writer, "BEGIN").await;
+        assert_eq!(writer.marks.user_transaction, UserTransaction::Open);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_commit_tells_the_session_no_transaction_of_the_user_is_open() {
+        assert_eq!(after_the_user_ends("COMMIT").await, UserTransaction::None);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn an_end_tells_the_session_no_transaction_of_the_user_is_open() {
+        assert_eq!(after_the_user_ends("END").await, UserTransaction::None);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_rollback_tells_the_session_no_transaction_of_the_user_is_open() {
+        assert_eq!(after_the_user_ends("ROLLBACK").await, UserTransaction::None);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn an_abort_tells_the_session_no_transaction_of_the_user_is_open() {
+        assert_eq!(after_the_user_ends("ABORT").await, UserTransaction::None);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_failed_ending_leaves_the_session_unsure() {
+        let mut writer = session(WritePolicy::Allowed).await;
+        run_on(&mut writer, "BEGIN").await;
+        let admitted = guard::admit(Statement::new("COMMIT AND MAYBE"), Params::default(), WritePolicy::Allowed).unwrap();
+        assert!(writer.run(&admitted).await.is_err());
+        assert_eq!(writer.marks.user_transaction, UserTransaction::Unsure);
     }
 
     #[tokio::test]

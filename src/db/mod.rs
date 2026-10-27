@@ -3,6 +3,7 @@ use crate::connection::Tls;
 use anyhow::Result;
 use limits::ReadLimits;
 use model::{CancelToken, ServerError};
+use run::UserTransaction;
 use tokio::sync::watch;
 use tokio::task::AbortHandle;
 use tokio_postgres::error::ErrorPosition;
@@ -58,6 +59,7 @@ struct Marks {
     /// A statement or a page is on the server: a session dropped then cuts its link, so the server stops it instead of
     /// the link finishing it.
     is_mid_statement: bool,
+    user_transaction: UserTransaction,
 }
 
 impl Session {
