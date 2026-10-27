@@ -7,6 +7,7 @@ pub(crate) use route::{LocalPort, Route};
 pub(crate) use schema::{Catalog, Index, Schema, SchemaColumn, SchemaNode, Table, TableKind};
 use serde::Serialize;
 pub(crate) use server::{Named, RoleFlag, RolePowers, RoleRights, ServerFacts};
+use std::fmt;
 pub(crate) use value::Value;
 
 mod cancel;
@@ -32,9 +33,10 @@ impl Statement {
     }
 }
 
-/// A type as a statement's header names it (`date`, `timestamp with time zone`, `shop.status`): the server looks it
-/// up, the name bound, never put in SQL.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// A type's name: as a statement's header names it (`date`, `timestamp with time zone`, `shop.status`), the server
+/// looks it up, the name bound, never put in SQL; as a result's column has it, the server's own (`int4`, `inet`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
 pub(crate) struct TypeName(String);
 
 impl TypeName {
@@ -47,18 +49,32 @@ impl TypeName {
     }
 }
 
+/// A value given for a statement's parameter, sent as text for the server to read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ParamValue(String);
+
+impl ParamValue {
+    pub(crate) fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// The values bound to a statement's `$1`, `$2`…, in order: each sent as text, for the server to read with the type it
 /// gives the parameter, unless its type is named; `None` binds NULL.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Params {
-    values: Vec<Option<String>>,
+    values: Vec<Option<ParamValue>>,
     /// The type of each `$n`, `None` for the server to infer; shorter than `values` when the last ones have none.
     types: Vec<Option<TypeName>>,
 }
 
 impl Params {
     /// `values`, each `$n` of the type at its place in `types`.
-    pub(crate) fn new(values: Vec<Option<String>>, types: Vec<Option<TypeName>>) -> Self {
+    pub(crate) fn new(values: Vec<Option<ParamValue>>, types: Vec<Option<TypeName>>) -> Self {
         Self { values, types }
     }
 
@@ -70,7 +86,7 @@ impl Params {
         self.values.is_empty()
     }
 
-    pub(crate) fn values(&self) -> &[Option<String>] {
+    pub(crate) fn values(&self) -> &[Option<ParamValue>] {
         &self.values
     }
 
@@ -99,12 +115,33 @@ pub(crate) enum ColumnKind {
     Other,
 }
 
+/// A column's name as the server sent it: one result may hold the same name twice, or an empty one.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub(crate) struct ColumnName(String);
+
+impl ColumnName {
+    pub(crate) fn new(name: impl Into<String>) -> Self {
+        Self(name.into())
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ColumnName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// A column of a result: its name and the kind of its values.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct Column {
-    pub(crate) name: String,
+    pub(crate) name: ColumnName,
     pub(crate) kind: ColumnKind,
     /// The server's name for the type: `int4`, `timestamptz`, `inet`.
     #[serde(rename = "type")]
-    pub(crate) type_name: String,
+    pub(crate) type_name: TypeName,
 }

@@ -152,7 +152,7 @@ mod tests {
     use super::*;
     use crate::connection::WritePolicy;
     use crate::db::guard;
-    use crate::db::model::{self, Route, Statement};
+    use crate::db::model::{self, ParamValue, Route, Statement};
     use crate::fixtures;
 
     #[tokio::test]
@@ -269,7 +269,7 @@ mod tests {
     }
 
     async fn run_with(writes: WritePolicy, sql: &str, values: &[Option<&str>]) -> Result<ResultSet> {
-        let params = Params::new(values.iter().map(|value| value.map(str::to_owned)).collect(), vec![]);
+        let params = Params::new(values.iter().map(|value| value.map(ParamValue::new)).collect(), vec![]);
         session(writes).await.run(&guard::admit(Statement::new(sql), params, writes).unwrap()).await
     }
 
@@ -281,7 +281,7 @@ mod tests {
     }
 
     async fn run_typed(writes: WritePolicy, sql: &str, value: &str, type_name: &str) -> Result<ResultSet> {
-        let params = Params::new(vec![Some(value.to_owned())], vec![Some(model::TypeName::new(type_name))]);
+        let params = Params::new(vec![Some(ParamValue::new(value))], vec![Some(model::TypeName::new(type_name))]);
         session(writes).await.run(&guard::admit(Statement::new(sql), params, writes).unwrap()).await
     }
 

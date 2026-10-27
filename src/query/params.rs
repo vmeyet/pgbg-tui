@@ -2,7 +2,7 @@
 use crate::connection::WritePolicy;
 use crate::db::guard::{self, Admitted};
 use crate::db::lex::{self, Token};
-use crate::db::model::{Params, Statement, TypeName};
+use crate::db::model::{ParamValue, Params, Statement, TypeName};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::ops::Range;
@@ -21,7 +21,7 @@ pub(crate) struct ParamName(String);
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Assignment {
     name: ParamName,
-    value: String,
+    value: ParamValue,
 }
 
 /// What a header's `-- param: since date = 2024-01-01` says of one parameter.
@@ -39,7 +39,7 @@ pub(crate) enum Fallback {
     /// Nothing: the run stops.
     Required,
     /// `= 2024-01-01`.
-    Default(String),
+    Default(ParamValue),
     /// `optional`: NULL.
     Optional,
 }
@@ -47,7 +47,7 @@ pub(crate) enum Fallback {
 /// The values given for a run, by name.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Given {
-    values: BTreeMap<ParamName, String>,
+    values: BTreeMap<ParamName, ParamValue>,
     /// The names a params file gave: one file may serve several statements, so a name this one lacks is no typo.
     from_file: BTreeSet<ParamName>,
 }
@@ -95,7 +95,7 @@ pub(crate) enum ParamError {
 
 impl Given {
     /// The values typed in the parameter bar, one per name.
-    pub(crate) fn typed(values: BTreeMap<ParamName, String>) -> Self {
+    pub(crate) fn typed(values: BTreeMap<ParamName, ParamValue>) -> Self {
         Self { values, from_file: BTreeSet::new() }
     }
 
@@ -193,8 +193,8 @@ fn check_known(given: &Given, names: &[ParamName]) -> Result<(), ParamError> {
     }
 }
 
-fn value_of(given: &Given, name: &ParamName, spec: Option<&ParamSpec>) -> Result<Option<String>, ParamError> {
-    if let Some(value) = given.values.get(name).filter(|value| !value.is_empty()) {
+fn value_of(given: &Given, name: &ParamName, spec: Option<&ParamSpec>) -> Result<Option<ParamValue>, ParamError> {
+    if let Some(value) = given.values.get(name).filter(|value| !value.as_str().is_empty()) {
         return Ok(Some(value.clone()));
     }
     match spec.map(|spec| &spec.fallback) {
@@ -296,7 +296,7 @@ const OPTIONAL: &str = "optional";
 
 fn default_of(text: &str) -> Result<Fallback, String> {
     let default = text.trim();
-    if default.is_empty() { Err("a default goes after `=`".to_owned()) } else { Ok(Fallback::Default(default.to_owned())) }
+    if default.is_empty() { Err("a default goes after `=`".to_owned()) } else { Ok(Fallback::Default(ParamValue::new(default))) }
 }
 
 impl FromStr for Assignment {
@@ -304,7 +304,7 @@ impl FromStr for Assignment {
 
     fn from_str(text: &str) -> Result<Self, String> {
         let (name, value) = text.split_once('=').ok_or_else(|| NO_EQUAL_SIGN.to_owned())?;
-        Ok(Self { name: name.trim().parse()?, value: value.to_owned() })
+        Ok(Self { name: name.trim().parse()?, value: ParamValue::new(value) })
     }
 }
 
@@ -336,7 +336,10 @@ mod tests {
 
     fn filled(sql: &str, pairs: &[&str]) -> Result<(String, Vec<Option<String>>), ParamError> {
         let Filled { statement, params } = fill(&Statement::new(sql), &given(pairs), &[])?;
-        Ok((statement.as_str().to_owned(), params.values().to_vec()))
+        Ok((
+            statement.as_str().to_owned(),
+            params.values().iter().map(|value| value.as_ref().map(|value| value.as_str().to_owned())).collect(),
+        ))
     }
 
     fn name(name: &str) -> ParamName {
@@ -443,7 +446,7 @@ mod tests {
     #[test]
     fn a_spec_names_a_type_and_a_default() {
         let since = spec("since date = 2024-01-01");
-        assert_eq!((since.type_name, since.fallback), (Some(TypeName::new("date")), Fallback::Default("2024-01-01".into())));
+        assert_eq!((since.type_name, since.fallback), (Some(TypeName::new("date")), Fallback::Default(ParamValue::new("2024-01-01"))));
     }
 
     #[test]
@@ -472,13 +475,13 @@ mod tests {
     #[test]
     fn a_name_left_empty_takes_its_default_and_an_optional_one_binds_null() {
         let params = filled_with("SELECT {{since}}, {{owner}}", &["since="], &["since date = 2024-01-01", "owner text optional"]).unwrap();
-        assert_eq!(params.values(), [Some("2024-01-01".to_owned()), None]);
+        assert_eq!(params.values(), [Some(ParamValue::new("2024-01-01")), None]);
     }
 
     #[test]
     fn a_value_given_wins_over_the_default() {
         let params = filled_with("SELECT {{since}}", &["since=2025-06-01"], &["since date = 2024-01-01"]).unwrap();
-        assert_eq!(params.values(), [Some("2025-06-01".to_owned())]);
+        assert_eq!(params.values(), [Some(ParamValue::new("2025-06-01"))]);
     }
 
     #[test]

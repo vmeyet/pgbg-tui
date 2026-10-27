@@ -69,9 +69,9 @@ fn hints() -> String {
 
 /// The column's name and type, its value under it, then a blank line.
 fn column_lines(theme: &Theme, column: &Column, value: &Value, width: u16) -> Vec<Line<'static>> {
-    let name = Span::styled(render::printable(&column.name).into_owned(), Style::default().add_modifier(Modifier::BOLD));
-    let type_name = Span::styled(format!("  {}", render::printable(&column.type_name)), Style::default().fg(theme.muted));
-    let header = if column.type_name.is_empty() { Line::from(name) } else { Line::from(vec![name, type_name]) };
+    let name = Span::styled(render::printable(column.name.as_str()).into_owned(), Style::default().add_modifier(Modifier::BOLD));
+    let type_name = Span::styled(format!("  {}", render::printable(column.type_name.as_str())), Style::default().fg(theme.muted));
+    let header = if column.type_name.as_str().is_empty() { Line::from(name) } else { Line::from(vec![name, type_name]) };
     let room = usize::from(width).saturating_sub(INDENT.len());
     let value_lines = value_spans(theme, value).into_iter().flat_map(|spans| wrapped(&spans, room));
     let indented = value_lines.map(|spans| Line::from(std::iter::once(Span::raw(INDENT)).chain(spans).collect::<Vec<_>>()));
@@ -138,7 +138,7 @@ mod tests {
     use super::super::app::{Fit, Incoming, RunId};
     use super::super::styled;
     use super::*;
-    use crate::db::model::{ColumnKind, ResultSet};
+    use crate::db::model::{ColumnKind, ResultSet, TypeName};
     use crate::fixtures::column;
     use crossterm::event::{KeyCode, KeyEvent};
     use ratatui::Terminal;
@@ -165,7 +165,8 @@ mod tests {
     fn a_note() -> ResultSet {
         let note = "Leave at the door.\nRing twice: the bell is \u{202e}broken";
         let orders = orders();
-        let columns = orders.columns().iter().cloned().chain([Column { type_name: "text".into(), ..column("note", ColumnKind::Text) }]);
+        let columns =
+            orders.columns().iter().cloned().chain([Column { type_name: TypeName::new("text"), ..column("note", ColumnKind::Text) }]);
         let rows = orders.rows().iter().map(|row| row.iter().cloned().chain([Value::Text(note.into())]).collect());
         ResultSet::whole(columns.collect(), rows.collect())
     }

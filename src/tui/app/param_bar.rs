@@ -1,5 +1,6 @@
 //! The parameter bar above the editor: one field per `{{name}}` of the statement under the cursor.
 use super::editor;
+use crate::db::model::ParamValue;
 use crate::query::params::{Given, ParamName};
 use crossterm::event::{KeyCode, KeyEvent};
 use std::collections::BTreeMap;
@@ -45,7 +46,7 @@ impl ParamBar {
 
     /// The values typed for `names`; a name left empty falls back to its header's default.
     pub(super) fn given(&self, names: &[ParamName]) -> Given {
-        let typed = |name: &ParamName| self.fields.get(name).map(|field| (name.clone(), field.text().to_owned()));
+        let typed = |name: &ParamName| self.fields.get(name).map(|field| (name.clone(), ParamValue::new(field.text())));
         Given::typed(names.iter().filter_map(typed).collect())
     }
 }
@@ -104,7 +105,7 @@ mod tests {
         type_in(&mut app, "nina");
         let actions = press(&mut app, KeyCode::Enter);
         let input = input_of(&actions).unwrap();
-        assert_eq!(input.given, Given::typed([(name("owner"), "nina".to_owned())].into()));
+        assert_eq!(input.given, Given::typed([(name("owner"), ParamValue::new("nina"))].into()));
         assert_eq!(input.specs.len(), 1);
     }
 

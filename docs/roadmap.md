@@ -103,7 +103,7 @@ A performance step measures before and after, and the MR gives the numbers.
 
 - [ ] Doc comments, one MR per top-level module: drop the ones that restate the code, write the rest in plain English
 - [x] `App` and `Form` keep their fields private; the views read them through methods, and `App::paste` is one `match` on the overlay
-- [ ] Newtypes where the rules want them: `Column.type_name` as `TypeName`, the column name and the parameter values; the form's `(Slot, String)` alias becomes a named struct, and stops sharing the `Refusal` name with `db::guard`
+- [x] Newtypes where the rules want them: `Column.type_name` as `TypeName`, the column name and the parameter values; the form's `(Slot, String)` alias becomes a named struct, and stops sharing the `Refusal` name with `db::guard`
 - [x] `db/mod.rs` split under 800 lines along a concern
 - [x] `tui/backend/session.rs` split under 800 lines along a concern
 - [ ] `Act::ALL` as a plain array; the `after` chain and its `const fn` loops go

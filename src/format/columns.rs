@@ -75,7 +75,7 @@ pub(crate) fn opening(columns: &[Column], named: &[ColumnFormat], mode: Mode) ->
 }
 
 fn named_for(column: &Column, named: &[ColumnFormat]) -> Option<Format> {
-    let mut formats = named.iter().filter(|named| named.column.eq_ignore_ascii_case(&column.name)).map(|named| named.format);
+    let mut formats = named.iter().filter(|named| named.column.eq_ignore_ascii_case(column.name.as_str())).map(|named| named.format);
     formats.next_back().filter(|format| allowed(&column.kind).contains(format))
 }
 

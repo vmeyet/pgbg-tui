@@ -42,7 +42,7 @@ fn legend(series: &Series, theme: &Theme) -> Line<'static> {
     let entries = series.y.iter().enumerate().flat_map(|(column, y)| {
         [
             Span::styled("■ ", Style::default().fg(colour(theme, column))),
-            Span::styled(format!("{}  ", printable(&y.name)), Style::default().fg(theme.muted)),
+            Span::styled(format!("{}  ", printable(y.name.as_str())), Style::default().fg(theme.muted)),
         ]
     });
     Line::from(entries.collect::<Vec<_>>())

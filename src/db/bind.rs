@@ -1,6 +1,6 @@
 //! A statement's values as the driver binds them: each in text, so the server reads it with its parameter's own type.
 use super::guard::Admitted;
-use super::model::{Params, TypeName, UnknownType};
+use super::model::{ParamValue, Params, TypeName, UnknownType};
 use super::server_error;
 use anyhow::Result;
 use bytes::BytesMut;
@@ -36,7 +36,7 @@ impl ToSql for AsText<'_> {
 
 /// `params` in the order of their `$n`.
 pub(super) fn as_text(params: &Params) -> Vec<AsText<'_>> {
-    params.values().iter().map(|value| AsText(value.as_deref())).collect()
+    params.values().iter().map(|value| AsText(value.as_ref().map(ParamValue::as_str))).collect()
 }
 
 /// `values` as the driver's `bind` takes them.

@@ -2,7 +2,9 @@
 use super::save::typed_into;
 use super::{Action, App, Focus, Overlay};
 use crate::act::{self, Act, Pane};
-use crate::db::model::{Catalog, Column, ColumnKind, Extent, Index, Page, ResultSet, SchemaColumn, Statement, Table, Value, qualified};
+use crate::db::model::{
+    Catalog, Column, ColumnKind, ColumnName, Extent, Index, Page, ResultSet, SchemaColumn, Statement, Table, TypeName, Value, qualified,
+};
 use crate::query::params::ParamInput;
 use crossterm::event::KeyEvent;
 use std::collections::BTreeSet;
@@ -55,7 +57,8 @@ const DESCRIBED: [&str; 4] = ["", "name", "type", "detail"];
 
 /// A table's columns, then its indexes, one a row: what it holds, its name, its type or keys, and the rest.
 fn described(table: &Table) -> ResultSet {
-    let columns = DESCRIBED.iter().map(|name| Column { name: (*name).to_owned(), kind: ColumnKind::Text, type_name: "text".to_owned() });
+    let columns =
+        DESCRIBED.iter().map(|name| Column { name: ColumnName::new(*name), kind: ColumnKind::Text, type_name: TypeName::new("text") });
     let rows = table.columns.iter().map(column_row).chain(table.indexes.iter().map(index_row));
     ResultSet::new(columns.collect(), Page { rows: rows.collect(), extent: Extent::All })
 }

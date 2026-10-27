@@ -1,5 +1,5 @@
 //! Wire values to `Value`, by column type; a type pgbg does not know decodes as `Value::Unsupported`.
-use super::model::{Column, ColumnKind, Value};
+use super::model::{Column, ColumnKind, ColumnName, TypeName, Value};
 use chrono::{DateTime, Utc};
 use tokio_postgres::Row;
 use tokio_postgres::types::{FromSql, Kind, Type};
@@ -12,7 +12,7 @@ const NUMERIC_NEGATIVE_INFINITY: u16 = 0xF000;
 
 /// A column as `ResultSet` holds it.
 pub(super) fn column(column: &tokio_postgres::Column) -> Column {
-    Column { name: column.name().to_owned(), kind: column_kind(column.type_()), type_name: column.type_().name().to_owned() }
+    Column { name: ColumnName::new(column.name()), kind: column_kind(column.type_()), type_name: TypeName::new(column.type_().name()) }
 }
 
 /// Every value of `row`, in column order; a value pgbg cannot decode is `Value::Unsupported`, never an error.

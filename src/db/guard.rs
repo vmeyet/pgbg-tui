@@ -155,6 +155,7 @@ fn counted(count: usize, noun: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::model::ParamValue;
 
     fn verdict(sql: &str) -> Result<Mode, Refusal> {
         admit(Statement::new(sql), Params::default(), WritePolicy::ReadOnly).map(|admitted| admitted.mode)
@@ -322,7 +323,7 @@ mod tests {
     }
 
     fn admitted_with(sql: &str, values: usize, writes: WritePolicy) -> Result<Mode, Refusal> {
-        let params = Params::new(vec![Some("7".to_owned()); values], vec![]);
+        let params = Params::new(vec![Some(ParamValue::new("7")); values], vec![]);
         admit(Statement::new(sql), params, writes).map(|admitted| admitted.mode)
     }
 
