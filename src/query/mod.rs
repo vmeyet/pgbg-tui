@@ -284,7 +284,7 @@ fn opened_path(file: &fs::File) -> Result<PathBuf> {
     Ok(fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()))?)
 }
 
-/// Refuses a file that a link, swapped in after the listing, took out of the root whose real path is `real_root`.
+/// Refuses a file outside the root whose real path is `real_root`: a link swapped in after the listing can lead there.
 fn check_inside(real_root: &Path, opened: &Path) -> Result<()> {
     if !opened.starts_with(real_root) {
         bail!("it leads out of the queries folder");
