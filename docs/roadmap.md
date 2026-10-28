@@ -158,6 +158,21 @@ What a first real session asked for, one MR per step.
 - [x] Usage counts as revu keeps them, opt-in, action names only, from a part both apps share in vtui
 - [x] Your own saved queries belong to a connection, in the data folder; `queries = "<connection>"` shares another's; pgbg never makes a project's folder
 
+## 20. Review of the first-use batch
+
+The review of #194 to #208 found these, most severe first.
+
+- [ ] The idle ask sends a comment as its instruction only with `[ai] literals = "sent"`, and masks it otherwise
+- [ ] A version whose text holds a secret is kept as a note, as the history keeps it
+- [ ] The user's own queries folders are made `0700`, as the versions folder is
+- [ ] The usage file is merged under the same lock the history takes
+- [ ] Editing in `$EDITOR` keeps the replaced text whatever the editor's exit status
+- [ ] Undo copies the editor's text only when a key changes it, and its doc states the 1 MiB worst case
+- [ ] The usage counts live in pgbg's data folder, and the cache folder follows XDG as the others do
+- [ ] pgbg warns once when a config or history sits in the old macOS folder, and says where to move it
+- [ ] One private-folder helper and one atomic-write helper serve the history, the log, usage, versions and saved queries
+- [ ] Showing another sheet re-lists its queries in one place, and the idle ask builds its question once
+
 ## Later
 
 - A preview of what a write would change, before its confirmation
