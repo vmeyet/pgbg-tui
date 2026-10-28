@@ -56,9 +56,15 @@ pub(crate) struct Loaded {
     pub(crate) warnings: Vec<String>,
 }
 
-/// The file `$PGBG_CONFIG` names, else `pgbg/config.toml` in the user's config folder.
+/// The file `$PGBG_CONFIG` names, else `config.toml` in pgbg's config folder.
 pub(crate) fn path() -> PathBuf {
-    path_from(std::env::var_os(PATH_VARIABLE), dirs::config_dir())
+    path_from(std::env::var_os(PATH_VARIABLE), &dir())
+}
+
+/// `$XDG_CONFIG_HOME/pgbg`, else `~/.config/pgbg`: where terminal tools keep their config on every system, macOS
+/// included, so it sits next to gh, helix and a dotfiles repo.
+pub(crate) fn dir() -> PathBuf {
+    dir_from(std::env::var_os("XDG_CONFIG_HOME"), dirs::home_dir())
 }
 
 /// The path an environment variable holds; an empty one holds none, as `PGBG_CONFIG=` unsets it in a shell.
@@ -66,8 +72,17 @@ pub(crate) fn named_path(variable: Option<OsString>) -> Option<PathBuf> {
     variable.filter(|v| !v.is_empty()).map(PathBuf::from)
 }
 
-fn path_from(variable: Option<OsString>, config_dir: Option<PathBuf>) -> PathBuf {
-    named_path(variable).unwrap_or_else(|| config_dir.unwrap_or_else(|| PathBuf::from(".")).join("pgbg").join("config.toml"))
+fn path_from(variable: Option<OsString>, dir: &Path) -> PathBuf {
+    named_path(variable).unwrap_or_else(|| dir.join("config.toml"))
+}
+
+fn dir_from(xdg: Option<OsString>, home: Option<PathBuf>) -> PathBuf {
+    xdg_folder(xdg, home, ".config").unwrap_or_else(|| PathBuf::from(".")).join("pgbg")
+}
+
+/// The folder an `$XDG_*_HOME` variable holds when it is absolute, as the spec asks, else `under_home` in `home`.
+pub(crate) fn xdg_folder(xdg: Option<OsString>, home: Option<PathBuf>, under_home: &str) -> Option<PathBuf> {
+    xdg.map(PathBuf::from).filter(|p| p.is_absolute()).or_else(|| home.map(|h| h.join(under_home)))
 }
 
 impl Config {
@@ -182,9 +197,22 @@ url = "postgres://nina@localhost:5432/shop"
 
     #[test]
     fn the_path_comes_from_pgbg_config_else_the_config_folder() {
-        let folder = Some(PathBuf::from("/Users/nina/Library/Application Support"));
-        assert_eq!(path_from(Some("/tmp/shop.toml".into()), folder.clone()), PathBuf::from("/tmp/shop.toml"));
-        assert_eq!(path_from(None, folder.clone()), PathBuf::from("/Users/nina/Library/Application Support/pgbg/config.toml"));
-        assert_eq!(path_from(Some("".into()), folder), PathBuf::from("/Users/nina/Library/Application Support/pgbg/config.toml"));
+        let folder = Path::new("/Users/nina/.config/pgbg");
+        assert_eq!(path_from(Some("/tmp/shop.toml".into()), folder), PathBuf::from("/tmp/shop.toml"));
+        assert_eq!(path_from(None, folder), PathBuf::from("/Users/nina/.config/pgbg/config.toml"));
+        assert_eq!(path_from(Some("".into()), folder), PathBuf::from("/Users/nina/.config/pgbg/config.toml"));
+    }
+
+    #[test]
+    fn the_config_folder_is_xdg_config_home_else_dot_config_under_home() {
+        let home = Some(PathBuf::from("/Users/nina"));
+        assert_eq!(dir_from(None, home.clone()), PathBuf::from("/Users/nina/.config/pgbg"));
+        assert_eq!(dir_from(Some("/tmp/xdg".into()), home.clone()), PathBuf::from("/tmp/xdg/pgbg"));
+        assert_eq!(
+            dir_from(Some("relative".into()), home.clone()),
+            PathBuf::from("/Users/nina/.config/pgbg"),
+            "a relative XDG path is ignored"
+        );
+        assert_eq!(dir_from(Some("".into()), home), PathBuf::from("/Users/nina/.config/pgbg"));
     }
 }

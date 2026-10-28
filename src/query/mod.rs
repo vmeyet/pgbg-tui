@@ -1,5 +1,6 @@
 //! Saved queries: the `.sql` files under the `.pgbg/queries/` nearest the working directory, found the way git finds
-//! `.git`, and under `pgbg/queries/` in the user's config folder.
+//! `.git`, and under `queries/` in pgbg's config folder.
+use crate::config;
 use crate::render;
 use anyhow::{Context, Result, bail};
 use rustix::fs::{Mode, OFlags};
@@ -26,7 +27,6 @@ mod tree;
 
 const PROJECT_DIR: &str = ".pgbg";
 const QUERIES_DIR: &str = "queries";
-const USER_DIR: &str = "pgbg/queries";
 const REPOSITORY_MARKER: &str = ".git";
 const EXTENSION: &str = ".sql";
 /// The biggest query the editor takes: past it, the file is a dump, not a query.
@@ -96,6 +96,7 @@ pub(crate) struct Query {
 pub(crate) struct Places<'a> {
     pub(crate) working_dir: &'a Path,
     pub(crate) home: Option<&'a Path>,
+    /// pgbg's config folder, whose `queries/` holds the user's own queries.
     pub(crate) config_dir: Option<&'a Path>,
 }
 
@@ -179,7 +180,7 @@ fn project_root(places: &Places<'_>) -> Option<Root> {
 }
 
 fn user_root(config_dir: &Path) -> Option<Root> {
-    let root = config_dir.join(USER_DIR);
+    let root = config_dir.join(QUERIES_DIR);
     if !exists(&root) {
         return None;
     }
@@ -198,17 +199,17 @@ pub(crate) struct Roots {
 }
 
 impl Roots {
-    /// The nearest `.pgbg/queries/` from the working directory up, and `pgbg/queries/` under the config folder; a root
+    /// The nearest `.pgbg/queries/` from the working directory up, and `queries/` under pgbg's config folder; a root
     /// that is a link, or that another user owns, is skipped. Blocks on the file system.
     pub(crate) fn find(places: &Places<'_>) -> Self {
         Self { project: project_root(places), user: places.config_dir.and_then(user_root) }
     }
 
-    /// The roots for the working directory, the home folder and the user's config folder, found off the runtime.
+    /// The roots for the working directory, the home folder and pgbg's config folder, found off the runtime.
     pub(crate) async fn find_here() -> Result<Self> {
         let working_dir = std::env::current_dir()?;
-        let (home, config_dir) = (dirs::home_dir(), dirs::config_dir());
-        let found = move || Self::find(&Places { working_dir: &working_dir, home: home.as_deref(), config_dir: config_dir.as_deref() });
+        let (home, config_dir) = (dirs::home_dir(), config::dir());
+        let found = move || Self::find(&Places { working_dir: &working_dir, home: home.as_deref(), config_dir: Some(&config_dir) });
         Ok(tokio::task::spawn_blocking(found).await?)
     }
 
@@ -394,8 +395,8 @@ mod tests {
         let config = tempfile::tempdir().unwrap();
         let places = Places { working_dir: config.path(), home: None, config_dir: Some(config.path()) };
         assert_eq!(Roots::find(&places).user, None);
-        write(config.path(), "pgbg/queries/mine.sql");
-        assert_eq!(Roots::find(&places).user.map(|root| root.dir), Some(config.path().join("pgbg/queries")));
+        write(config.path(), "queries/mine.sql");
+        assert_eq!(Roots::find(&places).user.map(|root| root.dir), Some(config.path().join("queries")));
     }
 
     #[test]

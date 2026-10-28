@@ -126,9 +126,11 @@ pub(crate) struct Store {
 }
 
 impl Store {
-    /// The `history` folder in `$PGBG_DATA_DIR`, else `pgbg/history` in the user's data folder.
+    /// The `history` folder in `$PGBG_DATA_DIR`, else in `$XDG_DATA_HOME/pgbg`, else in `~/.local/share/pgbg`, on
+    /// every system, macOS included.
     pub(crate) fn from_env() -> Option<Self> {
-        dir_from(std::env::var_os(PATH_VARIABLE), dirs::data_dir()).map(|dir| Self { dir, max_bytes: MAX_BYTES })
+        let dir = dir_from(std::env::var_os(PATH_VARIABLE), std::env::var_os("XDG_DATA_HOME"), dirs::home_dir());
+        dir.map(|dir| Self { dir, max_bytes: MAX_BYTES })
     }
 
     /// Adds `entry` at the end of its connection's file; a statement that holds a password is kept as a note instead.
@@ -177,8 +179,9 @@ impl Store {
     }
 }
 
-fn dir_from(variable: Option<OsString>, data_dir: Option<PathBuf>) -> Option<PathBuf> {
-    Some(config::named_path(variable).or_else(|| data_dir.map(|dir| dir.join("pgbg")))?.join("history"))
+fn dir_from(variable: Option<OsString>, xdg: Option<OsString>, home: Option<PathBuf>) -> Option<PathBuf> {
+    let data_dir = || config::xdg_folder(xdg, home, ".local/share").map(|dir| dir.join("pgbg"));
+    Some(config::named_path(variable).or_else(data_dir)?.join("history"))
 }
 
 /// The file at `path`, opened to append and locked for this process alone; opened again, a few times at most, when
@@ -382,9 +385,12 @@ mod tests {
 
     #[test]
     fn the_folder_is_the_variable_else_pgbg_in_the_data_folder() {
-        assert_eq!(dir_from(Some("/tmp/pgbg-data".into()), Some("/data".into())), Some(PathBuf::from("/tmp/pgbg-data/history")));
-        assert_eq!(dir_from(Some("".into()), Some("/data".into())), Some(PathBuf::from("/data/pgbg/history")));
-        assert_eq!(dir_from(None, None), None);
+        let home = || Some(PathBuf::from("/Users/nina"));
+        assert_eq!(dir_from(Some("/tmp/pgbg-data".into()), Some("/data".into()), home()), Some(PathBuf::from("/tmp/pgbg-data/history")));
+        assert_eq!(dir_from(Some("".into()), Some("/data".into()), home()), Some(PathBuf::from("/data/pgbg/history")));
+        assert_eq!(dir_from(None, None, home()), Some(PathBuf::from("/Users/nina/.local/share/pgbg/history")));
+        assert_eq!(dir_from(None, Some("relative".into()), home()), Some(PathBuf::from("/Users/nina/.local/share/pgbg/history")));
+        assert_eq!(dir_from(None, None, None), None);
     }
 
     #[test]
