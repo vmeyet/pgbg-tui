@@ -150,7 +150,7 @@ What a first real session asked for, one MR per step.
 - [ ] The idle ghost reads an answer laid out differently from what was typed, and the log says why an ask gave nothing
 - [ ] A date column reads `today`, `3 days ago`; `f` on a column with one format says so
 - [x] A key for a new, empty query
-- [ ] Undo and redo in the editor
+- [x] Undo and redo in the editor
 - [ ] Every save keeps the version it replaced, outside the project; a key lists them and puts one back
 - [ ] Completion after `JOIN` offers the table with its `ON` condition, from the foreign keys
 - [ ] The idle ghost shows the whole rest of the statement, and a `--` comment line above it is the instruction

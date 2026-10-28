@@ -55,6 +55,7 @@ mod schema_tab;
 mod search;
 mod sheet;
 mod table_finder;
+mod undo;
 
 /// The pane that has the keys.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -260,6 +261,18 @@ impl App {
     /// Whether the editor on screen changed since its colours were built, so it needs `recolour`.
     pub(super) fn has_stale_colours(&self) -> bool {
         self.sheet().editor.has_stale_colours()
+    }
+
+    /// Whether the loop waits for the editor to sit idle: to end the undo step of the characters typed, or to ask the
+    /// idle ghost.
+    pub(super) fn waits_for_idle(&self) -> bool {
+        self.sheet().editor.is_typing() || self.wants_idle_ghost()
+    }
+
+    /// The editor sat idle: the characters typed so far make one undo step, and the idle ghost asks when it would.
+    pub(super) fn sat_idle(&mut self) -> Vec<Action> {
+        self.sheet_mut().editor.end_typing();
+        self.ask_idle_ghost()
     }
 
     /// Rebuilds the colours of the editor on screen, once its text stopped changing for a moment.

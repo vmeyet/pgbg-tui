@@ -51,7 +51,7 @@ impl App {
         let sheet = self.sheet_mut();
         let held = sheet.editor.text().trim_end();
         let text = if held.is_empty() { statement.to_owned() } else { format!("{held}\n\n{statement}") };
-        sheet.editor.reload(&text);
+        sheet.editor.rewrite(&text);
         sheet.text_changed();
         self.focus = Focus::Editor;
     }

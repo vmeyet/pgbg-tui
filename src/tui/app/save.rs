@@ -218,6 +218,15 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_q_leaves_nothing_to_undo() {
+        let mut app = typed("SELECT 2");
+        ctrl_q(&mut app);
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL));
+        assert_eq!(app.sheet().editor.text(), "");
+    }
+
+    #[test]
     fn ctrl_q_over_unsaved_text_asks_first_and_esc_keeps_the_text() {
         let mut app = typed("SELECT 2");
         ctrl_q(&mut app);
