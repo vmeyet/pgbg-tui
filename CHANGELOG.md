@@ -11,6 +11,8 @@ Each entry says what changed, then where, then how to use it.
 - **A date reads relative to today**, in the TUI's grid: a `date` column reads `today`, `yesterday`, `tomorrow`, then `3 d ago`, `in 2 d`, `1 mo ago` or `2 y ago`, counted from your local date.
   Press `f` on it, `F` to put every column readable, or name it in a saved query's header as `-- format: day=relative`.
   `f` on a column with no other format now says so on the status line instead of doing nothing.
+- **`ctrl-q` starts a new, empty query**, in the TUI, from any pane: the editor empties and stands for no saved query.
+  The first `ctrl-s` asks for its path; over unsaved text it asks first, as opening another query does.
 - **Keys like revu's** in the TUI: `⇧⇥` goes to the previous pane, `⇧` and an arrow to the pane on that side, and a click on a pane gives it the keys.
   `←` `→` switch the sidebar between queries and schema, as `[` `]` still do, which an AZERTY keyboard reaches badly.
   `⌘k` finds a saved query as `^p` does, in a terminal that speaks the kitty keyboard protocol (Ghostty, Kitty, WezTerm, iTerm2 with the option on); `?` shows the keys from the sidebar too, and `F1` from the editor.

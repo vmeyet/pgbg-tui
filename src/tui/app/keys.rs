@@ -2,7 +2,7 @@
 use super::grid::Move;
 use super::panes::Side;
 use super::param_bar::Direction;
-use super::{Action, App, AskStep, Focus, Overlay};
+use super::{Action, App, AskStep, Focus, Opening, Overlay};
 use crate::act::{self, Act, Pane};
 use crossterm::event::{KeyCode, KeyEvent};
 use vtui::help::Help;
@@ -153,6 +153,7 @@ impl App {
             }
             Act::Open => return self.open_in_sidebar(),
             Act::Save => return self.save(),
+            Act::NewQuery => return self.ask_open(Opening::New),
             Act::EditOutside => return self.edit_outside(),
             Act::History => return self.recall(),
             Act::FindTable => return self.find_table(),

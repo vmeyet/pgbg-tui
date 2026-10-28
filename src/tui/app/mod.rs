@@ -23,7 +23,7 @@ pub(super) use protocol::{
     SaveConnection, Saving, SessionId, TunnelState,
 };
 pub(super) use queries::{Finder, Queries};
-pub(super) use save::Prompt;
+pub(super) use save::{Opening, Prompt};
 pub(super) use schema_tab::{SchemaRow, SchemaTab, SidebarTab};
 pub(super) use search::Search;
 pub(super) use sheet::{Run, SchemaState, SessionState, Sheet, View};
