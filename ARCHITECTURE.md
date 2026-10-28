@@ -188,7 +188,7 @@ Charting a result:
 ## Boundaries
 
 - Only `src/db/` sees a `tokio_postgres` type; everything else uses `db/model/`.
-- Side effects live at the edges: `main.rs`, `signal.rs`, `commands/`, `tui/mod.rs`, `tui/backend/`, `tunnel/`, `secret/`, `ai/command.rs`, `config/` when it rewrites the file, `query/` when it lists and reads the queries folders, `history.rs` when it appends and reads its files.
+- Side effects live at the edges: `main.rs`, `signal.rs`, `commands/`, `tui/mod.rs`, `tui/backend/`, `tunnel/`, `secret/`, `ai/command.rs`, `config/` when it rewrites the file, `query/` when it lists, reads, writes and makes the queries folders, `history.rs` when it appends and reads its files.
 - `tui/app/` is pure: it never reads the clock nor does I/O; its tests drive it with keys and `Answer` values.
 - `chart/` is pure: a `ResultSet` in, a `Series` out; drawing lives in `tui/chart_view/`.
 - `format/` is pure: a `Value`, a `Format` and a `Clock` in, the cell's text out; it never reads the clock itself.
@@ -255,6 +255,7 @@ pgbg's own read-only transaction (`Session::read_only`) is refused with `InsideU
 
 - One `.sql` file per query under `.pgbg/queries/`, found by walking up from the working directory like `.git`, then under `queries/` in pgbg's config folder (`$XDG_CONFIG_HOME/pgbg`, else `~/.config/pgbg`).
 - The walk stops at the home folder or at the first folder holding `.git`, so a folder above the project never gives its queries.
+- A new query goes to the project's root, else to the user's when only that one exists; a project without one gets `.pgbg/queries/` made at its first save, at the repository root, else in the working directory, one folder at a time and refusing a link or a file in the way.
 - A root that is a link, under a `.pgbg` that is a link, or that another user owns is skipped with a warning: a cloned repository cannot point pgbg at the whole disk.
 - Each list and each read checks the root again, and that it still leads to the real path it had when found: a folder swapped for a link since then is skipped.
 - Folders nest; the sidebar shows the tree and the fuzzy finder searches every file.
