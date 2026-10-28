@@ -136,7 +136,7 @@ impl App {
     }
 
     fn is_schema_shown(&self) -> bool {
-        self.sidebar == SidebarTab::Schema && self.fit.has_sidebar
+        self.sidebar == SidebarTab::Schema && self.fit.panes.has_sidebar()
     }
 
     /// `actions`, plus a read of the schema when its tab is drawn and the open session on screen has no schema yet.
@@ -238,7 +238,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::super::fixtures::{app, app_on, shop, to_shop};
+    use super::super::fixtures::{app, app_on, every_pane, shop, to_shop};
     use super::super::sheet::{SchemaState, SessionState};
     use super::super::{Answer, Fit, Incoming, Run, RunId, SessionId};
     use super::*;
@@ -249,13 +249,14 @@ mod tests {
     use crate::fixtures::{self, shop_catalog};
     use crossterm::event::KeyCode;
     use std::sync::Arc;
+    use vtui::help::Help;
 
     fn press(app: &mut App, code: KeyCode) -> Vec<Action> {
         app.handle_key(KeyEvent::from(code))
     }
 
     fn on_the_sidebar(app: &mut App) {
-        app.fit(Fit { has_sidebar: true, ..Fit::default() });
+        app.fit(Fit { panes: every_pane(), ..Fit::default() });
         app.focus = Focus::Queries;
     }
 
@@ -293,6 +294,22 @@ mod tests {
     }
 
     #[test]
+    fn the_arrows_switch_the_sidebar_tab_either_way() {
+        let mut app = on_the_schema_tab();
+        press(&mut app, KeyCode::Left);
+        assert_eq!(app.pane(), Pane::Queries);
+        press(&mut app, KeyCode::Right);
+        assert_eq!(app.pane(), Pane::Schema);
+    }
+
+    #[test]
+    fn a_question_mark_in_the_sidebar_opens_the_help() {
+        let mut app = on_the_schema_tab();
+        press(&mut app, KeyCode::Char('?'));
+        assert_eq!(app.overlay, Some(Overlay::Help(Help::default())));
+    }
+
+    #[test]
     fn a_sheet_opened_again_under_the_schema_tab_reads_its_schema_once_its_session_opens() {
         let mut app = on_the_schema_tab();
         let connection = app.sheet().connection.clone();
@@ -307,7 +324,7 @@ mod tests {
         let mut app = app();
         app.sidebar = SidebarTab::Schema;
         app.apply(to_shop(Incoming::NotOpened(Failure::Login("connection refused".into()))));
-        app.fit(Fit { has_sidebar: true, ..Fit::default() });
+        app.fit(Fit { panes: every_pane(), ..Fit::default() });
         app
     }
 

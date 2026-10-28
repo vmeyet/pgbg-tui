@@ -200,20 +200,21 @@ In the TUI, a bar above the editor shows one field per parameter.
 | `⏎` | Run the statement under the cursor. |
 | `⌥⏎` `⇧⏎` | New line. |
 | `esc` | Cancel the running statement. |
-| `tab` | Next pane: editor, parameters, result, sidebar. |
+| `tab` `⇧tab` | Next, previous pane: editor, parameters, result, sidebar. |
+| `⇧←` `⇧→` `⇧↑` `⇧↓` | The pane on that side; a click on a pane does the same. |
 | `^o` | Pick another connection; sessions stay open. |
-| `^p` | Find a saved query. |
+| `^p` `⌘k` | Find a saved query; `⌘k` needs a terminal with the kitty keyboard protocol, as Ghostty, Kitty or WezTerm. |
 | `^t` | Find a table of the schema. |
 | `^r` | Search the history of this connection. |
-| `[` `]` | In the sidebar: switch between queries and schema. |
+| `←` `→` `[` `]` | In the sidebar: switch between queries and schema. |
 | `→` | Take the faded rest after the cursor: completion, or the idle ghost. |
-| `^space` | List the names that fit at the cursor. |
+| `^space` `^n` | List the names that fit at the cursor; `^n` where macOS takes `^space` to switch the input source. |
 | `v` | Show the result as a chart, or as a grid again. |
 | `f` `F` | Next format for this column; every column raw or readable. |
 | `y` `Y` `c` | Copy the cell; the row as CSV; the result as CSV, JSON or Markdown. |
 | `^s` | Save the query. |
 | `^e` | Edit the saved query in `$EDITOR`. |
-| `F1` | Every key of the pane you are in. |
+| `F1` `?` | Every key of the pane you are in; `?` outside the editor and the parameters, where it types. |
 | `^c` | Quit. |
 
 `pgbg tui <connection>` opens the TUI on another connection than the first.

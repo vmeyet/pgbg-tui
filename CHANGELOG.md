@@ -8,6 +8,10 @@ Each entry says what changed, then where, then how to use it.
 
 ### New
 
+- **Keys like revu's** in the TUI: `⇧⇥` goes to the previous pane, `⇧` and an arrow to the pane on that side, and a click on a pane gives it the keys.
+  `←` `→` switch the sidebar between queries and schema, as `[` `]` still do, which an AZERTY keyboard reaches badly.
+  `⌘k` finds a saved query as `^p` does, in a terminal that speaks the kitty keyboard protocol (Ghostty, Kitty, WezTerm, iTerm2 with the option on); `?` shows the keys from the sidebar too, and `F1` from the editor.
+- **`ctrl-n` lists the names that fit at the cursor**, in the TUI's editor, as `ctrl-space` does: macOS takes `ctrl-space` to switch the input source unless you turn that shortcut off in System Settings › Keyboard › Keyboard Shortcuts › Input Sources.
 - **The idle ghost** in the TUI's editor: after a second without a key, your `[ai] command` is asked for the rest of the statement under the cursor, and its next line shows faded after the cursor.
   It waits while completion shows a name, and any key stops the command; `→` takes it, and it never runs by itself.
   Turn it on with `ghost = true` in the `[ai]` table of `config.toml`; a connection with `ai = "off"` never asks.

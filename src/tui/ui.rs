@@ -1,5 +1,5 @@
 //! Drawing: the frame in the tier's colour, the panes inside it, and the key hints under them.
-use super::app::{App, Fit, Overlay, SessionState, SidebarTab, TunnelState};
+use super::app::{App, Fit, Overlay, Panes, SessionState, SidebarTab, TunnelState};
 use super::{
     ask_view, completion_view, detail_view, editor_view, finder_view, form_view, help_view, history_view, param_bar_view, picker_view,
     prompt_view, result_view, sidebar_view, table_finder_view,
@@ -23,10 +23,7 @@ const CUT_SCHEMA: &str = "first 20 000 tables";
 
 /// Where each part of the screen goes.
 struct Areas {
-    sidebar: Option<Rect>,
-    params: Option<Rect>,
-    editor: Rect,
-    result: Rect,
+    panes: Panes,
     footer: Rect,
 }
 
@@ -34,18 +31,18 @@ struct Areas {
 pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> Fit {
     let has_sidebar = f.area().width >= SIDEBAR_MIN_SCREEN_COLUMNS;
     let has_params = !app.sheet().param_names().is_empty();
-    let areas = layout(framed(f, app), has_sidebar, has_params);
-    if let Some(sidebar) = areas.sidebar {
+    let Areas { panes, footer: footer_area } = layout(framed(f, app), has_sidebar, has_params);
+    if let Some(sidebar) = panes.sidebar {
         sidebar_view::draw(f, app, sidebar);
     }
-    if let Some(params) = areas.params {
+    if let Some(params) = panes.params {
         param_bar_view::draw(f, app, params);
     }
-    editor_view::draw(f, app, areas.editor);
-    let grid = result_view::draw(f, app, areas.result);
-    ask_view::draw(f, app, areas.result);
-    completion_view::draw(f, app, areas.editor);
-    footer(f, app, areas.footer);
+    editor_view::draw(f, app, panes.editor);
+    let grid = result_view::draw(f, app, panes.result);
+    ask_view::draw(f, app, panes.result);
+    completion_view::draw(f, app, panes.editor);
+    footer(f, app, footer_area);
     finder_view::draw(f, app);
     table_finder_view::draw(f, app);
     picker_view::draw(f, app);
@@ -53,7 +50,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> Fit {
     form_view::draw(f, app);
     let detail = detail_view::draw(f, app);
     help_view::draw(f, app);
-    Fit { grid, has_sidebar, detail }
+    Fit { grid, panes, detail }
 }
 
 /// The outer frame and its `● name · tier` label in the tier's colour, so the tier is clear even without colour; returns
@@ -78,7 +75,8 @@ fn layout(area: Rect, has_sidebar: bool, has_params: bool) -> Areas {
     let [top, result] = Layout::vertical([Constraint::Percentage(EDITOR_SHARE_PCT), Constraint::Fill(1)]).areas(panes);
     let bar_rows = u16::from(has_params);
     let [params, editor] = Layout::vertical([Constraint::Length(bar_rows), Constraint::Fill(1)]).areas(top);
-    Areas { sidebar: has_sidebar.then_some(sidebar), params: has_params.then_some(params), editor, result, footer }
+    let panes = Panes { sidebar: has_sidebar.then_some(sidebar), params: has_params.then_some(params), editor, result };
+    Areas { panes, footer }
 }
 
 /// The session's state on the right, as wide as it needs up to half the row, and the keys that fit on the left.
@@ -176,7 +174,7 @@ fn failure(app: &App, err: &str, width: usize) -> Line<'static> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::app::fixtures::{app, app_on, connection, on_the_result, to_shop, typed};
+    use super::super::app::fixtures::{app, app_on, connection, every_pane, on_the_result, to_shop, typed};
     use super::super::app::queries::tests::{query, with_queries};
     use super::super::app::{Answer, App, Incoming, QueryAnswer, RunId};
     use super::super::styled;
@@ -334,7 +332,7 @@ mod tests {
 
     fn on_the_schema_tab(is_cut: bool) -> App {
         let mut app = app();
-        app.fit(Fit { has_sidebar: true, ..Fit::default() });
+        app.fit(Fit { panes: every_pane(), ..Fit::default() });
         app.handle_key(KeyEvent::from(KeyCode::Tab));
         app.handle_key(KeyEvent::from(KeyCode::Tab));
         app.handle_key(KeyEvent::from(KeyCode::Char(']')));

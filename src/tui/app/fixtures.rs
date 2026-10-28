@@ -1,11 +1,12 @@
 //! Invented fixtures the app's tests and the views' tests share: the app on `shop`, typed text, and its answers.
-use super::{Action, Answer, App, Focus, Incoming, Run, RunId, SessionId, View};
+use super::{Action, Answer, App, Fit, Focus, Incoming, Panes, Run, RunId, SessionId, View};
 use crate::connection::{Connection, ConnectionName};
 use crate::db::model::{ResultSet, Statement};
 use crate::fixtures::{self, orders};
 use crate::query::params::ParamInput;
 use crate::tui::theme::Theme;
 use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::layout::Rect;
 use std::time::Duration;
 
 pub(in crate::tui) fn connection(tier: &str, writes: &str) -> Connection {
@@ -79,4 +80,21 @@ pub(in crate::tui) fn press(app: &mut App, code: KeyCode) {
 pub(in crate::tui) fn view(app: &App) -> &View {
     let Run::Done { view, .. } = &app.sheet().run else { panic!("no result") };
     view
+}
+
+/// [`with_result`] on a screen that drew every pane.
+pub(in crate::tui) fn with_every_pane() -> App {
+    let mut app = with_result();
+    app.fit(Fit { panes: every_pane(), ..Fit::default() });
+    app
+}
+
+/// An 80 by 24 screen: the sidebar on the left, the bar, the editor and the result stacked on the right.
+pub(in crate::tui) fn every_pane() -> Panes {
+    Panes {
+        sidebar: Some(Rect::new(0, 0, 30, 24)),
+        params: Some(Rect::new(30, 0, 50, 1)),
+        editor: Rect::new(30, 1, 50, 9),
+        result: Rect::new(30, 10, 50, 14),
+    }
 }
