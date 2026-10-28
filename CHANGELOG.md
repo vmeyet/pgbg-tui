@@ -133,6 +133,8 @@ Each entry says what changed, then where, then how to use it.
 
 ### Fixed
 
+- **pgbg's config folder is `~/.config/pgbg/` on macOS too**, for `config.toml` and your own `queries/`: it was `~/Library/Application Support/pgbg/`.
+  Set `$XDG_CONFIG_HOME` to move it, or `$PGBG_CONFIG` to use another file.
 - **A command that ends cleanly no longer logs a warning on macOS**, for a `before`, password or `[ai]` command: pgbg no longer says it could not kill its process group.
 - **A command whose helper left its process group no longer hangs**, for a `before`, password or `[ai]` command: when that helper still holds its output a second after the group is stopped, the command fails and says so.
 - **The question before a write shows its table names escaped**, in `pgbg run` and the TUI's footer: a control character or a mark that reverses text in a name can no longer hide the verb.

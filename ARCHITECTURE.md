@@ -253,7 +253,7 @@ pgbg's own read-only transaction (`Session::read_only`) is refused with `InsideU
 
 ## Saved queries
 
-- One `.sql` file per query under `.pgbg/queries/`, found by walking up from the working directory like `.git`, then under the user config folder.
+- One `.sql` file per query under `.pgbg/queries/`, found by walking up from the working directory like `.git`, then under `queries/` in pgbg's config folder (`$XDG_CONFIG_HOME/pgbg`, else `~/.config/pgbg`).
 - The walk stops at the home folder or at the first folder holding `.git`, so a folder above the project never gives its queries.
 - A root that is a link, under a `.pgbg` that is a link, or that another user owns is skipped with a warning: a cloned repository cannot point pgbg at the whole disk.
 - Each list and each read checks the root again, and that it still leads to the real path it had when found: a folder swapped for a link since then is skipped.
