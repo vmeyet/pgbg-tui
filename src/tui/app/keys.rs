@@ -1,4 +1,5 @@
 //! Keys and pastes: which pane or overlay gets them, and what each key does.
+use super::ghost::Ghost;
 use super::grid::Move;
 use super::panes::Side;
 use super::param_bar::Direction;
@@ -36,13 +37,25 @@ impl App {
             return self.overlay_key(overlay, key);
         }
         let ghost = self.sheet_mut().ghost.take();
-        if let Some(act) = act::act_for(key, self.pane()) {
-            if let (Act::TakeGhost, Some(ghost)) = (act, ghost) {
-                self.sheet_mut().take_ghost(ghost);
-                return vec![];
-            }
-            return self.act(act);
+        match act::act_for(key, self.pane()) {
+            Some(act) if act.is_ghost() => self.ghost_act(act, ghost, key),
+            Some(act) => self.act(act),
+            None => self.key_in_focus(key),
         }
+    }
+
+    /// Takes or drops the shown `ghost`; with none, `key` does what it does around the editor, or edits.
+    fn ghost_act(&mut self, act: Act, ghost: Option<Ghost>, key: KeyEvent) -> Vec<Action> {
+        match (act, ghost, act::act_for(key, Pane::Anywhere)) {
+            (Act::TakeGhost, Some(ghost), _) => self.sheet_mut().take_ghost(ghost),
+            (_, Some(_), _) => {}
+            (_, None, Some(around)) => return self.act(around),
+            (_, None, None) => return self.key_in_focus(key),
+        }
+        vec![]
+    }
+
+    fn key_in_focus(&mut self, key: KeyEvent) -> Vec<Action> {
         match self.focus {
             Focus::Editor => return self.sheet_mut().edit(key),
             Focus::Params => self.sheet_mut().edit_bar(key),
@@ -118,7 +131,6 @@ impl App {
         }
         match act {
             Act::Run => return self.run_editor(),
-            Act::TakeGhost => return self.sheet_mut().edit(KeyEvent::from(KeyCode::Right)),
             Act::Complete => return self.open_completions(),
             Act::Ask => return self.open_ask(),
             Act::Undo => self.sheet_mut().undo(),
@@ -168,7 +180,7 @@ impl App {
             Act::CopyResult => self.ask_copy_format(),
             Act::SwitchTab => return self.switch_tab(),
             Act::Close | Act::Delete | Act::CloseSession | Act::Add | Act::Edit | Act::CopyCsv | Act::CopyJson | Act::CopyMarkdown => {}
-            Act::Filter | Act::ReadAgain | Act::Preview | Act::Insert => {}
+            Act::Filter | Act::ReadAgain | Act::Preview | Act::Insert | Act::TakeGhost | Act::DropGhost => {}
         }
         vec![]
     }
@@ -248,6 +260,30 @@ mod tests {
         assert_eq!(app.focus, Focus::Result);
         press(&mut app, KeyCode::Tab);
         assert_eq!(app.focus, Focus::Editor);
+    }
+
+    #[test]
+    fn tab_takes_the_ghost_while_one_shows() {
+        let mut app = typed("sel");
+        press(&mut app, KeyCode::Tab);
+        assert_eq!((app.sheet().editor.text(), app.focus), ("select", Focus::Editor));
+    }
+
+    #[test]
+    fn esc_drops_the_ghost_before_it_cancels_the_run() {
+        let mut app = typed("SELECT pg_sleep(30)");
+        enter(&mut app);
+        " sel".chars().for_each(|c| press(&mut app, KeyCode::Char(c)));
+        assert_eq!(app.handle_key(KeyEvent::from(KeyCode::Esc)), []);
+        assert_eq!((app.sheet().ghost.as_ref(), app.sheet().editor.text()), (None, "SELECT pg_sleep(30) sel"));
+    }
+
+    #[test]
+    fn esc_without_a_ghost_still_cancels_the_run() {
+        let mut app = typed("SELECT pg_sleep(30)");
+        enter(&mut app);
+        " sel ".chars().for_each(|c| press(&mut app, KeyCode::Char(c)));
+        assert_eq!(app.handle_key(KeyEvent::from(KeyCode::Esc)), [Action::Cancel { connection: shop(), run: RunId::FIRST }]);
     }
 
     fn shifted(app: &mut App, code: KeyCode) {

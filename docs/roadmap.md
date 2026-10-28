@@ -147,14 +147,14 @@ What a first real session asked for, one MR per step.
 - [x] Config in `~/.config/pgbg`, history in `~/.local/share/pgbg`, as revu keeps its own
 - [x] `ctrl-s` makes `.pgbg/queries/` when the project has none
 - [x] Pane moves as in revu: `⇧⇥`, `⇧` and an arrow, a click, `←` `→` in the sidebar, `⌘k`, `?`, `^n`
-- [ ] The idle ghost reads an answer laid out differently from what was typed, and the log says why an ask gave nothing
-- [ ] A date column reads `today`, `3 days ago`; `f` on a column with one format says so
+- [x] The idle ghost reads an answer laid out differently from what was typed, and the log says why an ask gave nothing
+- [x] A date column reads `today`, `3 days ago`; `f` on a column with one format says so
 - [x] A key for a new, empty query
 - [x] Undo and redo in the editor
 - [x] Every save keeps the version it replaced, outside the project; a key lists them and puts one back
 - [x] Completion after `JOIN` offers the table with its `ON` condition, from the foreign keys
 - [x] The idle ghost shows the whole rest of the statement, and a `--` comment line above it is the instruction
-- [ ] `tab` takes the ghost while one shows; `esc` drops it
+- [x] `tab` takes the ghost while one shows; `esc` drops it
 - [ ] Usage counts as revu keeps them, opt-in, action names only, from a part both apps share in vtui
 
 ## Later

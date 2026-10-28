@@ -201,15 +201,15 @@ In the TUI, a bar above the editor shows one field per parameter.
 | --- | --- |
 | `⏎` | Run the statement under the cursor. |
 | `⌥⏎` `⇧⏎` | New line. |
-| `esc` | Cancel the running statement. |
-| `tab` `⇧tab` | Next, previous pane: editor, parameters, result, sidebar. |
+| `esc` | Drop the faded rest after the cursor while one shows; else cancel the running statement. |
+| `tab` `⇧tab` | Next, previous pane: editor, parameters, result, sidebar; in the editor, `tab` takes the faded rest while one shows. |
 | `⇧←` `⇧→` `⇧↑` `⇧↓` | The pane on that side; a click on a pane does the same. |
 | `^o` | Pick another connection; sessions stay open. |
 | `^p` `⌘k` | Find a saved query; `⌘k` needs a terminal with the kitty keyboard protocol, as Ghostty, Kitty or WezTerm. |
 | `^t` | Find a table of the schema. |
 | `^r` | Search the history of this connection. |
 | `←` `→` `[` `]` | In the sidebar: switch between queries and schema. |
-| `→` | Take the faded rest after the cursor: completion, or the idle ghost; after `JOIN`, a table with its alias and `ON` condition. |
+| `→` `tab` | Take the faded rest after the cursor: completion, or the idle ghost; after `JOIN`, a table with its alias and `ON` condition. |
 | `^z` | Undo: the last word typed, paste, name taken or delete. |
 | `⇧^z` `^y` | Redo; `^y` where the terminal sends `⇧^z` as `^z`. |
 | `^space` `^n` | List the names that fit at the cursor, after `JOIN` the tables a foreign key links first; `^n` where macOS takes `^space` to switch the input source. |

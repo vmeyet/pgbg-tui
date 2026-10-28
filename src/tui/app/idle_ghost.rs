@@ -321,6 +321,13 @@ pub(in crate::tui) mod tests {
     }
 
     #[test]
+    fn tab_takes_the_idle_ghost() {
+        let mut app = ghosted("SELECT * ", "SELECT * FROM orders\nWHERE total > 10");
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        assert_eq!(app.sheet().editor.split(), ("SELECT * FROM orders\nWHERE total > 10", "", ""));
+    }
+
+    #[test]
     fn right_takes_every_line_of_the_rest() {
         let mut app = ghosted("SELECT * ", "SELECT * FROM orders\nWHERE total > 10");
         app.handle_key(KeyEvent::from(KeyCode::Right));
