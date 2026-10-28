@@ -140,6 +140,23 @@ The code keeps its own rules where they slipped, one MR per step.
 - [x] `ResultSet` storage measured on a capped result: a frame costs the same at any row, so its rows stay as they are
 - [x] `[lints]` keeps only the lints that guard a house rule or a real hazard
 
+## 19. First real use
+
+What a first real session asked for, one MR per step.
+
+- [x] Config in `~/.config/pgbg`, history in `~/.local/share/pgbg`, as revu keeps its own
+- [x] `ctrl-s` makes `.pgbg/queries/` when the project has none
+- [x] Pane moves as in revu: `⇧⇥`, `⇧` and an arrow, a click, `←` `→` in the sidebar, `⌘k`, `?`, `^n`
+- [ ] The idle ghost reads an answer laid out differently from what was typed, and the log says why an ask gave nothing
+- [ ] A date column reads `today`, `3 days ago`; `f` on a column with one format says so
+- [ ] A key for a new, empty query
+- [ ] Undo and redo in the editor
+- [ ] Every save keeps the version it replaced, outside the project; a key lists them and puts one back
+- [ ] Completion after `JOIN` offers the table with its `ON` condition, from the foreign keys
+- [ ] The idle ghost shows the whole rest of the statement, and a `--` comment line above it is the instruction
+- [ ] `tab` takes the ghost while one shows; `esc` drops it
+- [ ] Usage counts as revu keeps them, opt-in, action names only, from a part both apps share in vtui
+
 ## Later
 
 - A preview of what a write would change, before its confirmation
