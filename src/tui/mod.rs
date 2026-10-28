@@ -23,6 +23,7 @@ mod styled;
 mod table_finder_view;
 mod theme;
 mod ui;
+mod versions_view;
 
 use crate::config::AiSettings;
 use crate::connection::{Connection, ConnectionName};

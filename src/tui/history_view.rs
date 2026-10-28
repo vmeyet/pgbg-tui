@@ -11,8 +11,8 @@ use vtui::palette::view::{self, Pick, Popup};
 
 const WHEN_FORMAT: &str = "%m-%d %H:%M";
 
-/// A statement on one line, next to when it ran and its outcome.
-fn pick<'a>(app: &App, label: &'a str, detail: &'a str) -> Pick<'a> {
+/// A text from the past on one line, next to its faded detail: a statement run, or a version of a query.
+pub(super) fn pick<'a>(app: &App, label: &'a str, detail: &'a str) -> Pick<'a> {
     Pick { icon: "↺", colour: app.theme().accent, label, detail: view::faded(app.theme(), detail) }
 }
 
@@ -20,7 +20,7 @@ fn detail(entry: &Entry) -> String {
     format!("{} · {}", entry.started_at.format(WHEN_FORMAT), entry.outcome)
 }
 
-fn one_line(statement: &str) -> String {
+pub(super) fn one_line(statement: &str) -> String {
     statement.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 

@@ -1,5 +1,6 @@
 //! The messages between the app and the backend: the actions the app asks for, and the answers that come back.
 use super::Confirmed;
+use super::versions::Listed;
 use crate::ai::{AnswerError, CommandError, NotSent, Prompt};
 use crate::complete::Index;
 use crate::config::{AiSettings, ConnectionChange};
@@ -98,6 +99,8 @@ pub(in crate::tui) enum Action {
     SaveConnection(SaveConnection),
     /// Read the history of the connection, for `ctrl-r`.
     ListHistory(ConnectionName),
+    /// Read the versions of the query a save replaced, for `ctrl-v`, each compared with the editor's `text`.
+    ListVersions { query: Query, text: String },
     /// Put `text` on the clipboard, then report `done`; the loop also sends it to the terminal, unless it is too big.
     Copy { text: String, done: String },
     /// Build the text of `result` in `format` off the loop, then copy it as `Copy` does.
@@ -146,6 +149,8 @@ pub(in crate::tui) enum Answer {
     Config { id: ConfigChangeId, answer: ConfigAnswer },
     /// The history of `connection`: each statement once, newest first.
     History { connection: ConnectionName, entries: Vec<Entry> },
+    /// The versions of `query` a save replaced, newest first.
+    Versions { query: Query, versions: Vec<Listed> },
     /// The outcome of a copy to the clipboard, in a few words.
     Copied(String),
     /// The text of a result that `CopyResult` asked for, to copy before reporting `done`.

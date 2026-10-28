@@ -39,7 +39,6 @@ impl Roots {
     }
 
     /// The versions of `query`, newest first. Blocks on the file system.
-    #[cfg_attr(not(test), expect(dead_code, reason = "a key lists them in the next step of the roadmap"))]
     pub(crate) fn versions(&self, query: &Query) -> Result<Vec<Version>> {
         let Some(versions) = &self.versions else { return Ok(vec![]) };
         Ok(versions.list(&self.real_file(query)?)?)

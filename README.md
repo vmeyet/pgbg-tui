@@ -166,6 +166,7 @@ pgbg finds the nearest one from the folder you start it in, the way git finds `.
 When there is none, `ctrl-s` on a new query makes `.pgbg/queries/` at the top of your repository, or in the folder you started pgbg in outside one.
 Queries of your own, for every project, go under `queries/` in pgbg's config folder, as `~/.config/pgbg/queries/`.
 Each save over a query, from `ctrl-s` or `$EDITOR`, keeps the text it replaced under `versions/` in pgbg's data folder, never in your project: the newest 50 of each query.
+`ctrl-v` lists them, and `⏎` puts one back in the editor, unsaved until you press `ctrl-s`.
 
 ```sql
 -- name: Orders per day
@@ -218,6 +219,7 @@ In the TUI, a bar above the editor shows one field per parameter.
 | `^s` | Save the query. |
 | `^q` | A new, empty query; the first `^s` asks for its path. |
 | `^e` | Edit the saved query in `$EDITOR`. |
+| `^v` | The versions of the saved query its saves replaced; `⏎` puts one back in the editor, unsaved. |
 | `F1` `?` | Every key of the pane you are in; `?` outside the editor and the parameters, where it types. |
 | `^c` | Quit. |
 

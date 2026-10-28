@@ -1,5 +1,5 @@
 //! The saved queries on disk: listed and read off the loop, each answer sent back as `Answer::Queries`.
-use super::super::app::{Answer, QueryAnswer};
+use super::super::app::{Answer, Listed, QueryAnswer};
 use super::send;
 use crate::connection::ConnectionName;
 use crate::query::{Query, QueryPath, Roots, Write};
@@ -36,6 +36,20 @@ impl QueryFiles {
     /// file system.
     pub(super) fn edit(&self, query: &Query, edit: impl FnOnce(&Path) -> anyhow::Result<()>) -> anyhow::Result<()> {
         self.roots.edit_kept(query, edit)
+    }
+
+    /// Lists the versions of `query` on a blocking thread, each compared with the editor's `text`; they come back as
+    /// `Answer::Versions`, none when they cannot be read.
+    pub(in crate::tui) fn list_versions(&self, query: Query, text: String) {
+        let (roots, answers) = (self.roots.clone(), self.answers.clone());
+        tokio::task::spawn_blocking(move || {
+            let versions = roots.versions(&query).unwrap_or_else(|err| {
+                tracing::warn!("the versions of {} were not read: {err:#}", query.path);
+                vec![]
+            });
+            let versions = versions.into_iter().map(|version| Listed::against(version, &text)).collect();
+            send(&answers, Answer::Versions { query, versions });
+        });
     }
 
     /// Writes `text` over `query` on a blocking thread, the text it replaces kept as a version first;

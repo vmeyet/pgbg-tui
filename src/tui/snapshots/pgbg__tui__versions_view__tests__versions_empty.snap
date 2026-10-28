@@ -1,0 +1,16 @@
+---
+source: src/tui/versions_view.rs
+expression: "render(&[]).backend()"
+---
+"                ╭ Versions of daily.sql ───────────────────────╮                "
+"                │ › ▌                                          │                "
+"                │                                              │                "
+"                │   none yet: ^s keeps the text it replaces    │                "
+"                │   ↑↓ pick · ⏎ opens · esc closes             │                "
+"                │                                              │                "
+"                │                                              │                "
+"                │                                              │                "
+"                │                                              │                "
+"                │                                              │                "
+"                │                                              │                "
+"                ╰──────────────────────────────────────────────╯                "

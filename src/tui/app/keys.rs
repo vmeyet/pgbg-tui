@@ -59,6 +59,7 @@ impl App {
             Some(Overlay::Finder(finder)) => finder.paste(text, &self.queries.all),
             Some(Overlay::TableFinder(finder)) => finder.search.paste(text, &finder.all),
             Some(Overlay::Recall(recall)) => recall.search.paste(text, &recall.all),
+            Some(Overlay::Versions(list)) => list.search.paste(text, &list.all),
             Some(Overlay::SchemaFilter) => self.schema_tab.filter.paste(text),
             Some(Overlay::Completion(_)) => self.paste_past_completions(text),
             Some(Overlay::Ask(AskStep::Instruction(instruction))) => instruction.paste(text),
@@ -93,6 +94,7 @@ impl App {
             }
             Overlay::Picker(picker) => self.picker_key(picker, key),
             Overlay::Recall(recall) => self.recall_key(recall, key),
+            Overlay::Versions(list) => self.versions_key(list, key),
             Overlay::TableFinder(finder) => self.table_finder_key(*finder, key),
             Overlay::Form(form) => self.form_key(*form, key),
             Overlay::Prompt(prompt) => {
@@ -158,6 +160,7 @@ impl App {
             Act::NewQuery => return self.ask_open(Opening::New),
             Act::EditOutside => return self.edit_outside(),
             Act::History => return self.recall(),
+            Act::Versions => return self.list_versions(),
             Act::FindTable => return self.find_table(),
             Act::Detail => self.open_detail(),
             Act::CopyCell => return self.copy_cell(),

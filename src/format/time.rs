@@ -17,7 +17,7 @@ pub(super) fn local<Tz: TimeZone>(at: DateTime<Utc>, zone: &Tz) -> String {
 /// The time from `now` to `at` in its largest whole unit: `3 h ago`, `in 2 d`, `now` under a minute either way.
 ///
 /// Months and years count on the calendar, so a year is a year whatever its leap days.
-pub(super) fn relative(at: DateTime<Utc>, now: DateTime<Utc>) -> String {
+pub(crate) fn relative(at: DateTime<Utc>, now: DateTime<Utc>) -> String {
     match (span(at.min(now), at.max(now)), at > now) {
         (None, _) => "now".to_owned(),
         (Some(span), true) => format!("in {span}"),

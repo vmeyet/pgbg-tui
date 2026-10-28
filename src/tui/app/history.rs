@@ -48,10 +48,15 @@ impl App {
 
     /// Adds `statement` at the end of the editor after a blank line, with the cursor on it so `⏎` runs it.
     fn put_in_editor(&mut self, statement: &str) {
-        let sheet = self.sheet_mut();
-        let held = sheet.editor.text().trim_end();
+        let held = self.sheet().editor.text().trim_end();
         let text = if held.is_empty() { statement.to_owned() } else { format!("{held}\n\n{statement}") };
-        sheet.editor.rewrite(&text);
+        self.replace_editor_text(&text);
+    }
+
+    /// Puts `text` in the editor in place of its own, unsaved and undoable, and gives it the keys.
+    pub(super) fn replace_editor_text(&mut self, text: &str) {
+        let sheet = self.sheet_mut();
+        sheet.editor.rewrite(text);
         sheet.text_changed();
         self.focus = Focus::Editor;
     }

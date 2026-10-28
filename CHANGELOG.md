@@ -20,6 +20,7 @@ Each entry says what changed, then where, then how to use it.
   Type the start of the table after `JOIN` and press `→` to take the faded rest, or `^space` to list every join first, then the plain tables.
   `pgbg schema --json` lists each table's foreign keys too.
 - **Every save keeps the version it replaced**, for each saved query in the TUI, whether you save with `ctrl-s` or in `$EDITOR`: the newest 50, under `versions/` in pgbg's data folder, never in your project.
+  Press `ctrl-v` to list them, newest first, with when each was replaced and the lines it would change; `⏎` puts one in the editor, unsaved, and `ctrl-s` makes it the query again.
 - **Keys like revu's** in the TUI: `⇧⇥` goes to the previous pane, `⇧` and an arrow to the pane on that side, and a click on a pane gives it the keys.
   `←` `→` switch the sidebar between queries and schema, as `[` `]` still do, which an AZERTY keyboard reaches badly.
   `⌘k` finds a saved query as `^p` does, in a terminal that speaks the kitty keyboard protocol (Ghostty, Kitty, WezTerm, iTerm2 with the option on); `?` shows the keys from the sidebar too, and `F1` from the editor.
