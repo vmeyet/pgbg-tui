@@ -1,10 +1,12 @@
 //! Keys and pastes: which pane or overlay gets them, and what each key does.
 use super::grid::Move;
+use super::panes::Side;
 use super::param_bar::Direction;
 use super::{Action, App, AskStep, Focus, Overlay};
 use crate::act::{self, Act, Pane};
 use crossterm::event::{KeyCode, KeyEvent};
 use vtui::help::Help;
+use vtui::toward::Toward;
 
 /// The help after `key`: `?` lists every key, `j`/`k` scroll, any other key closes it.
 fn help_after(help: Help, key: KeyEvent, pane: Pane) -> Option<Help> {
@@ -120,7 +122,12 @@ impl App {
             Act::Cancel if self.focus == Focus::Params && !self.sheet().is_running() => self.focus = Focus::Editor,
             Act::Cancel => return self.sheet_mut().cancel(),
             Act::NewLine => return self.sheet_mut().edit(KeyEvent::from(KeyCode::Enter)),
-            Act::SwitchPane => self.switch_pane(),
+            Act::SwitchPane => self.focus_on(self.pane_after(Toward::Next)),
+            Act::SwitchPaneBack => self.focus_on(self.pane_after(Toward::Previous)),
+            Act::FocusLeft => self.focus_toward(Side::Left),
+            Act::FocusRight => self.focus_toward(Side::Right),
+            Act::FocusUp => self.focus_toward(Side::Above),
+            Act::FocusDown => self.focus_toward(Side::Below),
             Act::Help => self.overlay = Some(Overlay::Help(Help::default())),
             Act::Quit => return self.quit(),
             Act::Down if self.focus == Focus::Params => self.step_bar(Direction::Forward),
@@ -163,11 +170,18 @@ impl App {
         vec![]
     }
 
-    /// Gives the keys to the next pane; the parameter bar takes them on its first field.
-    fn switch_pane(&mut self) {
-        self.focus = self.next_pane();
-        if self.focus == Focus::Params {
+    /// Gives the keys to `focus`; the parameter bar takes them on its first field.
+    pub(super) fn focus_on(&mut self, focus: Focus) {
+        self.focus = focus;
+        if focus == Focus::Params {
             self.sheet_mut().bar.at = 0;
+        }
+    }
+
+    /// Gives the keys to the nearest pane on `side` of the one that has them, if the last frame drew one there.
+    fn focus_toward(&mut self, side: Side) {
+        if let Some(focus) = self.fit.panes.toward(self.focus, side) {
+            self.focus_on(focus);
         }
     }
 
@@ -177,21 +191,22 @@ impl App {
             return;
         }
         self.focus = match direction {
-            Direction::Forward => self.next_pane(),
+            Direction::Forward => self.pane_after(Toward::Next),
             Direction::Back => Focus::Editor,
         };
     }
 
-    /// The pane `tab` goes to: the next in `Focus::ORDER` that the frame drew.
-    fn next_pane(&self) -> Focus {
+    /// The pane `tab` goes to, or `⇧⇥` going `Previous`: the next one in `Focus::ORDER` that the frame drew.
+    fn pane_after(&self, toward: Toward) -> Focus {
+        let len = Focus::ORDER.len();
         let at = Focus::ORDER.iter().position(|&focus| focus == self.focus).unwrap_or_default();
-        let after = Focus::ORDER.iter().cycle().skip(at + 1).take(Focus::ORDER.len());
-        after.copied().find(|&focus| self.is_drawn(focus)).unwrap_or_default()
+        let steps_away = |steps| Focus::ORDER[toward.wrapped(at, steps, len)];
+        (1..=len).map(steps_away).find(|&focus| self.is_drawn(focus)).unwrap_or_default()
     }
 
     pub(super) fn is_drawn(&self, focus: Focus) -> bool {
         match focus {
-            Focus::Queries => self.fit.has_sidebar,
+            Focus::Queries => self.fit.panes.has_sidebar(),
             Focus::Params => !self.sheet().param_names().is_empty(),
             Focus::Editor | Focus::Result => true,
         }
@@ -205,7 +220,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::super::fixtures::{app, enter, press, shop, typed, view, with_result};
+    use super::super::fixtures::{app, enter, press, shop, typed, view, with_every_pane, with_result};
     use super::*;
     use crate::chart;
     use crate::fixtures::orders;
@@ -224,6 +239,38 @@ mod tests {
         assert_eq!(app.focus, Focus::Result);
         press(&mut app, KeyCode::Tab);
         assert_eq!(app.focus, Focus::Editor);
+    }
+
+    fn shifted(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::new(code, KeyModifiers::SHIFT));
+    }
+
+    #[test]
+    fn shift_tab_moves_the_keys_to_the_previous_pane() {
+        let mut app = with_every_pane();
+        press(&mut app, KeyCode::BackTab);
+        assert_eq!(app.focus, Focus::Queries);
+        press(&mut app, KeyCode::BackTab);
+        assert_eq!(app.focus, Focus::Result);
+    }
+
+    #[test]
+    fn shift_and_an_arrow_move_the_keys_to_the_pane_on_that_side() {
+        let mut app = with_every_pane();
+        shifted(&mut app, KeyCode::Down);
+        assert_eq!(app.focus, Focus::Result);
+        shifted(&mut app, KeyCode::Left);
+        assert_eq!(app.focus, Focus::Queries);
+        shifted(&mut app, KeyCode::Right);
+        assert_eq!(app.focus, Focus::Editor);
+    }
+
+    #[test]
+    fn shift_and_an_arrow_toward_no_pane_keep_the_keys_where_they_are() {
+        let mut app = with_every_pane();
+        shifted(&mut app, KeyCode::Left);
+        shifted(&mut app, KeyCode::Left);
+        assert_eq!(app.focus, Focus::Queries);
     }
 
     #[test]

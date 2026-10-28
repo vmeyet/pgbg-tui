@@ -16,6 +16,7 @@ pub(super) use diff::Change;
 pub(super) use form::{Form, PasswordFrom, Slot};
 pub(super) use grid::{Clock, GAP, Grid, Reading, Room};
 pub(super) use history::Recall;
+pub(super) use panes::Panes;
 pub(super) use picker::{Note, Picker};
 pub(super) use protocol::{
     Action, Answer, AskFailure, AskId, ConfigAnswer, ConfigChangeId, Incoming, KeychainPassword, QueryAnswer, RunId, SaveConnection,
@@ -43,6 +44,8 @@ mod grid;
 pub(super) mod history;
 pub(super) mod idle_ghost;
 mod keys;
+mod mouse;
+mod panes;
 mod param_bar;
 pub(super) mod picker;
 mod protocol;
@@ -84,8 +87,8 @@ impl Focus {
 pub(super) struct Fit {
     /// The rows and columns the grid had, which also set the size of a `PgDn` page.
     pub(super) grid: Room,
-    /// Whether the sidebar was drawn, which a terminal narrower than 80 columns leaves out.
-    pub(super) has_sidebar: bool,
+    /// Where each pane was drawn; a terminal narrower than 80 columns leaves the sidebar out.
+    pub(super) panes: Panes,
     /// Where the row's detail started and how far it scrolls.
     pub(super) detail: DetailFit,
 }

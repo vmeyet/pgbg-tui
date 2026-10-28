@@ -127,6 +127,7 @@ async fn event_loop(
             Some(event) = events.next() => match event? {
                 Event::Key(key) if key.kind != KeyEventKind::Release => app.handle_key(key),
                 Event::Paste(text) => app.paste(&text),
+                Event::Mouse(mouse) => app.handle_mouse(mouse),
                 _ => vec![],
             },
             Some(answer) = incoming.recv() => app.apply(answer),

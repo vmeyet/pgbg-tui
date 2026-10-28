@@ -12,6 +12,11 @@ pub(crate) enum Act {
     NewLine,
     Cancel,
     SwitchPane,
+    SwitchPaneBack,
+    FocusLeft,
+    FocusRight,
+    FocusUp,
+    FocusDown,
     Help,
     Connections,
     Quit,
@@ -144,6 +149,15 @@ const fn control(c: char) -> KeyEvent {
     KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
 }
 
+/// `⌘` and a letter, which only a terminal that speaks the kitty keyboard protocol reports.
+const fn command(c: char) -> KeyEvent {
+    KeyEvent::new(KeyCode::Char(c), KeyModifiers::SUPER)
+}
+
+const fn shift(code: KeyCode) -> KeyEvent {
+    KeyEvent::new(code, KeyModifiers::SHIFT)
+}
+
 const fn row(act: Act, pane: Pane, keys: &'static [KeyEvent]) -> Row {
     Row { act, pane, keys, help: None, footer: None }
 }
@@ -157,6 +171,12 @@ impl Row {
         Self { footer: Some(Hint { keys, does }), ..self }
     }
 }
+
+/// The `?` help's line in the panes where `?` types nothing.
+const HELP_KEYS: &str = "these keys; again for every key";
+
+/// The keys that switch the sidebar's tab: `←` `→` for keyboards where `[` `]` take a modifier, as AZERTY.
+const SWITCH_TAB: &[KeyEvent] = &[key(KeyCode::Left), key(KeyCode::Right), key(KeyCode::Char('[')), key(KeyCode::Char(']'))];
 
 /// The actions whose footer hint stays when the others no longer fit, the one kept longest first.
 const FOOTER_KEPT_LONGEST: [Act; 3] = [Act::Quit, Act::Help, Act::Close];
@@ -172,7 +192,7 @@ pub(crate) const ROWS: &[Row] = &[
     .help("⌥⏎ ⇧⏎", "break the line")
     .footer("⌥⏎", "new line"),
     row(Act::TakeGhost, Pane::Editor, &[key(KeyCode::Right)]).help("→", "take the faded rest after the cursor"),
-    row(Act::Complete, Pane::Editor, &[control(' ')]).help("^space", "list the names that fit here"),
+    row(Act::Complete, Pane::Editor, &[control(' '), control('n')]).help("^space ^n", "list the names that fit here"),
     row(Act::Ask, Pane::Editor, &[control('g')]).help("^g", "ask the [ai] command for SQL"),
     row(Act::Run, Pane::Params, &[key(KeyCode::Enter)]).help("⏎", "run the statement with these values").footer("⏎", "run"),
     row(Act::Down, Pane::Params, &[key(KeyCode::Tab)]).help("⇥ ⇧⇥", "next, previous parameter").footer("⇥", "next"),
@@ -198,13 +218,12 @@ pub(crate) const ROWS: &[Row] = &[
         .help("f", "the column in its next format: raw, then readable ones")
         .footer("f", "format"),
     row(Act::SwitchFormats, Pane::Result, &[key(KeyCode::Char('F'))]).help("F", "every column raw, or readable"),
-    row(Act::Help, Pane::Result, &[key(KeyCode::Char('?'))]).help("?", "these keys; again for every key"),
+    row(Act::Help, Pane::Result, &[key(KeyCode::Char('?'))]).help("?", HELP_KEYS),
     row(Act::Down, Pane::Queries, &[key(KeyCode::Char('j')), key(KeyCode::Down)]).help("j k", "next, previous query").footer("j/k", "move"),
     row(Act::Up, Pane::Queries, &[key(KeyCode::Char('k')), key(KeyCode::Up)]),
     row(Act::Open, Pane::Queries, &[key(KeyCode::Enter)]).help("⏎", "open the query, fold the folder").footer("⏎", "open"),
-    row(Act::SwitchTab, Pane::Queries, &[key(KeyCode::Char('[')), key(KeyCode::Char(']'))])
-        .help("[ ]", "the schema instead")
-        .footer("[]", "schema"),
+    row(Act::SwitchTab, Pane::Queries, SWITCH_TAB).help("← → [ ]", "the schema instead").footer("←→", "schema"),
+    row(Act::Help, Pane::Queries, &[key(KeyCode::Char('?'))]).help("?", HELP_KEYS),
     row(Act::Down, Pane::Schema, &[key(KeyCode::Char('j')), key(KeyCode::Down)]).help("j k", "next, previous table").footer("j/k", "move"),
     row(Act::Up, Pane::Schema, &[key(KeyCode::Char('k')), key(KeyCode::Up)]),
     row(Act::Open, Pane::Schema, &[key(KeyCode::Enter)])
@@ -216,9 +235,8 @@ pub(crate) const ROWS: &[Row] = &[
         .help("/", "keep the tables whose name holds what you type")
         .footer("/", "filter"),
     row(Act::ReadAgain, Pane::Schema, &[key(KeyCode::Char('r'))]).help("r", "read the schema again"),
-    row(Act::SwitchTab, Pane::Schema, &[key(KeyCode::Char('[')), key(KeyCode::Char(']'))])
-        .help("[ ]", "the queries instead")
-        .footer("[]", "queries"),
+    row(Act::SwitchTab, Pane::Schema, SWITCH_TAB).help("← → [ ]", "the queries instead").footer("←→", "queries"),
+    row(Act::Help, Pane::Schema, &[key(KeyCode::Char('?'))]).help("?", HELP_KEYS),
     row(Act::Open, Pane::SchemaFilter, &[key(KeyCode::Enter)]).help("⏎", "keep the filter").footer("⏎", "keep"),
     row(Act::Close, Pane::SchemaFilter, &[key(KeyCode::Esc)]).help("esc", "drop the filter").footer("esc", "drop"),
     row(Act::Quit, Pane::SchemaFilter, &[control('c')]).help("^c", "quit"),
@@ -227,7 +245,7 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Open, Pane::Finder, &[key(KeyCode::Enter)]).help("⏎", "open it in the editor").footer("⏎", "opens"),
     row(Act::Quit, Pane::Finder, &[control('c')]).help("^c", "quit"),
     row(Act::Close, Pane::Finder, &[key(KeyCode::Esc)]).help("esc", "close the finder").footer("esc", "closes"),
-    row(Act::Find, Pane::Anywhere, &[control('p')]).help("^p", "find a saved query").footer("^p", "find"),
+    row(Act::Find, Pane::Anywhere, &[control('p'), command('k')]).help("^p ⌘k", "find a saved query").footer("^p", "find"),
     row(Act::FindTable, Pane::Anywhere, &[control('t')]).help("^t", "find a table of the schema"),
     row(Act::Open, Pane::TableFinder, &[key(KeyCode::Enter)]).help("⏎", "its columns and indexes").footer("⏎", "opens"),
     row(Act::Preview, Pane::TableFinder, &[control('r')]).help("^r", "run SELECT * FROM it LIMIT 100").footer("^r", "preview"),
@@ -237,7 +255,12 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Close, Pane::TableFinder, &[key(KeyCode::Esc)]).help("esc", "close the finder").footer("esc", "closes"),
     row(Act::Quit, Pane::TableFinder, &[control('c')]).help("^c", "quit"),
     row(Act::Cancel, Pane::Anywhere, &[key(KeyCode::Esc)]).help("esc", "cancel the running statement"),
-    row(Act::SwitchPane, Pane::Anywhere, &[key(KeyCode::Tab)]).help("tab", "next pane: editor, bar, result, sidebar").footer("⇥", "pane"),
+    row(Act::SwitchPane, Pane::Anywhere, &[key(KeyCode::Tab)]).help("⇥ ⇧⇥", "next, previous pane").footer("⇥", "pane"),
+    row(Act::SwitchPaneBack, Pane::Anywhere, &[key(KeyCode::BackTab)]),
+    row(Act::FocusLeft, Pane::Anywhere, &[shift(KeyCode::Left)]).help("⇧←→↑↓", "the pane on that side"),
+    row(Act::FocusRight, Pane::Anywhere, &[shift(KeyCode::Right)]),
+    row(Act::FocusUp, Pane::Anywhere, &[shift(KeyCode::Up)]),
+    row(Act::FocusDown, Pane::Anywhere, &[shift(KeyCode::Down)]),
     row(Act::Help, Pane::Anywhere, &[key(KeyCode::F(1))]).help("F1", "these keys, from the editor too").footer("F1", "keys"),
     row(Act::Down, Pane::Picker, &[key(KeyCode::Down), control('n')]).help("↓ ^n", "next, previous connection").footer("↑↓", "pick"),
     row(Act::Up, Pane::Picker, &[key(KeyCode::Up), control('p')]),
@@ -416,7 +439,7 @@ mod tests {
     #[test]
     fn the_editor_help_lists_the_keys_that_complete_a_name() {
         let keys: Vec<String> = help_rows(Pane::Editor).into_iter().map(|row| row.keys).collect();
-        assert!(keys.contains(&"→".to_owned()) && keys.contains(&"^space".to_owned()), "{keys:?}");
+        assert!(keys.contains(&"→".to_owned()) && keys.contains(&"^space ^n".to_owned()), "{keys:?}");
     }
 
     #[test]
@@ -477,6 +500,26 @@ mod tests {
         assert_eq!(act_for(key(KeyCode::Esc), Pane::Finder), Some(Act::Close));
         assert_eq!(act_for(key(KeyCode::Tab), Pane::Finder), None);
         assert_eq!(act_for(control('p'), Pane::Editor), Some(Act::Find));
+    }
+
+    #[test]
+    fn command_k_finds_a_query_as_ctrl_p_does() {
+        assert_eq!(act_for(command('k'), Pane::Editor), Some(Act::Find));
+        assert_eq!(act_for(key(KeyCode::Char('k')), Pane::Editor), None);
+    }
+
+    #[test]
+    fn ctrl_n_lists_the_names_where_macos_takes_ctrl_space() {
+        assert_eq!(act_for(control('n'), Pane::Editor), Some(Act::Complete));
+    }
+
+    #[test]
+    fn a_question_mark_types_in_the_editor_and_the_bar_and_opens_the_help_elsewhere() {
+        let question_mark = key(KeyCode::Char('?'));
+        assert_eq!([Pane::Editor, Pane::Params].map(|pane| act_for(question_mark, pane)), [None, None]);
+        for pane in [Pane::Result, Pane::Queries, Pane::Schema] {
+            assert_eq!(act_for(question_mark, pane), Some(Act::Help), "{pane:?}");
+        }
     }
 
     #[test]
