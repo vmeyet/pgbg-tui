@@ -54,6 +54,7 @@ pub(crate) enum Act {
     Filter,
     ReadAgain,
     TakeGhost,
+    DropGhost,
     Complete,
     Undo,
     Redo,
@@ -82,6 +83,11 @@ impl Act {
                 | Self::StepFormat
                 | Self::SwitchFormats
         )
+    }
+
+    /// Whether this act works on the ghost, so its key does what it does around the editor while no ghost shows.
+    pub(crate) const fn is_ghost(self) -> bool {
+        matches!(self, Self::TakeGhost | Self::DropGhost)
     }
 }
 
@@ -195,7 +201,8 @@ pub(crate) const ROWS: &[Row] = &[
     )
     .help("⌥⏎ ⇧⏎", "break the line")
     .footer("⌥⏎", "new line"),
-    row(Act::TakeGhost, Pane::Editor, &[key(KeyCode::Right)]).help("→", "take the faded rest after the cursor"),
+    row(Act::TakeGhost, Pane::Editor, &[key(KeyCode::Right), key(KeyCode::Tab)]).help("→ ⇥", "take the faded rest after the cursor"),
+    row(Act::DropGhost, Pane::Editor, &[key(KeyCode::Esc)]).help("esc", "drop the faded rest"),
     row(Act::Complete, Pane::Editor, &[control(' '), control('n')]).help("^space ^n", "list the names that fit here"),
     row(Act::Ask, Pane::Editor, &[control('g')]).help("^g", "ask the [ai] command for SQL"),
     row(Act::Undo, Pane::Editor, &[control('z')]).help("^z", "undo the last change"),
@@ -452,7 +459,7 @@ mod tests {
     #[test]
     fn the_editor_help_lists_the_keys_that_complete_a_name() {
         let keys: Vec<String> = help_rows(Pane::Editor).into_iter().map(|row| row.keys).collect();
-        assert!(keys.contains(&"→".to_owned()) && keys.contains(&"^space ^n".to_owned()), "{keys:?}");
+        assert!(keys.contains(&"→ ⇥".to_owned()) && keys.contains(&"^space ^n".to_owned()), "{keys:?}");
     }
 
     #[test]
@@ -483,7 +490,8 @@ mod tests {
             Pane::Asking,
             Pane::Answer,
         ] {
-            let keys: Vec<&KeyEvent> = ROWS.iter().filter(|row| works_in(row, pane)).flat_map(|row| row.keys).collect();
+            let rows = ROWS.iter().filter(|row| works_in(row, pane) && !row.act.is_ghost());
+            let keys: Vec<&KeyEvent> = rows.flat_map(|row| row.keys).collect();
             for (at, key) in keys.iter().enumerate() {
                 assert!(!keys[at + 1..].contains(key), "{key:?} in {pane:?}");
             }
