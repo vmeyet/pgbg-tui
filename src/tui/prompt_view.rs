@@ -1,6 +1,6 @@
 //! The prompt on the footer line: the path of a new query as it is typed, whether to open a query over unsaved text, or
 //! whether to send a write.
-use super::app::{App, Prompt};
+use super::app::{App, Opening, Prompt};
 use crate::{act, render};
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -22,8 +22,12 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, prompt: &Prompt, area: Rect) {
             spans.extend(error.iter().map(|error| Span::styled(format!("{error} "), Style::default().fg(theme.danger))));
             spans
         }
-        Prompt::OpenOverUnsaved(query) => {
-            vec![Span::styled(format!(" the editor's text is not saved: open {} over it? ", query.path), Style::default().fg(theme.warn))]
+        Prompt::OpenOverUnsaved(opening) => {
+            let what = match opening {
+                Opening::Saved(query) => format!("open {}", query.path),
+                Opening::New => "start a new query".to_owned(),
+            };
+            vec![Span::styled(format!(" the editor's text is not saved: {what} over it? "), Style::default().fg(theme.warn))]
         }
         Prompt::SendWrite(waiting) => {
             vec![Span::styled(

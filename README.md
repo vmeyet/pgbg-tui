@@ -213,6 +213,7 @@ In the TUI, a bar above the editor shows one field per parameter.
 | `f` `F` | Next format for this column; every column raw or readable. |
 | `y` `Y` `c` | Copy the cell; the row as CSV; the result as CSV, JSON or Markdown. |
 | `^s` | Save the query. |
+| `^q` | A new, empty query; the first `^s` asks for its path. |
 | `^e` | Edit the saved query in `$EDITOR`. |
 | `F1` `?` | Every key of the pane you are in; `?` outside the editor and the parameters, where it types. |
 | `^c` | Quit. |

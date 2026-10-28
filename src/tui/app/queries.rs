@@ -1,6 +1,6 @@
 //! The saved queries in the app: the sidebar's tree and its cursor, the `ctrl-p` finder, and the query opened in the editor.
 use super::search::{Search, Searching};
-use super::{Action, App, Focus, Overlay};
+use super::{Action, App, Focus, Opening, Overlay, Sheet};
 use crate::act::Pane;
 use crate::connection::ConnectionName;
 use crate::query::{Query, TreeRow, tree_rows};
@@ -52,7 +52,7 @@ impl App {
     /// Opens the query under the sidebar's cursor, or folds and unfolds the folder there.
     pub(super) fn open_in_sidebar(&mut self) -> Vec<Action> {
         match self.queries.rows().into_iter().nth(self.queries.selected) {
-            Some(TreeRow::Query { query, .. }) => return self.ask_open(query),
+            Some(TreeRow::Query { query, .. }) => return self.ask_open(Opening::Saved(query)),
             Some(TreeRow::Folder { key, is_open: true, .. }) => _ = self.queries.closed.insert(key),
             Some(TreeRow::Folder { key, is_open: false, .. }) => _ = self.queries.closed.remove(&key),
             None => {}
@@ -65,7 +65,7 @@ impl App {
         match finder.after(key, Pane::Finder, &self.queries.all) {
             Searching::Typed(finder) | Searching::Unhandled(finder, _) => (Some(finder), vec![]),
             Searching::Closed => (None, vec![]),
-            Searching::Picked(query) => (None, self.ask_open(query)),
+            Searching::Picked(query) => (None, self.ask_open(Opening::Saved(query))),
             Searching::Quit => (None, self.quit()),
         }
     }
@@ -80,14 +80,27 @@ impl App {
     pub(super) fn opened(&mut self, connection: &ConnectionName, query: Query, text: &str) {
         let is_on_screen = self.sheet().name() == connection;
         let Some(sheet) = self.sheet_of_mut(connection) else { return };
-        sheet.query_error = None;
-        sheet.opened = Some(query);
-        sheet.editor.reload(text);
-        sheet.text_changed();
-        sheet.is_dirty = false;
+        sheet.stand_for(Some(query), text);
         if is_on_screen {
             self.focus = Focus::Editor;
         }
+    }
+
+    /// Empties the editor on screen, which now stands for no saved query, and gives it the keys.
+    pub(super) fn new_query(&mut self) {
+        self.sheet_mut().stand_for(None, "");
+        self.focus = Focus::Editor;
+    }
+}
+
+impl Sheet {
+    /// Puts `text` in the editor, which now stands for `opened` and holds nothing unsaved.
+    fn stand_for(&mut self, opened: Option<Query>, text: &str) {
+        self.query_error = None;
+        self.opened = opened;
+        self.editor.reload(text);
+        self.text_changed();
+        self.is_dirty = false;
     }
 }
 

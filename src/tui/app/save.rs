@@ -15,10 +15,18 @@ const SAVE_FIRST: &str = "save the query with ^s before editing it in $EDITOR";
 pub(in crate::tui) enum Prompt {
     /// The path to save a new query at, as typed so far, and why the last path was refused.
     SaveAs { path: Field, error: Option<String> },
-    /// The query to open once the user agrees to drop the editor's unsaved text.
-    OpenOverUnsaved(Query),
+    /// What to open once the user agrees to drop the editor's unsaved text.
+    OpenOverUnsaved(Opening),
     /// A write waiting for a `y`; any other key drops it.
     SendWrite(Box<WriteToSend>),
+}
+
+/// What the editor opens in place of its text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::tui) enum Opening {
+    Saved(Query),
+    /// An empty editor that stands for no saved query yet: the next `ctrl-s` asks for its path.
+    New,
 }
 
 impl Prompt {
@@ -68,13 +76,23 @@ impl App {
         vec![Action::EditOutside { connection: sheet.name().clone(), query }]
     }
 
-    /// Opens `query` in the editor on screen, asking first when the editor holds unsaved text.
-    pub(super) fn ask_open(&mut self, query: Query) -> Vec<Action> {
+    /// Opens `opening` in the editor on screen, asking first when the editor holds unsaved text.
+    pub(super) fn ask_open(&mut self, opening: Opening) -> Vec<Action> {
         if !self.sheet().is_dirty {
-            return vec![self.open_query(query)];
+            return self.open(opening);
         }
-        self.overlay = Some(Overlay::Prompt(Prompt::OpenOverUnsaved(query)));
+        self.overlay = Some(Overlay::Prompt(Prompt::OpenOverUnsaved(opening)));
         vec![]
+    }
+
+    fn open(&mut self, opening: Opening) -> Vec<Action> {
+        match opening {
+            Opening::Saved(query) => vec![self.open_query(query)],
+            Opening::New => {
+                self.new_query();
+                vec![]
+            }
+        }
     }
 
     /// The prompt after `key`, `None` once it closes, and the actions to run.
@@ -84,7 +102,7 @@ impl App {
             (Some(Act::Close), _) => (None, vec![]),
             (Some(Act::Run), Prompt::SendWrite(waiting)) => (None, self.send_write(*waiting)),
             (_, Prompt::SendWrite(_)) => (None, vec![]),
-            (Some(Act::Open), Prompt::OpenOverUnsaved(query)) => (None, vec![self.open_query(query)]),
+            (Some(Act::Open), Prompt::OpenOverUnsaved(opening)) => (None, self.open(opening)),
             (Some(Act::Open), Prompt::SaveAs { path, .. }) => self.save_as(path),
             (_, Prompt::SaveAs { mut path, error }) => {
                 typed_into(&mut path, key);
@@ -124,7 +142,7 @@ impl App {
 mod tests {
     use super::super::fixtures::{shop, typed};
     use super::super::queries::tests::{query, with_queries};
-    use super::super::{Answer, QueryAnswer};
+    use super::super::{Answer, Focus, QueryAnswer};
     use super::*;
 
     fn press(app: &mut App, key: impl Into<KeyEvent>) -> Vec<Action> {
@@ -179,11 +197,49 @@ mod tests {
     #[test]
     fn opening_a_query_over_unsaved_text_asks_first() {
         let mut app = typed("SELECT 2");
-        assert_eq!(app.ask_open(query("customers.sql")), []);
+        assert_eq!(app.ask_open(Opening::Saved(query("customers.sql"))), []);
         assert_eq!(press(&mut app, KeyCode::Esc), []);
         assert_eq!(app.overlay, None);
-        app.ask_open(query("customers.sql"));
+        app.ask_open(Opening::Saved(query("customers.sql")));
         assert_eq!(press(&mut app, KeyCode::Enter), [Action::OpenQuery { connection: shop(), query: query("customers.sql") }]);
+    }
+
+    fn ctrl_q(app: &mut App) -> Vec<Action> {
+        press(app, KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL))
+    }
+
+    #[test]
+    fn ctrl_q_empties_a_saved_query_and_the_next_save_asks_for_its_path() {
+        let mut app = opened("SELECT 1");
+        assert_eq!(ctrl_q(&mut app), []);
+        assert_eq!((app.sheet().editor.text(), app.sheet().opened.as_ref(), app.sheet().is_dirty), ("", None, false));
+        ctrl_s(&mut app);
+        assert!(matches!(app.overlay, Some(Overlay::Prompt(Prompt::SaveAs { .. }))), "{:?}", app.overlay);
+    }
+
+    #[test]
+    fn ctrl_q_over_unsaved_text_asks_first_and_esc_keeps_the_text() {
+        let mut app = typed("SELECT 2");
+        ctrl_q(&mut app);
+        assert!(matches!(app.overlay, Some(Overlay::Prompt(Prompt::OpenOverUnsaved(Opening::New)))), "{:?}", app.overlay);
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.sheet().editor.text(), "SELECT 2");
+    }
+
+    #[test]
+    fn enter_on_the_question_drops_the_unsaved_text_for_a_new_query() {
+        let mut app = typed("SELECT 2");
+        ctrl_q(&mut app);
+        assert_eq!(press(&mut app, KeyCode::Enter), []);
+        assert_eq!((app.sheet().editor.text(), app.overlay.as_ref()), ("", None));
+    }
+
+    #[test]
+    fn ctrl_q_from_the_result_gives_the_new_query_the_keys() {
+        let mut app = opened("SELECT 1");
+        press(&mut app, KeyCode::Tab);
+        ctrl_q(&mut app);
+        assert_eq!(app.focus, Focus::Editor);
     }
 
     #[test]
