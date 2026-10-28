@@ -3,6 +3,7 @@
 //! The key handling, the help and the footer all read it from here.
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use vtui::help::{Row as HelpRow, Section};
+use vtui::usage::Group as UsageGroup;
 
 /// One action; its row in [`ROWS`] says everything else about it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,6 +66,66 @@ pub(crate) enum Act {
 }
 
 impl Act {
+    /// What `pgbg usage` and the usage file call it.
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Run => "run",
+            Self::NewLine => "new_line",
+            Self::Cancel => "cancel",
+            Self::SwitchPane => "switch_pane",
+            Self::SwitchPaneBack => "switch_pane_back",
+            Self::FocusLeft => "focus_left",
+            Self::FocusRight => "focus_right",
+            Self::FocusUp => "focus_up",
+            Self::FocusDown => "focus_down",
+            Self::Help => "help",
+            Self::Connections => "connections",
+            Self::Quit => "quit",
+            Self::Down => "down",
+            Self::Up => "up",
+            Self::PageDown => "page_down",
+            Self::PageUp => "page_up",
+            Self::Top => "top",
+            Self::Bottom => "bottom",
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::Find => "find",
+            Self::Open => "open",
+            Self::Close => "close",
+            Self::Chart => "chart",
+            Self::StepFormat => "step_format",
+            Self::SwitchFormats => "switch_formats",
+            Self::Delete => "delete",
+            Self::CloseSession => "close_session",
+            Self::Add => "add",
+            Self::Edit => "edit",
+            Self::Save => "save",
+            Self::NewQuery => "new_query",
+            Self::EditOutside => "edit_outside",
+            Self::History => "history",
+            Self::Versions => "versions",
+            Self::Detail => "detail",
+            Self::CopyCell => "copy_cell",
+            Self::CopyRow => "copy_row",
+            Self::CopyResult => "copy_result",
+            Self::CopyCsv => "copy_csv",
+            Self::CopyJson => "copy_json",
+            Self::CopyMarkdown => "copy_markdown",
+            Self::SwitchTab => "switch_tab",
+            Self::Filter => "filter",
+            Self::ReadAgain => "read_again",
+            Self::TakeGhost => "take_ghost",
+            Self::DropGhost => "drop_ghost",
+            Self::Complete => "complete",
+            Self::Undo => "undo",
+            Self::Redo => "redo",
+            Self::Preview => "preview",
+            Self::Insert => "insert",
+            Self::FindTable => "find_table",
+            Self::Ask => "ask",
+        }
+    }
+
     /// Whether this act works on the grid's cursor, so it does nothing while the result pane shows a chart.
     pub(crate) const fn is_grid(self) -> bool {
         matches!(
@@ -130,6 +191,56 @@ pub(crate) enum Pane {
     Asking,
     /// The `[ai] command`'s answer: while shown it takes every key.
     Answer,
+}
+
+impl Pane {
+    /// The order the `?` help lists the panes in.
+    const IN_HELP: [Self; 19] = [
+        Self::Editor,
+        Self::Params,
+        Self::Result,
+        Self::Queries,
+        Self::Schema,
+        Self::SchemaFilter,
+        Self::Finder,
+        Self::TableFinder,
+        Self::Picker,
+        Self::Form,
+        Self::Prompt,
+        Self::Confirm,
+        Self::Detail,
+        Self::CopyAs,
+        Self::Completion,
+        Self::Instruction,
+        Self::Asking,
+        Self::Answer,
+        Self::Anywhere,
+    ];
+
+    /// Its heading in the `?` help, and its name in `pgbg usage`.
+    pub(crate) const fn title(self) -> &'static str {
+        match self {
+            Self::Editor => "editor",
+            Self::Params => "parameters",
+            Self::Result => "result",
+            Self::Queries => "queries",
+            Self::Schema => "schema",
+            Self::SchemaFilter => "schema filter",
+            Self::Finder => "finder",
+            Self::TableFinder => "table finder",
+            Self::Picker => "picker",
+            Self::Form => "form",
+            Self::Prompt => "prompt",
+            Self::Confirm => "write",
+            Self::Detail => "row",
+            Self::CopyAs => "copy as",
+            Self::Completion => "names",
+            Self::Instruction => "ask",
+            Self::Asking => "asking",
+            Self::Answer => "answer",
+            Self::Anywhere => "anywhere",
+        }
+    }
 }
 
 /// Keys as the help or the footer writes them, and what they do in a few words.
@@ -399,29 +510,17 @@ pub(crate) fn footer_within(pane: Pane, columns: usize, width: impl Fn(Hint) -> 
 
 /// The `?` help: the keys of `pane` and those that work anywhere, or every pane's with `every_key`.
 pub(crate) fn sections(pane: Pane, every_key: bool) -> Vec<Section> {
-    let panes = [
-        (Pane::Editor, "editor"),
-        (Pane::Params, "parameters"),
-        (Pane::Result, "result"),
-        (Pane::Queries, "queries"),
-        (Pane::Schema, "schema"),
-        (Pane::SchemaFilter, "schema filter"),
-        (Pane::Finder, "finder"),
-        (Pane::TableFinder, "table finder"),
-        (Pane::Picker, "picker"),
-        (Pane::Form, "form"),
-        (Pane::Prompt, "prompt"),
-        (Pane::Confirm, "write"),
-        (Pane::Detail, "row"),
-        (Pane::CopyAs, "copy as"),
-        (Pane::Completion, "names"),
-        (Pane::Instruction, "ask"),
-        (Pane::Asking, "asking"),
-        (Pane::Answer, "answer"),
-        (Pane::Anywhere, "anywhere"),
-    ];
-    let shown = panes.into_iter().filter(|&(listed, _)| every_key || listed == pane || listed == Pane::Anywhere);
-    shown.map(|(listed, title)| Section { title, rows: help_rows(listed) }).collect()
+    let shown = Pane::IN_HELP.into_iter().filter(|&listed| every_key || listed == pane || listed == Pane::Anywhere);
+    shown.map(|listed| Section { title: listed.title(), rows: help_rows(listed) }).collect()
+}
+
+/// Every act's name, grouped under the pane of its first row, panes in the order of the help; what `pgbg usage` lists
+/// when unused.
+pub(crate) fn usage_groups() -> Vec<UsageGroup> {
+    let first_rows: Vec<&Row> =
+        ROWS.iter().enumerate().filter(|(at, row)| !ROWS[..*at].iter().any(|before| before.act == row.act)).map(|(_, row)| row).collect();
+    let names_in = |pane: Pane| first_rows.iter().filter(|row| row.pane == pane).map(|row| row.act.name()).collect();
+    Pane::IN_HELP.into_iter().map(|pane| UsageGroup { title: pane.title(), actions: names_in(pane) }).collect()
 }
 
 fn help_rows(pane: Pane) -> Vec<HelpRow> {

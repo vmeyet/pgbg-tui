@@ -52,7 +52,8 @@ When a boundary or a flow changes, change this page in the same MR.
 | `tui/theme.rs` | pgbg's `Theme`: vtui's palette, read through `Deref`, with the tier colours and a production colour of its own (`danger` leaning to magenta), so a production frame never reads as an error drawn in `danger`; the SQL token colours are vtui's `Syntax` |
 | `vtui` (git dependency) | Shared with the sibling TUIs: the terminal in raw mode (`Screen`, with the mouse, and `⌘` where the terminal speaks the kitty keyboard protocol), the palette (`Theme`) and its code colours (`Syntax`), the input box (`Field`, its cleaned paste, and the secret one whose `Debug` hides its text), styled lines wrapped to a width (`text::wrap_line`), the completion index (`complete::Index`), the `ctrl-k` palette and its `Pick` rows, the `?` overlay, fzf-style matching |
 | `failure.rs` | Why a session did not open or was lost (`Lost`), or why a run, a page or a schema read gave no result (`Failure`): one kind per reason, from the session task to the app, drawn or logged only there; the history's `Outcome` is derived from it |
-| `log.rs` | The log file; never a secret, never a row |
+| `usage.rs` | `[usage]` counts: pgbg's `Rules` for vtui's `usage` (every act under the pane of its first row) and `UsageFile`, `usage.jsonl` in pgbg's cache folder, read and merged through a temp file only its owner reads; `tui/usage.rs` is the loop's side, `tui/app/usage.rs` what the app answers |
+| `log.rs` | The log file, in pgbg's cache folder; never a secret, never a row |
 | `signal.rs` | The signals that stop pgbg (`SIGINT`, `SIGTERM`, `SIGHUP`) and the exit code each gives |
 
 ## Data flow
@@ -192,8 +193,9 @@ Charting a result:
 ## Boundaries
 
 - Only `src/db/` sees a `tokio_postgres` type; everything else uses `db/model/`.
-- Side effects live at the edges: `main.rs`, `signal.rs`, `commands/`, `tui/mod.rs`, `tui/backend/`, `tunnel/`, `secret/`, `ai/command.rs`, `config/` when it rewrites the file, `query/` when it lists, reads, writes and makes the queries folders and keeps the versions a save replaced, `history.rs` when it appends and reads its files.
+- Side effects live at the edges: `main.rs`, `signal.rs`, `commands/`, `tui/mod.rs`, `tui/backend/`, `tunnel/`, `secret/`, `ai/command.rs`, `config/` when it rewrites the file, `query/` when it lists, reads, writes and makes the queries folders and keeps the versions a save replaced, `history.rs` when it appends and reads its files, `usage.rs` when it reads and writes the usage file, `tui/usage.rs` when it reads the clock for it.
 - `tui/app/` is pure: it never reads the clock nor does I/O; its tests drive it with keys and `Answer` values.
+  The usage counts read it from the loop (`tui/usage.rs`): the act a key does where it lands and the screen on show, before the key; the loop keeps the clock and the tally, and writes them once a minute and on quit.
 - `chart/` is pure: a `ResultSet` in, a `Series` out; drawing lives in `tui/chart_view/`.
 - `format/` is pure: a `Value`, a `Format` and a `Clock` in, the cell's text out; it never reads the clock itself.
 - A program that takes the terminal (`$EDITOR` on a saved query) runs from the loop through `Screen::lend`, with the key stream dropped and, through vtui, pastes given back until it exits, then every cell drawn again at the terminal's size; the text it replaced is kept as a version, and the query is read again after.

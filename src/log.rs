@@ -20,7 +20,7 @@ pub fn start() {
     if level == LevelFilter::OFF {
         return;
     }
-    let Some(dir) = dirs::cache_dir().map(|cache| cache.join("pgbg")) else { return };
+    let Some(dir) = crate::config::cache_dir() else { return };
     let Ok(file) = Rolling::open(dir, MAX_BYTES) else { return };
     #[expect(clippy::let_underscore_must_use, reason = "`start` runs once per process, so no subscriber is set before")]
     let _ = tracing::subscriber::set_global_default(subscriber(std::sync::Mutex::new(file), level));

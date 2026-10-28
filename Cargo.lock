@@ -631,7 +631,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1861,7 +1861,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2233,7 +2233,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2757,13 +2757,16 @@ dependencies = [
 
 [[package]]
 name = "vtui"
-version = "0.5.0"
-source = "git+https://github.com/vmeyet/vtui?tag=v0.5.0#1630eb07c45fba74d26598c853002c84093df821"
+version = "0.6.0"
+source = "git+https://github.com/vmeyet/vtui?tag=v0.6.0#065ca7497704247ab2be1294f95f88cf245b5137"
 dependencies = [
  "base64",
+ "chrono",
  "crossterm",
  "libc",
  "ratatui",
+ "serde",
+ "serde_json",
  "tempfile",
  "tracing",
  "unicode-segmentation",

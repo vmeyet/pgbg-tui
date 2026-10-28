@@ -273,14 +273,30 @@ pgbg run scratch "DELETE FROM orders WHERE id = 7" --yes
 | `pgbg connections` | List the connections. |
 | `pgbg connection add\|edit\|remove` | Change `config.toml`. |
 | `pgbg password set <connection>` | Save a password in the keychain. |
+| `pgbg usage` | What you use the TUI for: the keys never or rarely used, the most used, the time per pane; `--since 4w`, `7d` or `all`. |
 
 `--param name=value` and `--params-file <file>` (one `name=value` per line, `-` for stdin) give parameter values.
 `--yes` sends a write without asking, on a connection with `writes = "allowed"` such as `scratch` above.
-`run`, `history`, `schema`, `doctor` and `connections` take `--json` for machine-readable output.
+`run`, `history`, `schema`, `doctor`, `connections` and `usage` take `--json` for machine-readable output.
 
 The history lives in `$XDG_DATA_HOME/pgbg/history/` when it is set, else `~/.local/share/pgbg/history/`, on macOS too; set `$PGBG_DATA_DIR` to keep it elsewhere.
 The versions of saved queries live beside it, in `versions/`.
 It keeps when, how long and what came of each statement, never a row.
+
+### Usage counts
+
+The TUI can count which keys you use and how long you spend on each pane, so `pgbg usage` shows what to learn and what to drop.
+It is off until you ask for it:
+
+```toml
+[usage]
+enabled = true
+```
+
+The counts stay on this machine, in `usage.jsonl` in pgbg's cache folder (`~/Library/Caches/pgbg` on macOS, `~/.cache/pgbg` on Linux), and are never sent anywhere.
+They hold act names and seconds per pane only: no statement, table, row, connection or host.
+A key counts as what it did where you pressed it; a pane stops counting time a minute after your last key, and while the terminal is in the background.
+Delete the file to start again.
 
 ## What's next
 

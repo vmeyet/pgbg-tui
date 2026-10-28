@@ -155,7 +155,7 @@ What a first real session asked for, one MR per step.
 - [x] Completion after `JOIN` offers the table with its `ON` condition, from the foreign keys
 - [x] The idle ghost shows the whole rest of the statement, and a `--` comment line above it is the instruction
 - [x] `tab` takes the ghost while one shows; `esc` drops it
-- [ ] Usage counts as revu keeps them, opt-in, action names only, from a part both apps share in vtui
+- [x] Usage counts as revu keeps them, opt-in, action names only, from a part both apps share in vtui
 
 ## Later
 
