@@ -11,6 +11,9 @@ Each entry says what changed, then where, then how to use it.
 - **A date reads relative to today**, in the TUI's grid: a `date` column reads `today`, `yesterday`, `tomorrow`, then `3 d ago`, `in 2 d`, `1 mo ago` or `2 y ago`, counted from your local date.
   Press `f` on it, `F` to put every column readable, or name it in a saved query's header as `-- format: day=relative`.
   `f` on a column with no other format now says so on the status line instead of doing nothing.
+- **Undo and redo** in the TUI's editor: `ctrl-z` takes back the last change, `ctrl-shift-z` or `ctrl-y` puts it back.
+  A word typed with the spaces after it is one change, and a cursor move or a second without a key ends it; a paste, a name taken or a delete is one too.
+  It keeps the last 100 changes, and opening a query or a new one starts afresh.
 - **`ctrl-q` starts a new, empty query**, in the TUI, from any pane: the editor empties and stands for no saved query.
   The first `ctrl-s` asks for its path; over unsaved text it asks first, as opening another query does.
 - **Keys like revu's** in the TUI: `⇧⇥` goes to the previous pane, `⇧` and an arrow to the pane on that side, and a click on a pane gives it the keys.

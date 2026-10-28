@@ -1,5 +1,6 @@
-//! The SQL editor: its text, the editing keys and pastes that change it, and the syntax colours that follow it.
+//! The SQL editor: its text, the editing keys and pastes that change it, their undo, and the syntax colours that follow it.
 use super::ghost::is_name_key;
+use super::undo::{Change, Undo};
 use super::{Action, Sheet};
 use crate::db::lex::Lexed;
 use crate::query::Header;
@@ -19,12 +20,13 @@ pub(super) enum Edited {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(in crate::tui) struct Revision(u64);
 
-/// The editor's text, its tokens and its colours.
+/// The editor's text, its tokens, its colours and its undo.
 /// The tokens are updated on each change; the colours are rebuilt by `recolour` after the text changes.
 #[derive(Debug, Default)]
 pub(in crate::tui) struct Editor {
     field: Field,
     revision: Revision,
+    undo: Undo,
     lexed: Lexed,
     colours: Vec<Spans>,
     has_stale_colours: bool,
@@ -34,10 +36,10 @@ impl Editor {
     /// An editor on `text`, not coloured yet: the loop colours it later, so opening a big query never waits on
     /// tree-sitter.
     pub(super) fn new(text: &str) -> Self {
-        Self { field: Field::new(text), revision: Revision::default(), lexed: Lexed::of(text), colours: vec![], has_stale_colours: true }
+        Self { field: Field::new(text), lexed: Lexed::of(text), has_stale_colours: true, ..Self::default() }
     }
 
-    /// Puts `text` in place of the whole text, the cursor at its end.
+    /// Puts `text` in place of the whole text, the cursor at its end, with nothing to undo.
     pub(super) fn reload(&mut self, text: &str) {
         *self = Self { revision: self.revision.next(), ..Self::new(text) };
     }
@@ -78,19 +80,19 @@ impl Editor {
     }
 
     pub(super) fn edit(&mut self, key: KeyEvent) -> Edited {
-        self.change(|field| apply(field, key))
+        self.change(change_of(key), |field| apply(field, key))
     }
 
     /// Inserts `text` at the cursor, cleaned as vtui cleans a paste: line ends become `\n`, tabs become spaces, and other
     /// control characters and marks that reverse text are removed.
     pub(super) fn paste(&mut self, text: &str) -> Edited {
-        self.change(|field| field.paste(text))
+        self.change(Change::Whole, |field| field.paste(text))
     }
 
     /// Puts `insert` in place of the bytes `typed`, which end at the cursor.
     pub(super) fn replace_typed(&mut self, typed: Range<usize>, insert: &str) -> Edited {
         let typed_chars = self.field.text()[typed].chars().count();
-        self.change(|field| {
+        self.change(Change::Whole, |field| {
             (0..typed_chars).for_each(|_| field.backspace());
             field.insert_str(insert);
         })
@@ -100,19 +102,60 @@ impl Editor {
     pub(super) fn replace(&mut self, range: Range<usize>, text: &str) -> Edited {
         let mut field = Field::joined(&self.field.text()[..range.start], &self.field.text()[range.end..]);
         field.paste(text);
-        self.field = field;
+        self.put(field);
+        Edited::Text
+    }
+
+    /// Puts `text` in place of the whole text as one step, the cursor at its end.
+    pub(super) fn rewrite(&mut self, text: &str) {
+        self.put(Field::new(text));
+    }
+
+    /// Takes the text back to before the last step; `Edited::Cursor` when nothing is left to undo.
+    pub(super) fn undo(&mut self) -> Edited {
+        let undone = self.undo.undo(&self.field);
+        self.restore(undone)
+    }
+
+    /// Puts back the last step undone; `Edited::Cursor` when nothing was undone.
+    pub(super) fn redo(&mut self) -> Edited {
+        let redone = self.undo.redo(&self.field);
+        self.restore(redone)
+    }
+
+    /// Ends the step of the characters typed so far, as when the user pauses.
+    pub(super) fn end_typing(&mut self) {
+        self.undo.end_typing();
+    }
+
+    /// Whether characters typed now would join the last step.
+    pub(super) fn is_typing(&self) -> bool {
+        self.undo.is_typing()
+    }
+
+    fn change(&mut self, change: Change, edit: impl FnOnce(&mut Field)) -> Edited {
+        let before = self.field.clone();
+        edit(&mut self.field);
+        if self.field.revision() == before.revision() {
+            self.undo.end_typing();
+            return Edited::Cursor;
+        }
+        self.undo.changed(before, change);
         self.text_changed();
         Edited::Text
     }
 
-    fn change(&mut self, edit: impl FnOnce(&mut Field)) -> Edited {
-        let revision = self.field.revision();
-        edit(&mut self.field);
-        let edited = if self.field.revision() == revision { Edited::Cursor } else { Edited::Text };
-        if edited == Edited::Text {
-            self.text_changed();
-        }
-        edited
+    fn put(&mut self, field: Field) {
+        let before = std::mem::replace(&mut self.field, field);
+        self.undo.changed(before, Change::Whole);
+        self.text_changed();
+    }
+
+    fn restore(&mut self, field: Option<Field>) -> Edited {
+        let Some(field) = field else { return Edited::Cursor };
+        self.field = field;
+        self.text_changed();
+        Edited::Text
     }
 
     fn text_changed(&mut self) {
@@ -125,6 +168,15 @@ impl Editor {
 impl Revision {
     const fn next(self) -> Self {
         Self(self.0.wrapping_add(1))
+    }
+}
+
+/// What `key` does to the text, for undo: a typed character, or a delete that is a step of its own.
+fn change_of(key: KeyEvent) -> Change {
+    match key.code {
+        KeyCode::Enter => Change::Typed('\n'),
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => Change::Typed(c),
+        _ => Change::Whole,
     }
 }
 
@@ -161,6 +213,20 @@ impl Sheet {
         if is_name_key(key) { self.ask_ghost() } else { vec![] }
     }
 
+    /// Takes the editor's text back to before its last step.
+    pub(super) fn undo(&mut self) {
+        if self.editor.undo() == Edited::Text {
+            self.text_changed();
+        }
+    }
+
+    /// Puts back the editor's last step undone.
+    pub(super) fn redo(&mut self) {
+        if self.editor.redo() == Edited::Text {
+            self.text_changed();
+        }
+    }
+
     /// Pastes `text` into the editor as one change: a line end in it never runs a statement.
     pub(super) fn paste(&mut self, text: &str) {
         if self.editor.paste(text) == Edited::Text {
@@ -181,7 +247,9 @@ impl Sheet {
 
 #[cfg(test)]
 mod tests {
-    use super::super::fixtures::app;
+    use super::super::fixtures::{app, typed};
+    use super::super::queries::tests::query;
+    use super::super::{Answer, App, QueryAnswer};
     use super::*;
     use crate::syntax::{Painted, Token};
 
@@ -278,5 +346,90 @@ mod tests {
         editor.recolour();
         editor.edit(KeyEvent::from(KeyCode::Left));
         assert!(!editor.has_stale_colours());
+    }
+
+    fn control(app: &mut App, c: char) {
+        app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL));
+    }
+
+    fn type_in(app: &mut App, text: &str) {
+        text.chars().for_each(|c| _ = app.handle_key(KeyEvent::from(KeyCode::Char(c))));
+    }
+
+    #[test]
+    fn ctrl_z_takes_back_the_last_word_typed() {
+        let mut app = typed("SELECT id");
+        control(&mut app, 'z');
+        assert_eq!(app.sheet().editor.text(), "SELECT ");
+    }
+
+    #[test]
+    fn ctrl_y_puts_back_what_ctrl_z_took() {
+        let mut app = typed("SELECT id");
+        control(&mut app, 'z');
+        control(&mut app, 'y');
+        assert_eq!(app.sheet().editor.text(), "SELECT id");
+    }
+
+    #[test]
+    fn ctrl_shift_z_redoes_as_ctrl_y_does() {
+        let mut app = typed("SELECT id");
+        control(&mut app, 'z');
+        app.handle_key(KeyEvent::new(KeyCode::Char('Z'), KeyModifiers::CONTROL | KeyModifiers::SHIFT));
+        assert_eq!(app.sheet().editor.text(), "SELECT id");
+    }
+
+    #[test]
+    fn a_paste_is_one_step() {
+        let mut app = typed("SELECT ");
+        app.paste("id, total");
+        control(&mut app, 'z');
+        assert_eq!(app.sheet().editor.text(), "SELECT ");
+    }
+
+    #[test]
+    fn a_name_taken_is_one_step() {
+        let mut app = typed("SELECT * FROM ord");
+        app.sheet_mut().put_name(14..17, "orders");
+        control(&mut app, 'z');
+        assert_eq!(app.sheet().editor.text(), "SELECT * FROM ord");
+    }
+
+    #[test]
+    fn each_delete_is_one_step() {
+        let mut app = typed("SELECT id");
+        (0..2).for_each(|_| _ = app.handle_key(KeyEvent::from(KeyCode::Backspace)));
+        control(&mut app, 'z');
+        assert_eq!(app.sheet().editor.text(), "SELECT i");
+    }
+
+    #[test]
+    fn a_pause_ends_the_step_of_the_characters_typed() {
+        let mut app = typed("SEL");
+        app.sat_idle();
+        type_in(&mut app, "ECT");
+        control(&mut app, 'z');
+        assert_eq!(app.sheet().editor.text(), "SEL");
+    }
+
+    #[test]
+    fn a_cursor_move_ends_the_step_of_the_characters_typed() {
+        let mut app = typed("SEL");
+        app.handle_key(KeyEvent::from(KeyCode::Left));
+        type_in(&mut app, "x");
+        control(&mut app, 'z');
+        assert_eq!(shown(&app.sheet().editor), "SE|L");
+    }
+
+    #[test]
+    fn opening_a_query_leaves_nothing_to_undo() {
+        let mut app = typed("SELECT 1");
+        app.apply(Answer::Queries(QueryAnswer::Opened {
+            connection: app.sheet().name().clone(),
+            query: query("daily.sql"),
+            text: "SELECT 2".into(),
+        }));
+        control(&mut app, 'z');
+        assert_eq!((app.sheet().editor.text(), app.sheet().is_dirty), ("SELECT 2", false));
     }
 }

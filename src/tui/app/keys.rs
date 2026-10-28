@@ -119,6 +119,8 @@ impl App {
             Act::TakeGhost => return self.sheet_mut().edit(KeyEvent::from(KeyCode::Right)),
             Act::Complete => return self.open_completions(),
             Act::Ask => return self.open_ask(),
+            Act::Undo => self.sheet_mut().undo(),
+            Act::Redo => self.sheet_mut().redo(),
             Act::Cancel if self.focus == Focus::Params && !self.sheet().is_running() => self.focus = Focus::Editor,
             Act::Cancel => return self.sheet_mut().cancel(),
             Act::NewLine => return self.sheet_mut().edit(KeyEvent::from(KeyCode::Enter)),

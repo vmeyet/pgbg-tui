@@ -54,6 +54,8 @@ pub(crate) enum Act {
     ReadAgain,
     TakeGhost,
     Complete,
+    Undo,
+    Redo,
     Preview,
     Insert,
     FindTable,
@@ -195,6 +197,8 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::TakeGhost, Pane::Editor, &[key(KeyCode::Right)]).help("→", "take the faded rest after the cursor"),
     row(Act::Complete, Pane::Editor, &[control(' '), control('n')]).help("^space ^n", "list the names that fit here"),
     row(Act::Ask, Pane::Editor, &[control('g')]).help("^g", "ask the [ai] command for SQL"),
+    row(Act::Undo, Pane::Editor, &[control('z')]).help("^z", "undo the last change"),
+    row(Act::Redo, Pane::Editor, &[control('Z'), control('y')]).help("⇧^z ^y", "redo the change undone"),
     row(Act::Run, Pane::Params, &[key(KeyCode::Enter)]).help("⏎", "run the statement with these values").footer("⏎", "run"),
     row(Act::Down, Pane::Params, &[key(KeyCode::Tab)]).help("⇥ ⇧⇥", "next, previous parameter").footer("⇥", "next"),
     row(Act::Up, Pane::Params, &[key(KeyCode::BackTab)]),
@@ -315,11 +319,16 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Quit, Pane::Anywhere, &[control('c')]).help("^c", "quit").footer("^c", "quit"),
 ];
 
-/// Whether `pressed` is `own`; a typed character is its own shift, so `G` matches with or without it.
+/// Whether `pressed` is `own`; a typed character is its own shift, so `G` matches with or without it, and a shifted
+/// `z`, as `⇧^z` comes, is `Z`.
 fn is_the_key(own: &KeyEvent, pressed: KeyEvent) -> bool {
-    let is_shifted_already = matches!(pressed.code, KeyCode::Char(_) | KeyCode::BackTab);
-    let modifiers = if is_shifted_already { pressed.modifiers - KeyModifiers::SHIFT } else { pressed.modifiers };
-    own.code == pressed.code && own.modifiers == modifiers
+    let is_shifted = pressed.modifiers.contains(KeyModifiers::SHIFT);
+    let (code, modifiers) = match pressed.code {
+        KeyCode::Char(c) if is_shifted => (KeyCode::Char(c.to_ascii_uppercase()), pressed.modifiers - KeyModifiers::SHIFT),
+        KeyCode::BackTab => (pressed.code, pressed.modifiers - KeyModifiers::SHIFT),
+        code => (code, pressed.modifiers),
+    };
+    own.code == code && own.modifiers == modifiers
 }
 
 fn works_in(row: &Row, pane: Pane) -> bool {
@@ -522,6 +531,13 @@ mod tests {
         for pane in [Pane::Result, Pane::Queries, Pane::Schema] {
             assert_eq!(act_for(question_mark, pane), Some(Act::Help), "{pane:?}");
         }
+    }
+
+    #[test]
+    fn ctrl_shift_z_redoes_whether_the_terminal_sends_the_capital_or_the_shift() {
+        assert_eq!(act_for(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL | KeyModifiers::SHIFT), Pane::Editor), Some(Act::Redo));
+        assert_eq!(act_for(control('Z'), Pane::Editor), Some(Act::Redo));
+        assert_eq!(act_for(control('z'), Pane::Editor), Some(Act::Undo));
     }
 
     #[test]
