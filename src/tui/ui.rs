@@ -2,7 +2,7 @@
 use super::app::{App, Fit, Overlay, Panes, SessionState, SidebarTab, TunnelState};
 use super::{
     ask_view, completion_view, detail_view, editor_view, finder_view, form_view, help_view, history_view, param_bar_view, picker_view,
-    prompt_view, result_view, sidebar_view, table_finder_view,
+    prompt_view, result_view, sidebar_view, table_finder_view, versions_view,
 };
 use crate::act::{self, Hint, Pane};
 use crate::render::printable;
@@ -47,6 +47,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> Fit {
     table_finder_view::draw(f, app);
     picker_view::draw(f, app);
     history_view::draw(f, app);
+    versions_view::draw(f, app);
     form_view::draw(f, app);
     let detail = detail_view::draw(f, app);
     help_view::draw(f, app);

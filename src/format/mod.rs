@@ -2,6 +2,7 @@
 //! Pure: the clock and the time zone are passed in.
 pub(crate) use columns::{ColumnFormat, Mode, opening, parse_column_formats};
 pub(crate) use number::grouped_digits;
+pub(crate) use time::relative;
 
 use crate::db::model::{ColumnKind, Value};
 use crate::render;
@@ -134,8 +135,8 @@ pub(crate) fn cell<Tz: TimeZone>(value: &Value, format: Format, clock: &Clock<Tz
 fn formatted<Tz: TimeZone>(value: &Value, format: Format, clock: &Clock<Tz>) -> Option<String> {
     match (format, value) {
         (Format::Local, Value::TimestampTz(at)) => Some(time::local(*at, &clock.zone)),
-        (Format::Relative, Value::TimestampTz(at)) => Some(time::relative(*at, clock.now)),
-        (Format::Relative, Value::Timestamp(at)) => Some(time::relative(at.and_utc(), clock.now)),
+        (Format::Relative, Value::TimestampTz(at)) => Some(relative(*at, clock.now)),
+        (Format::Relative, Value::Timestamp(at)) => Some(relative(at.and_utc(), clock.now)),
         (Format::Relative, Value::Date(day)) => Some(time::relative_day(*day, clock.today())),
         (Format::Grouped, Value::Int(int)) => Some(number::grouped_int(*int)),
         (Format::Grouped, Value::Float(float)) => number::grouped_decimal(&float.to_string()),
@@ -203,7 +204,7 @@ mod tests {
     #[test]
     fn a_relative_column_is_as_wide_as_the_widest_relative_time_under_a_year() {
         let widest =
-            (1..60 * 24 * 365).map(|minutes| time::relative(paris_summer().now - chrono::Duration::minutes(minutes), paris_summer().now));
+            (1..60 * 24 * 365).map(|minutes| relative(paris_summer().now - chrono::Duration::minutes(minutes), paris_summer().now));
         assert_eq!(widest.map(|text| text.len()).max(), Some(least_width(Format::Relative)));
         assert_eq!(least_width(Format::Grouped), 0);
     }
@@ -212,7 +213,7 @@ mod tests {
     fn a_relative_time_up_to_a_thousand_years_either_way_fits_a_relative_column() {
         let now = paris_summer().now;
         let years = (1..=1000).flat_map(|years| [now - chrono::Months::new(12 * years), now + chrono::Months::new(12 * years)]);
-        assert!(years.map(|at| time::relative(at, now).len()).all(|width| width <= least_width(Format::Relative)));
+        assert!(years.map(|at| relative(at, now).len()).all(|width| width <= least_width(Format::Relative)));
     }
 
     #[test]

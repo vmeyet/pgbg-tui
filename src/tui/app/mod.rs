@@ -28,6 +28,7 @@ pub(super) use schema_tab::{SchemaRow, SchemaTab, SidebarTab};
 pub(super) use search::Search;
 pub(super) use sheet::{Run, SchemaState, SessionState, Sheet, View};
 pub(super) use table_finder::TableFinder;
+pub(super) use versions::{Listed, VersionList};
 
 pub(super) mod ask;
 mod completion;
@@ -56,6 +57,7 @@ mod search;
 mod sheet;
 mod table_finder;
 mod undo;
+pub(super) mod versions;
 
 /// The pane that has the keys.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -107,6 +109,8 @@ pub(super) enum Overlay {
     Form(Box<Form>),
     /// The `ctrl-r` search over the connection's history.
     Recall(Recall),
+    /// The `ctrl-v` list of the versions of the query on screen.
+    Versions(VersionList),
     /// A question on the footer line: the path of a new query, or whether to open one over unsaved text.
     Prompt(Prompt),
     /// The row under the grid's cursor, one column per line.
@@ -349,6 +353,7 @@ impl App {
             }
             Answer::Config { id, answer: ConfigAnswer::Failed { why, password } } => self.config_failed(id, why, password),
             Answer::History { connection, entries } => self.history_read(&connection, entries),
+            Answer::Versions { query, versions } => self.versions_read(&query, versions),
             Answer::Copied(note) => self.copied(note),
             Answer::Exported { text, done } => return vec![Action::Copy { text, done }],
             Answer::Asked { ask, answer } => return self.asked(ask, answer),

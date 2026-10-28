@@ -1,5 +1,6 @@
 //! A list narrowed as fzf does, for the finders and the `ctrl-o` picker: the typed line and what it matches.
 //! Matches are ranked again only when the line or the list changes.
+use super::versions::Listed;
 use crate::act::{self, Act, Pane};
 use crate::connection::Connection;
 use crate::history::Entry;
@@ -36,6 +37,12 @@ impl Searched for Query {
 impl Searched for Entry {
     fn search_text(&self) -> String {
         self.statement.as_str().to_owned()
+    }
+}
+
+impl Searched for Listed {
+    fn search_text(&self) -> String {
+        self.version.text.clone()
     }
 }
 

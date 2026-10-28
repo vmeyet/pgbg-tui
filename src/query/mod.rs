@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 pub(crate) use header::Header;
 pub(crate) use save::Write;
 pub(crate) use tree::{TreeRow, tree_rows};
-pub(crate) use versions::Versions;
+pub(crate) use versions::{Version, Versions};
 
 mod header;
 pub(crate) mod params;

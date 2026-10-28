@@ -1,0 +1,16 @@
+---
+source: src/tui/versions_view.rs
+expression: "render(&[\"SELECT id, total\\nFROM orders\", \"SELECT id\\nFROM orders\"]).backend()"
+---
+"                ╭ Versions of daily.sql ───────────────────────╮                "
+"                │ › ▌                                          │                "
+"                │                                              │                "
+"                │ ▎↺ SELECT id, total  3 h ago · +1 −1         │                "
+"                │  ↺ the text in the editor  3 h ago · +0 −0   │                "
+"                │   ↑↓ pick · ⏎ opens · esc closes             │                "
+"                │                                              │                "
+"                │                                              │                "
+"                │                                              │                "
+"                │                                              │                "
+"                │                                              │                "
+"                ╰──────────────────────────────────────────────╯                "

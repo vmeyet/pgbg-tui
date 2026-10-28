@@ -42,6 +42,7 @@ pub(crate) enum Act {
     NewQuery,
     EditOutside,
     History,
+    Versions,
     Detail,
     CopyCell,
     CopyRow,
@@ -315,6 +316,7 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Save, Pane::Anywhere, &[control('s')]).help("^s", "save the query, naming a new one").footer("^s", "save"),
     row(Act::NewQuery, Pane::Anywhere, &[control('q')]).help("^q", "a new, empty query"),
     row(Act::History, Pane::Anywhere, &[control('r')]).help("^r", "search the statements run on this connection"),
+    row(Act::Versions, Pane::Anywhere, &[control('v')]).help("^v", "the versions of the saved query its saves replaced"),
     row(Act::Connections, Pane::Anywhere, &[control('o')]).help("^o", "pick a connection").footer("^o", "connections"),
     row(Act::Quit, Pane::Anywhere, &[control('c')]).help("^c", "quit").footer("^c", "quit"),
 ];
