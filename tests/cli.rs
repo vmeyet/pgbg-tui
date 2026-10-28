@@ -142,12 +142,12 @@ fn run_keeps_a_param_in_the_history_never_its_value() {
     assert!(history.contains("{{owner}}") && !history.contains("nina"), "{history}");
 }
 
-/// `pgbg run local` with `args`, from a repository holding `queries` under `.pgbg/queries/`, as `(path, text)`.
-fn run_in_a_project(queries: &[(&str, &str)], args: &[&str]) -> Output {
+/// `pgbg run local` with `args`, from a repository that is also pgbg's data folder, holding `files` as `(path, text)`.
+fn run_in_a_project(files: &[(&str, &str)], args: &[&str]) -> Output {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join(".git")).unwrap();
-    for (path, text) in queries {
-        let file = dir.path().join(".pgbg/queries").join(path);
+    for (path, text) in files {
+        let file = dir.path().join(path);
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(file, text).unwrap();
     }
@@ -166,7 +166,14 @@ fn run_in_a_project(queries: &[(&str, &str)], args: &[&str]) -> Output {
 
 #[test]
 fn run_reads_a_saved_query_by_its_path() {
-    let output = run_in_a_project(&[("orders/purge.sql", "-- name: purge\nDELETE FROM orders")], &["--query", "orders/purge"]);
+    let output =
+        run_in_a_project(&[(".pgbg/queries/orders/purge.sql", "-- name: purge\nDELETE FROM orders")], &["--query", "orders/purge"]);
+    assert!(stderr(&output).contains("`DELETE` is not a read"), "{}", stderr(&output));
+}
+
+#[test]
+fn run_reads_a_saved_query_from_the_connections_own_folder() {
+    let output = run_in_a_project(&[("queries/local/purge.sql", "DELETE FROM orders")], &["--query", "purge"]);
     assert!(stderr(&output).contains("`DELETE` is not a read"), "{}", stderr(&output));
 }
 

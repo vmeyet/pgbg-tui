@@ -31,6 +31,8 @@ pub(crate) struct ConnectionChange {
     pub(crate) tls: Option<Tls>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) statement_timeout: Option<StatementTimeout>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) queries: Option<ConnectionName>,
 }
 
 const TUNNEL: &str = "tunnel";
@@ -308,6 +310,13 @@ mod tests {
         let (_dir, path) = typed_config(TYPED);
         edit_connection(&path, &prod(), &change(|c| c.statement_timeout = Some("2min".parse().unwrap()))).unwrap();
         assert!(read(&path).ends_with("statement_timeout = \"2min\"\n"), "{}", read(&path));
+    }
+
+    #[test]
+    fn editing_queries_writes_the_name_of_the_connection_it_shares() {
+        let (_dir, path) = typed_config(TYPED);
+        edit_connection(&path, &"local".parse().unwrap(), &change(|c| c.queries = Some(prod()))).unwrap();
+        assert!(read(&path).contains("url = \"postgres://nina@localhost:5432/shop\"\nqueries = \"prod\"\n"), "{}", read(&path));
     }
 
     #[test]

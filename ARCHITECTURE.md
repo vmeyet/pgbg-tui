@@ -32,7 +32,7 @@ When a boundary or a flow changes, change this page in the same MR.
 | `db/guard.rs` | Classifies a statement before it is sent: read, write, or more than one statement; `admit` turns a statement and its `Params` into an `Admitted`, the only kind a session runs, with the `TransactionStep` it takes on a transaction the user began, refused when the count of values is not the count of its `$n` or when it holds more than one statement, whatever the connection allows, and the `Write` it is when it is not a read; `write_in` names that `Write` (each write it holds, with its verb and the tables it lists, as `INSERT into archived_orders and DELETE from orders`, a change of the schema with its kind and the object it names by place, as `DROP TABLE role`, and `CASCADE` when it says so, or more than one statement) from tokens already read, for the confirmation, and none for transaction control or cursor statements (`BEGIN`, `COMMIT`, `SAVEPOINT`, `FETCH`, `CLOSE`), which change no data by themselves, save `COMMIT PREPARED` and `ROLLBACK PREPARED`, which end a prepared transaction, maybe another client's, and so ask; the words it takes for a write live in `db/model/words.rs`, which `name.rs` reads too; `statement_at` finds the statement under the editor's cursor with the same tokenizer |
 | `db/bind.rs` | `AsText`, the one `ToSql` a value is bound through: any parameter type, sent as text for the server to read with that type's input, `None` as NULL; `prepare` looks up each type a header names (`to_regtype`, the name bound) and leaves the others to the server (id 0) |
 | `db/decode.rs` | Wire values to `Value`, by column type, a domain by its base type; a value it cannot decode is `Unsupported`, never an error |
-| `query/` | Saved queries: the `.pgbg/queries/` tree (`Roots`, which the TUI lists and `pgbg run --query` reads by path), the header (`-- name:`, `-- connection:`, `-- chart:`, `-- format:` and `-- param:`), load, and save |
+| `query/` | Saved queries: the `.pgbg/queries/` tree and the user's own folder of each connection (`Roots`, which the TUI lists for the connection on screen and `pgbg run --query` reads by path), the header (`-- name:`, `-- connection:`, `-- chart:`, `-- format:` and `-- param:`), load, and save |
 | `query/versions.rs` | The texts a save replaced: `Roots::write` over a query, and `Roots::edit_kept` around the user's editor, keep the old text in `<data folder>/versions/<FNV-1a of the file's real path>/<when it was replaced>.sql` (folder `0700`) unless it is the text written or already the newest version, the newest 50 per query; listed newest first for `ctrl-v` |
 | `query/params.rs` | Parameters, pure: the `{{name}}` of a statement turned into `$n`, and the values `Given` by name (`--param`, a `--params-file` line, the parameter bar) into the `Params` its run binds, a name left empty taking its `-- param:` default, or NULL when `optional`, then `admit`ted by the guard; its `Numbering` reads a place in the filled text, where a server error points, back in the template |
 | `complete/` | Completion, pure: the `Index` built once from a `Catalog` (a vtui completion index per list: the tables, every column, each table's own columns and the keywords, in the catalog's order, and the names that need quotes with how they go in; a table bare in the first schema of `current_schemas(false)` that holds its name, else as `schema.table`; each column name once, and each table's own), the `Ask` at the cursor from the tokens of the statement under it, never of the whole editor, and none inside a string, a comment or a quoted name (a table after `FROM` or a `,` of a `FROM` list; after `JOIN`, a table with the tables named before it; a column of `orders` after `o.` when `FROM orders o`, each table found by its name as PostgreSQL resolves it, a bare one lowercased and a quoted one as written; a keyword at a statement's start; else a column or a keyword), and the ranked candidates: vtui ranks each list, the ghost's prefix only and the list's fuzzy too, and `complete/` merges the lists, quotes a name, cases a keyword as typed and offers a table's first column after a bare `.`; after `JOIN`, the joins (`join.rs`) come first: each table a foreign key links to one the statement names, either way, as `customers c ON c.id = o.customer_id`, its alias the initials of its name, numbered when taken or a keyword, its condition from the key's columns joined with `AND` |
@@ -193,7 +193,7 @@ Charting a result:
 ## Boundaries
 
 - Only `src/db/` sees a `tokio_postgres` type; everything else uses `db/model/`.
-- Side effects live at the edges: `main.rs`, `signal.rs`, `commands/`, `tui/mod.rs`, `tui/backend/`, `tunnel/`, `secret/`, `ai/command.rs`, `config/` when it rewrites the file, `query/` when it lists, reads, writes and makes the queries folders and keeps the versions a save replaced, `history.rs` when it appends and reads its files, `usage.rs` when it reads and writes the usage file, `tui/usage.rs` when it reads the clock for it.
+- Side effects live at the edges: `main.rs`, `signal.rs`, `commands/`, `tui/mod.rs`, `tui/backend/`, `tunnel/`, `secret/`, `ai/command.rs`, `config/` when it rewrites the file, `query/` when it lists, reads, writes and makes the user's own queries folders and keeps the versions a save replaced, `history.rs` when it appends and reads its files, `usage.rs` when it reads and writes the usage file, `tui/usage.rs` when it reads the clock for it.
 - `tui/app/` is pure: it never reads the clock nor does I/O; its tests drive it with keys and `Answer` values.
   The usage counts read it from the loop (`tui/usage.rs`): the act a key does where it lands and the screen on show, before the key; the loop keeps the clock and the tally, and writes them once a minute and on quit.
 - `chart/` is pure: a `ResultSet` in, a `Series` out; drawing lives in `tui/chart_view/`.
@@ -259,9 +259,11 @@ pgbg's own read-only transaction (`Session::read_only`) is refused with `InsideU
 
 ## Saved queries
 
-- One `.sql` file per query under `.pgbg/queries/`, found by walking up from the working directory like `.git`, then under `queries/` in pgbg's config folder (`$XDG_CONFIG_HOME/pgbg`, else `~/.config/pgbg`).
+- One `.sql` file per query under `.pgbg/queries/`, found by walking up from the working directory like `.git`, which every connection shows, then under `queries/<connection>/` in pgbg's data folder, the user's own of the connection on screen (`Source::User`).
+- A connection's `queries` key names another connection whose folder it uses; the config refuses a name that is no connection, and a connection name of only dots, so the folder stays inside `queries/`.
+- The app asks for the list of the folder of the connection on screen (`Action::ListQueries`), drops a list of another folder, and asks again after a switch to a connection with another folder, its list emptied until it comes, and after each save.
 - The walk stops at the home folder or at the first folder holding `.git`, so a folder above the project never gives its queries.
-- A new query goes to the project's root, else to the user's when only that one exists; a project without one gets `.pgbg/queries/` made at its first save, at the repository root, else in the working directory, one folder at a time and refusing a link or a file in the way.
+- A new query goes to the project's root when it has one, else to the user's own folder of the connection on screen, made at its first save under the data folder, one folder at a time and refusing a link or a file in the way; pgbg never makes a project's folder.
 - A root that is a link, under a `.pgbg` that is a link, or that another user owns is skipped with a warning: a cloned repository cannot point pgbg at the whole disk.
 - Each list and each read checks the root again, and that it still leads to the real path it had when found: a folder swapped for a link since then is skipped.
 - Folders nest; the sidebar shows the tree and the fuzzy finder searches every file.
@@ -275,7 +277,7 @@ pgbg's own read-only transaction (`Session::read_only`) is refused with `InsideU
 - A save over a query, from `ctrl-s` or `$EDITOR`, first keeps the text it replaces as a version in pgbg's data folder, never in the project; best effort, so a version not kept is logged and never stops the save.
 - `ctrl-v` lists the versions of the query on screen; `⏎` puts one in the editor as unsaved text, and only `ctrl-s` writes it.
 - A save writes a temporary file beside the query and renames it over; it makes the missing folders, refuses a link or a root that changed, and a new query never replaces another file, so saving twice changes nothing.
-- A new query goes under the project's root, else under the user's; opening another query or a new, empty one (`ctrl-q`) over unsaved text asks first.
+- Opening another query or a new, empty one (`ctrl-q`) over unsaved text asks first.
 
 ## Performance
 
@@ -304,7 +306,7 @@ One word per concept, in code, docs and UI.
 | run | One sending of a statement, named by its `RunId`: running, cancelling, done or failed |
 | tunnel | The child process that forwards a local port to a database out of reach |
 | statement | One SQL statement, the unit pgbg runs |
-| query | A saved `.sql` file under `.pgbg/queries/` |
+| query | A saved `.sql` file under `.pgbg/queries/`, or under the user's own folder of a connection |
 | result | The columns and rows a statement returned, page by page |
 | page | One batch of rows fetched from the portal |
 | chart | A bar or line drawing of a result |

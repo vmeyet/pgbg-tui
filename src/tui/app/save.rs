@@ -116,8 +116,8 @@ impl App {
         let sheet = self.sheet();
         match QueryPath::parse(&with_extension(path.text())) {
             Ok(parsed) => {
-                let save = Action::SaveNewQuery { connection: sheet.name().clone(), path: parsed, text: sheet.editor.text().to_owned() };
-                (None, vec![save])
+                let (connection, folder) = (sheet.name().clone(), self.queries_folder().clone());
+                (None, vec![Action::SaveNewQuery { connection, folder, path: parsed, text: sheet.editor.text().to_owned() }])
             }
             Err(err) => (Some(Prompt::SaveAs { path, error: Some(err.to_string()) }), vec![]),
         }
@@ -171,7 +171,10 @@ mod tests {
         assert_eq!(ctrl_s(&mut app), []);
         "orders/weekly".chars().for_each(|c| _ = press(&mut app, KeyCode::Char(c)));
         let path = QueryPath::parse("orders/weekly.sql").unwrap();
-        assert_eq!(press(&mut app, KeyCode::Enter), [Action::SaveNewQuery { connection: shop(), path, text: "SELECT 2".into() }]);
+        assert_eq!(
+            press(&mut app, KeyCode::Enter),
+            [Action::SaveNewQuery { connection: shop(), folder: shop(), path, text: "SELECT 2".into() }]
+        );
         assert_eq!(app.overlay, None);
     }
 
@@ -192,6 +195,13 @@ mod tests {
         assert!(app.sheet().is_dirty);
         app.apply(Answer::Queries(QueryAnswer::Saved { connection: shop(), query: query("daily.sql"), text: "SELECT 1;".into() }));
         assert!(!app.sheet().is_dirty);
+    }
+
+    #[test]
+    fn a_saved_query_lists_the_queries_again_so_a_new_file_shows() {
+        let mut app = opened("SELECT 1");
+        let saved = QueryAnswer::Saved { connection: shop(), query: query("daily.sql"), text: "SELECT 1".into() };
+        assert_eq!(app.apply(Answer::Queries(saved)), [Action::ListQueries(shop())]);
     }
 
     #[test]

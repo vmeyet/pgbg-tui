@@ -10,6 +10,9 @@ Each entry says what changed, then where, then how to use it.
 
 - **Usage counts, opt-in**, for the TUI: with `[usage] enabled = true` in `config.toml`, pgbg counts the keys you use and the time on each pane, on this machine only, never a statement or a name.
   Run `pgbg usage` to see the keys never or rarely used, the most used and the time per pane; `--since 4w`, `7d` or `all` changes the window, `--json` gives it to a script.
+- **Your own saved queries belong to a connection**, in the TUI and `pgbg run --query`: they live in `queries/<connection>/` in pgbg's data folder, as `~/.local/share/pgbg/queries/prod/`.
+  The sidebar and `ctrl-p` show the queries of the connection on screen, with the project's `.pgbg/queries/` on every connection, and `ctrl-o` to another connection shows its own.
+  Set `queries = "prod"` on a connection to use the queries of `prod`, as reports shared by a replica, or pass `--queries prod` to `pgbg connection add` or `edit`; a name that is no connection is refused.
 - **A date reads relative to today**, in the TUI's grid: a `date` column reads `today`, `yesterday`, `tomorrow`, then `3 d ago`, `in 2 d`, `1 mo ago` or `2 y ago`, counted from your local date.
   Press `f` on it, `F` to put every column readable, or name it in a saved query's header as `-- format: day=relative`.
   `f` on a column with no other format now says so on the status line instead of doing nothing.
@@ -100,7 +103,7 @@ Each entry says what changed, then where, then how to use it.
 - **Saved queries** in the TUI: put `.sql` files under `.pgbg/queries/`, in folders if you like, at the top of your project.
   Press `ctrl-p`, type a few letters of a query's path, and `⏎` opens it in the editor; `↑`/`↓` pick another match, `esc` closes the finder.
   pgbg finds the `.pgbg/queries/` nearest the folder you start it in, as git finds `.git`.
-  Queries of your own, for every project, go under `pgbg/queries/` in your config folder; the finder marks them `user`.
+  Queries of your own, for every project, go under `queries/<connection>/` in pgbg's data folder; the finder marks them `user`.
   The search stops at your home folder or at the top of your repository, where `.git` is; a queries folder that is a link, or that another user owns, is skipped.
   Only a plain file of 1 MiB at most opens: a pipe, a link or a dump says why it does not.
   The sidebar on the left lists them as a tree, `●` on the one in the editor: `tab` reaches it, `j`/`k` move, `⏎` opens a query or folds a folder; a terminal under 80 columns leaves it out.
@@ -158,12 +161,12 @@ Each entry says what changed, then where, then how to use it.
 - **The idle ghost shows when the answer lays the statement out its own way**, in the TUI's editor: other line breaks, spaces, comments or word case no longer hide it.
   What you typed stays as is, and an answer that changes it still shows nothing.
   When no ghost shows, `pgbg.log` says why: the command failed, ran out of time, or did not continue the statement.
-- **pgbg's config folder is `~/.config/pgbg/` on macOS too**, for `config.toml` and your own `queries/`: it was `~/Library/Application Support/pgbg/`.
+- **pgbg's config folder is `~/.config/pgbg/` on macOS too**, for `config.toml`: it was `~/Library/Application Support/pgbg/`.
   Set `$XDG_CONFIG_HOME` to move it, or `$PGBG_CONFIG` to use another file.
 - **pgbg's history is in `~/.local/share/pgbg/history/` on macOS too**: it was `~/Library/Application Support/pgbg/history/`.
   Set `$XDG_DATA_HOME` to move it, or `$PGBG_DATA_DIR` to keep it elsewhere.
-- **Saving the first query makes its folder**, in the TUI: `ctrl-s` on a new query in a project without `.pgbg/queries/` makes it, at the top of your repository or in the folder you started pgbg in, instead of failing.
-  Your own `~/.config/pgbg/queries/` still takes a new query when the project has no folder of its own and yours exists.
+- **Saving the first query makes its folder**, in the TUI: `ctrl-s` on a new query in a project without `.pgbg/queries/` makes the folder of the connection on screen in pgbg's data folder, instead of failing.
+  pgbg never makes a project's `.pgbg/queries/` itself: make it to keep queries with the project, and new queries go there.
 - **A command that ends cleanly no longer logs a warning on macOS**, for a `before`, password or `[ai]` command: pgbg no longer says it could not kill its process group.
 - **A command whose helper left its process group no longer hangs**, for a `before`, password or `[ai]` command: when that helper still holds its output a second after the group is stopped, the command fails and says so.
 - **The question before a write shows its table names escaped**, in `pgbg run` and the TUI's footer: a control character or a mark that reverses text in a name can no longer hide the verb.

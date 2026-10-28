@@ -257,10 +257,10 @@ impl App {
         &mut self.sheets[self.shown]
     }
 
-    /// What the runner should do as the TUI starts: open the first sheet's session, list the queries.
+    /// What the runner should do as the TUI starts: open the first sheet's session, list its queries.
     pub(super) fn start(&self) -> Vec<Action> {
         let first = &self.sheets[0];
-        vec![Action::Open { connection: first.connection.clone(), session: first.session_id }, Action::ListQueries]
+        vec![Action::Open { connection: first.connection.clone(), session: first.session_id }, self.list_queries()]
     }
 
     /// Whether the editor on screen changed since its colours were built, so it needs `recolour`.
@@ -340,14 +340,17 @@ impl App {
                     sheet.apply(incoming, &reading);
                 }
             }
-            Answer::Queries(QueryAnswer::All(all)) => self.listed(all),
+            Answer::Queries(QueryAnswer::All { folder, queries }) => self.listed(&folder, queries),
             Answer::Queries(QueryAnswer::Opened { connection, query, text }) => self.opened(&connection, query, &text),
             Answer::Queries(QueryAnswer::NotOpened { connection, query, error }) => {
                 if let Some(sheet) = self.sheet_of_mut(&connection) {
                     sheet.query_error = Some(format!("could not open {}: {error}", query.path));
                 }
             }
-            Answer::Queries(QueryAnswer::Saved { connection, query, text }) => self.saved(&connection, query, &text),
+            Answer::Queries(QueryAnswer::Saved { connection, query, text }) => {
+                self.saved(&connection, query, &text);
+                return vec![self.list_queries()];
+            }
             Answer::Queries(QueryAnswer::NotSaved { connection, path, error }) => self.not_saved(&connection, &path, &error),
             Answer::Config { id, answer: ConfigAnswer::Changed { connections, warning } } => {
                 return self.take_connections(id, connections, warning);

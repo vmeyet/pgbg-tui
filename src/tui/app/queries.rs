@@ -25,8 +25,35 @@ impl Queries {
 }
 
 impl App {
+    /// The queries folder of the connection on screen, whose queries the sidebar and the finder show.
+    pub(super) fn queries_folder(&self) -> &ConnectionName {
+        self.sheet().connection.queries()
+    }
+
+    /// Lists the queries of the connection on screen again.
+    pub(super) fn list_queries(&self) -> Action {
+        Action::ListQueries(self.queries_folder().clone())
+    }
+
+    /// Lists the queries again when the connection on screen no longer uses the `listed` folder, emptying the list
+    /// until they come, so another connection's queries never show.
+    pub(super) fn follow_queries_folder(&mut self, listed: &ConnectionName) -> Option<Action> {
+        if self.queries_folder() == listed {
+            return None;
+        }
+        self.take_list(vec![]);
+        Some(self.list_queries())
+    }
+
+    /// Takes the list of queries of `folder`, unless the connection on screen no longer uses that folder.
+    pub(super) fn listed(&mut self, folder: &ConnectionName, all: Vec<Query>) {
+        if self.queries_folder() == folder {
+            self.take_list(all);
+        }
+    }
+
     /// Takes the new list of queries, keeping the sidebar's cursor on its row, or else inside the list.
-    pub(super) fn listed(&mut self, all: Vec<Query>) {
+    fn take_list(&mut self, all: Vec<Query>) {
         let selected = self.queries.rows().into_iter().nth(self.queries.selected);
         self.queries.all = all;
         let rows = self.queries.rows();
@@ -41,7 +68,7 @@ impl App {
     /// Opens the finder on every query, and lists them again in case a file was added or removed.
     pub(super) fn find(&mut self) -> Vec<Action> {
         self.overlay = Some(Overlay::Finder(Finder::new(&self.queries.all)));
-        vec![Action::ListQueries]
+        vec![self.list_queries()]
     }
 
     pub(super) fn step_sidebar(&mut self, delta: isize) {
@@ -120,9 +147,14 @@ pub(in crate::tui) mod tests {
         Query { source: Source::Project, path: QueryPath::parse(path).unwrap() }
     }
 
+    /// The list of the queries of `shop`, the connection on screen.
+    pub(in crate::tui) fn listed(queries: Vec<Query>) -> Answer {
+        Answer::Queries(QueryAnswer::All { folder: shop(), queries })
+    }
+
     pub(in crate::tui) fn with_queries() -> App {
         let mut app = app();
-        app.apply(Answer::Queries(QueryAnswer::All(vec![query("customers.sql"), query("orders/daily.sql"), query("orders/weekly.sql")])));
+        app.apply(listed(vec![query("customers.sql"), query("orders/daily.sql"), query("orders/weekly.sql")]));
         app.fit(Fit { grid: Room { rows: 10, columns: 80 }, panes: every_pane(), ..Fit::default() });
         app
     }
@@ -209,8 +241,8 @@ pub(in crate::tui) mod tests {
     #[test]
     fn ctrl_p_lists_the_queries_again_and_the_finder_follows_the_new_list() {
         let mut app = with_queries();
-        assert_eq!(press(&mut app, KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL)), [Action::ListQueries]);
-        app.apply(Answer::Queries(QueryAnswer::All(vec![query("refunds.sql")])));
+        assert_eq!(press(&mut app, KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL)), [Action::ListQueries(shop())]);
+        app.apply(listed(vec![query("refunds.sql")]));
         assert_eq!(press(&mut app, KeyCode::Enter), [Action::OpenQuery { connection: shop(), query: query("refunds.sql") }]);
     }
 
@@ -268,7 +300,7 @@ pub(in crate::tui) mod tests {
         to_sidebar(&mut app);
         (0..2).for_each(|_| _ = press(&mut app, KeyCode::Char('j')));
         let all = vec![query("archive/old.sql"), query("customers.sql"), query("orders/daily.sql"), query("orders/weekly.sql")];
-        app.apply(Answer::Queries(QueryAnswer::All(all)));
+        app.apply(listed(all));
         assert_eq!(press(&mut app, KeyCode::Enter), [Action::OpenQuery { connection: shop(), query: query("orders/weekly.sql") }]);
     }
 
@@ -277,7 +309,7 @@ pub(in crate::tui) mod tests {
         let mut app = with_queries();
         to_sidebar(&mut app);
         (0..5).for_each(|_| _ = press(&mut app, KeyCode::Char('j')));
-        app.apply(Answer::Queries(QueryAnswer::All(vec![query("customers.sql")])));
+        app.apply(listed(vec![query("customers.sql")]));
         assert_eq!(app.queries.selected, 0);
     }
 

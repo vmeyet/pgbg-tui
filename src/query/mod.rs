@@ -1,6 +1,7 @@
 //! Saved queries: the `.sql` files under the `.pgbg/queries/` nearest the working directory, found the way git finds
-//! `.git`, and under `queries/` in pgbg's config folder.
+//! `.git`, and under `queries/<connection>/` in pgbg's data folder.
 use crate::config;
+use crate::connection::ConnectionName;
 use crate::render;
 use anyhow::{Context, Result, bail};
 use rustix::fs::{Mode, OFlags};
@@ -69,19 +70,19 @@ impl fmt::Display for QueryPath {
 }
 
 /// Which root a query is under.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Source {
-    /// The `.pgbg/queries/` nearest the working directory.
+    /// The `.pgbg/queries/` nearest the working directory, which every connection shows.
     Project,
-    /// `queries/` in pgbg's config folder.
-    User,
+    /// The user's own folder of this connection, `queries/<connection>/` in pgbg's data folder.
+    User(ConnectionName),
 }
 
 impl fmt::Display for Source {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Project => "project",
-            Self::User => "user",
+            Self::User(_) => "user",
         })
     }
 }
@@ -98,8 +99,8 @@ pub(crate) struct Query {
 pub(crate) struct Places<'a> {
     pub(crate) working_dir: &'a Path,
     pub(crate) home: Option<&'a Path>,
-    /// pgbg's config folder, whose `queries/` holds the user's own queries.
-    pub(crate) config_dir: Option<&'a Path>,
+    /// pgbg's data folder, whose `queries/<connection>/` holds the user's own queries of each connection.
+    pub(crate) data_dir: Option<&'a Path>,
 }
 
 /// Why a folder is not taken as a root of queries.
@@ -175,115 +176,84 @@ fn walked<'a>(places: &Places<'a>) -> Vec<&'a Path> {
     ancestors[..kept].to_vec()
 }
 
-/// The project's queries folder, and the folder holding its `.pgbg/`.
-#[derive(Clone, Debug)]
-struct Project {
-    /// The nearest folder up from the working directory with a `.pgbg/queries/`, else the repository root, else the
-    /// working directory.
-    dir: PathBuf,
-    /// The queries folder as found when pgbg started; none when it was missing then, until a save makes it.
-    root: Option<Root>,
-}
-
-impl Project {
-    fn find(places: &Places<'_>) -> Self {
-        let walked = walked(places);
-        let with_queries = walked.iter().find(|dir| exists(&queries_dir(dir)));
-        let repository = walked.last().filter(|dir| dir.join(REPOSITORY_MARKER).exists());
-        let dir = with_queries.or(repository).copied().unwrap_or(places.working_dir);
-        Self { dir: dir.to_path_buf(), root: project_root(dir) }
-    }
-
-    /// The root found when pgbg started, else the one made since then, once it exists. Blocks on the file system.
-    fn root(&self) -> Option<Root> {
-        self.root.clone().or_else(|| project_root(&self.dir))
-    }
+/// The `.pgbg/queries/` nearest the working directory up, when one exists and passes the checks.
+fn project_root(places: &Places<'_>) -> Option<Root> {
+    let dir = walked(places).into_iter().find(|dir| exists(&queries_dir(dir)))?;
+    let root = queries_dir(dir);
+    Root::checked(root.clone(), vec![dir.join(PROJECT_DIR), root])
 }
 
 fn queries_dir(dir: &Path) -> PathBuf {
     dir.join(PROJECT_DIR).join(QUERIES_DIR)
 }
 
-/// The `.pgbg/queries/` of `dir` when it exists and passes the checks.
-fn project_root(dir: &Path) -> Option<Root> {
-    let root = queries_dir(dir);
-    if !exists(&root) {
-        return None;
-    }
-    Root::checked(root.clone(), vec![dir.join(PROJECT_DIR), root])
-}
-
-fn user_root(config_dir: &Path) -> Option<Root> {
-    let root = config_dir.join(QUERIES_DIR);
-    if !exists(&root) {
-        return None;
-    }
-    Root::checked(root.clone(), vec![root])
-}
-
 fn exists(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok()
 }
 
-/// The folders queries live in: the project's, made at the first save when missing, and the user's when it exists.
+/// The folders queries live in: the project's when it has one, and the user's own folder of each connection.
 #[derive(Clone, Debug)]
+#[cfg_attr(test, derive(Default))]
 pub(crate) struct Roots {
-    project: Project,
-    user: Option<Root>,
+    project: Option<Root>,
+    /// pgbg's data folder, where a connection's own folder is made at its first save; none keeps no query of the user's.
+    data_dir: Option<PathBuf>,
     /// Where a save keeps the text it replaces; none keeps no version.
     versions: Option<Versions>,
 }
 
-/// No queries folder at all, the project's under a folder that does not exist.
-#[cfg(test)]
-impl Default for Roots {
-    fn default() -> Self {
-        Self { project: Project { dir: PathBuf::from("/nonexistent/shop"), root: None }, user: None, versions: None }
-    }
-}
-
 impl Roots {
-    /// The nearest `.pgbg/queries/` from the working directory up, and `queries/` under pgbg's config folder; a root
-    /// that is a link, or that another user owns, is skipped. Blocks on the file system.
+    /// The nearest `.pgbg/queries/` from the working directory up, and the user's folders under pgbg's data folder; a
+    /// root that is a link, or that another user owns, is skipped. Blocks on the file system.
     pub(crate) fn find(places: &Places<'_>) -> Self {
-        Self { project: Project::find(places), user: places.config_dir.and_then(user_root), versions: None }
+        Self { project: project_root(places), data_dir: places.data_dir.map(Path::to_path_buf), versions: None }
     }
 
-    /// The roots for the working directory, the home folder and pgbg's config folder, found off the runtime.
+    /// The roots for the working directory, the home folder and pgbg's data folder, found off the runtime.
     pub(crate) async fn find_here() -> Result<Self> {
         let working_dir = std::env::current_dir()?;
-        let (home, config_dir) = (dirs::home_dir(), config::dir());
-        let found = move || Self::find(&Places { working_dir: &working_dir, home: home.as_deref(), config_dir: Some(&config_dir) });
+        let (home, data_dir) = (dirs::home_dir(), config::data_dir());
+        let found = move || Self::find(&Places { working_dir: &working_dir, home: home.as_deref(), data_dir: data_dir.as_deref() });
         Ok(tokio::task::spawn_blocking(found).await?)
     }
 
-    /// The query at `path`, `.sql` added when it lacks it: the project's before the user's.
-    pub(crate) async fn named(&self, path: &str) -> Result<Query> {
+    /// The query at `path`, `.sql` added when it lacks it: the project's before the user's own of `folder`.
+    pub(crate) async fn named(&self, path: &str, folder: &ConnectionName) -> Result<Query> {
         let with_extension = if path.ends_with(EXTENSION) { path.to_owned() } else { format!("{path}{EXTENSION}") };
         let path = QueryPath::parse(&with_extension)?;
-        let roots = self.clone();
-        let listed = tokio::task::spawn_blocking(move || roots.list()).await?;
+        let (roots, folder) = (self.clone(), folder.clone());
+        let listed = tokio::task::spawn_blocking(move || roots.list(&folder)).await?;
         listed
             .into_iter()
             .find(|query| query.path == path)
             .with_context(|| format!("no saved query {path}: `pgbg` lists them in its sidebar"))
     }
 
+    /// The user's own folder of the connection `folder`, `queries/<connection>/` in pgbg's data folder.
+    fn user_dir(&self, folder: &ConnectionName) -> Option<PathBuf> {
+        Some(self.data_dir.as_ref()?.join(QUERIES_DIR).join(folder.to_string()))
+    }
+
     /// The root of `source`, when it exists. Blocks on the file system.
-    fn root(&self, source: Source) -> Option<Root> {
+    fn root(&self, source: &Source) -> Option<Root> {
         match source {
-            Source::Project => self.project.root(),
-            Source::User => self.user.clone(),
+            Source::Project => self.project.clone(),
+            Source::User(folder) => {
+                let root = self.user_dir(folder).filter(|dir| exists(dir))?;
+                let queries = root.parent()?.to_path_buf();
+                Root::checked(root.clone(), vec![queries, root])
+            }
         }
     }
 
-    /// Every query under both roots, sorted; a folder that cannot be read, or that changed since it was found, is
-    /// skipped with a warning. Blocks on the file system.
-    pub(crate) fn list(&self) -> Vec<Query> {
-        let safe = |source| self.root(source).filter(Root::is_still_safe).map(|root| (source, root.dir));
-        let found = [Source::Project, Source::User].into_iter().filter_map(safe);
-        let mut queries: Vec<Query> =
-            found.flat_map(|(source, dir)| files_under(&dir, "").into_iter().map(move |path| Query { source, path })).collect();
+    /// Every query of the project and of the user's own `folder`, sorted; a folder that cannot be read, or that changed
+    /// since it was found, is skipped with a warning. Blocks on the file system.
+    pub(crate) fn list(&self, folder: &ConnectionName) -> Vec<Query> {
+        let safe = |source: Source| self.root(&source).filter(Root::is_still_safe).map(|root| (source, root.dir));
+        let found = [Source::Project, Source::User(folder.clone())].into_iter().filter_map(safe);
+        let mut queries: Vec<Query> = found
+            .flat_map(|(source, dir)| files_under(&dir, "").into_iter().map(move |path| Query { source: source.clone(), path }))
+            .collect();
         queries.sort();
         queries
     }
@@ -296,12 +266,12 @@ impl Roots {
     }
 
     fn read_blocking(&self, query: &Query) -> Result<String> {
-        let root = self.existing_root(query.source)?;
+        let root = self.existing_root(&query.source)?;
         read_checked(&root, &query.path.under(&root.real))
     }
 
     /// The root of `source`, or an error naming it when it does not exist. Blocks on the file system.
-    fn existing_root(&self, source: Source) -> Result<Root> {
+    fn existing_root(&self, source: &Source) -> Result<Root> {
         self.root(source).with_context(|| format!("no {source} queries folder"))
     }
 }
@@ -413,7 +383,11 @@ mod tests {
     }
 
     fn project(root: &Path) -> Roots {
-        Roots { project: Project { dir: root.into(), root: Some(unchecked(root)) }, ..Roots::default() }
+        Roots { project: Some(unchecked(root)), ..Roots::default() }
+    }
+
+    fn name(text: &str) -> ConnectionName {
+        text.parse().unwrap()
     }
 
     fn unchecked(dir: &Path) -> Root {
@@ -421,7 +395,7 @@ mod tests {
     }
 
     fn listed(roots: &Roots) -> Vec<String> {
-        roots.list().iter().map(|query| format!("{} {}", query.source, query.path)).collect()
+        roots.list(&name("shop")).iter().map(|query| format!("{} {}", query.source, query.path)).collect()
     }
 
     #[test]
@@ -441,24 +415,38 @@ mod tests {
         assert_eq!(find_from(&home.path().join("shop/src"), None), Some(home.path().join("shop/.pgbg/queries")));
     }
 
-    #[test]
-    fn the_user_root_is_under_the_config_folder_when_it_exists() {
-        let config = tempfile::tempdir().unwrap();
-        let places = Places { working_dir: config.path(), home: None, config_dir: Some(config.path()) };
-        assert_eq!(Roots::find(&places).user, None);
-        write(config.path(), "queries/mine.sql");
-        assert_eq!(Roots::find(&places).user.map(|root| root.dir), Some(config.path().join("queries")));
+    fn with_data(roots: Roots, data: &Path) -> Roots {
+        Roots { data_dir: Some(data.into()), ..roots }
     }
 
     #[test]
-    fn listing_finds_every_sql_file_of_both_roots_sorted() {
-        let (root, user) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    fn listing_finds_every_sql_file_of_the_project_and_the_connections_own_folder_sorted() {
+        let (root, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         for file in ["orders/daily.sql", "customers.sql", "notes.txt", "orders/weekly/top.sql"] {
             write(root.path(), file);
         }
-        write(user.path(), "mine.sql");
-        let roots = Roots { user: Some(unchecked(user.path())), ..project(root.path()) };
+        write(data.path(), "queries/shop/mine.sql");
+        let roots = with_data(project(root.path()), data.path());
         assert_eq!(listed(&roots), ["project customers.sql", "project orders/daily.sql", "project orders/weekly/top.sql", "user mine.sql"]);
+    }
+
+    #[test]
+    fn a_connections_own_query_is_not_listed_on_another_connection() {
+        let data = tempfile::tempdir().unwrap();
+        write(data.path(), "queries/staging/mine.sql");
+        let roots = with_data(Roots::default(), data.path());
+        assert_eq!(roots.list(&name("shop")), []);
+        assert_eq!(roots.list(&name("staging")).len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_connections_own_folder_that_is_a_link_is_refused() {
+        let (data, outside) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        write(outside.path(), "mine.sql");
+        fs::create_dir_all(data.path().join("queries")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), data.path().join("queries/shop")).unwrap();
+        assert_eq!(listed(&with_data(Roots::default(), data.path())), Vec::<String>::new());
     }
 
     #[cfg(unix)]
@@ -472,7 +460,7 @@ mod tests {
     }
 
     fn find_from(working_dir: &Path, home: Option<&Path>) -> Option<PathBuf> {
-        Roots::find(&Places { working_dir, home, config_dir: None }).project.root.map(|root| root.dir)
+        Roots::find(&Places { working_dir, home, data_dir: None }).project.map(|root| root.dir)
     }
 
     fn daily() -> Query {
@@ -532,7 +520,7 @@ mod tests {
         let (project, outside) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         write(project.path(), ".pgbg/queries/orders/daily.sql");
         write(outside.path(), "queries/orders/daily.sql");
-        let roots = Roots::find(&Places { working_dir: project.path(), home: None, config_dir: None });
+        let roots = Roots::find(&Places { working_dir: project.path(), home: None, data_dir: None });
         fs::rename(project.path().join(".pgbg"), project.path().join("was")).unwrap();
         std::os::unix::fs::symlink(outside.path(), project.path().join(".pgbg")).unwrap();
         (roots, [project, outside])
