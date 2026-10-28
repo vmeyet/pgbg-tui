@@ -89,6 +89,7 @@ impl Backend {
             Action::CopyResult { result, format, done } => clipboard::export(result, format, done, self.answers.clone()),
             Action::Ask { ask, prompt, settings } => self.asks.ask(ask, prompt, &settings),
             Action::DropAsk(ask) => self.asks.drop_ask(ask),
+            Action::LogNoIdleGhost(why) => tracing::warn!("{why}"),
         }
     }
 

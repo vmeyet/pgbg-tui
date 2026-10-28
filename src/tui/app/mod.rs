@@ -19,8 +19,8 @@ pub(super) use history::Recall;
 pub(super) use panes::Panes;
 pub(super) use picker::{Note, Picker};
 pub(super) use protocol::{
-    Action, Answer, AskFailure, AskId, ConfigAnswer, ConfigChangeId, Incoming, KeychainPassword, QueryAnswer, RunId, SaveConnection,
-    Saving, SessionId, TunnelState,
+    Action, Answer, AskFailure, AskId, ConfigAnswer, ConfigChangeId, Incoming, KeychainPassword, NoIdleGhost, QueryAnswer, RunId,
+    SaveConnection, Saving, SessionId, TunnelState,
 };
 pub(super) use queries::{Finder, Queries};
 pub(super) use save::Prompt;
@@ -338,7 +338,7 @@ impl App {
             Answer::History { connection, entries } => self.history_read(&connection, entries),
             Answer::Copied(note) => self.copied(note),
             Answer::Exported { text, done } => return vec![Action::Copy { text, done }],
-            Answer::Asked { ask, answer } => self.asked(ask, answer),
+            Answer::Asked { ask, answer } => return self.asked(ask, answer),
         }
         vec![]
     }

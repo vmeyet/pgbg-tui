@@ -3,10 +3,11 @@
 //! The loop owns the second; the app only says whether one would ask.
 use super::editor::Revision;
 use super::ghost::Ghost;
-use super::{Action, App, AskFailure, AskId, Focus, Sheet};
+use super::{Action, App, AskFailure, AskId, Focus, NoIdleGhost, Sheet};
 use crate::ai::Instruction;
 use crate::config::AiSettings;
 use crate::connection::{AiAsking, ConnectionName};
+use crate::db::lex::{self, Placed, Token};
 use crate::db::model::Statement;
 
 const INSTRUCTION: &str = "Complete the statement under the cursor: answer with it whole, the text it holds kept exactly as \
@@ -88,15 +89,22 @@ impl App {
     }
 
     /// Shows the rest of the statement the idle ask's `answer` gives, while the editor is still the one it asked about;
-    /// a failed ask shows nothing, since nobody asked for it.
-    pub(super) fn show_idle_ghost(&mut self, answer: Result<Vec<Statement>, AskFailure>) {
-        if self.asks.idle.stop_waiting().is_none() {
-            return;
-        }
+    /// when it gives none, says why for the log, since nobody asked for it and so nothing on screen says it.
+    pub(super) fn show_idle_ghost(&mut self, answer: Result<Vec<Statement>, AskFailure>) -> Option<Action> {
+        self.asks.idle.stop_waiting()?;
         let is_current = self.asks.idle.covers(&self.editor_on_screen()) && self.shows_the_bare_editor() && self.idle_settings().is_some();
-        let Some(statements) = answer.ok().filter(|_| is_current) else { return };
-        let ghost = self.sheet().rest_in(&statements);
-        self.sheet_mut().ghost = ghost;
+        if !is_current {
+            return None;
+        }
+        let why = match answer.map(|statements| self.sheet().rest_in(&statements)) {
+            Ok(Some(ghost)) => {
+                self.sheet_mut().ghost = Some(ghost);
+                return None;
+            }
+            Ok(None) => NoIdleGhost::NotContinued,
+            Err(failure) => NoIdleGhost::Failed(failure),
+        };
+        Some(Action::LogNoIdleGhost(why))
     }
 
     fn editor_on_screen(&self) -> EditorAt {
@@ -125,12 +133,47 @@ impl Sheet {
     }
 
     /// The ghost of what the first of `statements` adds after the statement typed before the cursor, when it starts
-    /// with that statement as typed.
+    /// with that statement's tokens.
     fn rest_in(&self, statements: &[Statement]) -> Option<Ghost> {
         let typed = self.statement_before_cursor()?;
-        let rest = statements.first()?.as_str().strip_prefix(typed)?;
+        let rest = rest_after(typed, statements.first()?.as_str())?;
         let (before, _, _) = self.editor.split();
-        Ghost::at_cursor(before.len(), rest)
+        Ghost::at_cursor(before.len(), &rest)
+    }
+}
+
+/// What `answer` adds after `typed`, when its tokens start with those of `typed`: blanks, comments and the case of words
+/// aside, so a reformatted answer still fits, and the last typed token may be the start of a longer one.
+/// A rest after a typed token begins with one space where the answer has blanks; after typed blanks, with none.
+fn rest_after(typed: &str, answer: &str) -> Option<String> {
+    let (typed_tokens, answer_tokens) = (lex::tokens(typed), lex::tokens(answer));
+    let (last, before) = typed_tokens.split_last()?;
+    let reached = answer_tokens.get(before.len())?;
+    let same_before = before.iter().zip(&answer_tokens).all(|(mine, theirs)| is_same(mine, typed, theirs, answer));
+    let ends_on_token = last.range.end == typed.len();
+    let last_typed = &typed[last.range.clone()];
+    let reached_text = &answer[reached.range.clone()];
+    let fits = if ends_on_token { starts_with(reached_text, last_typed, &last.token) } else { is_same(last, typed, reached, answer) };
+    if !same_before || !fits {
+        return None;
+    }
+    let after = &answer[reached.range.start + last_typed.len()..];
+    let trimmed = after.trim_start_matches(lex::is_blank);
+    let gap = if ends_on_token && trimmed.len() < after.len() { " " } else { "" };
+    Some(format!("{gap}{trimmed}"))
+}
+
+fn is_same(mine: &Placed, typed: &str, theirs: &Placed, answer: &str) -> bool {
+    let text = &answer[theirs.range.clone()];
+    text.len() == mine.range.len() && starts_with(text, &typed[mine.range.clone()], &mine.token)
+}
+
+/// Whether the token `text` starts with `typed`, a token of kind `kind`; PostgreSQL reads a word without regard to ASCII case.
+fn starts_with(text: &str, typed: &str, kind: &Token) -> bool {
+    match text.get(..typed.len()) {
+        Some(start) if *kind == Token::Word => start.eq_ignore_ascii_case(typed),
+        Some(start) => start == typed,
+        None => false,
     }
 }
 
@@ -141,11 +184,13 @@ pub(in crate::tui) mod tests {
     use super::super::picker::tests::{ctrl, on_local, press};
     use super::super::{Answer, Incoming, Overlay};
     use super::*;
+    use crate::ai::CommandError;
     use crate::complete::Index;
     use crate::fixtures::{self, shop_catalog};
     use crate::tui::app::AskStep;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::sync::Arc;
+    use std::time::Duration;
 
     fn type_in(app: &mut App, text: &str) {
         text.chars().for_each(|c| drop(app.handle_key(KeyEvent::from(KeyCode::Char(c)))));
@@ -200,8 +245,67 @@ pub(in crate::tui) mod tests {
     }
 
     #[test]
+    fn an_answer_laid_out_on_other_lines_still_shows_the_rest() {
+        let app = ghosted("SELECT * FROM orders o JOIN ", "SELECT *\nFROM orders o\nJOIN customers c ON c.id = o.customer_id");
+        assert_eq!(rest(&app), Some("customers c ON c.id = o.customer_id"));
+    }
+
+    #[test]
     fn an_answer_that_changes_what_is_typed_shows_nothing() {
         assert_eq!(rest(&ghosted("SELECT * FROM orders WHERE ", "SELECT id FROM orders WHERE total > 10")), None);
+    }
+
+    #[test]
+    fn the_case_of_words_and_comments_do_not_keep_the_answer_from_fitting() {
+        assert_eq!(
+            rest_after("select * from orders ", "-- the open ones\nSELECT * FROM orders WHERE total > 10").as_deref(),
+            Some("WHERE total > 10")
+        );
+    }
+
+    #[test]
+    fn a_literal_changed_by_the_answer_keeps_it_from_fitting() {
+        assert_eq!(
+            rest_after("SELECT * FROM orders WHERE note = 'Paid' ", "SELECT * FROM orders WHERE note = 'paid' AND total > 10"),
+            None
+        );
+    }
+
+    #[test]
+    fn the_last_typed_word_may_be_the_start_of_a_longer_one() {
+        assert_eq!(rest_after("SELECT * FROM ord", "SELECT * FROM orders").as_deref(), Some("ers"));
+    }
+
+    #[test]
+    fn the_last_typed_word_followed_by_a_blank_must_be_whole() {
+        assert_eq!(rest_after("SELECT * FROM ord ", "SELECT * FROM orders"), None);
+    }
+
+    #[test]
+    fn a_rest_on_the_next_line_after_a_typed_word_shows_after_one_space() {
+        assert_eq!(rest_after("SELECT *", "SELECT *\nFROM orders").as_deref(), Some(" FROM orders"));
+    }
+
+    #[test]
+    fn an_answer_shorter_than_what_is_typed_does_not_fit() {
+        assert_eq!(rest_after("SELECT * FROM orders WHERE ", "SELECT * FROM orders"), None);
+    }
+
+    #[test]
+    fn a_failed_idle_ask_is_logged() {
+        let mut app = idle_on("SELECT * FROM orders WHERE ");
+        app.ask_idle_ghost();
+        let timed_out = || AskFailure::Command(CommandError::TimedOut(Duration::from_secs(30)));
+        let logged = app.apply(Answer::Asked { ask: AskId::FIRST, answer: Err(timed_out()) });
+        assert_eq!(logged, [Action::LogNoIdleGhost(NoIdleGhost::Failed(timed_out()))]);
+    }
+
+    #[test]
+    fn an_answer_that_does_not_fit_is_logged() {
+        let mut app = idle_on("SELECT * FROM orders WHERE ");
+        app.ask_idle_ghost();
+        let logged = app.apply(Answer::Asked { ask: AskId::FIRST, answer: Ok(vec![Statement::new("SELECT id FROM customers")]) });
+        assert_eq!(logged, [Action::LogNoIdleGhost(NoIdleGhost::NotContinued)]);
     }
 
     #[test]
