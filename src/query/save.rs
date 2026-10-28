@@ -22,11 +22,16 @@ impl Roots {
         Query { source: if only_user { Source::User } else { Source::Project }, path }
     }
 
-    /// Writes `text` as `query`, making its folders and the project's `.pgbg/queries/`; safe to run twice. Blocks on
-    /// the file system.
+    /// Writes `text` as `query`, making its folders and the project's `.pgbg/queries/`, the text it replaces kept as a
+    /// version first; safe to run twice. Blocks on the file system.
     pub(crate) fn write(&self, query: &Query, text: &str, write: Write) -> Result<()> {
         if query.source == Source::Project {
             self.project.make().context("making the project's queries folder")?;
+        }
+        if write == Write::Replace
+            && let Ok(old) = self.read_blocking(query)
+        {
+            self.keep(query, &old, text);
         }
         let root = self.existing_root(query.source)?;
         write_inside(&root, query, text, write).with_context(|| format!("saving {}", query.path))
@@ -116,7 +121,7 @@ mod tests {
     use crate::query::Places;
 
     fn project(root: &Path) -> Roots {
-        Roots { project: Project { dir: root.into(), root: Root::checked(root.into(), vec![root.into()]) }, user: None }
+        Roots { project: Project { dir: root.into(), root: Root::checked(root.into(), vec![root.into()]) }, ..Roots::default() }
     }
 
     fn found_from(working_dir: &Path, config_dir: Option<&Path>) -> Roots {

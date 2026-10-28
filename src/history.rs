@@ -9,7 +9,6 @@ use chrono::{DateTime, Utc};
 use rustix::fs::{FlockOperation, flock};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::ffi::OsString;
 use std::fmt;
 use std::fs::{DirBuilder, File, OpenOptions};
 use std::io::{self, Write};
@@ -18,7 +17,6 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::task::JoinHandle;
 
-const PATH_VARIABLE: &str = "PGBG_DATA_DIR";
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
 const DIR_MODE: u32 = 0o700;
 const FILE_MODE: u32 = 0o600;
@@ -126,11 +124,9 @@ pub(crate) struct Store {
 }
 
 impl Store {
-    /// The `history` folder in `$PGBG_DATA_DIR`, else in `$XDG_DATA_HOME/pgbg`, else in `~/.local/share/pgbg`, on
-    /// every system, macOS included.
+    /// The `history` folder in pgbg's data folder.
     pub(crate) fn from_env() -> Option<Self> {
-        let dir = dir_from(std::env::var_os(PATH_VARIABLE), std::env::var_os("XDG_DATA_HOME"), dirs::home_dir());
-        dir.map(|dir| Self { dir, max_bytes: MAX_BYTES })
+        config::data_dir().map(|dir| Self { dir: dir.join("history"), max_bytes: MAX_BYTES })
     }
 
     /// Adds `entry` at the end of its connection's file; a statement that holds a password is kept as a note instead.
@@ -177,11 +173,6 @@ impl Store {
     fn rolled(&self, connection: &ConnectionName) -> PathBuf {
         self.dir.join(format!("{connection}.jsonl.1"))
     }
-}
-
-fn dir_from(variable: Option<OsString>, xdg: Option<OsString>, home: Option<PathBuf>) -> Option<PathBuf> {
-    let data_dir = || config::xdg_folder(xdg, home, ".local/share").map(|dir| dir.join("pgbg"));
-    Some(config::named_path(variable).or_else(data_dir)?.join("history"))
 }
 
 /// The file at `path`, opened to append and locked for this process alone; opened again, a few times at most, when
@@ -381,16 +372,6 @@ mod tests {
     fn a_connection_never_run_has_no_history() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(store(&dir).read(&shop()).unwrap(), History::default());
-    }
-
-    #[test]
-    fn the_folder_is_the_variable_else_pgbg_in_the_data_folder() {
-        let home = || Some(PathBuf::from("/Users/nina"));
-        assert_eq!(dir_from(Some("/tmp/pgbg-data".into()), Some("/data".into()), home()), Some(PathBuf::from("/tmp/pgbg-data/history")));
-        assert_eq!(dir_from(Some("".into()), Some("/data".into()), home()), Some(PathBuf::from("/data/pgbg/history")));
-        assert_eq!(dir_from(None, None, home()), Some(PathBuf::from("/Users/nina/.local/share/pgbg/history")));
-        assert_eq!(dir_from(None, Some("relative".into()), home()), Some(PathBuf::from("/Users/nina/.local/share/pgbg/history")));
-        assert_eq!(dir_from(None, None, None), None);
     }
 
     #[test]

@@ -19,11 +19,13 @@ use std::path::{Path, PathBuf};
 pub(crate) use header::Header;
 pub(crate) use save::Write;
 pub(crate) use tree::{TreeRow, tree_rows};
+pub(crate) use versions::Versions;
 
 mod header;
 pub(crate) mod params;
 mod save;
 mod tree;
+mod versions;
 
 const PROJECT_DIR: &str = ".pgbg";
 const QUERIES_DIR: &str = "queries";
@@ -228,13 +230,15 @@ fn exists(path: &Path) -> bool {
 pub(crate) struct Roots {
     project: Project,
     user: Option<Root>,
+    /// Where a save keeps the text it replaces; none keeps no version.
+    versions: Option<Versions>,
 }
 
 /// No queries folder at all, the project's under a folder that does not exist.
 #[cfg(test)]
 impl Default for Roots {
     fn default() -> Self {
-        Self { project: Project { dir: PathBuf::from("/nonexistent/shop"), root: None }, user: None }
+        Self { project: Project { dir: PathBuf::from("/nonexistent/shop"), root: None }, user: None, versions: None }
     }
 }
 
@@ -242,7 +246,7 @@ impl Roots {
     /// The nearest `.pgbg/queries/` from the working directory up, and `queries/` under pgbg's config folder; a root
     /// that is a link, or that another user owns, is skipped. Blocks on the file system.
     pub(crate) fn find(places: &Places<'_>) -> Self {
-        Self { project: Project::find(places), user: places.config_dir.and_then(user_root) }
+        Self { project: Project::find(places), user: places.config_dir.and_then(user_root), versions: None }
     }
 
     /// The roots for the working directory, the home folder and pgbg's config folder, found off the runtime.
@@ -409,7 +413,7 @@ mod tests {
     }
 
     fn project(root: &Path) -> Roots {
-        Roots { project: Project { dir: root.into(), root: Some(unchecked(root)) }, user: None }
+        Roots { project: Project { dir: root.into(), root: Some(unchecked(root)) }, ..Roots::default() }
     }
 
     fn unchecked(dir: &Path) -> Root {

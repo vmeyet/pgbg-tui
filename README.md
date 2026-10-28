@@ -165,6 +165,7 @@ Put `.sql` files under `.pgbg/queries/` in your project, in folders if you like.
 pgbg finds the nearest one from the folder you start it in, the way git finds `.git`.
 When there is none, `ctrl-s` on a new query makes `.pgbg/queries/` at the top of your repository, or in the folder you started pgbg in outside one.
 Queries of your own, for every project, go under `queries/` in pgbg's config folder, as `~/.config/pgbg/queries/`.
+Each save over a query, from `ctrl-s` or `$EDITOR`, keeps the text it replaced under `versions/` in pgbg's data folder, never in your project: the newest 50 of each query.
 
 ```sql
 -- name: Orders per day
@@ -272,6 +273,7 @@ pgbg run scratch "DELETE FROM orders WHERE id = 7" --yes
 `run`, `history`, `schema`, `doctor` and `connections` take `--json` for machine-readable output.
 
 The history lives in `$XDG_DATA_HOME/pgbg/history/` when it is set, else `~/.local/share/pgbg/history/`, on macOS too; set `$PGBG_DATA_DIR` to keep it elsewhere.
+The versions of saved queries live beside it, in `versions/`.
 It keeps when, how long and what came of each statement, never a row.
 
 ## What's next
