@@ -187,9 +187,19 @@ impl Sheet {
     /// The prompt for `instruction` about the statement under the cursor, with the schema read so far.
     pub(super) fn prompt(&self, instruction: &Instruction, literals: LiteralPolicy) -> Result<Prompt, NotSent> {
         let statement = self.range_under_cursor().map(|range| Statement::new(&self.editor.text()[range]));
+        self.prompt_about(instruction, statement.as_ref(), literals)
+    }
+
+    /// The prompt for `instruction` about `statement`, with the schema read so far.
+    pub(super) fn prompt_about(
+        &self,
+        instruction: &Instruction,
+        statement: Option<&Statement>,
+        literals: LiteralPolicy,
+    ) -> Result<Prompt, NotSent> {
         let unread = Catalog::default();
         let catalog = self.catalog().unwrap_or(&unread);
-        ai::prompt(&ai::PromptInput { instruction, statement: statement.as_ref(), catalog, tier: self.connection.tier(), literals })
+        ai::prompt(&ai::PromptInput { instruction, statement, catalog, tier: self.connection.tier(), literals })
     }
 
     /// `statements` against the statement under the cursor, which they would replace, unless the editor is no longer

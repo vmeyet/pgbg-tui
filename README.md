@@ -243,11 +243,15 @@ timeout = 60                                    # seconds; 60 by default
 | --- | --- |
 | `command` | The program and its arguments; it runs from an empty folder. |
 | `env` | The variables it gets besides `PATH`, `HOME`, `LANG` and `TERM`; one a password names is never passed. |
-| `ghost` | Asks for the rest of the statement after 1 s without a key, when no completion shows; `→` takes it. |
+| `ghost` | Asks for the rest of the statement after 1 s without a key, when no completion shows, and shows all of it faded; `→` takes it. |
 | `literals` | `masked` replaces the statement's values with markers, `sent` sends them as typed. |
 | `timeout` | How long the command has before it is stopped. |
 
 `ai = "off"` on a connection keeps both from asking there.
+
+The `--` lines right above the statement tell the idle ghost what you want, and are sent as typed; header lines such as `-- name:` are left out.
+On a blank line under `-- the ten biggest orders`, with nothing typed yet, it asks for the whole statement.
+
 When the idle ghost shows nothing, `pgbg.log` in pgbg's cache folder says why.
 
 ## On the command line
