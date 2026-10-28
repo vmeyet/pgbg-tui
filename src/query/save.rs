@@ -173,7 +173,7 @@ mod tests {
     #[test]
     fn a_new_query_goes_to_the_user_folder_when_only_that_one_exists() {
         let (project, user) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        fs::create_dir_all(user.path().join("pgbg/queries")).unwrap();
+        fs::create_dir_all(user.path().join("queries")).unwrap();
         let roots = found_from(project.path(), Some(user.path()));
         assert_eq!(roots.new_query(QueryPath::parse("x.sql").unwrap()).source, Source::User);
     }
