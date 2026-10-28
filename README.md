@@ -207,10 +207,10 @@ In the TUI, a bar above the editor shows one field per parameter.
 | `^t` | Find a table of the schema. |
 | `^r` | Search the history of this connection. |
 | `←` `→` `[` `]` | In the sidebar: switch between queries and schema. |
-| `→` | Take the faded rest after the cursor: completion, or the idle ghost. |
+| `→` | Take the faded rest after the cursor: completion, or the idle ghost; after `JOIN`, a table with its alias and `ON` condition. |
 | `^z` | Undo: the last word typed, paste, name taken or delete. |
 | `⇧^z` `^y` | Redo; `^y` where the terminal sends `⇧^z` as `^z`. |
-| `^space` `^n` | List the names that fit at the cursor; `^n` where macOS takes `^space` to switch the input source. |
+| `^space` `^n` | List the names that fit at the cursor, after `JOIN` the tables a foreign key links first; `^n` where macOS takes `^space` to switch the input source. |
 | `v` | Show the result as a chart, or as a grid again. |
 | `f` `F` | Next format for this column; every column raw or readable. |
 | `y` `Y` `c` | Copy the cell; the row as CSV; the result as CSV, JSON or Markdown. |

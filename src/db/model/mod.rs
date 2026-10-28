@@ -5,7 +5,7 @@ pub(crate) use json::JsonText;
 pub(crate) use name::{needs_quotes, qualified, sql_name};
 pub(crate) use result::{Extent, Page, ResultSet};
 pub(crate) use route::{LocalPort, Route};
-pub(crate) use schema::{Catalog, Index, Schema, SchemaColumn, SchemaNode, Table, TableKind};
+pub(crate) use schema::{Catalog, ForeignKey, Index, Schema, SchemaColumn, SchemaNode, Table, TableKind};
 use serde::{Deserialize, Serialize};
 pub(crate) use server::{Named, ReadOnlyGaps, RoleFlag, RoleName, RolePowers, RoleRights, ServerFacts};
 use std::fmt;

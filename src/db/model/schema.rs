@@ -1,7 +1,7 @@
 use super::TypeName;
 use serde::Serialize;
 
-/// Every schema the role can see, with its tables, their columns and their indexes.
+/// Every schema the role can see, with its tables, their columns, their indexes and their foreign keys.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub(crate) struct Schema {
     pub(crate) schemas: Vec<SchemaNode>,
@@ -46,6 +46,7 @@ pub(crate) struct Table {
     pub(crate) estimated_rows: Option<u64>,
     pub(crate) columns: Vec<SchemaColumn>,
     pub(crate) indexes: Vec<Index>,
+    pub(crate) foreign_keys: Vec<ForeignKey>,
 }
 
 /// A column of a table, as the catalog declares it.
@@ -66,6 +67,16 @@ pub(crate) struct Index {
     pub(crate) columns: Vec<String>,
     pub(crate) is_unique: bool,
     pub(crate) is_primary: bool,
+}
+
+/// A foreign key of a table: its columns, each pointing to the column at the same place in `target_columns` of the
+/// table `target_schema.target_table`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct ForeignKey {
+    pub(crate) columns: Vec<String>,
+    pub(crate) target_schema: String,
+    pub(crate) target_table: String,
+    pub(crate) target_columns: Vec<String>,
 }
 
 impl SchemaNode {

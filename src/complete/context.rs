@@ -22,8 +22,10 @@ pub(crate) struct Ask {
 pub(crate) enum Want {
     /// A keyword, at a statement's start.
     Keyword,
-    /// A table, after `FROM` or `JOIN`; what was typed may hold its schema.
+    /// A table, after `FROM` or a `,` of a `FROM` list; what was typed may hold its schema.
     Table,
+    /// A table after `JOIN`, where those a foreign key links to `tables`, the tables named before it, come first.
+    Join { tables: Vec<TableRef> },
     /// A column of one table, after `orders.` or an alias of it.
     ColumnOf { table: String },
     /// A column of the tables the statement names, a column of any other table, or a keyword.
@@ -31,10 +33,22 @@ pub(crate) enum Want {
 }
 
 /// A table the statement reads from, and the alias it gives it.
-#[derive(Debug, PartialEq, Eq)]
-struct TableRef {
-    name: String,
-    alias: Option<String>,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TableRef {
+    pub(super) name: String,
+    pub(super) alias: Option<String>,
+}
+
+impl TableRef {
+    /// The name the rest of the statement calls it by: its alias, else its name without the schema.
+    pub(super) fn qualifier(&self) -> &str {
+        self.alias.as_deref().unwrap_or_else(|| without_schema(&self.name))
+    }
+}
+
+/// `name` past its last `.`: `invoices` for `billing.invoices`.
+pub(super) fn without_schema(name: &str) -> &str {
+    name.rsplit_once('.').map_or(name, |(_, table)| table)
 }
 
 impl Ask {
@@ -63,11 +77,19 @@ fn wanted(before: &str, refs: &[TableRef]) -> (usize, Want) {
     let name_start = qualifier.as_ref().map_or(word_start, |qualifier| qualifier.start);
     let ahead = &head[..head.iter().take_while(|placed| placed.range.end <= name_start).count()];
     match (ahead.last(), qualifier) {
-        (Some(previous), _) if is_table_place(before, previous, last_clause(before, ahead)) => (name_start, Want::Table),
+        (Some(previous), _) if is_table_place(before, previous, last_clause(before, ahead)) => {
+            (name_start, table_want(before, previous, name_start))
+        }
         (_, Some(qualifier)) => (word_start, Want::ColumnOf { table: table_of(&qualifier.name, refs) }),
         (None, None) => (word_start, Want::Keyword),
         (Some(_), None) => (word_start, Want::Column { tables: refs.iter().map(|table| table.name.clone()).collect() }),
     }
+}
+
+/// What a table name after `previous` wants: after `JOIN`, a join to the tables named before `name_start`.
+fn table_want(before: &str, previous: &Placed, name_start: usize) -> Want {
+    let is_join = previous.word(before).is_some_and(|word| word.eq_ignore_ascii_case("JOIN"));
+    if is_join { Want::Join { tables: table_refs(&before[..name_start]) } } else { Want::Table }
 }
 
 /// The name right before a `.` that ends where the typed word starts, as in `o.` or `billing.`.
@@ -87,10 +109,7 @@ fn qualifier(before: &str, head: &[Placed], word_start: usize) -> Option<Qualifi
 
 /// The table a qualifier stands for: the one it aliases or names last, else the qualifier itself.
 fn table_of(qualifier: &str, refs: &[TableRef]) -> String {
-    let is_named = |table: &&TableRef| {
-        let last_part = table.name.rsplit('.').next();
-        table.alias.as_deref() == Some(qualifier) || last_part == Some(qualifier)
-    };
+    let is_named = |table: &&TableRef| table.alias.as_deref() == Some(qualifier) || without_schema(&table.name) == qualifier;
     refs.iter().find(is_named).map_or_else(|| qualifier.to_owned(), |table| table.name.clone())
 }
 
@@ -165,10 +184,26 @@ mod tests {
         Want::Column { tables: tables.iter().map(|table| (*table).to_owned()).collect() }
     }
 
+    fn joined_to(tables: &[(&str, Option<&str>)]) -> Want {
+        let table = |(name, alias): &(&str, Option<&str>)| TableRef { name: (*name).to_owned(), alias: alias.map(str::to_owned) };
+        Want::Join { tables: tables.iter().map(table).collect() }
+    }
+
     #[test]
-    fn a_name_after_from_or_join_is_a_table() {
+    fn a_name_after_from_is_a_table() {
         assert_eq!(asked("SELECT * FROM or|"), Some(("or".to_owned(), Want::Table)));
-        assert_eq!(asked("SELECT * FROM orders o JOIN cu|"), Some(("cu".to_owned(), Want::Table)));
+    }
+
+    #[test]
+    fn a_name_after_join_is_a_join_to_the_tables_named_before_it() {
+        let want = joined_to(&[("orders", Some("o")), ("billing.invoices", None)]);
+        assert_eq!(asked("SELECT * FROM orders o, billing.invoices LEFT JOIN cu| WHERE true"), Some(("cu".to_owned(), want)));
+    }
+
+    #[test]
+    fn a_table_is_called_by_its_alias_else_by_its_name_without_the_schema() {
+        let Some((_, Want::Join { tables })) = asked("SELECT * FROM orders o JOIN billing.invoices ON true JOIN |") else { panic!() };
+        assert_eq!(tables.iter().map(TableRef::qualifier).collect::<Vec<_>>(), ["o", "invoices"]);
     }
 
     #[test]

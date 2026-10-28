@@ -58,6 +58,7 @@ fn kind_word(kind: Kind) -> &'static str {
         Kind::Table => "table",
         Kind::Column => "column",
         Kind::Keyword => "keyword",
+        Kind::Join => "join",
     }
 }
 

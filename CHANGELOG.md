@@ -16,6 +16,9 @@ Each entry says what changed, then where, then how to use it.
   It keeps the last 100 changes, and opening a query or a new one starts afresh.
 - **`ctrl-q` starts a new, empty query**, in the TUI, from any pane: the editor empties and stands for no saved query.
   The first `ctrl-s` asks for its path; over unsaved text it asks first, as opening another query does.
+- **Completion after `JOIN` offers the join itself**, in the TUI's editor: a table a foreign key links to one the statement already names, either way, with a free alias and its `ON` condition, as `customers c ON c.id = o.customer_id`.
+  Type the start of the table after `JOIN` and press `→` to take the faded rest, or `^space` to list every join first, then the plain tables.
+  `pgbg schema --json` lists each table's foreign keys too.
 - **Keys like revu's** in the TUI: `⇧⇥` goes to the previous pane, `⇧` and an arrow to the pane on that side, and a click on a pane gives it the keys.
   `←` `→` switch the sidebar between queries and schema, as `[` `]` still do, which an AZERTY keyboard reaches badly.
   `⌘k` finds a saved query as `^p` does, in a terminal that speaks the kitty keyboard protocol (Ghostty, Kitty, WezTerm, iTerm2 with the option on); `?` shows the keys from the sidebar too, and `F1` from the editor.

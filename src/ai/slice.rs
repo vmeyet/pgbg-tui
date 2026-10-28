@@ -98,7 +98,14 @@ mod tests {
     #[test]
     fn a_table_with_a_short_name_is_not_named_by_every_word_it_starts() {
         let mut catalog = shop_catalog();
-        let short = Table { name: "o".into(), kind: TableKind::Table, estimated_rows: None, columns: vec![], indexes: vec![] };
+        let short = Table {
+            name: "o".into(),
+            kind: TableKind::Table,
+            estimated_rows: None,
+            columns: vec![],
+            indexes: vec![],
+            foreign_keys: vec![],
+        };
         catalog.schema.schemas[1].tables.push(short);
         let lines = slice(&catalog, "", "the last order");
         assert_eq!(lines, ["public.orders(id integer, customer_id integer, total numeric(10,2))"]);

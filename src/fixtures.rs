@@ -1,8 +1,8 @@
 //! Invented fixtures the tests share: the connection `shop`, the test database, tunnels to it, and results of `orders`.
 use crate::connection::{Connection, Entry, WritePolicy};
 use crate::db::model::{
-    Catalog, Column, ColumnKind, ColumnName, Extent, Index, Page, Params, ResultSet, Route, Schema, SchemaColumn, SchemaNode, Statement,
-    Table, TableKind, TypeName, Value,
+    Catalog, Column, ColumnKind, ColumnName, Extent, ForeignKey, Index, Page, Params, ResultSet, Route, Schema, SchemaColumn, SchemaNode,
+    Statement, Table, TableKind, TypeName, Value,
 };
 use crate::db::{Session, guard};
 use rustix::process::{Pid, test_kill_process};
@@ -212,7 +212,17 @@ fn schema_column(name: &str, type_name: &str, default: Option<&str>) -> SchemaCo
 }
 
 fn schema_table(name: &str, columns: Vec<SchemaColumn>) -> Table {
-    Table { name: name.to_owned(), kind: TableKind::Table, estimated_rows: None, columns, indexes: vec![] }
+    Table { name: name.to_owned(), kind: TableKind::Table, estimated_rows: None, columns, indexes: vec![], foreign_keys: vec![] }
+}
+
+/// A one-column foreign key, `column` pointing to `id` of `target_schema.target_table`.
+fn key_to_id(column: &str, target_schema: &str, target_table: &str) -> ForeignKey {
+    ForeignKey {
+        columns: vec![column.to_owned()],
+        target_schema: target_schema.to_owned(),
+        target_table: target_table.to_owned(),
+        target_columns: vec!["id".to_owned()],
+    }
 }
 
 /// The catalog of `shop`: its schema, `public` its search path, whole.
@@ -221,7 +231,7 @@ pub(crate) fn shop_catalog() -> Catalog {
 }
 
 /// The schema of `shop`: `orders` and `customers` in `public`, `invoices` in `billing`; `orders` has its key, a
-/// default and a row estimate.
+/// default and a row estimate; `orders.customer_id` points to `customers` and `invoices.order_id` to `orders`.
 pub(crate) fn shop_schema() -> Schema {
     let key = Index { name: "orders_pkey".to_owned(), columns: vec!["id".to_owned()], is_unique: true, is_primary: true };
     let orders_columns = vec![
@@ -229,9 +239,17 @@ pub(crate) fn shop_schema() -> Schema {
         schema_column("customer_id", "integer", None),
         schema_column("total", "numeric(10,2)", Some("0")),
     ];
-    let orders = Table { estimated_rows: Some(1200), indexes: vec![key], ..schema_table("orders", orders_columns) };
+    let orders = Table {
+        estimated_rows: Some(1200),
+        indexes: vec![key],
+        foreign_keys: vec![key_to_id("customer_id", "public", "customers")],
+        ..schema_table("orders", orders_columns)
+    };
     let customers = schema_table("customers", vec![schema_column("id", "integer", None), schema_column("name", "text", None)]);
-    let invoices = schema_table("invoices", vec![schema_column("id", "integer", None), schema_column("order_id", "integer", None)]);
+    let invoices = Table {
+        foreign_keys: vec![key_to_id("order_id", "public", "orders")],
+        ..schema_table("invoices", vec![schema_column("id", "integer", None), schema_column("order_id", "integer", None)])
+    };
     let public = SchemaNode { name: "public".to_owned(), tables: vec![orders, customers] };
     let billing = SchemaNode { name: "billing".to_owned(), tables: vec![invoices] };
     Schema { schemas: vec![billing, public] }

@@ -1,4 +1,5 @@
 //! The names of one catalog, each list a vtui completion index, and how each name goes in the editor.
+use super::join::{Join, joins_by_table};
 use super::keyword::keywords;
 use crate::db::model::{Catalog, SchemaNode, Table, needs_quotes, qualified, sql_name};
 use std::collections::{HashMap, HashSet};
@@ -12,6 +13,8 @@ pub(crate) struct Index {
     pub(super) tables: Names,
     /// The columns of each table, by its place in `by_name`.
     table_columns: Vec<Names>,
+    /// The tables each table joins through a foreign key, by its place in `by_name`.
+    joins: Vec<Vec<Join>>,
     /// The columns of every table, each name once.
     pub(super) columns: Names,
     pub(super) keywords: Names,
@@ -37,17 +40,18 @@ impl PartialEq for Index {
 impl Eq for Index {}
 
 /// A table as completion names it, with its `schema.table` and its name quoted when it needs quotes.
-struct Named<'a> {
-    name: String,
+pub(super) struct Named<'a> {
+    pub(super) name: String,
     quoted: Option<String>,
     qualified: String,
-    table: &'a Table,
+    pub(super) table: &'a Table,
 }
 
 impl Index {
     pub(crate) fn new(catalog: &Catalog) -> Self {
         let named = named_tables(catalog);
         let by_name = named.iter().enumerate().flat_map(|(at, table)| [(table.name.clone(), at), (table.qualified.clone(), at)]);
+        let by_name: HashMap<String, usize> = by_name.collect();
         let table_columns = named.iter().map(|table| Names::new(column_names(table.table).collect())).collect();
         let columns = distinct(named.iter().flat_map(|table| column_names(table.table)));
         let quoted_tables = named.iter().filter_map(|table| Some((table.name.clone(), table.quoted.clone()?.into())));
@@ -58,7 +62,8 @@ impl Index {
             table_columns,
             columns: Names::new(columns),
             keywords: Names::new(keywords().collect()),
-            by_name: by_name.collect(),
+            joins: joins_by_table(&named, &by_name),
+            by_name,
             quoted,
         }
     }
@@ -66,6 +71,11 @@ impl Index {
     /// The columns of the table a statement names `name`, as PostgreSQL resolves it, bare or with its schema.
     pub(super) fn columns_of(&self, name: &str) -> Option<&Names> {
         self.by_name.get(name).map(|&at| &self.table_columns[at])
+    }
+
+    /// The tables that the table a statement names `name` joins through a foreign key, either way.
+    pub(super) fn joins_of(&self, name: &str) -> &[Join] {
+        self.by_name.get(name).map_or(&[], |&at| &self.joins[at])
     }
 
     /// What goes in the editor for the table or column `name`, spelled as the catalog does: quoted when it needs quotes.
@@ -118,10 +128,15 @@ fn named_tables(catalog: &Catalog) -> Vec<Named<'_>> {
 
 fn named_table<'a>(node: &SchemaNode, table: &'a Table, bare: &HashSet<(&str, &str)>) -> Named<'a> {
     let is_bare = bare.contains(&(node.name.as_str(), table.name.as_str()));
-    let qualified_name = format!("{}.{}", node.name, table.name);
+    let qualified_name = qualified_name(&node.name, &table.name);
     let name = if is_bare { table.name.clone() } else { qualified_name.clone() };
     let quoted = if is_bare { sql_name(&table.name).into_owned() } else { qualified(&node.name, &table.name) };
     Named { quoted: (quoted != name).then_some(quoted), name, qualified: qualified_name, table }
+}
+
+/// `schema.table` as written in the catalog, unquoted: how `by_name` finds a table with its schema.
+pub(super) fn qualified_name(schema: &str, table: &str) -> String {
+    format!("{schema}.{table}")
 }
 
 /// The tables a statement names bare: in a schema of the search path, the first one there to hold that name.

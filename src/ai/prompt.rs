@@ -245,6 +245,7 @@ mod tests {
             estimated_rows: None,
             columns: columns.clone(),
             indexes: vec![],
+            foreign_keys: vec![],
         };
         catalog.schema.schemas.push(SchemaNode { name: "archive".into(), tables: (0..400).map(table).collect() });
         catalog
