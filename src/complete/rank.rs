@@ -1,5 +1,6 @@
 //! The candidates for an ask, best first: vtui ranks each list of names, and this merges the lists, a prefix before a
-//! fuzzy match, a column of a table the statement names before any other name, and among prefixes the shorter first.
+//! fuzzy match, a column of a table the statement names before any other name, and among prefixes the shorter first;
+//! after `JOIN`, the joins a foreign key gives come before them all.
 use super::context::{Ask, Want};
 use super::index::{Index, Names};
 use std::collections::HashSet;
@@ -14,12 +15,14 @@ pub(crate) enum Kind {
     Table,
     Column,
     Keyword,
+    /// A table with its alias and `ON` condition, after `JOIN`.
+    Join,
 }
 
 /// A name offered at the cursor.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Candidate {
-    /// As shown: the catalog's name, or a keyword in the case typed.
+    /// As shown: the catalog's name, a keyword in the case typed, or a join's table with its alias and condition.
     pub(crate) name: String,
     /// As put in the editor: quoted when the name needs it.
     pub(crate) insert: String,
@@ -50,13 +53,22 @@ struct Match {
 }
 
 impl Index {
-    /// The best name that starts with what `ask` typed, for the ghost; none when nothing was typed, unless after a `.`,
-    /// where it is the table's first column.
+    /// The best name that starts with what `ask` typed, for the ghost, the first join after `JOIN`; none when nothing was
+    /// typed, unless after a `.`, where it is the table's first column.
     pub(crate) fn ghost(&self, ask: &Ask) -> Option<Ghosted> {
         let is_after_dot = matches!(ask.want, Want::ColumnOf { .. });
         if ask.prefix.is_empty() && !is_after_dot {
             return None;
         }
+        self.join_ghost(ask).or_else(|| self.name_ghost(ask))
+    }
+
+    fn join_ghost(&self, ask: &Ask) -> Option<Ghosted> {
+        let Candidate { name, insert, .. } = self.joins(ask).next()?;
+        Some(Ghosted { rest: name.get(ask.prefix.len()..)?.to_owned(), insert })
+    }
+
+    fn name_ghost(&self, ask: &Ask) -> Option<Ghosted> {
         let sources = self.sources(&ask.want);
         let best = |is_in_scope: bool| {
             let tier = sources.iter().filter(|source| source.is_in_scope == is_in_scope);
@@ -69,21 +81,22 @@ impl Index {
         Some(Ghosted { rest, insert })
     }
 
-    /// The best names for `ask`, at most `MAX_LISTED`, each name once: a column of a table the statement names wins over the
-    /// same name among every column.
+    /// The best names for `ask`, at most `MAX_LISTED`, the joins first, each name once: a column of a table the statement
+    /// names wins over the same name among every column.
     pub(crate) fn candidates(&self, ask: &Ask) -> Vec<Candidate> {
         let mut seen = HashSet::new();
         let found = self.sources(&ask.want).into_iter().flat_map(|source| source.matches(&ask.prefix));
         let mut found: Vec<Match> = found.filter(|found| seen.insert((found.kind, found.name.clone()))).collect();
         found.sort_by_key(Match::rank);
-        found.into_iter().take(MAX_LISTED).map(|found| self.candidate(found.kind, &found.name, &ask.prefix)).collect()
+        let names = found.into_iter().map(|found| self.candidate(found.kind, &found.name, &ask.prefix));
+        self.joins(ask).chain(names).take(MAX_LISTED).collect()
     }
 
     fn sources(&self, want: &Want) -> Vec<Source<'_>> {
         let source = |names, kind, is_in_scope| Source { names, kind, is_in_scope };
         match want {
             Want::Keyword => vec![source(&self.keywords, Kind::Keyword, false)],
-            Want::Table => vec![source(&self.tables, Kind::Table, false)],
+            Want::Table | Want::Join { .. } => vec![source(&self.tables, Kind::Table, false)],
             Want::ColumnOf { table } => self.columns_of(table).map(|names| source(names, Kind::Column, true)).into_iter().collect(),
             Want::Column { tables } => {
                 let named = tables.iter().filter_map(|table| self.columns_of(table)).map(|names| source(names, Kind::Column, true));
@@ -194,6 +207,16 @@ mod tests {
     #[test]
     fn the_list_puts_columns_of_named_tables_first_and_each_name_once() {
         assert_eq!(listed("SELECT i| FROM customers")[..3], ["id", "in", "is"]);
+    }
+
+    #[test]
+    fn after_join_the_ghost_offers_the_join_a_key_gives() {
+        assert_eq!(ghost("SELECT * FROM orders o JOIN cu|").as_deref(), Some("stomers c ON c.id = o.customer_id"));
+    }
+
+    #[test]
+    fn after_join_the_list_puts_the_joins_before_the_tables() {
+        assert_eq!(listed("SELECT * FROM orders o JOIN cu|")[..2], ["customers c ON c.id = o.customer_id", "customers"]);
     }
 
     #[test]

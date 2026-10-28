@@ -152,7 +152,7 @@ What a first real session asked for, one MR per step.
 - [x] A key for a new, empty query
 - [x] Undo and redo in the editor
 - [ ] Every save keeps the version it replaced, outside the project; a key lists them and puts one back
-- [ ] Completion after `JOIN` offers the table with its `ON` condition, from the foreign keys
+- [x] Completion after `JOIN` offers the table with its `ON` condition, from the foreign keys
 - [ ] The idle ghost shows the whole rest of the statement, and a `--` comment line above it is the instruction
 - [ ] `tab` takes the ghost while one shows; `esc` drops it
 - [ ] Usage counts as revu keeps them, opt-in, action names only, from a part both apps share in vtui

@@ -1,5 +1,5 @@
 //! The schema the role can see, read from the catalogs in one read-only transaction.
-use super::model::{Catalog, Index, Route, Schema, SchemaColumn, SchemaNode, Table, TableKind, TypeName};
+use super::model::{Catalog, ForeignKey, Index, Route, Schema, SchemaColumn, SchemaNode, Table, TableKind, TypeName};
 use super::{Isolation, Session, server_error};
 use crate::connection::Connection;
 use anyhow::{Result, bail};
@@ -40,6 +40,17 @@ const INDEXES: &str = "SELECT i.indrelid, c.relname, i.indisunique, i.indisprima
         )
     FROM pg_index i JOIN visible v ON v.oid = i.indrelid JOIN pg_class c ON c.oid = i.indexrelid
     ORDER BY i.indrelid, c.relname";
+/// The foreign keys of the visible tables, whatever table they point to; a key a partitioned table passes down to a
+/// partition, which `conparentid` marks, is left to the key it comes from.
+const FOREIGN_KEYS: &str = "SELECT k.conrelid, t.nspname, t.relname,
+        ARRAY(SELECT a.attname FROM unnest(k.conkey) WITH ORDINALITY AS key(attnum, position)
+            JOIN pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = key.attnum ORDER BY key.position),
+        ARRAY(SELECT a.attname FROM unnest(k.confkey) WITH ORDINALITY AS key(attnum, position)
+            JOIN pg_attribute a ON a.attrelid = k.confrelid AND a.attnum = key.attnum ORDER BY key.position)
+    FROM pg_constraint k JOIN visible v ON v.oid = k.conrelid
+    JOIN (SELECT c.oid, n.nspname, c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace) t ON t.oid = k.confrelid
+    WHERE k.contype = 'f' AND k.conparentid = 0
+    ORDER BY k.conrelid, k.conname";
 const SEARCH_PATH: &str = "SELECT current_schemas(false)::text[]";
 const DROPPED_RELATION: &str = "could not open relation with OID";
 
@@ -84,7 +95,7 @@ async fn read_retried_once_on_drop(reader: &mut impl ReadsCatalogOnce, cap: Tabl
 }
 
 impl Session {
-    /// Every schema, table, column and index the role can read, the first 20 000 tables by name, and the search path,
+    /// Every schema, table, column, index and foreign key the role can read, the first 20 000 tables by name, and the search path,
     /// in one read-only transaction that sees one snapshot.
     pub(crate) async fn read_schema(&mut self) -> Result<Catalog> {
         self.read_schema_capped(TABLE_CAP, "").await
@@ -105,10 +116,11 @@ impl Session {
             let tables = rows(transaction, TABLES, limit, filter).await?.iter().map(listed).collect::<Result<Vec<_>>>()?;
             let columns = rows(transaction, COLUMNS, limit, filter).await?.iter().map(column).collect::<Result<Vec<_>>>()?;
             let indexes = rows(transaction, INDEXES, limit, filter).await?.iter().map(index).collect::<Result<Vec<_>>>()?;
+            let keys = rows(transaction, FOREIGN_KEYS, limit, filter).await?.iter().map(foreign_key).collect::<Result<Vec<_>>>()?;
             let search_path = transaction.query_one(SEARCH_PATH, &[]).await.map_err(server_error)?.try_get(0)?;
             let is_cut = tables.len() > cap.0;
             let kept = tables.into_iter().take(cap.0).collect();
-            Ok(Catalog { schema: assembled(kept, columns, indexes), search_path, is_cut })
+            Ok(Catalog { schema: assembled(kept, columns, indexes, keys), search_path, is_cut })
         })
         .await
     }
@@ -142,7 +154,7 @@ fn is_dropped_relation(code: Option<&SqlState>, message: &str) -> bool {
 fn listed(row: &Row) -> Result<Listed> {
     let kind = table_kind(&row.try_get::<_, String>(3)?)?;
     let estimated_rows = estimated_rows(kind, row.try_get(4)?);
-    let table = Table { name: row.try_get(2)?, kind, estimated_rows, columns: vec![], indexes: vec![] };
+    let table = Table { name: row.try_get(2)?, kind, estimated_rows, columns: vec![], indexes: vec![], foreign_keys: vec![] };
     Ok(Listed { oid: row.try_get(0)?, schema: row.try_get(1)?, table })
 }
 
@@ -178,15 +190,27 @@ fn index(row: &Row) -> Result<(u32, Index)> {
     Ok((row.try_get(0)?, index))
 }
 
-/// The tables, in order, each with its columns and indexes, grouped by schema.
-fn assembled(tables: Vec<Listed>, columns: Vec<(u32, SchemaColumn)>, indexes: Vec<(u32, Index)>) -> Schema {
+fn foreign_key(row: &Row) -> Result<(u32, ForeignKey)> {
+    let key = ForeignKey {
+        columns: row.try_get(3)?,
+        target_schema: row.try_get(1)?,
+        target_table: row.try_get(2)?,
+        target_columns: row.try_get(4)?,
+    };
+    Ok((row.try_get(0)?, key))
+}
+
+/// The tables, in order, each with its columns, indexes and foreign keys, grouped by schema.
+fn assembled(tables: Vec<Listed>, columns: Vec<(u32, SchemaColumn)>, indexes: Vec<(u32, Index)>, keys: Vec<(u32, ForeignKey)>) -> Schema {
     let mut columns_by_table = grouped(columns);
     let mut indexes_by_table = grouped(indexes);
+    let mut keys_by_table = grouped(keys);
     let mut schemas: Vec<SchemaNode> = vec![];
     for Listed { oid, schema, table } in tables {
         let table = Table {
             columns: columns_by_table.remove(&oid).unwrap_or_default(),
             indexes: indexes_by_table.remove(&oid).unwrap_or_default(),
+            foreign_keys: keys_by_table.remove(&oid).unwrap_or_default(),
             ..table
         };
         match schemas.last_mut() {
@@ -329,6 +353,47 @@ mod tests {
                 ("orders_pkey", vec!["id".to_owned()], true, true),
             ]
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn the_schema_gives_each_table_its_foreign_keys_in_column_order() {
+        let mut session = session_on(
+            "shop_keys",
+            &[
+                "CREATE TABLE shop_keys.customers (id int, region text, PRIMARY KEY (region, id))",
+                "CREATE TABLE shop_keys.orders (id int, customer_id int, customer_region text,
+                    FOREIGN KEY (customer_region, customer_id) REFERENCES shop_keys.customers (region, id))",
+            ],
+        )
+        .await;
+        let schema = read(&mut session).await.schema;
+        let [customers, orders] = tables_of(&schema, "shop_keys") else { panic!("{schema:?}") };
+        let key = ForeignKey {
+            columns: vec!["customer_region".to_owned(), "customer_id".to_owned()],
+            target_schema: "shop_keys".to_owned(),
+            target_table: "customers".to_owned(),
+            target_columns: vec!["region".to_owned(), "id".to_owned()],
+        };
+        assert_eq!((customers.foreign_keys.as_slice(), orders.foreign_keys.as_slice()), (&[][..], &[key][..]));
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_foreign_key_to_a_partitioned_table_comes_once() {
+        let mut session = session_on(
+            "shop_part_keys",
+            &[
+                "CREATE TABLE shop_part_keys.days (day date PRIMARY KEY) PARTITION BY RANGE (day)",
+                "CREATE TABLE shop_part_keys.days_2026 PARTITION OF shop_part_keys.days FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')",
+                "CREATE TABLE shop_part_keys.orders (day date REFERENCES shop_part_keys.days)",
+            ],
+        )
+        .await;
+        let schema = read(&mut session).await.schema;
+        let [_, orders] = tables_of(&schema, "shop_part_keys") else { panic!("{schema:?}") };
+        let targets: Vec<&str> = orders.foreign_keys.iter().map(|key| key.target_table.as_str()).collect();
+        assert_eq!(targets, ["days"]);
     }
 
     #[tokio::test]

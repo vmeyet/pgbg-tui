@@ -142,6 +142,13 @@ mod tests {
     }
 
     #[test]
+    fn right_after_join_takes_the_table_with_its_alias_and_condition() {
+        let mut app = typed_on_shop("SELECT * FROM orders o JOIN cu");
+        app.handle_key(KeyEvent::from(KeyCode::Right));
+        assert_eq!(app.sheet().editor.text(), "SELECT * FROM orders o JOIN customers c ON c.id = o.customer_id");
+    }
+
+    #[test]
     fn any_other_key_drops_the_ghost() {
         let mut app = typed_on_shop("SELECT * FROM cu");
         app.handle_key(KeyEvent::from(KeyCode::Left));

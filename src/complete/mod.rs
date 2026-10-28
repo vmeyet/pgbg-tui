@@ -6,6 +6,7 @@ pub(crate) use rank::{Candidate, Kind};
 
 mod context;
 mod index;
+mod join;
 mod keyword;
 mod rank;
 
@@ -14,15 +15,21 @@ mod tests {
     use super::rank::Ghosted;
     use super::*;
     use crate::db::lex::Lexed;
-    use crate::db::model::{Catalog, Schema, SchemaColumn, SchemaNode, Table, TableKind, TypeName};
+    use crate::db::model::{Catalog, ForeignKey, Schema, SchemaColumn, SchemaNode, Table, TableKind, TypeName};
 
     const TABLE_COUNT: usize = 20_000;
     const COLUMNS_PER_TABLE: usize = 10;
     const WORDS: [&str; 10] = ["orders", "customers", "invoices", "payments", "refunds", "carts", "items", "stocks", "shipments", "notes"];
     const COLUMN_WORDS: [&str; 10] =
         ["id", "created_at", "updated_at", "customer_id", "status", "total", "currency", "note", "code", "count"];
-    const KEYS: [&str; 5] =
-        ["SELECT * FROM o|", "SELECT o.| FROM orders_40 o", "SELECT st| FROM orders_40", "SELECT c|", "SELECT cr| FROM missing"];
+    const KEYS: [&str; 6] = [
+        "SELECT * FROM o|",
+        "SELECT o.| FROM orders_40 o",
+        "SELECT st| FROM orders_40",
+        "SELECT c|",
+        "SELECT cr| FROM missing",
+        "SELECT * FROM orders_40 o JOIN c|",
+    ];
 
     fn large_catalog() -> Catalog {
         let column = |name: String| SchemaColumn { name, type_name: TypeName::new("integer"), is_nullable: false, default: None };
@@ -32,9 +39,21 @@ mod tests {
             estimated_rows: None,
             columns: COLUMN_WORDS.iter().take(COLUMNS_PER_TABLE).map(|word| column(format!("{word}_{at}"))).collect(),
             indexes: vec![],
+            foreign_keys: vec![to_next(at)],
         };
         let public = SchemaNode { name: "public".to_owned(), tables: (0..TABLE_COUNT).map(table).collect() };
         Catalog { schema: Schema { schemas: vec![public] }, search_path: vec!["public".to_owned()], is_cut: false }
+    }
+
+    /// The key of table `at` pointing to the next table, so each table joins two others.
+    fn to_next(at: usize) -> ForeignKey {
+        let next = (at + 1) % TABLE_COUNT;
+        ForeignKey {
+            columns: vec![format!("customer_id_{at}")],
+            target_schema: "public".to_owned(),
+            target_table: format!("{}_{next}", WORDS[next % WORDS.len()]),
+            target_columns: vec![format!("id_{next}")],
+        }
     }
 
     fn ask(marked: &str) -> Option<Ask> {
