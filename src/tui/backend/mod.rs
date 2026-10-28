@@ -12,7 +12,7 @@ use paging::PAGES_IDLE_LIMIT;
 use queries::QueryFiles;
 use session::{Job, Queued, SessionAnswers, SessionLink};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -57,9 +57,10 @@ impl Backend {
         Self { history, ..self }
     }
 
-    /// The file of `query` for the user's editor; blocks on the file system, so the loop calls it with the terminal lent.
-    pub(super) fn query_file(&self, query: &Query) -> anyhow::Result<PathBuf> {
-        self.queries.file(query)
+    /// Runs the user's editor through `edit` on the file of `query`, then keeps the text it replaced; blocks on the
+    /// file system, so the loop calls it with the terminal lent.
+    pub(super) fn edit_query(&self, query: &Query, edit: impl FnOnce(&Path) -> anyhow::Result<()>) -> anyhow::Result<()> {
+        self.queries.edit(query, edit)
     }
 
     /// Hands `action` over without waiting for it; the loop never waits on the database.

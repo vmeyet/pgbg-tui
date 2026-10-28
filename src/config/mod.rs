@@ -19,6 +19,7 @@ pub(crate) use keychain::{keychain_item_to_delete, replaced_keychain_item};
 pub(crate) use write::{ConnectionChange, add_connection, edit_connection, remove_connection, set_password};
 
 const PATH_VARIABLE: &str = "PGBG_CONFIG";
+const DATA_DIR_VARIABLE: &str = "PGBG_DATA_DIR";
 
 #[derive(Deserialize)]
 struct ConfigFile {
@@ -80,8 +81,18 @@ fn dir_from(xdg: Option<OsString>, home: Option<PathBuf>) -> PathBuf {
     xdg_folder(xdg, home, ".config").unwrap_or_else(|| PathBuf::from(".")).join("pgbg")
 }
 
+/// `$PGBG_DATA_DIR`, else `$XDG_DATA_HOME/pgbg`, else `~/.local/share/pgbg`, on every system, macOS included: where
+/// pgbg keeps what it writes for itself, the history and the versions of saved queries.
+pub(crate) fn data_dir() -> Option<PathBuf> {
+    data_dir_from(std::env::var_os(DATA_DIR_VARIABLE), std::env::var_os("XDG_DATA_HOME"), dirs::home_dir())
+}
+
+fn data_dir_from(variable: Option<OsString>, xdg: Option<OsString>, home: Option<PathBuf>) -> Option<PathBuf> {
+    named_path(variable).or_else(|| xdg_folder(xdg, home, ".local/share").map(|dir| dir.join("pgbg")))
+}
+
 /// The folder an `$XDG_*_HOME` variable holds when it is absolute, as the spec asks, else `under_home` in `home`.
-pub(crate) fn xdg_folder(xdg: Option<OsString>, home: Option<PathBuf>, under_home: &str) -> Option<PathBuf> {
+fn xdg_folder(xdg: Option<OsString>, home: Option<PathBuf>, under_home: &str) -> Option<PathBuf> {
     xdg.map(PathBuf::from).filter(|p| p.is_absolute()).or_else(|| home.map(|h| h.join(under_home)))
 }
 
@@ -214,5 +225,15 @@ url = "postgres://nina@localhost:5432/shop"
             "a relative XDG path is ignored"
         );
         assert_eq!(dir_from(Some("".into()), home), PathBuf::from("/Users/nina/.config/pgbg"));
+    }
+
+    #[test]
+    fn the_data_folder_is_the_variable_else_pgbg_in_xdg_data_home_else_under_home() {
+        let home = || Some(PathBuf::from("/Users/nina"));
+        assert_eq!(data_dir_from(Some("/tmp/pgbg-data".into()), Some("/data".into()), home()), Some(PathBuf::from("/tmp/pgbg-data")));
+        assert_eq!(data_dir_from(Some("".into()), Some("/data".into()), home()), Some(PathBuf::from("/data/pgbg")));
+        assert_eq!(data_dir_from(None, None, home()), Some(PathBuf::from("/Users/nina/.local/share/pgbg")));
+        assert_eq!(data_dir_from(None, Some("relative".into()), home()), Some(PathBuf::from("/Users/nina/.local/share/pgbg")));
+        assert_eq!(data_dir_from(None, None, None), None);
     }
 }

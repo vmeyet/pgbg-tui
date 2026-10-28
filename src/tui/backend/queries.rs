@@ -3,6 +3,7 @@ use super::super::app::{Answer, QueryAnswer};
 use super::send;
 use crate::connection::ConnectionName;
 use crate::query::{Query, QueryPath, Roots, Write};
+use std::path::Path;
 use tokio::sync::mpsc::UnboundedSender;
 
 /// The folders of saved queries, and the loop's channel for what is read from them.
@@ -31,13 +32,14 @@ impl QueryFiles {
         });
     }
 
-    /// The file of `query` for the user's editor; blocks on the file system.
-    pub(super) fn file(&self, query: &Query) -> anyhow::Result<std::path::PathBuf> {
-        self.roots.file(query)
+    /// Runs `edit` on the file of `query`, as the user's editor does, then keeps the text it replaced; blocks on the
+    /// file system.
+    pub(super) fn edit(&self, query: &Query, edit: impl FnOnce(&Path) -> anyhow::Result<()>) -> anyhow::Result<()> {
+        self.roots.edit_kept(query, edit)
     }
 
-    /// Writes `text` over `query` on a blocking thread; `QueryAnswer::Saved` comes back for the sheet of `connection`,
-    /// followed by the new list.
+    /// Writes `text` over `query` on a blocking thread, the text it replaces kept as a version first;
+    /// `QueryAnswer::Saved` comes back for the sheet of `connection`, followed by the new list.
     pub(in crate::tui) fn save(&self, connection: ConnectionName, query: Query, text: String) {
         let (roots, answers) = (self.roots.clone(), self.answers.clone());
         tokio::task::spawn_blocking(move || {

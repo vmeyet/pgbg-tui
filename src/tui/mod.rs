@@ -28,7 +28,7 @@ use crate::config::AiSettings;
 use crate::connection::{Connection, ConnectionName};
 use crate::format::Mode;
 use crate::history::Store;
-use crate::query::{Query, Roots};
+use crate::query::{Query, Roots, Versions};
 use crate::signal::Signals;
 use anyhow::Result;
 use app::{Action, Answer, App, Clock, Fit, QueryAnswer};
@@ -67,7 +67,8 @@ pub(crate) async fn run(
     let mut app = App::new(connections, &first, theme).with_format_mode(format).with_ai(ai);
     // Unbounded: each answer follows an action, a page only once the grid asks for it, and the loop takes one per turn.
     let (answers, mut incoming) = mpsc::unbounded_channel();
-    let mut backend = Backend::new(Roots::find_here().await?, config, answers).with_history(Store::from_env());
+    let roots = Roots::find_here().await?.with_versions(Versions::from_env());
+    let mut backend = Backend::new(roots, config, answers).with_history(Store::from_env());
     for action in app.start() {
         backend.dispatch(action);
     }
@@ -86,12 +87,9 @@ struct Screens<'a> {
 }
 
 impl Screens<'_> {
-    /// Lends the terminal to the user's editor on `query`'s file until it exits.
+    /// Lends the terminal to the user's editor on `query`'s file until it exits, then keeps the text it replaced.
     fn edit_outside(&mut self, query: &Query, backend: &Backend) -> Result<()> {
-        tokio::task::block_in_place(|| {
-            let path = backend.query_file(query)?;
-            self.screen.lend(self.terminal, || outside::edit(&path))
-        })
+        tokio::task::block_in_place(|| backend.edit_query(query, |path| self.screen.lend(self.terminal, || outside::edit(path))))
     }
 }
 

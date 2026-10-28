@@ -33,6 +33,7 @@ When a boundary or a flow changes, change this page in the same MR.
 | `db/bind.rs` | `AsText`, the one `ToSql` a value is bound through: any parameter type, sent as text for the server to read with that type's input, `None` as NULL; `prepare` looks up each type a header names (`to_regtype`, the name bound) and leaves the others to the server (id 0) |
 | `db/decode.rs` | Wire values to `Value`, by column type, a domain by its base type; a value it cannot decode is `Unsupported`, never an error |
 | `query/` | Saved queries: the `.pgbg/queries/` tree (`Roots`, which the TUI lists and `pgbg run --query` reads by path), the header (`-- name:`, `-- connection:`, `-- chart:`, `-- format:` and `-- param:`), load, and save |
+| `query/versions.rs` | The texts a save replaced: `Roots::write` over a query, and `Roots::edit_kept` around the user's editor, keep the old text in `<data folder>/versions/<FNV-1a of the file's real path>/<when it was replaced>.sql` (folder `0700`) unless it is the text written or already the newest version, the newest 50 per query |
 | `query/params.rs` | Parameters, pure: the `{{name}}` of a statement turned into `$n`, and the values `Given` by name (`--param`, a `--params-file` line, the parameter bar) into the `Params` its run binds, a name left empty taking its `-- param:` default, or NULL when `optional`, then `admit`ted by the guard; its `Numbering` reads a place in the filled text, where a server error points, back in the template |
 | `complete/` | Completion, pure: the `Index` built once from a `Catalog` (a vtui completion index per list: the tables, every column, each table's own columns and the keywords, in the catalog's order, and the names that need quotes with how they go in; a table bare in the first schema of `current_schemas(false)` that holds its name, else as `schema.table`; each column name once, and each table's own), the `Ask` at the cursor from the tokens of the statement under it, never of the whole editor, and none inside a string, a comment or a quoted name (a table after `FROM` or a `,` of a `FROM` list; after `JOIN`, a table with the tables named before it; a column of `orders` after `o.` when `FROM orders o`, each table found by its name as PostgreSQL resolves it, a bare one lowercased and a quoted one as written; a keyword at a statement's start; else a column or a keyword), and the ranked candidates: vtui ranks each list, the ghost's prefix only and the list's fuzzy too, and `complete/` merges the lists, quotes a name, cases a keyword as typed and offers a table's first column after a bare `.`; after `JOIN`, the joins (`join.rs`) come first: each table a foreign key links to one the statement names, either way, as `customers c ON c.id = o.customer_id`, its alias the initials of its name, numbered when taken or a keyword, its condition from the key's columns joined with `AND` |
 | `ai/` | Asking a command for SQL: the `Prompt` (instruction, statement, schema slice, tier) as the text on the command's stdin (`prompt.rs`), the statement's literals masked unless `[ai] literals = "sent"` and its comments stripped (`mask.rs`), the tables shown (`slice.rs`), and its answer read back as statements (`answer.rs`), all pure; `Asking` runs the command on a prompt in a task of its own, which a drop kills, and says why it brought no reply with a `CommandError` (`command.rs`) |
@@ -189,11 +190,11 @@ Charting a result:
 ## Boundaries
 
 - Only `src/db/` sees a `tokio_postgres` type; everything else uses `db/model/`.
-- Side effects live at the edges: `main.rs`, `signal.rs`, `commands/`, `tui/mod.rs`, `tui/backend/`, `tunnel/`, `secret/`, `ai/command.rs`, `config/` when it rewrites the file, `query/` when it lists, reads, writes and makes the queries folders, `history.rs` when it appends and reads its files.
+- Side effects live at the edges: `main.rs`, `signal.rs`, `commands/`, `tui/mod.rs`, `tui/backend/`, `tunnel/`, `secret/`, `ai/command.rs`, `config/` when it rewrites the file, `query/` when it lists, reads, writes and makes the queries folders and keeps the versions a save replaced, `history.rs` when it appends and reads its files.
 - `tui/app/` is pure: it never reads the clock nor does I/O; its tests drive it with keys and `Answer` values.
 - `chart/` is pure: a `ResultSet` in, a `Series` out; drawing lives in `tui/chart_view/`.
 - `format/` is pure: a `Value`, a `Format` and a `Clock` in, the cell's text out; it never reads the clock itself.
-- A program that takes the terminal (`$EDITOR` on a saved query) runs from the loop through `Screen::lend`, with the key stream dropped and, through vtui, pastes given back until it exits, then every cell drawn again at the terminal's size; the query is read again after.
+- A program that takes the terminal (`$EDITOR` on a saved query) runs from the loop through `Screen::lend`, with the key stream dropped and, through vtui, pastes given back until it exits, then every cell drawn again at the terminal's size; the text it replaced is kept as a version, and the query is read again after.
 - Secrets are read only in `secret/` and sent only by `Session::open` and the keychain write.
 
 ## Read only
@@ -267,6 +268,7 @@ pgbg's own read-only transaction (`Session::read_only`) is refused with `InsideU
 - The header is read again whenever the editor's text changes; a line it cannot read is a warning in the editor's title, never a failure.
 - `-- connection:` only suggests: the editor's title names it, in red when it is a production connection, and a statement always runs on the session on screen.
 - The file is the source of truth: pgbg reads it when it is opened and writes it back when it is saved, nothing else.
+- A save over a query, from `ctrl-s` or `$EDITOR`, first keeps the text it replaces as a version in pgbg's data folder, never in the project; best effort, so a version not kept is logged and never stops the save.
 - A save writes a temporary file beside the query and renames it over; it makes the missing folders, refuses a link or a root that changed, and a new query never replaces another file, so saving twice changes nothing.
 - A new query goes under the project's root, else under the user's; opening another query or a new, empty one (`ctrl-q`) over unsaved text asks first.
 
@@ -302,6 +304,7 @@ One word per concept, in code, docs and UI.
 | page | One batch of rows fetched from the portal |
 | chart | A bar or line drawing of a result |
 | history | Every statement run on a connection |
+| version | A text of a saved query that a save replaced, kept outside the project |
 | schema | The schemas, tables, columns and indexes a session's role can read |
 | catalog | The schema as one read gave it, with the search path it was read under and whether the table cap cut it |
 | completion | A name the editor offers at the cursor, from the schema or the keywords |
