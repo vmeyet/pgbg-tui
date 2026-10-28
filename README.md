@@ -241,7 +241,7 @@ pgbg run scratch "DELETE FROM orders WHERE id = 7" --yes
 `--yes` sends a write without asking, on a connection with `writes = "allowed"` such as `scratch` above.
 `run`, `history`, `schema`, `doctor` and `connections` take `--json` for machine-readable output.
 
-The history lives in `pgbg/history/` in your data folder, or in `$PGBG_DATA_DIR`.
+The history lives in `$XDG_DATA_HOME/pgbg/history/` when it is set, else `~/.local/share/pgbg/history/`, on macOS too; set `$PGBG_DATA_DIR` to keep it elsewhere.
 It keeps when, how long and what came of each statement, never a row.
 
 ## What's next

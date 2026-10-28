@@ -77,8 +77,12 @@ fn path_from(variable: Option<OsString>, dir: &Path) -> PathBuf {
 }
 
 fn dir_from(xdg: Option<OsString>, home: Option<PathBuf>) -> PathBuf {
-    let xdg = xdg.map(PathBuf::from).filter(|p| p.is_absolute());
-    xdg.or_else(|| home.map(|h| h.join(".config"))).unwrap_or_else(|| PathBuf::from(".")).join("pgbg")
+    xdg_folder(xdg, home, ".config").unwrap_or_else(|| PathBuf::from(".")).join("pgbg")
+}
+
+/// The folder an `$XDG_*_HOME` variable holds when it is absolute, as the spec asks, else `under_home` in `home`.
+pub(crate) fn xdg_folder(xdg: Option<OsString>, home: Option<PathBuf>, under_home: &str) -> Option<PathBuf> {
+    xdg.map(PathBuf::from).filter(|p| p.is_absolute()).or_else(|| home.map(|h| h.join(under_home)))
 }
 
 impl Config {
