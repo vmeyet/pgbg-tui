@@ -142,13 +142,13 @@ impl App {
 
     /// Shows the answer to `ask` while the footer still waits on it; a late answer is dropped, and so is one whose
     /// editor changed meanwhile.
-    pub(super) fn asked(&mut self, ask: AskId, answer: Result<Vec<Statement>, AskFailure>) {
+    pub(super) fn asked(&mut self, ask: AskId, answer: Result<Vec<Statement>, AskFailure>) -> Vec<Action> {
         if self.asks.idle.is_waiting_on(ask) {
-            return self.show_idle_ghost(answer);
+            return self.show_idle_ghost(answer).into_iter().collect();
         }
-        let Some(Overlay::Ask(AskStep::Waiting { ask: waiting, revision })) = self.overlay else { return };
+        let Some(Overlay::Ask(AskStep::Waiting { ask: waiting, revision })) = self.overlay else { return vec![] };
         if waiting != ask {
-            return;
+            return vec![];
         }
         let answer = answer.and_then(|statements| self.sheet().suggestion(revision, &statements));
         match answer {
@@ -158,6 +158,7 @@ impl App {
                 self.asks.failure = Some(failure);
             }
         }
+        vec![]
     }
 
     /// Why `ctrl-g` asks nothing on the sheet on screen, as the config stands now.

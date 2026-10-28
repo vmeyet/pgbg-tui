@@ -219,6 +219,31 @@ In the TUI, a bar above the editor shows one field per parameter.
 
 `pgbg tui <connection>` opens the TUI on another connection than the first.
 
+## Asking AI
+
+`ctrl-g` in the editor asks a command of your choice for SQL, and the idle ghost asks it for the rest of the statement you are typing.
+Name the command in the `[ai]` table of `config.toml`:
+
+```toml
+[ai]
+command = ["claude", "-p", "--model", "haiku"]  # reads the prompt on stdin, prints SQL; never run through a shell
+env = ["USER"]                                  # claude finds its login through USER
+ghost = true                                    # the idle ghost; off by default
+literals = "masked"                             # or "sent"; masked by default
+timeout = 60                                    # seconds; 60 by default
+```
+
+| Key | What it does |
+| --- | --- |
+| `command` | The program and its arguments; it runs from an empty folder. |
+| `env` | The variables it gets besides `PATH`, `HOME`, `LANG` and `TERM`; one a password names is never passed. |
+| `ghost` | Asks for the rest of the statement after 1 s without a key, when no completion shows; `→` takes it. |
+| `literals` | `masked` replaces the statement's values with markers, `sent` sends them as typed. |
+| `timeout` | How long the command has before it is stopped. |
+
+`ai = "off"` on a connection keeps both from asking there.
+When the idle ghost shows nothing, `pgbg.log` in pgbg's cache folder says why.
+
 ## On the command line
 
 ```sh

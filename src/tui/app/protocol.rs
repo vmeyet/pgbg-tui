@@ -106,6 +106,8 @@ pub(in crate::tui) enum Action {
     Ask { ask: AskId, prompt: Prompt, settings: AiSettings },
     /// Kill the command of `ask` if it still runs; its answer never comes.
     DropAsk(AskId),
+    /// Log why the idle ask shows no ghost, which nobody asked for and so nothing on screen says.
+    LogNoIdleGhost(NoIdleGhost),
 }
 
 /// A connection to add or edit: the keys it sets, and the password typed for its keychain item.
@@ -164,6 +166,14 @@ pub(in crate::tui) enum AskFailure {
     Answer(AnswerError),
     /// The editor changed while the ask was on screen, so the answer no longer fits the text it was asked about.
     EditorChanged,
+}
+
+/// Why the idle ask shows no ghost; it never holds the statement nor the answer.
+#[derive(Debug, PartialEq)]
+pub(in crate::tui) enum NoIdleGhost {
+    Failed(AskFailure),
+    /// The answer does not start with the statement as typed, blanks, comments and the case of words aside.
+    NotContinued,
 }
 
 /// The outcome of a change to the config.
@@ -261,6 +271,15 @@ impl fmt::Display for AskFailure {
             Self::Command(failed) => failed.fmt(f),
             Self::Answer(unread) => unread.fmt(f),
             Self::EditorChanged => f.write_str("the answer is dropped: the editor changed since ^g asked"),
+        }
+    }
+}
+
+impl fmt::Display for NoIdleGhost {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Failed(failure) => write!(f, "no idle ghost: {failure}"),
+            Self::NotContinued => f.write_str("no idle ghost: the answer does not continue the statement as typed"),
         }
     }
 }

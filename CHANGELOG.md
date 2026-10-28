@@ -137,6 +137,9 @@ Each entry says what changed, then where, then how to use it.
 
 ### Fixed
 
+- **The idle ghost shows when the answer lays the statement out its own way**, in the TUI's editor: other line breaks, spaces, comments or word case no longer hide it.
+  What you typed stays as is, and an answer that changes it still shows nothing.
+  When no ghost shows, `pgbg.log` says why: the command failed, ran out of time, or did not continue the statement.
 - **pgbg's config folder is `~/.config/pgbg/` on macOS too**, for `config.toml` and your own `queries/`: it was `~/Library/Application Support/pgbg/`.
   Set `$XDG_CONFIG_HOME` to move it, or `$PGBG_CONFIG` to use another file.
 - **pgbg's history is in `~/.local/share/pgbg/history/` on macOS too**: it was `~/Library/Application Support/pgbg/history/`.

@@ -163,8 +163,8 @@ Asking a command for SQL:
    `⏎` takes nothing, so taking an answer and running it are always two keys; running it goes through `db::guard` like any statement.
 6. The idle ghost, when `[ai] ghost = true` and the connection does not say `ai = "off"`, asks for the rest of the statement under the cursor once the editor sat 1 s without an event, the loop's timer as for the colours, so the app stays pure and its tests call `ask_idle_ghost` themselves.
    It asks only when the cursor ends that statement, the editor has the keys with no overlay over it, no completion ghost shows (the local ghost first), and that text was not asked about yet; it goes through `Action::Ask` with a fixed instruction, the prompt built as for `ctrl-g`, so the backend runs one ask at a time.
-   Any key or paste sends `Action::DropAsk`, which kills the command; an answer to an older `AskId`, or for an editor whose `Revision` moved, is dropped, and a failed ask shows nothing.
-   The answer's first statement shows only when it starts with the statement as typed: the first line of what follows, cleaned as a paste is, shows faded after the cursor as the completion ghost does, `→` takes it by the same path, and running it still goes through `db::guard` and its confirmation.
+   Any key or paste sends `Action::DropAsk`, which kills the command; an answer to an older `AskId`, or for an editor whose `Revision` moved, is dropped, and a failed ask shows nothing on screen: the app answers `Action::LogNoIdleGhost`, and the backend logs why, never the statement nor the answer.
+   The answer's first statement shows only when its `db::lex` tokens start with those typed, blanks, comments and the case of words aside, the last typed word possibly cut short; the text typed is never changed: the first line of what follows, cleaned as a paste is, shows faded after the cursor as the completion ghost does, `→` takes it by the same path, and running it still goes through `db::guard` and its confirmation.
 7. The log says which program ran, how long, how it exited and how many bytes went each way; never the prompt, the instruction or the answer.
 
 Formatting a cell:
