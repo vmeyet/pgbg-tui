@@ -5,7 +5,7 @@ pub(crate) use number::grouped_digits;
 
 use crate::db::model::{ColumnKind, Value};
 use crate::render;
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use std::fmt;
 use std::str::FromStr;
 
@@ -23,7 +23,7 @@ pub(crate) enum Format {
     Raw,
     /// A timestamp with time zone in the local time zone, without its offset.
     Local,
-    /// A timestamp as the time from now: `3 h ago`, `in 2 d`.
+    /// A timestamp as the time from now, `3 h ago`, `in 2 d`; a date as the days from today, `yesterday`, `in 2 d`.
     Relative,
     /// A number grouped by thousands: `1 234 567.5`.
     Grouped,
@@ -80,15 +80,16 @@ impl FromStr for Format {
 /// The formats a column of `kind` allows, raw first.
 ///
 /// A timestamp without time zone has no local form, as its zone is unknown; its relative form reads it as UTC.
+/// A date has no zone either: its relative form counts days from today's local date.
 pub(crate) fn allowed(kind: &ColumnKind) -> &'static [Format] {
     match kind {
         ColumnKind::Int | ColumnKind::Numeric => &[Format::Raw, Format::Grouped, Format::Bytes],
         ColumnKind::Float => &[Format::Raw, Format::Grouped],
-        ColumnKind::Timestamp => &[Format::Raw, Format::Relative],
+        ColumnKind::Timestamp | ColumnKind::Date => &[Format::Raw, Format::Relative],
         ColumnKind::TimestampTz => &[Format::Raw, Format::Local, Format::Relative],
         ColumnKind::Uuid => &[Format::Raw, Format::Short],
         ColumnKind::Bytes => &[Format::Raw, Format::Bytes],
-        ColumnKind::Bool | ColumnKind::Text | ColumnKind::Json | ColumnKind::Date | ColumnKind::Time | ColumnKind::Other => &[Format::Raw],
+        ColumnKind::Bool | ColumnKind::Text | ColumnKind::Json | ColumnKind::Time | ColumnKind::Other => &[Format::Raw],
     }
 }
 
@@ -118,6 +119,12 @@ pub(crate) struct Clock<Tz: TimeZone> {
     pub(crate) zone: Tz,
 }
 
+impl<Tz: TimeZone> Clock<Tz> {
+    fn today(&self) -> NaiveDate {
+        self.now.with_timezone(&self.zone).date_naive()
+    }
+}
+
 /// The text of `value` in `format`, escaped; a value the format has no form for (NULL, NaN) reads raw, its first `chars` characters.
 pub(crate) fn cell<Tz: TimeZone>(value: &Value, format: Format, clock: &Clock<Tz>, chars: usize) -> String {
     formatted(value, format, clock).unwrap_or_else(|| render::cell_text(value, chars))
@@ -129,6 +136,7 @@ fn formatted<Tz: TimeZone>(value: &Value, format: Format, clock: &Clock<Tz>) -> 
         (Format::Local, Value::TimestampTz(at)) => Some(time::local(*at, &clock.zone)),
         (Format::Relative, Value::TimestampTz(at)) => Some(time::relative(*at, clock.now)),
         (Format::Relative, Value::Timestamp(at)) => Some(time::relative(at.and_utc(), clock.now)),
+        (Format::Relative, Value::Date(day)) => Some(time::relative_day(*day, clock.today())),
         (Format::Grouped, Value::Int(int)) => Some(number::grouped_int(*int)),
         (Format::Grouped, Value::Float(float)) => number::grouped_decimal(&float.to_string()),
         (Format::Grouped, Value::Numeric(text)) => number::grouped_decimal(text),
@@ -252,6 +260,24 @@ mod tests {
     fn a_timestamp_without_time_zone_reads_relative_as_utc() {
         let at = at("2026-07-13T12:00:00Z").naive_utc();
         assert_eq!(read(&Value::Timestamp(at), Format::Relative), "1 d ago");
+    }
+
+    #[test]
+    fn a_date_reads_relative_to_todays_local_date() {
+        let day = "2026-07-13".parse().unwrap();
+        assert_eq!(read(&Value::Date(day), Format::Relative), "yesterday");
+    }
+
+    #[test]
+    fn a_date_reads_relative_to_the_local_date_when_it_differs_from_the_utc_one() {
+        let late_evening_in_new_york = Clock { now: at("2026-07-15T02:00:00Z"), zone: FixedOffset::west_opt(4 * 3600).unwrap() };
+        let today = "2026-07-14".parse().unwrap();
+        assert_eq!(cell(&Value::Date(today), Format::Relative, &late_evening_in_new_york, CHARS), "today");
+    }
+
+    #[test]
+    fn a_date_steps_to_relative_and_is_relative_when_readable() {
+        assert_eq!((Format::Raw.next(&ColumnKind::Date), readable(&ColumnKind::Date)), (Format::Relative, Format::Relative));
     }
 
     #[test]

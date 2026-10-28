@@ -1,5 +1,5 @@
-//! Timestamps in a time zone, and as the time from now.
-use chrono::{DateTime, Datelike, TimeZone, Utc};
+//! Timestamps in a time zone, and timestamps and dates as the time from now.
+use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, TimeZone, Utc};
 
 /// Each unit under a month a relative time reads in, largest first, and its seconds.
 const UNITS: [(u64, &str); 3] = [(86_400, "d"), (3600, "h"), (60, "min")];
@@ -23,6 +23,21 @@ pub(super) fn relative(at: DateTime<Utc>, now: DateTime<Utc>) -> String {
         (Some(span), true) => format!("in {span}"),
         (Some(span), false) => format!("{span} ago"),
     }
+}
+
+/// The calendar days from `today` to `day` in words, `today`, `yesterday` or `tomorrow`, else as `relative` reads
+/// their midnights: `3 d ago`, `in 1 mo`.
+pub(super) fn relative_day(day: NaiveDate, today: NaiveDate) -> String {
+    match (day - today).num_days() {
+        -1 => "yesterday".to_owned(),
+        0 => "today".to_owned(),
+        1 => "tomorrow".to_owned(),
+        _ => relative(midnight(day), midnight(today)),
+    }
+}
+
+fn midnight(day: NaiveDate) -> DateTime<Utc> {
+    day.and_time(NaiveTime::MIN).and_utc()
 }
 
 /// The time from `from` to the later `to` in its largest whole unit, as `3 h`; none under a minute.
@@ -115,5 +130,29 @@ mod tests {
     #[test]
     fn a_future_span_over_a_year_reads_as_in() {
         assert_eq!(since("2028-07-14T11:59:59Z"), "in 1 y");
+    }
+
+    fn day(text: &str) -> NaiveDate {
+        text.parse().unwrap()
+    }
+
+    fn from_bastille_day(text: &str) -> String {
+        relative_day(day(text), day("2026-07-14"))
+    }
+
+    #[test]
+    fn a_day_next_to_today_reads_in_words() {
+        let days = [from_bastille_day("2026-07-13"), from_bastille_day("2026-07-14"), from_bastille_day("2026-07-15")];
+        assert_eq!(days, ["yesterday", "today", "tomorrow"]);
+    }
+
+    #[test]
+    fn a_day_further_away_reads_in_whole_days() {
+        assert_eq!([from_bastille_day("2026-07-11"), from_bastille_day("2026-07-16")], ["3 d ago", "in 2 d"]);
+    }
+
+    #[test]
+    fn a_day_a_month_or_more_away_reads_in_calendar_months_and_years() {
+        assert_eq!([from_bastille_day("2026-06-14"), from_bastille_day("2024-07-14")], ["1 mo ago", "2 y ago"]);
     }
 }

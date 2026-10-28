@@ -147,7 +147,7 @@ pub(super) struct App {
     next_session: SessionId,
     /// Why a change to the config failed when no form waits on it; the status line says it until the next key.
     config_failure: Option<String>,
-    /// The outcome of the last copy; the status line says it until the next key.
+    /// What the last key did when it shows nowhere else, as a copy's outcome; the status line says it until the next key.
     note: Option<String>,
     /// The format mode new results open in, and the clock the loop last read.
     reading: Reading,

@@ -1,5 +1,5 @@
 //! The results grid's state: the cursor's cell, the first row and column in view, and each column's format and width.
-use crate::db::model::ResultSet;
+use crate::db::model::{ColumnName, ResultSet};
 use crate::format::{self, Format, Mode};
 use crate::render;
 use chrono::Local;
@@ -77,12 +77,17 @@ impl Grid {
         Self::new(result, vec![Format::Raw; result.columns().len()], &clock_at_epoch())
     }
 
-    /// Puts the cursor's column in the next format its kind allows.
-    pub(super) fn step_format(&mut self, result: &ResultSet, clock: &Clock) {
-        let Some(column) = result.columns().get(self.column) else { return };
+    /// Puts the cursor's column in the next format its kind allows; when its kind has no other, leaves it and returns
+    /// its name.
+    pub(super) fn step_format(&mut self, result: &ResultSet, clock: &Clock) -> Option<ColumnName> {
+        let column = result.columns().get(self.column)?;
+        if format::allowed(&column.kind).len() == 1 {
+            return Some(column.name.clone());
+        }
         let mut formats = self.formats.clone();
         formats[self.column] = formats[self.column].next(&column.kind);
         self.set_formats(formats, result, clock);
+        None
     }
 
     /// Puts every column raw, or each in its readable format when all are raw already.
@@ -188,7 +193,7 @@ mod tests {
 
     fn stepped_format(result: &ResultSet, steps: usize) -> Grid {
         let mut grid = Grid::raw(result);
-        (0..steps).for_each(|_| grid.step_format(result, &clock_at_epoch()));
+        (0..steps).for_each(|_| _ = grid.step_format(result, &clock_at_epoch()));
         grid
     }
 
@@ -197,6 +202,14 @@ mod tests {
         let result = result(1).with_cell(0, 0, Value::Int(1_048_576));
         let grid = stepped_format(&result, 2);
         assert_eq!((grid.formats[0], grid.widths[0]), (Format::Bytes, "1.0 MiB".len()));
+    }
+
+    #[test]
+    fn a_format_step_on_a_column_with_one_format_leaves_it_raw_and_names_it() {
+        let result = crate::fixtures::orders();
+        let mut grid = Grid::raw(&result);
+        grid.column = 2;
+        assert_eq!((grid.step_format(&result, &clock_at_epoch()), grid.formats[2]), (Some(ColumnName::new("customer")), Format::Raw));
     }
 
     #[test]

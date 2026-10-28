@@ -8,7 +8,7 @@ use crate::chart::{self, ChartError, Series};
 use crate::complete::Index;
 use crate::connection::{Connection, ConnectionName, WritePolicy};
 use crate::db::guard::{self, Write};
-use crate::db::model::{Extent, Page, ResultSet, Statement};
+use crate::db::model::{ColumnName, Extent, Page, ResultSet, Statement};
 use crate::failure::Failure;
 use crate::format::{self, Format};
 use crate::query::params::{self, Numbering, ParamInput, ParamName};
@@ -448,11 +448,10 @@ impl Sheet {
         vec![Action::NextPage { connection: self.connection.name().clone(), session: self.session_id, run: *run }]
     }
 
-    /// Puts the column under the grid's cursor in its next format.
-    pub(super) fn step_format(&mut self, clock: &Clock) {
-        if let Run::Done { result, grid, .. } = &mut self.run {
-            grid.step_format(result, clock);
-        }
+    /// Puts the column under the grid's cursor in its next format; when its kind has no other, returns its name.
+    pub(super) fn step_format(&mut self, clock: &Clock) -> Option<ColumnName> {
+        let Run::Done { result, grid, .. } = &mut self.run else { return None };
+        grid.step_format(result, clock)
     }
 
     /// Puts every column of the grid raw, or readable when all are raw.
