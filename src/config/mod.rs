@@ -4,7 +4,7 @@ use crate::connection::{Connection, Entry};
 use crate::format::Mode;
 pub(crate) use ai::AiSettings;
 use ai::AiTable;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -130,10 +130,20 @@ fn parse(text: &str) -> Result<Loaded> {
         .into_iter()
         .map(|(name, entry)| Connection::new(&name, entry).with_context(|| format!("connection `{name}`")))
         .collect::<Result<_>>()?;
+    check_queries_named(&connections)?;
     let ai = ai::read(file.ai, &connections)?;
     let warnings = warnings.into_iter().chain(ai.warnings).collect();
     let config = Config { connections, format: file.display.format, ai: ai.settings, counts_usage: file.usage.enabled };
     Ok(Loaded { config, warnings })
+}
+
+/// Refuses a `queries` key that names no connection of the config.
+fn check_queries_named(connections: &[Connection]) -> Result<()> {
+    let is_known = |name| connections.iter().any(|other| other.name() == name);
+    if let Some(connection) = connections.iter().find(|connection| !is_known(connection.queries())) {
+        bail!("connection `{}`: `queries = \"{}\"` names no connection in the config", connection.name(), connection.queries());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -213,6 +223,18 @@ url = "postgres://nina@localhost:5432/shop"
     fn a_syntax_error_names_its_line_without_quoting_it() {
         let err = format!("{:#}", parse(&format!("{SHOP}password = \"hunter2\n")).unwrap_err());
         assert!(err.contains("line 9") && !err.contains("hunter2"), "{err}");
+    }
+
+    #[test]
+    fn a_connection_may_use_the_queries_of_another_one() {
+        let loaded = parse(&format!("{SHOP}queries = \"staging\"\n")).unwrap();
+        assert_eq!(loaded.config.connections[0].queries().to_string(), "staging");
+    }
+
+    #[test]
+    fn a_queries_key_naming_no_connection_is_refused() {
+        let err = format!("{:#}", parse(&format!("{SHOP}queries = \"reports\"\n")).unwrap_err());
+        assert!(err.contains("`queries = \"reports\"` names no connection"), "{err}");
     }
 
     #[test]

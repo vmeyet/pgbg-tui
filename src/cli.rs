@@ -121,7 +121,7 @@ pub enum ConnectionCommand {
     },
     /// Changes the keys given and leaves the others as they are.
     #[command(group(clap::ArgGroup::new("change").required(true).multiple(true)
-        .args(["tier", "url", "tunnel", "password_env", "password_command", "keychain", "writes", "tls", "statement_timeout"])))]
+        .args(["tier", "url", "tunnel", "password_env", "password_command", "keychain", "writes", "tls", "statement_timeout", "queries"])))]
     Edit {
         /// The connection's name in `config.toml`.
         connection: ConnectionName,
@@ -151,7 +151,7 @@ pub enum ConnectionCommand {
 pub struct StatementArgs {
     /// One SQL statement; each `{{name}}` in it is bound to the value given for it, never spliced into the text.
     pub sql: Option<String>,
-    /// A saved query, by its path under `.pgbg/queries/` or the user's queries folder: `orders/daily`.
+    /// A saved query, by its path under `.pgbg/queries/` or the connection's own queries folder: `orders/daily`.
     #[arg(long, value_name = "PATH")]
     pub query: Option<String>,
     /// A file holding the statement, or `-` for stdin.
@@ -178,6 +178,9 @@ pub struct ConnectionKeys {
     /// How long the server lets a statement run, such as "2min"; "0s" for no limit. Else the tier's.
     #[arg(long)]
     pub statement_timeout: Option<StatementTimeout>,
+    /// Another connection whose saved queries this one uses, as reports shared by several databases.
+    #[arg(long, value_name = "CONNECTION")]
+    pub queries: Option<ConnectionName>,
 }
 
 /// One place the password comes from; no flag takes the password itself, which `ps` would show.

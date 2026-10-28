@@ -71,10 +71,10 @@ impl Backend {
             Action::NextPage { connection, session, run } => self.next_page(&connection, session, run),
             Action::ReadSchema { connection, session } => self.read_schema(&connection, session),
             Action::Cancel { connection, run } => self.cancel(&connection, run),
-            Action::ListQueries => self.queries.list(),
+            Action::ListQueries(folder) => self.queries.list(folder),
             Action::OpenQuery { connection, query } => self.queries.open(connection, query),
             Action::SaveQuery { connection, query, text } => self.queries.save(connection, query, text),
-            Action::SaveNewQuery { connection, path, text } => self.queries.save_new(connection, path, text),
+            Action::SaveNewQuery { connection, folder, path, text } => self.queries.save_new(connection, folder, path, text),
             Action::EditOutside { query, .. } => {
                 tracing::warn!("{} goes to the loop, which lends the terminal, not to the backend", query.path);
             }

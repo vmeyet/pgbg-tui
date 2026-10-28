@@ -78,14 +78,15 @@ pub(in crate::tui) enum Action {
     ReadSchema { connection: ConnectionName, session: SessionId },
     /// Cancel this run if the connection's session is still running it.
     Cancel { connection: ConnectionName, run: RunId },
-    /// List every saved query.
-    ListQueries,
+    /// List the project's saved queries and the user's own of this connection's queries folder.
+    ListQueries(ConnectionName),
     /// Read this query into the editor of the connection's sheet.
     OpenQuery { connection: ConnectionName, query: Query },
     /// Write the text of the connection's editor over the query it stands for.
     SaveQuery { connection: ConnectionName, query: Query, text: String },
-    /// Write the text of the connection's editor as a new query at this path, never over another one.
-    SaveNewQuery { connection: ConnectionName, path: QueryPath, text: String },
+    /// Write the text of the connection's editor as a new query at this path, never over another one: under the
+    /// project's queries folder when it has one, else under the user's own `folder`.
+    SaveNewQuery { connection: ConnectionName, folder: ConnectionName, path: QueryPath, text: String },
     /// Lend the terminal to the user's editor on this query's file, then read the file again into the connection's sheet.
     /// The loop runs it, not the backend.
     EditOutside { connection: ConnectionName, query: Query },
@@ -143,7 +144,7 @@ pub(in crate::tui) enum Saving {
 pub(in crate::tui) enum Answer {
     /// From the session `session` of `connection`, so an answer from one session never lands on another.
     Session { connection: ConnectionName, session: SessionId, incoming: Incoming },
-    /// About the saved queries: the list every connection shares, or a query read for one sheet.
+    /// About the saved queries: the list of a queries folder, or a query read for one sheet.
     Queries(QueryAnswer),
     /// About the change to the config that `id` names.
     Config { id: ConfigChangeId, answer: ConfigAnswer },
@@ -195,8 +196,11 @@ pub(in crate::tui) enum ConfigAnswer {
 /// The outcome of reading or writing the saved queries.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::tui) enum QueryAnswer {
-    /// Every saved query, sorted.
-    All(Vec<Query>),
+    /// The project's saved queries and the user's own of `folder`, sorted.
+    All {
+        folder: ConnectionName,
+        queries: Vec<Query>,
+    },
     /// The text of `query`, for the sheet of `connection`, which asked for it.
     Opened {
         connection: ConnectionName,

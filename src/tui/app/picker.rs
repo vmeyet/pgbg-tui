@@ -52,7 +52,11 @@ impl App {
         match self.picked(picker, key) {
             Picked::Stay(picker) => self.overlay = Some(Overlay::Picker(picker)),
             Picked::Close => {}
-            Picked::Show(connection) => return self.show(connection),
+            Picked::Show(connection) => {
+                let listed = self.queries_folder().clone();
+                let shown = self.show(connection);
+                return shown.into_iter().chain(self.follow_queries_folder(&listed)).collect();
+            }
             Picked::Quit => return self.quit(),
             Picked::Form(form) => self.overlay = Some(Overlay::Form(form)),
             Picked::Remove(name) => {
@@ -149,10 +153,13 @@ impl App {
 
     /// Takes the connections the config holds after the change `id`.
     /// The sheet of a removed connection closes, the sheet of a changed one opens its session again unless it was
-    /// closed, the form that sent `id` closes, and the status line shows `warning`.
+    /// closed, the form that sent `id` closes, the status line shows `warning`, and the queries are listed again when the
+    /// connection on screen now uses another folder.
     pub(super) fn take_connections(&mut self, id: ConfigChangeId, connections: Vec<Connection>, warning: Option<String>) -> Vec<Action> {
+        let listed = self.queries_folder().clone();
         let closed = self.close_gone(&connections);
         let reopened = self.reopen_changed(&connections);
+        let relisted = self.follow_queries_folder(&listed);
         self.connections = connections;
         if let Some(Overlay::Picker(picker)) = &mut self.overlay {
             picker.search.rank(&self.connections);
@@ -162,7 +169,7 @@ impl App {
         if self.is_form_waiting_on(id) {
             self.overlay = None;
         }
-        closed.into_iter().chain(reopened).collect()
+        closed.into_iter().chain(reopened).chain(relisted).collect()
     }
 
     /// Drops the sheets of connections no longer in `connections`, except the one on screen.
@@ -297,7 +304,7 @@ pub(in crate::tui) mod tests {
     fn picking_a_connection_not_yet_open_shows_it_and_opens_its_session() {
         let mut app = on_local();
         let actions = switch_to(&mut app, "prod");
-        assert!(matches!(&*actions, [Action::Open { connection: prod, .. }] if prod.name() == &name("prod")), "{actions:?}");
+        assert!(matches!(&*actions, [Action::Open { connection: prod, .. }, _] if prod.name() == &name("prod")), "{actions:?}");
         assert_eq!((app.sheet().name(), &app.sheet().session, app.overlay.is_none()), (&name("prod"), &SessionState::Opening, true));
     }
 
@@ -313,7 +320,7 @@ pub(in crate::tui) mod tests {
         });
         switch_to(&mut app, "prod");
         assert_eq!(app.sheet().editor.text(), "");
-        assert_eq!(switch_to(&mut app, "local"), []);
+        assert_eq!(switch_to(&mut app, "local"), [Action::ListQueries(name("local"))]);
         assert_eq!(app.sheet().editor.text(), "SELECT 1");
         assert!(matches!(app.sheet().run, Run::Done { .. }));
     }
@@ -331,6 +338,40 @@ pub(in crate::tui) mod tests {
         });
         assert_eq!(app.sheet().run, Run::Idle);
         assert!(matches!(app.sheet_of(&name("local")).unwrap().run, Run::Done { .. }));
+    }
+
+    fn listed_on_local(app: &mut App) {
+        let path = crate::query::QueryPath::parse("mine.sql").unwrap();
+        let queries = vec![crate::query::Query { source: crate::query::Source::User(name("local")), path }];
+        app.apply(Answer::Queries(QueryAnswer::All { folder: name("local"), queries }));
+    }
+
+    #[test]
+    fn switching_lists_the_queries_of_the_new_connection_and_never_shows_the_old_ones() {
+        let mut app = on_local();
+        listed_on_local(&mut app);
+        let actions = switch_to(&mut app, "prod");
+        assert_eq!(actions.last(), Some(&Action::ListQueries(name("prod"))));
+        assert_eq!(app.queries.all, []);
+    }
+
+    #[test]
+    fn a_list_for_a_connection_no_longer_on_screen_is_dropped() {
+        let mut app = on_local();
+        switch_to(&mut app, "prod");
+        listed_on_local(&mut app);
+        assert_eq!(app.queries.all, []);
+    }
+
+    #[test]
+    fn switching_to_a_connection_that_shares_the_queries_keeps_the_list() {
+        let local = named("local", "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\n");
+        let replica = named("replica", "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\nqueries = \"local\"\n");
+        let mut app = App::new(vec![local.clone(), replica], &local, Theme::default());
+        listed_on_local(&mut app);
+        let actions = switch_to(&mut app, "replica");
+        assert!(matches!(&*actions, [Action::Open { .. }]), "{actions:?}");
+        assert_eq!(app.queries.all.len(), 1);
     }
 
     #[test]
@@ -404,7 +445,7 @@ pub(in crate::tui) mod tests {
         app.apply(Answer::Session { connection: name("prod"), session, incoming: Incoming::NotOpened(Failure::Login("no route".into())) });
         switch_to(&mut app, "local");
         let actions = switch_to(&mut app, "prod");
-        assert!(matches!(&*actions, [Action::Open { connection: prod, .. }] if prod.name() == &name("prod")), "{actions:?}");
+        assert!(matches!(&*actions, [Action::Open { connection: prod, .. }, _] if prod.name() == &name("prod")), "{actions:?}");
         assert_eq!(app.sheet().session, SessionState::Opening);
     }
 
@@ -501,7 +542,9 @@ pub(in crate::tui) mod tests {
         let mut app = on_prod_with_local_open();
         ctrl(&mut app, 'x');
         let local = app.connections[0].clone();
-        assert!(matches!(&*key(&mut app, KeyCode::Enter), [Action::Open { connection, .. }] if *connection == local));
+        assert!(
+            matches!(&*key(&mut app, KeyCode::Enter), [Action::Open { connection, .. }, Action::ListQueries(_)] if *connection == local)
+        );
         assert_eq!(app.sheet().session, SessionState::Opening);
     }
 

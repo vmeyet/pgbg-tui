@@ -66,14 +66,14 @@ impl<'a> Folder<'a> {
 
 /// The rows of `queries` with the folders in `closed` folded; each source is a folder of its own when both have queries.
 pub(crate) fn tree_rows(queries: &[Query], closed: &BTreeSet<String>) -> Vec<TreeRow> {
-    let mut by_source: BTreeMap<Source, Folder<'_>> = BTreeMap::new();
+    let mut by_source: BTreeMap<&Source, Folder<'_>> = BTreeMap::new();
     for query in queries {
-        by_source.entry(query.source).or_default().insert(query);
+        by_source.entry(&query.source).or_default().insert(query);
     }
     if by_source.len() == 1 {
         return by_source.iter().flat_map(|(source, folder)| folder.rows(0, &source.to_string(), closed)).collect();
     }
-    let source_folder = |source: &Source, folder: &Folder<'_>| {
+    let source_folder = |source: &&Source, folder: &Folder<'_>| {
         let key = source.to_string();
         let is_open = !closed.contains(&key);
         let rows = if is_open { folder.rows(1, &key, closed) } else { vec![] };
@@ -87,8 +87,8 @@ mod tests {
     use super::super::QueryPath;
     use super::*;
 
-    fn queries(source: Source, paths: &[&str]) -> Vec<Query> {
-        paths.iter().map(|path| Query { source, path: QueryPath::parse(path).unwrap() }).collect()
+    fn queries(source: &Source, paths: &[&str]) -> Vec<Query> {
+        paths.iter().map(|path| Query { source: source.clone(), path: QueryPath::parse(path).unwrap() }).collect()
     }
 
     fn drawn(rows: &[TreeRow]) -> Vec<String> {
@@ -101,7 +101,7 @@ mod tests {
 
     #[test]
     fn folders_come_first_then_files_each_level_sorted() {
-        let all = queries(Source::Project, &["zeta.sql", "orders/weekly.sql", "orders/daily/top.sql", "alpha.sql", "customers/new.sql"]);
+        let all = queries(&Source::Project, &["zeta.sql", "orders/weekly.sql", "orders/daily/top.sql", "alpha.sql", "customers/new.sql"]);
         let rows = tree_rows(&all, &BTreeSet::new());
         assert_eq!(
             drawn(&rows),
@@ -111,21 +111,21 @@ mod tests {
 
     #[test]
     fn a_closed_folder_hides_what_it_holds() {
-        let all = queries(Source::Project, &["orders/daily.sql", "alpha.sql"]);
+        let all = queries(&Source::Project, &["orders/daily.sql", "alpha.sql"]);
         let closed = BTreeSet::from(["project/orders".to_owned()]);
         assert_eq!(drawn(&tree_rows(&all, &closed)), ["▸ orders/", "alpha.sql"]);
     }
 
     #[test]
     fn a_control_character_in_a_folder_or_file_name_is_drawn_escaped() {
-        let all = queries(Source::Project, &["orders\u{1b}[2J/daily\u{202e}.sql"]);
+        let all = queries(&Source::Project, &["orders\u{1b}[2J/daily\u{202e}.sql"]);
         assert_eq!(drawn(&tree_rows(&all, &BTreeSet::new())), ["▾ orders\\u{1b}[2J/", "  daily\\u{202e}.sql"]);
     }
 
     #[test]
     fn each_source_is_a_folder_when_both_have_queries() {
-        let mut all = queries(Source::Project, &["orders.sql"]);
-        all.extend(queries(Source::User, &["mine/top.sql"]));
+        let mut all = queries(&Source::Project, &["orders.sql"]);
+        all.extend(queries(&Source::User("shop".parse().unwrap()), &["mine/top.sql"]));
         assert_eq!(drawn(&tree_rows(&all, &BTreeSet::new())), ["▾ project/", "  orders.sql", "▾ user/", "  ▾ mine/", "    top.sql"]);
     }
 }

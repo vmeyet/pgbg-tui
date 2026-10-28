@@ -37,6 +37,8 @@ pub(crate) struct Entry {
     schema: SchemaReading,
     #[serde(default)]
     ai: AiAsking,
+    #[serde(default)]
+    queries: Option<ConnectionName>,
 }
 
 /// A named database target: where it is, how to reach it, how to log in, and whether it takes writes.
@@ -57,6 +59,9 @@ pub(crate) struct Connection {
     statement_timeout: TimeoutChoice,
     schema: SchemaReading,
     ai: AiAsking,
+    /// The connection whose folder of saved queries this one uses, when not its own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    queries: Option<ConnectionName>,
 }
 
 /// The name a connection has under `[connections.<name>]`, typed on the command line.
@@ -105,7 +110,7 @@ pub enum WritePolicy {
 impl Connection {
     /// The connection `[connections.<name>]` describes, or why it is refused.
     pub(crate) fn new(name: &str, entry: Entry) -> Result<Self> {
-        let Entry { tier, url, password, tunnel, writes, tls, statement_timeout, schema, ai } = entry;
+        let Entry { tier, url, password, tunnel, writes, tls, statement_timeout, schema, ai, queries } = entry;
         let url = Target::parse(&url)?;
         let statement_timeout = statement_timeout.as_deref().map(StatementTimeout::parse).transpose()?;
         Ok(Self {
@@ -120,6 +125,7 @@ impl Connection {
             statement_timeout: statement_timeout.map_or_else(|| TimeoutChoice::Tier(tier.statement_timeout()), TimeoutChoice::Own),
             schema,
             ai,
+            queries,
         })
     }
 
@@ -168,6 +174,11 @@ impl Connection {
     pub(crate) fn ai(&self) -> AiAsking {
         self.ai
     }
+
+    /// The connection whose folder of saved queries this one uses: the one its `queries` key names, else itself.
+    pub(crate) fn queries(&self) -> &ConnectionName {
+        self.queries.as_ref().unwrap_or(&self.name)
+    }
 }
 
 impl Tier {
@@ -191,8 +202,9 @@ fn secret_source(entry: PasswordEntry) -> Result<SecretSource> {
 impl ConnectionName {
     fn new(name: &str) -> Result<Self> {
         let is_typable = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
-        if !is_typable {
-            bail!("`{name}` is not a connection name: use letters, digits, `-`, `_` and `.`");
+        let is_a_folder_name = !name.chars().all(|c| c == '.');
+        if !is_typable || !is_a_folder_name {
+            bail!("`{name}` is not a connection name: use letters, digits, `-`, `_` and `.`, not only dots");
         }
         Ok(Self(name.to_owned()))
     }
@@ -303,6 +315,7 @@ mod tests {
     fn a_name_the_command_line_cannot_type_is_refused() {
         assert!(connection("my shop", "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\n").is_err());
         assert!(connection("", "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\n").is_err());
+        assert!(connection("..", "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\n").is_err());
         assert!(connection("shop-eu_1.ro", "tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\n").is_ok());
     }
 
@@ -345,6 +358,12 @@ mod tests {
     #[test]
     fn an_unknown_schema_setting_is_refused() {
         assert!(shop("schema = \"lazy\"").is_err());
+    }
+
+    #[test]
+    fn a_connection_uses_its_own_queries_unless_it_names_another() {
+        assert_eq!(shop("").unwrap().queries().to_string(), "shop");
+        assert_eq!(shop("queries = \"reports\"").unwrap().queries().to_string(), "reports");
     }
 
     #[test]

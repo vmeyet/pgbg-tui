@@ -176,7 +176,7 @@ fn failure(app: &App, err: &str, width: usize) -> Line<'static> {
 #[cfg(test)]
 mod tests {
     use super::super::app::fixtures::{app, app_on, connection, every_pane, on_the_result, to_shop, typed};
-    use super::super::app::queries::tests::{query, with_queries};
+    use super::super::app::queries::tests::{listed, query, with_queries};
     use super::super::app::{Answer, App, Incoming, QueryAnswer, RunId};
     use super::super::styled;
     use super::*;
@@ -305,7 +305,7 @@ mod tests {
     fn a_finder_with_more_matches_than_fit_scrolls_and_keeps_its_footer() {
         let mut app = with_queries();
         let many = (1..=20).map(|day| query(&format!("orders/day{day:02}.sql"))).collect();
-        app.apply(Answer::Queries(QueryAnswer::All(many)));
+        app.apply(listed(many));
         app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
         (0..14).for_each(|_| _ = app.handle_key(KeyEvent::from(KeyCode::Down)));
         let screen = format!("{:?}", render(&app, 60, 20).backend());

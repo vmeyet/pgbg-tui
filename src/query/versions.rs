@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 /// and a query of 1 MiB, the most the editor takes, never fills more than 50 MiB.
 const MAX_VERSIONS: usize = 50;
 /// Only the user reads the folder: a query can quote a value its author did not mean to share.
-const DIR_MODE: u32 = 0o700;
+pub(super) const DIR_MODE: u32 = 0o700;
 const EXTENSION: &str = ".sql";
 /// When the version was replaced, in UTC to the millisecond, so the names sort as the versions do.
 const NAME_FORMAT: &str = "%Y%m%dT%H%M%S%.3fZ";
@@ -68,7 +68,7 @@ impl Roots {
 
     /// The real path of the file of `query`, which names its versions.
     fn real_file(&self, query: &Query) -> Result<PathBuf> {
-        Ok(query.path.under(&self.existing_root(query.source)?.real))
+        Ok(query.path.under(&self.existing_root(&query.source)?.real))
     }
 }
 
@@ -146,7 +146,7 @@ fn version(folder: &Path, name: &str) -> Option<Version> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{Project, QueryPath, Root, Source, Write};
+    use super::super::{QueryPath, Root, Source, Write};
     use super::*;
     use chrono::Duration;
     use std::os::unix::fs::PermissionsExt;
@@ -167,8 +167,8 @@ mod tests {
 
     /// A project whose queries live in `queries` and whose versions live in `data`.
     fn kept(queries: &tempfile::TempDir, data: &tempfile::TempDir) -> Roots {
-        let root = Root::checked(queries.path().into(), vec![queries.path().into()]);
-        let roots = Roots { project: Project { dir: queries.path().into(), root }, ..Roots::default() };
+        let project = Root::checked(queries.path().into(), vec![queries.path().into()]);
+        let roots = Roots { project, ..Roots::default() };
         roots.with_versions(Some(store(data)))
     }
 

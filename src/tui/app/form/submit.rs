@@ -70,6 +70,7 @@ impl Form {
             writes: differs(self.writes, was.map(Connection::writes)),
             tls: keys.tls.and_then(|tls| differs(tls, was.and_then(Connection::tls_setting))),
             statement_timeout: keys.statement_timeout.and_then(|own| differs(own, was.and_then(|c| c.statement_timeout().own()))),
+            queries: None,
         }
     }
 

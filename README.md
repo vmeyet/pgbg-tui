@@ -81,6 +81,7 @@ tunnel = { command = ["ssh", "-N", "-o", "ControlPath=none", "-o", "ExitOnForwar
 | `tls` | `"off"` talks in clear on purpose; `"on"` asks for TLS whatever `url` says. |
 | `statement_timeout` | Such as `"2min"`; `"0s"` for no limit. |
 | `schema` | `"off"` skips the second, short login that reads the schema for the sidebar and completion: for a pooler, or a role with no login to spare. |
+| `queries` | Another connection whose saved queries this one uses, as `"prod"` for a replica: its own folder when missing. |
 
 ### Tiers
 
@@ -162,9 +163,11 @@ It exits 1 when a check fails, so a script can run it.
 ## Saved queries
 
 Put `.sql` files under `.pgbg/queries/` in your project, in folders if you like.
-pgbg finds the nearest one from the folder you start it in, the way git finds `.git`.
-When there is none, `ctrl-s` on a new query makes `.pgbg/queries/` at the top of your repository, or in the folder you started pgbg in outside one.
-Queries of your own, for every project, go under `queries/` in pgbg's config folder, as `~/.config/pgbg/queries/`.
+pgbg finds the nearest one from the folder you start it in, the way git finds `.git`, and shows it on every connection.
+Queries of your own belong to a connection: they live in `queries/<connection>/` in pgbg's data folder, as `~/.local/share/pgbg/queries/prod/`.
+The sidebar and `ctrl-p` show the project's queries and those of the connection on screen; `queries = "prod"` on another connection shows the ones of `prod` there too.
+`ctrl-s` on a new query saves it in the project's `.pgbg/queries/` when there is one, else in the folder of the connection on screen; pgbg never makes a project's folder itself.
+Queries kept in `~/.config/pgbg/queries/` by an earlier pgbg move with `mv ~/.config/pgbg/queries ~/.local/share/pgbg/queries/prod`, naming the connection they belong to.
 Each save over a query, from `ctrl-s` or `$EDITOR`, keeps the text it replaced under `versions/` in pgbg's data folder, never in your project: the newest 50 of each query.
 `ctrl-v` lists them, and `⏎` puts one back in the editor, unsaved until you press `ctrl-s`.
 

@@ -79,6 +79,7 @@ fn change_from(keys: &ConnectionKeys) -> Result<ConnectionChange> {
         writes: keys.writes,
         tls: keys.tls,
         statement_timeout: keys.statement_timeout,
+        queries: keys.queries.clone(),
         ..ConnectionChange::default()
     })
 }

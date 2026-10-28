@@ -14,10 +14,14 @@ pub(in crate::tui) struct QueryFiles {
 }
 
 impl QueryFiles {
-    /// Lists every query on a blocking thread; the list comes back as `QueryAnswer::All`.
-    pub(in crate::tui) fn list(&self) {
+    /// Lists the project's queries and the user's own of `folder` on a blocking thread; the list comes back as
+    /// `QueryAnswer::All`.
+    pub(in crate::tui) fn list(&self, folder: ConnectionName) {
         let (roots, answers) = (self.roots.clone(), self.answers.clone());
-        tokio::task::spawn_blocking(move || send(&answers, Answer::Queries(QueryAnswer::All(roots.list()))));
+        tokio::task::spawn_blocking(move || {
+            let queries = roots.list(&folder);
+            send(&answers, Answer::Queries(QueryAnswer::All { folder, queries }));
+        });
     }
 
     /// Reads `query` for the sheet of `connection`; its text comes back as `QueryAnswer::Opened`.
@@ -53,23 +57,24 @@ impl QueryFiles {
     }
 
     /// Writes `text` over `query` on a blocking thread, the text it replaces kept as a version first;
-    /// `QueryAnswer::Saved` comes back for the sheet of `connection`, followed by the new list.
+    /// `QueryAnswer::Saved` comes back for the sheet of `connection`.
     pub(in crate::tui) fn save(&self, connection: ConnectionName, query: Query, text: String) {
         let (roots, answers) = (self.roots.clone(), self.answers.clone());
         tokio::task::spawn_blocking(move || {
             let path = query.path.clone();
             let saved = roots.write(&query, &text, Write::Replace).map(|()| query);
-            answer_saved(&answers, saved_answer(Saving { connection, path, saved, text }), &roots);
+            send(&answers, Answer::Queries(saved_answer(Saving { connection, path, saved, text })));
         });
     }
 
-    /// Writes `text` as a new query at `path`, never over another one; answers as `save` does.
-    pub(in crate::tui) fn save_new(&self, connection: ConnectionName, path: QueryPath, text: String) {
+    /// Writes `text` as a new query at `path`, never over another one: under the project's queries folder when it has
+    /// one, else under the user's own `folder`; answers as `save` does.
+    pub(in crate::tui) fn save_new(&self, connection: ConnectionName, folder: ConnectionName, path: QueryPath, text: String) {
         let (roots, answers) = (self.roots.clone(), self.answers.clone());
         tokio::task::spawn_blocking(move || {
-            let query = roots.new_query(path.clone());
+            let query = roots.new_query(path.clone(), &folder);
             let saved = roots.write(&query, &text, Write::Create).map(|()| query);
-            answer_saved(&answers, saved_answer(Saving { connection, path, saved, text }), &roots);
+            send(&answers, Answer::Queries(saved_answer(Saving { connection, path, saved, text })));
         });
     }
 }
@@ -87,10 +92,4 @@ fn saved_answer(Saving { connection, path, saved, text }: Saving) -> QueryAnswer
         Ok(query) => QueryAnswer::Saved { connection, query, text },
         Err(err) => QueryAnswer::NotSaved { connection, path, error: format!("{err:#}") },
     }
-}
-
-/// Sends `answer`, then the list of queries again, so a new file shows in the sidebar and the finder.
-fn answer_saved(answers: &UnboundedSender<Answer>, answer: QueryAnswer, roots: &Roots) {
-    send(answers, Answer::Queries(answer));
-    send(answers, Answer::Queries(QueryAnswer::All(roots.list())));
 }

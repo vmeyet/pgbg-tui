@@ -30,7 +30,7 @@ pub async fn run(
 ) -> Result<()> {
     let connection = super::connection(Some(connection))?;
     check_one_reader_of_stdin(statement.file.as_deref(), params_file)?;
-    let sql = &statement_text(statement).await?;
+    let sql = &statement_text(statement, connection.queries()).await?;
     let given = given(assignments, params_file).await?;
     let admitted = admit(&connection, sql, &given, yes).await;
     let (started_at, clock) = (Utc::now(), Instant::now());
@@ -51,11 +51,12 @@ fn check_one_reader_of_stdin(file: Option<&Path>, params_file: Option<&Path>) ->
     Ok(())
 }
 
-/// The text of the statement as typed, of the saved query, or of the file `statement` names.
-async fn statement_text(statement: &StatementArgs) -> Result<String> {
+/// The text of the statement as typed, of the saved query, the project's before the user's own of `folder`, or of the
+/// file `statement` names.
+async fn statement_text(statement: &StatementArgs, folder: &ConnectionName) -> Result<String> {
     if let Some(path) = &statement.query {
         let roots = Roots::find_here().await?;
-        return roots.read(&roots.named(path).await?).await;
+        return roots.read(&roots.named(path, folder).await?).await;
     }
     match &statement.file {
         Some(path) => read_text(path, "the statement").await,
