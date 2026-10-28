@@ -57,6 +57,7 @@ mod search;
 mod sheet;
 mod table_finder;
 mod undo;
+mod usage;
 pub(super) mod versions;
 
 /// The pane that has the keys.

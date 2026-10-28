@@ -6,6 +6,7 @@ use clap::error::ErrorKind;
 use clap::{Args, Parser, Subcommand};
 use std::ffi::OsStr;
 use std::path::PathBuf;
+use vtui::usage::Window;
 
 /// The command line: global flags, then one subcommand.
 #[derive(Parser, Debug)]
@@ -63,6 +64,12 @@ pub enum Command {
         /// Lists this many at most.
         #[arg(long, default_value_t = 20)]
         limit: usize,
+    },
+    /// What you use the TUI for, from the `[usage]` counts: the acts never or rarely used, the most used, the time per pane.
+    Usage {
+        /// How far back to look: `30d`, `4w`, or `all`.
+        #[arg(long, default_value = "30d")]
+        since: Window,
     },
     /// The tables the connection's role can read, with their columns and indexes.
     Schema {
@@ -295,6 +302,13 @@ mod tests {
     fn history_lists_twenty_unless_told_otherwise() {
         assert!(matches!(parse(&["history", "shop"]).unwrap().command, Some(Command::History { limit: 20, .. })));
         assert!(matches!(parse(&["history", "shop", "--limit", "3"]).unwrap().command, Some(Command::History { limit: 3, .. })));
+    }
+
+    #[test]
+    fn usage_looks_back_30_days_unless_told_otherwise() {
+        assert!(matches!(parse(&["usage"]).unwrap().command, Some(Command::Usage { since: Window::Days(30) })));
+        assert!(matches!(parse(&["usage", "--since", "all"]).unwrap().command, Some(Command::Usage { since: Window::All })));
+        assert!(parse(&["usage", "--since", "30"]).is_err());
     }
 
     #[test]

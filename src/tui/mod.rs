@@ -23,6 +23,7 @@ mod styled;
 mod table_finder_view;
 mod theme;
 mod ui;
+mod usage;
 mod versions_view;
 
 use crate::config::AiSettings;
@@ -31,6 +32,7 @@ use crate::format::Mode;
 use crate::history::Store;
 use crate::query::{Query, Roots, Versions};
 use crate::signal::Signals;
+use crate::usage::UsageFile;
 use anyhow::Result;
 use app::{Action, Answer, App, Clock, Fit, QueryAnswer};
 use backend::Backend;
@@ -43,6 +45,7 @@ use std::time::Duration;
 use theme::Theme;
 use tokio::sync::mpsc::{self, UnboundedReceiver};
 use tokio::time::sleep;
+use usage::Counting;
 use vtui::screen::Screen;
 
 /// How long the editor's text stays still before its colours are rebuilt, so typing never waits on them.
@@ -54,7 +57,8 @@ const IDLE_DELAY: Duration = Duration::from_secs(1);
 const RELATIVE_TIME_REDRAW: Duration = Duration::from_secs(60);
 
 /// Runs the TUI on `first` until the user quits, with `connections` to switch to, read from the `config` file, each
-/// result opening in `format`, and `ctrl-g` asking the command of `ai`; it gives the terminal back on the way out.
+/// result opening in `format`, `ctrl-g` asking the command of `ai`, and the usage counted into `usage` when given; it
+/// gives the terminal back on the way out.
 /// A signal while the sessions stop drops them at once, as a command does.
 pub(crate) async fn run(
     connections: Vec<Connection>,
@@ -62,6 +66,7 @@ pub(crate) async fn run(
     config: PathBuf,
     format: Mode,
     ai: Option<AiSettings>,
+    usage: Option<UsageFile>,
 ) -> Result<()> {
     let mut signals = Signals::listen()?;
     let theme = vtui::ground::ask().map_or_else(Theme::default, |ground| Theme::default().with_ground(ground));
@@ -75,7 +80,8 @@ pub(crate) async fn run(
     }
     let (mut terminal, screen) = Screen::enter();
     let screens = Screens { terminal: &mut terminal, screen: &screen };
-    let outcome = event_loop(screens, &mut app, &mut backend, &mut incoming, &mut signals).await;
+    let counting = usage.map(Counting::start);
+    let outcome = event_loop(screens, &mut app, &mut backend, &mut incoming, &mut signals, counting).await;
     screen.leave();
     let stopped = signals.or_stopped(backend.stop()).await;
     outcome.and(stopped.map_err(Into::into))
@@ -116,20 +122,30 @@ async fn event_loop(
     backend: &mut Backend,
     incoming: &mut UnboundedReceiver<Answer>,
     signals: &mut Signals,
+    mut counting: Option<Counting>,
 ) -> Result<()> {
     let mut events = EventStream::new();
     while !app.should_quit() {
+        if let Some(counting) = &mut counting {
+            counting.flush_when_due(app);
+        }
         app.set_clock(Clock { now: Utc::now(), zone: Local });
         let mut fit = Fit::default();
         screens.terminal.draw(|f| fit = ui::draw(f, app))?;
         app.fit(fit);
         let actions = tokio::select! {
-            Some(event) = events.next() => match event? {
-                Event::Key(key) if key.kind != KeyEventKind::Release => app.handle_key(key),
-                Event::Paste(text) => app.paste(&text),
-                Event::Mouse(mouse) => app.handle_mouse(mouse),
-                _ => vec![],
-            },
+            Some(event) = events.next() => {
+                let event = event?;
+                if let Some(counting) = &mut counting {
+                    counting.see(&event, app);
+                }
+                match event {
+                    Event::Key(key) if key.kind != KeyEventKind::Release => app.handle_key(key),
+                    Event::Paste(text) => app.paste(&text),
+                    Event::Mouse(mouse) => app.handle_mouse(mouse),
+                    _ => vec![],
+                }
+            }
             Some(answer) = incoming.recv() => app.apply(answer),
             () = sleep(RECOLOUR_DELAY), if app.has_stale_colours() => {
                 app.recolour();
@@ -165,6 +181,9 @@ async fn event_loop(
                 Err(failed) => app.apply(failed).into_iter().for_each(|action| backend.dispatch(action)),
             }
         }
+    }
+    if let Some(counting) = counting {
+        counting.flush(app).await;
     }
     Ok(())
 }

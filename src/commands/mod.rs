@@ -15,6 +15,8 @@ pub mod run;
 pub mod schema;
 /// `pgbg`, or `pgbg tui`.
 pub mod tui;
+/// `pgbg usage`.
+pub mod usage;
 
 use crate::config::{self, Config};
 use crate::connection::{Connection, ConnectionName};

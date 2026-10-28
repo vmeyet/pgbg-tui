@@ -1,4 +1,4 @@
-//! `config.toml`: the connections, how results show, and the command `ctrl-g` asks.
+//! `config.toml`: the connections, how results show, the command `ctrl-g` asks, and whether usage is counted.
 //! It is read once, with a warning for each key pgbg ignores.
 use crate::connection::{Connection, Entry};
 use crate::format::Mode;
@@ -16,7 +16,7 @@ mod keychain;
 mod write;
 
 pub(crate) use keychain::{keychain_item_to_delete, replaced_keychain_item};
-pub(crate) use write::{ConnectionChange, add_connection, edit_connection, remove_connection, set_password};
+pub(crate) use write::{ConnectionChange, add_connection, edit_connection, read_kept, remove_connection, set_password, write_whole};
 
 const PATH_VARIABLE: &str = "PGBG_CONFIG";
 const DATA_DIR_VARIABLE: &str = "PGBG_DATA_DIR";
@@ -29,6 +29,15 @@ struct ConfigFile {
     display: Display,
     #[serde(default)]
     ai: AiTable,
+    #[serde(default)]
+    usage: UsageTable,
+}
+
+/// The `[usage]` table.
+#[derive(Default, Deserialize)]
+struct UsageTable {
+    #[serde(default)]
+    enabled: bool,
 }
 
 /// The `[display]` table.
@@ -47,6 +56,8 @@ pub(crate) struct Config {
     pub(crate) format: Mode,
     /// How `ctrl-g` asks for SQL; none when `[ai]` names no command.
     pub(crate) ai: Option<AiSettings>,
+    /// `[usage] enabled`: the TUI counts the acts used and the time on each pane, for `pgbg usage`.
+    pub(crate) counts_usage: bool,
 }
 
 /// A config as read from its file.
@@ -91,6 +102,11 @@ fn data_dir_from(variable: Option<OsString>, xdg: Option<OsString>, home: Option
     named_path(variable).or_else(|| xdg_folder(xdg, home, ".local/share").map(|dir| dir.join("pgbg")))
 }
 
+/// pgbg's folder in the system's cache folder, where it keeps its log and the usage counts.
+pub(crate) fn cache_dir() -> Option<PathBuf> {
+    dirs::cache_dir().map(|cache| cache.join("pgbg"))
+}
+
 /// The folder an `$XDG_*_HOME` variable holds when it is absolute, as the spec asks, else `under_home` in `home`.
 fn xdg_folder(xdg: Option<OsString>, home: Option<PathBuf>, under_home: &str) -> Option<PathBuf> {
     xdg.map(PathBuf::from).filter(|p| p.is_absolute()).or_else(|| home.map(|h| h.join(under_home)))
@@ -116,7 +132,8 @@ fn parse(text: &str) -> Result<Loaded> {
         .collect::<Result<_>>()?;
     let ai = ai::read(file.ai, &connections)?;
     let warnings = warnings.into_iter().chain(ai.warnings).collect();
-    Ok(Loaded { config: Config { connections, format: file.display.format, ai: ai.settings }, warnings })
+    let config = Config { connections, format: file.display.format, ai: ai.settings, counts_usage: file.usage.enabled };
+    Ok(Loaded { config, warnings })
 }
 
 #[cfg(test)]
@@ -146,6 +163,12 @@ url = "postgres://nina@localhost:5432/shop"
     fn results_open_raw_unless_the_display_table_says_readable() {
         assert_eq!(parse(SHOP).unwrap().config.format, Mode::Raw);
         assert_eq!(parse(&format!("[display]\nformat = \"readable\"\n{SHOP}")).unwrap().config.format, Mode::Readable);
+    }
+
+    #[test]
+    fn usage_is_counted_only_when_the_usage_table_says_so() {
+        assert!(!parse(SHOP).unwrap().config.counts_usage);
+        assert!(parse(&format!("[usage]\nenabled = true\n{SHOP}")).unwrap().config.counts_usage);
     }
 
     #[test]

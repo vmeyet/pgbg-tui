@@ -24,3 +24,4 @@ pub mod signal;
 mod syntax;
 mod tui;
 mod tunnel;
+mod usage;

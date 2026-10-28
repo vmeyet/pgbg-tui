@@ -8,6 +8,8 @@ Each entry says what changed, then where, then how to use it.
 
 ### New
 
+- **Usage counts, opt-in**, for the TUI: with `[usage] enabled = true` in `config.toml`, pgbg counts the keys you use and the time on each pane, on this machine only, never a statement or a name.
+  Run `pgbg usage` to see the keys never or rarely used, the most used and the time per pane; `--since 4w`, `7d` or `all` changes the window, `--json` gives it to a script.
 - **A date reads relative to today**, in the TUI's grid: a `date` column reads `today`, `yesterday`, `tomorrow`, then `3 d ago`, `in 2 d`, `1 mo ago` or `2 y ago`, counted from your local date.
   Press `f` on it, `F` to put every column readable, or name it in a saved query's header as `-- format: day=relative`.
   `f` on a column with no other format now says so on the status line instead of doing nothing.

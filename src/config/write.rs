@@ -144,8 +144,8 @@ fn resolved(path: &Path) -> Result<PathBuf> {
     }
 }
 
-/// The config's text, empty when there is no file yet.
-fn read_kept(path: &Path) -> Result<String> {
+/// The text of the file at `path`, empty when there is no file yet.
+pub(crate) fn read_kept(path: &Path) -> Result<String> {
     match std::fs::read_to_string(path) {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
         read => read.with_context(|| format!("reading {}", path.display())),
@@ -154,8 +154,8 @@ fn read_kept(path: &Path) -> Result<String> {
 
 /// Writes `text` to `path` through a temp file only its owner reads, synced to disk before a rename,
 /// so the file is always the old one or the new one.
-fn write_whole(path: &Path, text: &str) -> Result<()> {
-    let dir = path.parent().context("the config path has no folder")?;
+pub(crate) fn write_whole(path: &Path, text: &str) -> Result<()> {
+    let dir = path.parent().with_context(|| format!("{} has no folder", path.display()))?;
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     let mut temp = tempfile::Builder::new().prefix(".tmp-").tempfile_in(dir).context("creating a temp file")?;
     temp.write_all(text.as_bytes()).context("writing a temp file")?;
