@@ -114,6 +114,12 @@ mod tests {
     }
 
     #[test]
+    fn a_date_column_opens_relative_when_the_header_names_it() {
+        let day = [column("day", ColumnKind::Date)];
+        assert_eq!(opening(&day, &named("day=relative"), Mode::Raw), [Format::Relative]);
+    }
+
+    #[test]
     fn the_last_format_named_for_a_column_wins() {
         assert_eq!(opening(&orders(), &named("id=bytes id=raw"), Mode::Readable)[0], Format::Raw);
     }

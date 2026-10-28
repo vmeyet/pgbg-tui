@@ -146,10 +146,7 @@ impl App {
             Act::Find => return self.find(),
             Act::Connections => self.open_picker(),
             Act::Chart => self.sheet_mut().switch_view(),
-            Act::StepFormat => {
-                let clock = self.reading.clock;
-                self.sheet_mut().step_format(&clock);
-            }
+            Act::StepFormat => self.step_format(),
             Act::SwitchFormats => {
                 let clock = self.reading.clock;
                 self.sheet_mut().switch_every_format(&clock);
@@ -216,11 +213,17 @@ impl App {
         let room = self.fit.grid;
         self.sheet_mut().step_grid(step, room)
     }
+
+    /// Puts the grid's column in its next format, or notes on the status line that it has no other.
+    fn step_format(&mut self) {
+        let clock = self.reading.clock;
+        self.note = self.sheet_mut().step_format(&clock).map(|column| format!("{column} has no other format"));
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::fixtures::{app, enter, press, shop, typed, view, with_every_pane, with_result};
+    use super::super::fixtures::{app, enter, on_the_result, press, shop, typed, view, with_every_pane, with_result};
     use super::*;
     use crate::chart;
     use crate::fixtures::orders;
@@ -386,5 +389,21 @@ mod tests {
         app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
         assert!(app.should_quit);
         assert_eq!(app.sheet().editor.text(), "SELECT 1");
+    }
+
+    #[test]
+    fn a_format_step_on_a_column_with_one_format_says_so_on_the_status_line() {
+        let mut app = on_the_result(orders());
+        for code in [KeyCode::Right, KeyCode::Right, KeyCode::Char('f')] {
+            press(&mut app, code);
+        }
+        assert_eq!(app.note(), Some("customer has no other format"));
+    }
+
+    #[test]
+    fn a_format_step_on_a_column_with_other_formats_notes_nothing() {
+        let mut app = on_the_result(orders());
+        press(&mut app, KeyCode::Char('f'));
+        assert_eq!(app.note(), None);
     }
 }
