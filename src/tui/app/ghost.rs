@@ -17,12 +17,13 @@ pub(in crate::tui) struct Ghost {
 }
 
 impl Ghost {
-    /// The first line of `rest`, cleaned as a paste is, offered at the cursor `at`; none when nothing printable is left.
+    /// `rest`, cleaned as a paste is and without its trailing blanks, offered at the cursor `at`, every line of it; none
+    /// when nothing printable is left.
     pub(super) fn at_cursor(at: usize, rest: &str) -> Option<Self> {
         let mut cleaned = Field::default();
         cleaned.paste(rest);
-        let line = cleaned.text().lines().next().filter(|line| !line.trim().is_empty())?;
-        Some(Self { typed: at..at, insert: line.to_owned(), rest: line.to_owned() })
+        let rest = cleaned.text().trim_end();
+        (!rest.trim_start().is_empty()).then(|| Self { typed: at..at, insert: rest.to_owned(), rest: rest.to_owned() })
     }
 }
 

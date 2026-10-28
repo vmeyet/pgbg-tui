@@ -83,16 +83,28 @@ struct Paint<'a> {
     theme: &'a Theme,
 }
 
-/// The rest of a name, drawn faded at byte `at` of the text, where the cursor is.
+/// The rest of a name or a statement, drawn faded at byte `at` of the text, where the cursor is: its first line after
+/// the cursor, the others under the cursor's line.
 #[derive(Clone, Copy)]
 struct Ghost<'a> {
     at: usize,
     rest: &'a str,
 }
 
+impl<'a> Ghost<'a> {
+    /// The ghost of its first line only, drawn after the cursor, and the lines after it.
+    fn first_line(self) -> (Self, Vec<&'a str>) {
+        let mut lines = self.rest.split('\n');
+        let first = lines.next().unwrap_or_default();
+        (Self { rest: first, ..self }, lines.collect())
+    }
+}
+
 /// The lines of `text` in `window`, each token in its colour and the mark on top; a mark at a line's end draws a space
 /// there.
+/// The ghost's lines past its first push the text under the cursor's line down, as many as the window holds.
 fn coloured<'a>(text: &'a str, paint: Paint<'_>, window: Window) -> Text<'a> {
+    let faded = Style::default().fg(paint.theme.faded);
     let mut line_start = 0;
     let mut lines = Vec::new();
     for (index, line) in text.split('\n').enumerate().take(window.first + window.rows) {
@@ -104,11 +116,34 @@ fn coloured<'a>(text: &'a str, paint: Paint<'_>, window: Window) -> Text<'a> {
                 .ghost
                 .and_then(|ghost| Some(Ghost { at: ghost.at.checked_sub(line_start)?, ..ghost }))
                 .filter(|ghost| ghost.at <= line.len());
-            lines.push(coloured_line(line, spans, Cuts { mark: marked, ghost }, paint));
+            let (ghost, below) = ghost.map(Ghost::first_line).unzip();
+            let drawn = coloured_line(line, spans, Cuts { mark: marked, ghost }, paint);
+            match below {
+                Some(below) => {
+                    let room = (window.first + window.rows).saturating_sub(index + 1);
+                    lines.extend(with_lines_below(drawn, &below, room, faded));
+                }
+                None => lines.push(drawn),
+            }
         }
         line_start += line.len() + 1;
     }
     Text::from(lines)
+}
+
+/// `line`, then each of `below` in `style`, as many as `room` rows hold; the last row says how many did not fit.
+fn with_lines_below<'a>(line: Line<'a>, below: &[&str], room: usize, style: Style) -> Vec<Line<'a>> {
+    let shown = below.len().min(room);
+    let more = below.len() - shown;
+    let below = below[..shown].iter().map(|text| Line::from(Span::styled((*text).to_owned(), style)));
+    let mut lines: Vec<Line<'a>> = std::iter::once(line).chain(below).collect();
+    if more > 0
+        && let Some(last) = lines.last_mut()
+    {
+        let unit = if more == 1 { "line" } else { "lines" };
+        last.push_span(Span::styled(format!("  +{more} {unit}"), style));
+    }
+    lines
 }
 
 /// The bytes of the character at `at`; empty at the line's end.
@@ -279,19 +314,43 @@ mod tests {
         assert_eq!(marked_text("SELECT", 6), ["SELECT[ ]"]);
     }
 
-    fn ghosted(text: &str, at: usize, rest: &str) -> Vec<String> {
+    fn ghosted_in(text: &str, at: usize, rest: &str, window: Window) -> Vec<String> {
         let theme = Theme::default();
         let ghost = Some(Ghost { at, rest });
         let shown =
             |span: &Span<'_>| if span.style.fg == Some(theme.faded) { format!("<{}>", span.content) } else { span.content.to_string() };
-        let text = coloured(text, Paint { colours: &[], mark: None, mark_style: Style::default(), ghost, theme: &theme }, EVERY_LINE);
+        let text = coloured(text, Paint { colours: &[], mark: None, mark_style: Style::default(), ghost, theme: &theme }, window);
         text.lines.iter().map(|line| line.spans.iter().map(shown).collect()).collect()
+    }
+
+    fn ghosted(text: &str, at: usize, rest: &str) -> Vec<String> {
+        ghosted_in(text, at, rest, EVERY_LINE)
     }
 
     #[test]
     fn the_ghost_draws_faded_at_the_cursor_on_its_line_only() {
         assert_eq!(ghosted("SELECT *\nFROM cu\nLIMIT 1", 16, "stomers"), ["SELECT *", "FROM cu<stomers>", "LIMIT 1"]);
         assert_eq!(ghosted("SELECT o. FROM orders o", 9, "id"), ["SELECT o.<id> FROM orders o"]);
+    }
+
+    #[test]
+    fn the_lines_of_the_ghost_after_its_first_push_the_text_below_down() {
+        assert_eq!(
+            ghosted("SELECT *\n\nSELECT 1", 8, " FROM orders\nWHERE paid"),
+            ["SELECT *< FROM orders>", "<WHERE paid>", "", "SELECT 1"]
+        );
+    }
+
+    #[test]
+    fn the_last_row_of_a_cut_ghost_says_how_many_lines_did_not_fit() {
+        let shown = ghosted_in("SELECT *", 8, " FROM orders\nWHERE paid\nORDER BY id\nLIMIT 10", Window { first: 0, rows: 2 });
+        assert_eq!(shown, ["SELECT *< FROM orders>", "<WHERE paid><  +2 lines>"]);
+    }
+
+    #[test]
+    fn a_ghost_on_the_last_row_says_how_many_lines_did_not_fit_on_it() {
+        let shown = ghosted_in("SELECT *", 8, " FROM orders\nWHERE paid", Window { first: 0, rows: 1 });
+        assert_eq!(shown, ["SELECT *< FROM orders><  +1 line>"]);
     }
 
     #[test]
@@ -309,6 +368,24 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(44, 3)).unwrap();
         terminal.draw(|f| draw(f, &app, f.area())).unwrap();
         insta::assert_snapshot!("idle_ghost", styled::runs(terminal.backend().buffer()));
+    }
+
+    fn drawn_idle_ghost(height: u16) -> String {
+        let mut app = idle_ghosted("SELECT * ", "SELECT * FROM orders\nWHERE total > 10\nORDER BY total DESC\nLIMIT 10");
+        app.recolour();
+        let mut terminal = Terminal::new(TestBackend::new(30, height)).unwrap();
+        terminal.draw(|f| draw(f, &app, f.area())).unwrap();
+        styled::runs(terminal.backend().buffer())
+    }
+
+    #[test]
+    fn every_line_of_the_idle_ghost_draws_under_the_cursor() {
+        insta::assert_snapshot!("idle_ghost_lines", drawn_idle_ghost(6));
+    }
+
+    #[test]
+    fn an_idle_ghost_taller_than_the_editor_says_how_many_lines_did_not_fit() {
+        insta::assert_snapshot!("idle_ghost_cut", drawn_idle_ghost(4));
     }
 
     #[test]

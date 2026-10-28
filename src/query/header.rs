@@ -24,8 +24,18 @@ pub(crate) struct Header {
 impl Header {
     /// The header of `text`: every `--` line before the first other one; a comment that is no `key:` line is left alone.
     pub(crate) fn parse(text: &str) -> Self {
-        let comments = text.lines().map_while(|line| line.trim_start().strip_prefix("--"));
+        let comments = text.lines().map_while(Self::comment_in);
         comments.filter_map(key_line).fold(Self::default(), Self::with)
+    }
+
+    /// What follows the `--` of `line`, when the line is a `--` comment.
+    pub(crate) fn comment_in(line: &str) -> Option<&str> {
+        line.trim_start().strip_prefix("--")
+    }
+
+    /// Whether `comment`, the text of a header line after its `--`, is a `key:` line the header reads, as `name: daily`.
+    pub(crate) fn is_key_line(comment: &str) -> bool {
+        key_line(comment).is_some()
     }
 
     fn with(self, (key, value): (&str, &str)) -> Self {
@@ -121,6 +131,11 @@ mod tests {
     #[test]
     fn a_comment_in_plain_words_is_no_key() {
         assert_eq!(Header::parse("-- orders per day, see: the dashboard\nSELECT 1"), Header::default());
+    }
+
+    #[test]
+    fn a_comment_naming_a_key_is_a_key_line_and_one_in_plain_words_is_not() {
+        assert_eq!([" param: since date", " owner: nina", " the open orders"].map(Header::is_key_line), [true, true, false]);
     }
 
     #[test]
