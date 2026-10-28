@@ -71,7 +71,7 @@ impl fmt::Display for QueryPath {
 pub(crate) enum Source {
     /// The `.pgbg/queries/` nearest the working directory.
     Project,
-    /// `pgbg/queries/` in the user's config folder.
+    /// `queries/` in pgbg's config folder.
     User,
 }
 
@@ -173,10 +173,42 @@ fn walked<'a>(places: &Places<'a>) -> Vec<&'a Path> {
     ancestors[..kept].to_vec()
 }
 
-fn project_root(places: &Places<'_>) -> Option<Root> {
-    let project = walked(places).into_iter().map(|dir| dir.join(PROJECT_DIR)).find(|dir| exists(&dir.join(QUERIES_DIR)))?;
-    let root = project.join(QUERIES_DIR);
-    Root::checked(root.clone(), vec![project, root])
+/// The project's queries folder, and the folder holding its `.pgbg/`.
+#[derive(Clone, Debug)]
+struct Project {
+    /// The nearest folder up from the working directory with a `.pgbg/queries/`, else the repository root, else the
+    /// working directory.
+    dir: PathBuf,
+    /// The queries folder as found when pgbg started; none when it was missing then, until a save makes it.
+    root: Option<Root>,
+}
+
+impl Project {
+    fn find(places: &Places<'_>) -> Self {
+        let walked = walked(places);
+        let with_queries = walked.iter().find(|dir| exists(&queries_dir(dir)));
+        let repository = walked.last().filter(|dir| dir.join(REPOSITORY_MARKER).exists());
+        let dir = with_queries.or(repository).copied().unwrap_or(places.working_dir);
+        Self { dir: dir.to_path_buf(), root: project_root(dir) }
+    }
+
+    /// The root found when pgbg started, else the one made since then, once it exists. Blocks on the file system.
+    fn root(&self) -> Option<Root> {
+        self.root.clone().or_else(|| project_root(&self.dir))
+    }
+}
+
+fn queries_dir(dir: &Path) -> PathBuf {
+    dir.join(PROJECT_DIR).join(QUERIES_DIR)
+}
+
+/// The `.pgbg/queries/` of `dir` when it exists and passes the checks.
+fn project_root(dir: &Path) -> Option<Root> {
+    let root = queries_dir(dir);
+    if !exists(&root) {
+        return None;
+    }
+    Root::checked(root.clone(), vec![dir.join(PROJECT_DIR), root])
 }
 
 fn user_root(config_dir: &Path) -> Option<Root> {
@@ -191,18 +223,26 @@ fn exists(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok()
 }
 
-/// The folders queries live in, each when it exists.
-#[derive(Clone, Debug, Default)]
+/// The folders queries live in: the project's, made at the first save when missing, and the user's when it exists.
+#[derive(Clone, Debug)]
 pub(crate) struct Roots {
-    project: Option<Root>,
+    project: Project,
     user: Option<Root>,
+}
+
+/// No queries folder at all, the project's under a folder that does not exist.
+#[cfg(test)]
+impl Default for Roots {
+    fn default() -> Self {
+        Self { project: Project { dir: PathBuf::from("/nonexistent/shop"), root: None }, user: None }
+    }
 }
 
 impl Roots {
     /// The nearest `.pgbg/queries/` from the working directory up, and `queries/` under pgbg's config folder; a root
     /// that is a link, or that another user owns, is skipped. Blocks on the file system.
     pub(crate) fn find(places: &Places<'_>) -> Self {
-        Self { project: project_root(places), user: places.config_dir.and_then(user_root) }
+        Self { project: Project::find(places), user: places.config_dir.and_then(user_root) }
     }
 
     /// The roots for the working directory, the home folder and pgbg's config folder, found off the runtime.
@@ -225,34 +265,41 @@ impl Roots {
             .with_context(|| format!("no saved query {path}: `pgbg` lists them in its sidebar"))
     }
 
-    fn root(&self, source: Source) -> Option<&Root> {
+    /// The root of `source`, when it exists. Blocks on the file system.
+    fn root(&self, source: Source) -> Option<Root> {
         match source {
-            Source::Project => self.project.as_ref(),
-            Source::User => self.user.as_ref(),
+            Source::Project => self.project.root(),
+            Source::User => self.user.clone(),
         }
     }
 
     /// Every query under both roots, sorted; a folder that cannot be read, or that changed since it was found, is
     /// skipped with a warning. Blocks on the file system.
     pub(crate) fn list(&self) -> Vec<Query> {
-        let safe = |source| self.root(source).filter(|root| root.is_still_safe()).map(|root| (source, root.dir.as_path()));
+        let safe = |source| self.root(source).filter(Root::is_still_safe).map(|root| (source, root.dir));
         let found = [Source::Project, Source::User].into_iter().filter_map(safe);
         let mut queries: Vec<Query> =
-            found.flat_map(|(source, dir)| files_under(dir, "").into_iter().map(move |path| Query { source, path })).collect();
+            found.flat_map(|(source, dir)| files_under(&dir, "").into_iter().map(move |path| Query { source, path })).collect();
         queries.sort();
         queries
     }
 
     /// The text of `query`, read without blocking: a plain file inside its root, as the root was found, `MAX_QUERY_BYTES` at most.
     pub(crate) async fn read(&self, query: &Query) -> Result<String> {
-        let root = self.root(query.source).with_context(|| format!("no {} queries folder", query.source))?.clone();
-        read_inside(root, &query.path).await.with_context(|| format!("reading {}", query.path))
+        let (roots, owned) = (self.clone(), query.clone());
+        let read = tokio::task::spawn_blocking(move || roots.read_blocking(&owned)).await?;
+        read.with_context(|| format!("reading {}", query.path))
     }
-}
 
-async fn read_inside(root: Root, query: &QueryPath) -> Result<String> {
-    let path = query.under(&root.real);
-    tokio::task::spawn_blocking(move || read_checked(&root, &path)).await?
+    fn read_blocking(&self, query: &Query) -> Result<String> {
+        let root = self.existing_root(query.source)?;
+        read_checked(&root, &query.path.under(&root.real))
+    }
+
+    /// The root of `source`, or an error naming it when it does not exist. Blocks on the file system.
+    fn existing_root(&self, source: Source) -> Result<Root> {
+        self.root(source).with_context(|| format!("no {source} queries folder"))
+    }
 }
 
 /// The text at `path` once opened, when `root` is still safe and the opened file is a plain one inside it. Blocks.
@@ -362,7 +409,7 @@ mod tests {
     }
 
     fn project(root: &Path) -> Roots {
-        Roots { project: Some(unchecked(root)), user: None }
+        Roots { project: Project { dir: root.into(), root: Some(unchecked(root)) }, user: None }
     }
 
     fn unchecked(dir: &Path) -> Root {
@@ -421,7 +468,7 @@ mod tests {
     }
 
     fn find_from(working_dir: &Path, home: Option<&Path>) -> Option<PathBuf> {
-        Roots::find(&Places { working_dir, home, config_dir: None }).project.map(|root| root.dir)
+        Roots::find(&Places { working_dir, home, config_dir: None }).project.root.map(|root| root.dir)
     }
 
     fn daily() -> Query {

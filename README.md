@@ -163,6 +163,7 @@ It exits 1 when a check fails, so a script can run it.
 
 Put `.sql` files under `.pgbg/queries/` in your project, in folders if you like.
 pgbg finds the nearest one from the folder you start it in, the way git finds `.git`.
+When there is none, `ctrl-s` on a new query makes `.pgbg/queries/` at the top of your repository, or in the folder you started pgbg in outside one.
 Queries of your own, for every project, go under `queries/` in pgbg's config folder, as `~/.config/pgbg/queries/`.
 
 ```sql

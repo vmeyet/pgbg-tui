@@ -51,7 +51,8 @@ impl QueryFiles {
     pub(in crate::tui) fn save_new(&self, connection: ConnectionName, path: QueryPath, text: String) {
         let (roots, answers) = (self.roots.clone(), self.answers.clone());
         tokio::task::spawn_blocking(move || {
-            let saved = roots.new_query(path.clone()).and_then(|query| roots.write(&query, &text, Write::Create).map(|()| query));
+            let query = roots.new_query(path.clone());
+            let saved = roots.write(&query, &text, Write::Create).map(|()| query);
             answer_saved(&answers, saved_answer(Saving { connection, path, saved, text }), &roots);
         });
     }
