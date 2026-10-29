@@ -19,7 +19,7 @@ pub(super) fn footer(f: &mut Frame<'_>, app: &App, step: &AskStep, area: Rect) {
             Span::raw(instruction.text().to_owned()),
             Span::styled("▌ ", Style::default().fg(theme.accent)),
         ],
-        AskStep::Waiting { .. } => vec![Span::styled(" asking the [ai] command… ", Style::default().fg(theme.warn))],
+        AskStep::Waiting { .. } => vec![Span::styled(asking(app), Style::default().fg(theme.warn))],
         AskStep::Answered(_) => {
             vec![Span::styled(" the [ai] command answered: ", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))]
         }
@@ -28,6 +28,11 @@ pub(super) fn footer(f: &mut Frame<'_>, app: &App, step: &AskStep, area: Rect) {
         act::footer(step.pane()).map(|hint| Span::styled(format!(" {} {} ", hint.keys, hint.does), Style::default().fg(theme.muted)));
     spans.extend(hints);
     f.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// ` asking claude… `: what the footer says while the `[ai] command` runs.
+pub(super) fn asking(app: &App) -> String {
+    format!(" asking {}… ", printable(app.ai_program().unwrap_or("the [ai] command")))
 }
 
 /// The answer over the result pane in `area`, while it is shown.
@@ -75,6 +80,7 @@ fn cut_to(mut lines: Vec<Line<'static>>, height: usize, style: Style) -> Vec<Lin
 #[cfg(test)]
 mod tests {
     use super::super::app::ask::tests::{answered, asking_on, waiting};
+    use super::super::app::idle_ghost::tests::idle_on;
     use super::super::app::{Answer, AskFailure, AskId};
     use super::super::{styled, ui};
     use crate::ai::CommandError;
@@ -99,6 +105,13 @@ mod tests {
     #[test]
     fn the_footer_says_while_the_command_runs() {
         insta::assert_snapshot!("ask_waiting", render(&waiting("SELECT * FROM orders", "only the ids"), 60, 6).backend());
+    }
+
+    #[test]
+    fn the_footer_names_the_program_while_the_idle_ghost_asks() {
+        let mut app = idle_on("SELECT * FROM orders WHERE ");
+        app.ask_idle_ghost();
+        insta::assert_snapshot!("idle_asking", render(&app, 60, 6).backend());
     }
 
     #[test]

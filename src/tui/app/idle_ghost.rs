@@ -110,6 +110,17 @@ impl App {
         left_out.map(Action::LogCommentLeftOut).into_iter().chain([Action::Ask { ask, prompt, settings }]).collect()
     }
 
+    /// Whether the idle ask runs, so the footer says it waits on the command.
+    pub(in crate::tui) fn is_asking_idle(&self) -> bool {
+        matches!(self.asks.idle, IdleAsk::Waiting { .. })
+    }
+
+    /// Asks at once when the key just ended a `--` line and left the cursor on the blank line under it, since that
+    /// comment is the instruction; any other text waits for the editor to sit idle.
+    pub(super) fn ask_under_an_ended_comment(&mut self) -> Vec<Action> {
+        if self.sheet().is_under_an_ended_comment() { self.ask_idle_ghost() } else { vec![] }
+    }
+
     /// Kills the idle ask still running, since a key or a paste makes its answer stale.
     pub(super) fn drop_idle_ask(&mut self) -> Option<Action> {
         self.asks.idle.stop_waiting().map(Action::DropAsk)
@@ -166,6 +177,12 @@ impl Sheet {
             _ if is_blank(&text[range.end..cursor]) => Some(typed()),
             _ => empty_question(text, tokens, cursor),
         }
+    }
+
+    /// Whether the cursor starts a blank line right under a `--` line, past any statement.
+    fn is_under_an_ended_comment(&self) -> bool {
+        let (before, _, _) = self.editor.split();
+        before.ends_with('\n') && self.question().is_some_and(|question| question.typed.is_empty())
     }
 
     /// The prompt asking for the rest of the statement under the cursor, with the comment above it as the instruction;
@@ -364,10 +381,27 @@ pub(in crate::tui) mod tests {
         assert!(text.contains(&format!("Instruction:\n{NO_COMMENT}\n")), "{text}");
     }
 
+    fn enter(app: &mut App) -> Vec<Action> {
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT))
+    }
+
     #[test]
-    fn a_blank_line_under_a_comment_asks_for_a_whole_statement() {
-        let text = prompt_text(&mut idle_on("SELECT 1;\n-- the ten biggest orders\n"));
+    fn ending_a_comment_line_asks_at_once_for_a_whole_statement() {
+        let sent = enter(&mut idle_on("SELECT 1;\n-- the ten biggest orders"));
+        let [Action::Ask { prompt, .. }] = &*sent else { panic!("{sent:?}") };
+        let text = prompt.text();
         assert!(text.contains("Instruction:\nthe ten biggest orders\n") && text.contains("cursor:\n(none)\n"), "{text}");
+    }
+
+    #[test]
+    fn a_key_typed_in_a_statement_under_a_comment_waits_for_the_editor_to_sit_idle() {
+        let mut app = idle_on("-- the big ones\nSELECT * FROM orders WHERE");
+        assert_eq!(app.handle_key(KeyEvent::from(KeyCode::Char(' '))), []);
+    }
+
+    #[test]
+    fn a_newline_under_no_comment_asks_nothing_at_once() {
+        assert_eq!(enter(&mut idle_on("SELECT 1;")), []);
     }
 
     #[test]
@@ -530,6 +564,19 @@ pub(in crate::tui) mod tests {
         let mut app = ghosted("SELECT * FROM orders WHERE ", "SELECT * FROM orders WHERE total > 10");
         app.handle_key(KeyEvent::from(KeyCode::Right));
         assert_eq!(app.sheet().editor.split(), ("SELECT * FROM orders WHERE total > 10", "", ""));
+    }
+
+    #[test]
+    fn an_answered_idle_ask_no_longer_shows_as_asking() {
+        assert!(!ghosted("SELECT * FROM orders WHERE ", "SELECT * FROM orders WHERE total > 10").is_asking_idle());
+    }
+
+    #[test]
+    fn a_dropped_idle_ask_no_longer_shows_as_asking() {
+        let mut app = idle_on("SELECT * FROM orders WHERE ");
+        app.ask_idle_ghost();
+        app.handle_key(KeyEvent::from(KeyCode::Left));
+        assert!(!app.is_asking_idle());
     }
 
     #[test]

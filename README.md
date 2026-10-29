@@ -261,7 +261,8 @@ The `--` lines right above the statement tell the idle ghost what you want; head
 Their values are masked as the statement's are: strings, numbers and any word holding an `@`, such as an email.
 A comment that opens a quote it never closes, as `don't`, cannot be masked: the idle ghost then only asks to complete the statement, and `pgbg.log` says so.
 With `literals = "sent"`, the comment is sent as typed; one holding a password is never sent.
-On a blank line under `-- the ten biggest orders`, with nothing typed yet, it asks for the whole statement.
+Press `⏎` at the end of `-- the ten biggest orders`, with nothing typed under it, and it asks at once for the whole statement.
+While the command runs, the footer says `asking claude…`, named after your program.
 
 When the idle ghost shows nothing, `pgbg.log` in pgbg's cache folder says why.
 
