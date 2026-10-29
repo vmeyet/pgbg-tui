@@ -170,6 +170,7 @@ The sidebar and `ctrl-p` show the project's queries and those of the connection 
 Queries kept in `~/.config/pgbg/queries/` by an earlier pgbg move with `mv ~/.config/pgbg/queries ~/.local/share/pgbg/queries/prod`, naming the connection they belong to.
 Each save over a query, from `ctrl-s` or `$EDITOR`, keeps the text it replaced under `versions/` in pgbg's data folder, never in your project: the newest 50 of each query.
 `ctrl-v` lists them, and `⏎` puts one back in the editor, unsaved until you press `ctrl-s`.
+A text holding a password is kept as a note instead, as the history does: the list shows the note, and it cannot be put back.
 
 ```sql
 -- name: Orders per day

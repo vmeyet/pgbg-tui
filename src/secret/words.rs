@@ -1,8 +1,15 @@
-//! The words that mark a statement as holding a secret, which then is neither kept in the history nor sent to the AI command.
+//! The words that mark a text as holding a secret, which then is neither kept on disk nor sent to the AI command.
 use crate::connection::SECRET_KEYS;
 
 const PASSWORD_WORD: &str = "password";
 const SCHEME_END: &str = "://";
+/// What pgbg writes to disk in place of a text holding a secret: in the history and in the versions of a query.
+pub(crate) const NOT_KEPT: &str = "-- not kept: it holds a password";
+
+/// `text`, or the `NOT_KEPT` note when it holds a secret, for what pgbg writes to disk.
+pub(crate) fn kept_or_note(text: &str) -> &str {
+    if holds_secret(text) { NOT_KEPT } else { text }
+}
 
 /// Whether `password` or a secret key a connection refuses stands as a word of its own, as in
 /// `ALTER ROLE nina PASSWORD '...'` or `sslpassword=...`, or a URL holds a password, as in

@@ -5,6 +5,7 @@ use crate::act::{self, Act, Pane};
 use crate::connection::Connection;
 use crate::history::Entry;
 use crate::query::Query;
+use crate::secret;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use vtui::fuzzy;
 use vtui::palette::{Mode, Palette};
@@ -42,7 +43,7 @@ impl Searched for Entry {
 
 impl Searched for Listed {
     fn search_text(&self) -> String {
-        self.version.text.clone()
+        self.version.text.as_deref().unwrap_or(secret::NOT_KEPT).to_owned()
     }
 }
 
