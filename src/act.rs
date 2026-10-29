@@ -429,6 +429,7 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Open, Pane::Detail, &[key(KeyCode::Enter)])
         .help("⏎", "the row the key points to, or the rows pointing here")
         .footer("⏎", "follow"),
+    row(Act::Edit, Pane::Detail, &[key(KeyCode::Char('e'))]).help("e", "write the join of the trail into the editor").footer("e", "join"),
     row(Act::Back, Pane::Detail, &[key(KeyCode::Backspace)]).help("⌫", "back to the row before").footer("⌫", "back"),
     row(Act::Close, Pane::Detail, &[key(KeyCode::Esc)]).help("esc", "back to the grid").footer("esc", "closes"),
     row(Act::Quit, Pane::Detail, &[control('c')]).help("^c", "quit"),

@@ -58,6 +58,21 @@ pub(crate) struct Pointing {
     pub(crate) value: ParamValue,
 }
 
+/// A table of a trail of rows, and the columns its row equals in the row before it; none for the first.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Hop {
+    pub(crate) schema: String,
+    pub(crate) table: String,
+    pub(crate) on: Vec<Joined>,
+}
+
+/// A column of the table before a hop, and the column of the hop's table it equals.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Joined {
+    pub(crate) from: String,
+    pub(crate) to: String,
+}
+
 /// A statement with `{{name}}` parameters, and the value each of them takes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Prefilled {
@@ -100,6 +115,12 @@ fn only_column(columns: &[Column], name: &str) -> Option<usize> {
 }
 
 impl Target {
+    /// The hop the key makes from a row of `columns` to the row it points to.
+    pub(crate) fn hop(&self, columns: &[Column]) -> Hop {
+        let joined = |pair: &KeyPair| Some(Joined { from: columns.get(pair.at)?.name.as_str().to_owned(), to: pair.column.clone() });
+        Hop { schema: self.schema.clone(), table: self.table.clone(), on: self.pairs.iter().filter_map(joined).collect() }
+    }
+
     /// The place in the result of the key's first column.
     pub(crate) fn first_column(&self) -> usize {
         self.pairs.iter().map(|pair| pair.at).min().unwrap_or_default()
@@ -163,11 +184,8 @@ impl Referrer {
 
     /// Its rows that point to the row, as a statement whose `{{name}}` parameters hold the row's values.
     pub(crate) fn rows(&self) -> Option<Prefilled> {
-        let names: Option<Vec<ParamName>> = self.pairs.iter().enumerate().map(|(at, pair)| param_name(&pair.column, at)).collect();
-        let names = names?;
-        let equal = self.pairs.iter().zip(&names).map(|(pair, name)| format!("{} = {{{{{name}}}}}", sql_name(&pair.column)));
-        let text = format!("SELECT * FROM {} WHERE {}", self.sql_name(), equal.collect::<Vec<_>>().join(" AND "));
-        Some(Prefilled { text, values: names.into_iter().zip(self.pairs.iter().map(|pair| pair.value.clone())).collect() })
+        let (condition, values) = param_condition("", &self.pairs)?;
+        Some(Prefilled { text: format!("SELECT * FROM {} WHERE {condition}", self.sql_name()), values })
     }
 
     fn sql_name(&self) -> String {
@@ -180,9 +198,34 @@ impl Referrer {
     }
 }
 
-/// The parameter a key column's value goes in: the column's name, or `key_<n>` when that is no parameter name.
-fn param_name(column: &str, at: usize) -> Option<ParamName> {
-    column.parse().or_else(|_| format!("key_{}", at + 1).parse()).ok()
+/// The statement joining the tables of a trail, the first one's row picked by `key` as `{{name}}` parameters: each
+/// table called by the alias completion gives it, joined to the one before on the key that led to it.
+pub(crate) fn trail_join(tables: &[Hop], key: &[Pointing]) -> Option<Prefilled> {
+    let aliases = tables.iter().fold(Vec::<String>::new(), |mut aliases, hop| {
+        let taken: Vec<&str> = aliases.iter().map(String::as_str).collect();
+        let alias = complete::alias_of(&hop.table, &taken);
+        aliases.push(alias);
+        aliases
+    });
+    let [first, rest @ ..] = tables else { return None };
+    let joins = rest.iter().zip(aliases.windows(2)).map(|(hop, pair)| {
+        let equal = hop.on.iter().map(|on| format!("{}.{} = {}.{}", pair[1], sql_name(&on.to), pair[0], sql_name(&on.from)));
+        format!("\nJOIN {} {} ON {}", qualified(&hop.schema, &hop.table), pair[1], equal.collect::<Vec<_>>().join(" AND "))
+    });
+    let joins: String = joins.collect();
+    let (condition, values) = param_condition(&format!("{}.", aliases[0]), key)?;
+    let text = format!("SELECT *\nFROM {} {}{joins}\nWHERE {condition}", qualified(&first.schema, &first.table), aliases[0]);
+    Some(Prefilled { text, values })
+}
+
+/// `column = {{name}}` for each of `pairs`, each column after `qualifier`, joined with `AND`, and the value each name
+/// takes; a column that is no parameter name gives `key_<n>`.
+fn param_condition(qualifier: &str, pairs: &[Pointing]) -> Option<(String, BTreeMap<ParamName, ParamValue>)> {
+    let name = |(at, pair): (usize, &Pointing)| pair.column.parse().or_else(|_| format!("key_{}", at + 1).parse()).ok();
+    let names: Vec<ParamName> = pairs.iter().enumerate().map(name).collect::<Option<_>>()?;
+    let equal = pairs.iter().zip(&names).map(|(pair, name)| format!("{qualifier}{} = {{{{{name}}}}}", sql_name(&pair.column)));
+    let condition = equal.collect::<Vec<_>>().join(" AND ");
+    Some((condition, names.into_iter().zip(pairs.iter().map(|pair| pair.value.clone())).collect()))
 }
 
 #[cfg(test)]
@@ -308,6 +351,30 @@ mod tests {
         assert_eq!(referrer.rows().unwrap().text, "SELECT * FROM billing.invoices WHERE \"Order Id\" = {{key_1}}");
     }
 
+    fn hop(schema: &str, table: &str, from: &str) -> Hop {
+        let on = if from.is_empty() { vec![] } else { vec![Joined { from: from.to_owned(), to: "id".to_owned() }] };
+        Hop { schema: schema.to_owned(), table: table.to_owned(), on }
+    }
+
+    fn order_7() -> Vec<Pointing> {
+        vec![Pointing { column: "id".to_owned(), value: ParamValue::new("7") }]
+    }
+
+    #[test]
+    fn a_trail_joins_each_table_to_the_one_before_on_the_key_that_led_to_it() {
+        let trail = [hop("public", "orders", ""), hop("public", "customers", "customer_id"), hop("public", "users", "user_id")];
+        let join = trail_join(&trail, &order_7()).unwrap();
+        let text = "SELECT *\nFROM public.orders o\nJOIN public.customers c ON c.id = o.customer_id\nJOIN public.users u ON u.id = c.user_id\nWHERE o.id = {{id}}";
+        assert_eq!((join.text.as_str(), join.values), (text, [("id".parse().unwrap(), ParamValue::new("7"))].into()));
+    }
+
+    #[test]
+    fn a_table_of_the_trail_whose_initials_are_taken_gets_a_number() {
+        let trail = [hop("public", "orders", ""), hop("public", "orders", "parent_id")];
+        let join = trail_join(&trail, &order_7()).unwrap();
+        assert!(join.text.contains("JOIN public.orders o2 ON o2.id = o.parent_id"), "{}", join.text);
+    }
+
     /// A fresh `table` holding three rows that point to 7 and one that points to 8.
     async fn pointing_rows(table: &str) -> Referrer {
         fixtures::run(WritePolicy::Allowed, &format!("DROP TABLE IF EXISTS {table}")).await.unwrap();
@@ -332,5 +399,30 @@ mod tests {
         let admitted = params::admit(&Statement::new(rows.text), &Given::typed(rows.values), &[], WritePolicy::ReadOnly).unwrap();
         let read = fixtures::session(WritePolicy::ReadOnly).await.run(&admitted).await.unwrap();
         assert_eq!(read.rows().len(), 3);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn the_join_of_a_trail_reads_the_row_with_the_rows_it_led_to() {
+        let made =
+            ["pgbg_trail_users (id int)", "pgbg_trail_customers (id int, user_id int)", "pgbg_trail_orders (id int, customer_id int)"];
+        for table in made {
+            let name = table.split_once(' ').map_or(table, |(name, _)| name);
+            fixtures::run(WritePolicy::Allowed, &format!("DROP TABLE IF EXISTS {name}")).await.unwrap();
+            fixtures::run(WritePolicy::Allowed, &format!("CREATE TABLE {table}")).await.unwrap();
+        }
+        let rows = "INSERT INTO pgbg_trail_users VALUES (5); INSERT INTO pgbg_trail_customers VALUES (3, 5); INSERT INTO pgbg_trail_orders VALUES (7, 3), (8, 3)";
+        for insert in rows.split("; ") {
+            fixtures::run(WritePolicy::Allowed, insert).await.unwrap();
+        }
+        let trail = [
+            hop("public", "pgbg_trail_orders", ""),
+            hop("public", "pgbg_trail_customers", "customer_id"),
+            hop("public", "pgbg_trail_users", "user_id"),
+        ];
+        let join = trail_join(&trail, &order_7()).unwrap();
+        let admitted = params::admit(&Statement::new(join.text), &Given::typed(join.values), &[], WritePolicy::ReadOnly).unwrap();
+        let read = fixtures::session(WritePolicy::ReadOnly).await.run(&admitted).await.unwrap();
+        assert_eq!(read.rows(), [[Value::Int(7), Value::Int(3), Value::Int(3), Value::Int(5), Value::Int(5)]]);
     }
 }

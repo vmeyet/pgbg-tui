@@ -72,7 +72,7 @@ impl Index {
 
 /// The initials of the words of `table`'s name, `oi` for `order_items`, as people write an alias; with a number after
 /// them when the statement already calls a table so, or when they would read as a keyword.
-fn alias_of(table: &str, taken: &[&str]) -> String {
+pub(crate) fn alias_of(table: &str, taken: &[&str]) -> String {
     let words = without_schema(table).split(|c: char| !c.is_ascii_alphanumeric()).filter_map(|word| word.chars().next());
     let initials: String = words.filter(char::is_ascii_alphabetic).map(|c| c.to_ascii_lowercase()).collect();
     let initials = if initials.is_empty() { "t".to_owned() } else { initials };

@@ -29,6 +29,8 @@ Each entry says what changed, then where, then how to use it.
 - **The row's detail lists the tables that point to it**, in the TUI: under its columns, each table whose foreign key points to the row, with how many of its rows do, counted up to 1000.
   Press `tab` to reach one and `⏎` to run its rows as a new result: the statement goes at the end of the editor, the row's values in the parameter bar, as `WHERE order_id = {{order_id}}`.
   The first 12 such tables are counted, each with one read-only read under the connection's statement timeout.
+- **`e` in the row's detail writes the join of its trail** into the TUI's editor, unsaved: from `orders › customers › users`, `SELECT * FROM public.orders o JOIN public.customers c ON c.id = o.customer_id JOIN public.users u ON u.id = c.user_id`, aliased as completion aliases a join.
+  Its `WHERE` picks the grid's row by its primary key as `{{id}}`, the value in the parameter bar; `ctrl-z` takes it back.
 - **Usage counts, opt-in**, for the TUI: with `[usage] enabled = true` in `config.toml`, pgbg counts the keys you use and the time on each pane, on this machine only, never a statement or a name.
   Run `pgbg usage` to see the keys never or rarely used, the most used and the time per pane; `--since 4w`, `7d` or `all` changes the window, `--json` gives it to a script.
 - **Your own saved queries belong to a connection**, in the TUI and `pgbg run --query`: they live in `queries/<connection>/` in pgbg's data folder, as `~/.local/share/pgbg/queries/prod/`.

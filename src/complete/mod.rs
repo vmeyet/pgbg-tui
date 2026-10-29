@@ -2,6 +2,7 @@
 //! candidates ranked for the ghost and the list.
 pub(crate) use context::{Ask, tables_named};
 pub(crate) use index::Index;
+pub(crate) use join::alias_of;
 pub(crate) use rank::{Candidate, Kind};
 
 mod context;
