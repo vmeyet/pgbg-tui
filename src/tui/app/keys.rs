@@ -76,6 +76,7 @@ impl App {
             Some(Overlay::Recall(recall)) => recall.search.paste(text, &recall.all),
             Some(Overlay::Versions(list)) => list.search.paste(text, &list.all),
             Some(Overlay::SchemaFilter) => self.schema_tab.filter.paste(text),
+            Some(Overlay::RowFilter(_)) => self.paste_in_row_filter(text),
             Some(Overlay::Completion(_)) => self.paste_past_completions(text),
             Some(Overlay::Ask(AskStep::Instruction(instruction))) => instruction.paste(text),
             Some(Overlay::Ask(_)) => {}
@@ -120,6 +121,7 @@ impl App {
             Overlay::Detail(detail) => self.detail_key(detail, key),
             Overlay::CopyAs => self.copy_as_key(key),
             Overlay::SchemaFilter => self.schema_filter_key(key),
+            Overlay::RowFilter(filter) => self.row_filter_key(filter, key),
             Overlay::Completion(completions) => self.completions_key(completions, key),
             Overlay::Ask(step) => self.ask_key(step, key),
         }
@@ -153,6 +155,7 @@ impl App {
             Act::Down if self.focus == Focus::Queries => self.step_sidebar(1),
             Act::Up if self.focus == Focus::Queries => self.step_sidebar(-1),
             act if act.is_grid() && self.sheet().is_chart_shown() => {}
+            Act::Detail | Act::CopyCell | Act::CopyRow if !self.sheet().shows_cursor_row() => {}
             Act::Down => return self.grid_step(Move::Down),
             Act::Up => return self.grid_step(Move::Up),
             Act::PageDown => return self.grid_step(Move::PageDown),
@@ -177,6 +180,7 @@ impl App {
             Act::Versions => return self.list_versions(),
             Act::FindTable => return self.find_table(),
             Act::Detail => return self.open_detail(),
+            Act::Filter => self.open_row_filter(),
             Act::Sort => self.step_sort(),
             Act::CopyCell => return self.copy_cell(),
             Act::CopyRow => return self.copy_row(),
@@ -186,7 +190,7 @@ impl App {
             Act::CopyResult => self.ask_copy_format(),
             Act::SwitchTab => return self.switch_tab(),
             Act::Close | Act::Delete | Act::CloseSession | Act::Add | Act::Edit | Act::CopyCsv | Act::CopyJson | Act::CopyMarkdown => {}
-            Act::Filter | Act::ReadAgain | Act::Preview | Act::Insert | Act::TakeGhost | Act::DropGhost | Act::Back => {}
+            Act::ReadAgain | Act::Preview | Act::Insert | Act::TakeGhost | Act::DropGhost | Act::Back => {}
         }
         vec![]
     }

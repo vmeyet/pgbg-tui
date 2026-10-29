@@ -36,6 +36,7 @@ impl App {
             Some(Overlay::Detail(_)) => Pane::Detail,
             Some(Overlay::CopyAs) => Pane::CopyAs,
             Some(Overlay::SchemaFilter) => Pane::SchemaFilter,
+            Some(Overlay::RowFilter(_)) => Pane::RowFilter,
             Some(Overlay::Completion(_)) => Pane::Completion,
             Some(Overlay::TableFinder(_)) => Pane::TableFinder,
             Some(Overlay::Ask(step)) => step.pane(),

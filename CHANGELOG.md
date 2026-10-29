@@ -8,6 +8,8 @@ Each entry says what changed, then where, then how to use it.
 
 ### New
 
+- **`/` filters the rows**, in the TUI's result grid, without running the statement again: on the rows loaded, so the title says `12 of 3 400 rows`, or `of the first 500 rows` when the result holds only its first rows.
+  Press `/` and type: a row stays when one of its cells, as the grid shows it, holds the text, whatever the case; `⏎` keeps the filter and `esc` drops it.
 - **`s` sorts the rows by a column**, in the TUI's result grid, without running the statement again: on the rows loaded.
   Press `s` on a column to sort it ascending, again for descending, a third time for the result's order; numbers sort as numbers, dates as dates, `NULL` last, and the header shows `▲` or `▼`.
 - **`⌘c` and `⌘v` copy and paste**, in the TUI's editor: `⌘c` copies the selection, else the statement under the cursor, and `⌘v` pastes the clipboard as the terminal's paste does.

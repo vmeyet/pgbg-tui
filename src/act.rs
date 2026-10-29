@@ -153,6 +153,7 @@ impl Act {
                 | Self::CopyRow
                 | Self::StepFormat
                 | Self::SwitchFormats
+                | Self::Filter
                 | Self::Sort
         )
     }
@@ -178,6 +179,8 @@ pub(crate) enum Pane {
     Schema,
     /// The line that filters the schema's tables: while open it takes every key.
     SchemaFilter,
+    /// The footer line that filters the grid's rows: while open it takes every key.
+    RowFilter,
     /// The `ctrl-t` finder over every table of the schema, a popup like the `ctrl-p` one.
     TableFinder,
     /// The `ctrl-p` finder over every saved query: while open it takes every key, and only its own work.
@@ -206,13 +209,14 @@ pub(crate) enum Pane {
 
 impl Pane {
     /// The order the `?` help lists the panes in.
-    const IN_HELP: [Self; 19] = [
+    const IN_HELP: [Self; 20] = [
         Self::Editor,
         Self::Params,
         Self::Result,
         Self::Queries,
         Self::Schema,
         Self::SchemaFilter,
+        Self::RowFilter,
         Self::Finder,
         Self::TableFinder,
         Self::Picker,
@@ -237,6 +241,7 @@ impl Pane {
             Self::Queries => "queries",
             Self::Schema => "schema",
             Self::SchemaFilter => "schema filter",
+            Self::RowFilter => "row filter",
             Self::Finder => "finder",
             Self::TableFinder => "table finder",
             Self::Picker => "picker",
@@ -361,6 +366,9 @@ pub(crate) const ROWS: &[Row] = &[
         .help("f", "the column in its next format: raw, then readable ones")
         .footer("f", "format"),
     row(Act::SwitchFormats, Pane::Result, &[key(KeyCode::Char('F'))]).help("F", "every column raw, or readable"),
+    row(Act::Filter, Pane::Result, &[key(KeyCode::Char('/'))])
+        .help("/", "keep the rows loaded with a cell holding what you type")
+        .footer("/", "filter"),
     row(Act::Sort, Pane::Result, &[key(KeyCode::Char('s'))]).help("s", "sort the rows loaded by the column: up, down, then as read"),
     row(Act::Help, Pane::Result, &[key(KeyCode::Char('?'))]).help("?", HELP_KEYS),
     row(Act::Down, Pane::Queries, &[key(KeyCode::Char('j')), key(KeyCode::Down)]).help("j k", "next, previous query").footer("j/k", "move"),
@@ -384,6 +392,9 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Open, Pane::SchemaFilter, &[key(KeyCode::Enter)]).help("⏎", "keep the filter").footer("⏎", "keep"),
     row(Act::Close, Pane::SchemaFilter, &[key(KeyCode::Esc)]).help("esc", "drop the filter").footer("esc", "drop"),
     row(Act::Quit, Pane::SchemaFilter, &[control('c')]).help("^c", "quit"),
+    row(Act::Open, Pane::RowFilter, &[key(KeyCode::Enter)]).help("⏎", "keep the filter").footer("⏎", "keep"),
+    row(Act::Close, Pane::RowFilter, &[key(KeyCode::Esc)]).help("esc", "drop the filter: every row shows again").footer("esc", "drop"),
+    row(Act::Quit, Pane::RowFilter, &[control('c')]).help("^c", "quit"),
     row(Act::Down, Pane::Finder, &[key(KeyCode::Down), control('n')]).help("↓ ^n", "next, previous query").footer("↑↓", "pick"),
     row(Act::Up, Pane::Finder, &[key(KeyCode::Up), control('p')]),
     row(Act::Open, Pane::Finder, &[key(KeyCode::Enter)]).help("⏎", "open it in the editor").footer("⏎", "opens"),
@@ -500,6 +511,7 @@ fn works_in(row: &Row, pane: Pane) -> bool {
                     | Pane::Detail
                     | Pane::CopyAs
                     | Pane::SchemaFilter
+                    | Pane::RowFilter
                     | Pane::Completion
                     | Pane::Instruction
                     | Pane::Asking
@@ -612,6 +624,7 @@ mod tests {
             Pane::Queries,
             Pane::Schema,
             Pane::SchemaFilter,
+            Pane::RowFilter,
             Pane::Finder,
             Pane::TableFinder,
             Pane::Picker,
@@ -707,6 +720,6 @@ mod tests {
     fn the_first_help_lists_the_focused_pane_and_what_works_anywhere() {
         let titles: Vec<&str> = sections(Pane::Result, false).iter().map(|section| section.title).collect();
         assert_eq!(titles, ["result", "anywhere"]);
-        assert_eq!(sections(Pane::Result, true).len(), 19);
+        assert_eq!(sections(Pane::Result, true).len(), 20);
     }
 }

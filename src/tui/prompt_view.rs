@@ -1,17 +1,19 @@
-//! The prompt on the footer line: the path of a new query as it is typed, whether to open a query over unsaved text, or
-//! whether to send a write.
+//! The prompt on the footer line: the path of a new query as it is typed, whether to open a query over unsaved text,
+//! whether to send a write, or the grid's filter.
 use super::app::{App, Opening, Prompt};
-use crate::{act, render};
+use crate::act::{self, Pane};
+use crate::render;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
+use vtui::field::Field;
 
 /// The prompt over the footer in `area`, followed by its keys.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App, prompt: &Prompt, area: Rect) {
     let theme = app.theme();
-    let mut spans = match prompt {
+    let spans = match prompt {
         Prompt::SaveAs { path, error } => {
             let (before, under, after) = path.split();
             let mut spans = vec![
@@ -36,9 +38,23 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, prompt: &Prompt, area: Rect) {
             )]
         }
     };
-    let hints =
-        act::footer(prompt.pane()).map(|hint| Span::styled(format!(" {} {} ", hint.keys, hint.does), Style::default().fg(theme.muted)));
-    spans.extend(hints);
+    draw_with_hints(f, app, spans, prompt.pane(), area);
+}
+
+/// The grid's filter over the footer in `area`, as it is typed, followed by its keys.
+pub(super) fn draw_row_filter(f: &mut Frame<'_>, app: &App, filter: &Field, area: Rect) {
+    let accent = Style::default().fg(app.theme().accent);
+    let spans = vec![
+        Span::styled(" filter › ", accent.add_modifier(Modifier::BOLD)),
+        Span::raw(render::printable(filter.text()).into_owned()),
+        Span::styled("▌ ", accent),
+    ];
+    draw_with_hints(f, app, spans, Pane::RowFilter, area);
+}
+
+fn draw_with_hints(f: &mut Frame<'_>, app: &App, mut spans: Vec<Span<'static>>, pane: Pane, area: Rect) {
+    let muted = Style::default().fg(app.theme().muted);
+    spans.extend(act::footer(pane).map(|hint| Span::styled(format!(" {} {} ", hint.keys, hint.does), muted)));
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
