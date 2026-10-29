@@ -38,6 +38,7 @@ pub(super) use versions::{Listed, VersionList};
 pub(super) mod ask;
 mod colouring;
 mod completion;
+mod condition;
 mod confirm;
 mod copy;
 mod detail;

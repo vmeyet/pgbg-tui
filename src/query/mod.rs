@@ -22,6 +22,7 @@ pub(crate) use save::Write;
 pub(crate) use tree::{TreeRow, tree_rows};
 pub(crate) use versions::{Version, Versions};
 
+pub(crate) mod condition;
 mod header;
 pub(crate) mod params;
 mod save;

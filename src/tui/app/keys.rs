@@ -5,6 +5,7 @@ use super::panes::Side;
 use super::param_bar::Direction;
 use super::{Action, App, AskStep, Focus, Opening, Overlay};
 use crate::act::{self, Act, Pane};
+use crate::query::condition::Comparison;
 use crossterm::event::{KeyCode, KeyEvent};
 use vtui::help::Help;
 use vtui::toward::Toward;
@@ -182,6 +183,8 @@ impl App {
             Act::Detail => return self.open_detail(),
             Act::Filter => self.open_row_filter(),
             Act::Sort => self.step_sort(),
+            Act::WhereEqual => self.add_condition(Comparison::Equal),
+            Act::WhereNotEqual => self.add_condition(Comparison::NotEqual),
             Act::CopyCell => return self.copy_cell(),
             Act::CopyRow => return self.copy_row(),
             Act::CopyStatement => return self.copy_statement(),
