@@ -1,6 +1,7 @@
 //! The results grid's state: the cursor's cell, the first row and column in view, and each column's format, width and
 //! colouring.
 use super::colouring::{Colouring, colourings};
+use super::shown_rows::{Order, ShownRows, Sort};
 use crate::db::model::{ColumnName, ResultSet};
 use crate::format::{self, Format, Mode};
 use crate::keys::{ColumnKey, Target};
@@ -63,11 +64,13 @@ pub(in crate::tui) struct Grid {
     pub(in crate::tui) colourings: Vec<Colouring>,
     /// Each column's key in the table the result was read from, by index; none when that table is unknown.
     keys: Vec<ColumnKey>,
-    /// The cursor's row.
+    /// The rows shown and their order, after `/` and `s`.
+    shown: ShownRows,
+    /// The cursor's row, by its index in the result.
     pub(in crate::tui) row: usize,
     /// The cursor's column.
     pub(in crate::tui) column: usize,
-    /// The first row in view.
+    /// The place of the first row in view among the rows shown.
     pub(in crate::tui) top: usize,
     /// The first column in view.
     pub(in crate::tui) left: usize,
@@ -77,7 +80,17 @@ impl Grid {
     /// The grid on `result` with each column in its format from `formats` and its key from `keys`, the cursor on the
     /// first row; `keys` is empty when the table the result was read from is unknown.
     pub(in crate::tui) fn new(result: &ResultSet, formats: Vec<Format>, keys: Vec<ColumnKey>, clock: &Clock) -> Self {
-        let mut grid = Self { formats: vec![], widths: vec![], colourings: vec![], keys, row: 0, column: 0, top: 0, left: 0 };
+        let mut grid = Self {
+            formats: vec![],
+            widths: vec![],
+            colourings: vec![],
+            keys,
+            shown: ShownRows::default(),
+            row: 0,
+            column: 0,
+            top: 0,
+            left: 0,
+        };
         grid.set_formats(formats, result, clock);
         grid
     }
@@ -103,11 +116,43 @@ impl Grid {
         &self.keys
     }
 
-    /// The header of the column at `column` of `result`: its name escaped, then `→` when it points to another table.
+    /// The header of the column at `column` of `result`: its name escaped, then `→` when it points to another table,
+    /// and `▲` or `▼` when the rows are sorted by it.
     pub(in crate::tui) fn header(&self, result: &ResultSet, column: usize) -> String {
         let name = render::printable(result.columns()[column].name.as_str());
-        let mark = if self.points_to(column).is_some() { POINTS_TO_MARK } else { "" };
-        format!("{name}{mark}")
+        let points_to = if self.points_to(column).is_some() { POINTS_TO_MARK } else { "" };
+        let sorted = match self.shown.sort() {
+            Some(Sort { column: sorted, order: Order::Ascending }) if sorted == column => " ▲",
+            Some(Sort { column: sorted, order: Order::Descending }) if sorted == column => " ▼",
+            _ => "",
+        };
+        format!("{name}{points_to}{sorted}")
+    }
+
+    /// The rows shown and their order.
+    pub(in crate::tui) const fn shown(&self) -> &ShownRows {
+        &self.shown
+    }
+
+    /// Sorts the rows shown by the cursor's column: ascending, then descending, then in the result's order; the cursor
+    /// goes to the first row.
+    pub(super) fn step_sort(&mut self, result: &ResultSet, clock: &Clock) {
+        self.shown = ShownRows::new(Sort::after(self.shown.sort(), self.column), result);
+        self.row = self.shown.row_at(0, result.rows().len()).unwrap_or(0);
+        self.top = 0;
+        self.widths = self.column_widths(result, &self.formats, clock);
+    }
+
+    /// Sorts the rows of `result` again, once a page added rows to it; the cursor stays on its row.
+    pub(super) fn take_rows(&mut self, result: &ResultSet) {
+        if !self.shown.is_whole() {
+            self.shown = ShownRows::new(self.shown.sort(), result);
+        }
+    }
+
+    /// The cursor's place among the rows shown.
+    fn cursor_place(&self) -> usize {
+        self.shown.place_of(self.row).unwrap_or(0)
     }
 
     /// Puts the cursor's column in the next format its kind allows; when its kind has no other, leaves it and returns
@@ -135,21 +180,31 @@ impl Grid {
         self.formats = formats;
     }
 
-    /// Moves the cursor by `step` in `result`, keeping its cell in the `room` the grid has.
+    /// Moves the cursor by `step` among the rows shown of `result`, keeping its cell in the `room` the grid has.
     pub(super) fn step(&mut self, step: Move, result: &ResultSet, room: Room) {
-        let last_row = result.rows().len().saturating_sub(1);
-        let page = room.rows.max(1);
+        let loaded = result.rows().len();
         match step {
-            Move::Down => self.row = (self.row + 1).min(last_row),
-            Move::Up => self.row = self.row.saturating_sub(1),
-            Move::PageDown => self.row = (self.row + page).min(last_row),
-            Move::PageUp => self.row = self.row.saturating_sub(page),
-            Move::First => self.row = 0,
-            Move::Last => self.row = last_row,
             Move::Left => self.column = self.column.saturating_sub(1),
             Move::Right => self.column = (self.column + 1).min(self.widths.len().saturating_sub(1)),
+            vertical => self.row = self.shown.row_at(self.place_after(vertical, loaded, room), loaded).unwrap_or(self.row),
         }
         self.keep_in_view(room);
+    }
+
+    /// The place among the rows shown that the cursor goes to on `step` up or down.
+    fn place_after(&self, step: Move, loaded: usize, room: Room) -> usize {
+        let place = self.cursor_place();
+        let last = self.shown.count(loaded).saturating_sub(1);
+        let page = room.rows.max(1);
+        match step {
+            Move::Down => (place + 1).min(last),
+            Move::Up => place.saturating_sub(1),
+            Move::PageDown => (place + page).min(last),
+            Move::PageUp => place.saturating_sub(page),
+            Move::First => 0,
+            Move::Last => last,
+            Move::Left | Move::Right => place,
+        }
     }
 
     /// Scrolls the least so the cursor's cell is in view: its row among the rows, its column whole when it fits.
@@ -160,11 +215,12 @@ impl Grid {
 
     fn keep_row_in_view(&mut self, visible: usize) {
         let visible = visible.max(1);
-        if self.row < self.top {
-            self.top = self.row;
+        let place = self.cursor_place();
+        if place < self.top {
+            self.top = place;
         }
-        if self.row >= self.top + visible {
-            self.top = self.row + 1 - visible;
+        if place >= self.top + visible {
+            self.top = place + 1 - visible;
         }
     }
 

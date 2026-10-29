@@ -301,3 +301,39 @@ pub(crate) fn best_of<T>(mut step: impl FnMut() -> T) -> Duration {
     };
     (0..5).map(|_| timed()).min().unwrap_or_default()
 }
+
+/// Ten thousand rows, the cap, of fifty columns: one of each kind the grid colours, and plain text.
+#[cfg(not(debug_assertions))]
+pub(crate) fn capped() -> ResultSet {
+    let kinds = [
+        ColumnKind::Int,
+        ColumnKind::Text,
+        ColumnKind::Numeric,
+        ColumnKind::TimestampTz,
+        ColumnKind::Bool,
+        ColumnKind::Uuid,
+        ColumnKind::Json,
+        ColumnKind::Text,
+        ColumnKind::Int,
+        ColumnKind::Text,
+    ];
+    let columns = (0..50).map(|index| column(&format!("c{index}"), kinds[index % kinds.len()].clone())).collect();
+    let statuses = ["paid", "open", "void"];
+    let cells = |n: i64| {
+        let at = chrono::DateTime::UNIX_EPOCH + chrono::Duration::hours(n);
+        [
+            Value::Int(n),
+            Value::Text(format!("customer {n}").into()),
+            Value::Numeric(format!("{n}.50").into()),
+            Value::TimestampTz(at),
+            Value::Bool(n % 2 == 0),
+            Value::Uuid(uuid::Uuid::from_u128(u128::from(n.unsigned_abs()) << 64)),
+            Value::Json(crate::db::model::JsonText::of(&serde_json::json!({"id": n, "status": "paid"}))),
+            Value::Text(statuses[n.unsigned_abs() as usize % statuses.len()].into()),
+            Value::Int(-n),
+            Value::Null,
+        ]
+    };
+    let rows = (0..10_000).map(|n| cells(n).into_iter().cycle().take(50).collect()).collect();
+    ResultSet::new(columns, Page { rows, extent: Extent::Cut })
+}

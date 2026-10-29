@@ -67,9 +67,14 @@ const fn view_switch(view: &View) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use super::super::app::fixtures::{on_the_result, press};
+    use super::super::ui;
     use super::*;
     use crate::chart::ChartError;
-    use crate::fixtures::page;
+    use crate::fixtures::{orders, page};
+    use crossterm::event::KeyCode;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
     #[test]
     fn a_result_waiting_on_more_pages_says_so() {
@@ -95,6 +100,21 @@ mod tests {
         let mut result = ResultSet::new(vec![], page(500, Extent::More));
         result.push(page(0, Extent::Cut));
         assert_eq!(row_count(&result), "first 500 rows");
+    }
+
+    /// The screen after `keys` on `result`, pressed once a first frame gave the grid its room.
+    fn pressed(result: ResultSet, keys: &str) -> String {
+        let mut app = on_the_result(result);
+        let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
+        terminal.draw(|f| app.fit(ui::draw(f, &app))).unwrap();
+        keys.chars().for_each(|c| press(&mut app, KeyCode::Char(c)));
+        terminal.draw(|f| _ = ui::draw(f, &app)).unwrap();
+        terminal.backend().to_string()
+    }
+
+    #[test]
+    fn a_sorted_column_says_which_way_in_its_header() {
+        insta::assert_snapshot!("sorted_down", pressed(orders(), "lss"));
     }
 
     #[test]

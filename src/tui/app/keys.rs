@@ -177,6 +177,7 @@ impl App {
             Act::Versions => return self.list_versions(),
             Act::FindTable => return self.find_table(),
             Act::Detail => return self.open_detail(),
+            Act::Sort => self.step_sort(),
             Act::CopyCell => return self.copy_cell(),
             Act::CopyRow => return self.copy_row(),
             Act::CopyStatement => return self.copy_statement(),

@@ -1,6 +1,7 @@
 use super::{JsonText, ParamValue};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use serde::{Serialize, Serializer};
+use std::cmp::Ordering;
 use std::fmt;
 
 /// One cell, decoded once at the boundary.
@@ -76,6 +77,49 @@ impl Value {
         match self {
             Self::Json(json) => json.pretty_prefix(chars),
             other => other.prefix(chars),
+        }
+    }
+
+    /// How it sorts against `other`, a value of the same column: numbers as numbers, times as times, text by its
+    /// characters, `-infinity` first and `infinity`, then NULL, last.
+    pub(crate) fn compare(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (Self::Int(a), Self::Int(b)) => a.cmp(b),
+            (Self::Int(_) | Self::Float(_) | Self::Numeric(_), Self::Int(_) | Self::Float(_) | Self::Numeric(_)) => {
+                self.number().total_cmp(&other.number())
+            }
+            (Self::Bool(a), Self::Bool(b)) => a.cmp(b),
+            (Self::Text(a), Self::Text(b)) => a.cmp(b),
+            (Self::Json(a), Self::Json(b)) => a.as_str().cmp(b.as_str()),
+            (Self::Uuid(a), Self::Uuid(b)) => a.cmp(b),
+            (Self::Date(a), Self::Date(b)) => a.cmp(b),
+            (Self::Time(a), Self::Time(b)) => a.cmp(b),
+            (Self::Timestamp(a), Self::Timestamp(b)) => a.cmp(b),
+            (Self::TimestampTz(a), Self::TimestampTz(b)) => a.cmp(b),
+            (Self::Bytes(a), Self::Bytes(b)) => a.cmp(b),
+            _ => self.rank().cmp(&other.rank()),
+        }
+    }
+
+    /// A number as a float, so a `NUMERIC` compares with another; NaN, as PostgreSQL sorts it, after every number.
+    fn number(&self) -> f64 {
+        match self {
+            #[expect(clippy::cast_precision_loss, reason = "only an integer and a float of one column compare this way")]
+            Self::Int(int) => *int as f64,
+            Self::Float(float) => *float,
+            Self::Numeric(text) => text.parse().unwrap_or(f64::NAN),
+            _ => f64::NAN,
+        }
+    }
+
+    /// Where a value sorts among values of other kinds.
+    const fn rank(&self) -> u8 {
+        match self {
+            Self::NegativeInfinity => 0,
+            Self::Infinity => 2,
+            Self::Unsupported => 3,
+            Self::Null => 4,
+            _ => 1,
         }
     }
 }
@@ -205,5 +249,28 @@ mod tests {
         let row =
             [Value::Int(3), Value::Null, Value::Numeric("12.50".into()), Value::Json(JsonText::of(&serde_json::json!({"paid": true})))];
         assert_eq!(serde_json::to_string(&row).unwrap(), r#"[3,null,"12.50",{"paid":true}]"#);
+    }
+
+    fn sorted(mut values: Vec<Value>) -> Vec<Value> {
+        values.sort_by(Value::compare);
+        values
+    }
+
+    #[test]
+    fn numbers_compare_as_numbers_not_as_text() {
+        let numerics = ["9.5", "10", "-2"].map(|text| Value::Numeric(text.into()));
+        assert_eq!(sorted(numerics.to_vec()), ["-2", "9.5", "10"].map(|text| Value::Numeric(text.into())));
+    }
+
+    #[test]
+    fn dates_compare_as_dates_with_infinity_at_either_end() {
+        let day = |text: &str| Value::Date(text.parse().unwrap());
+        let days = vec![Value::Infinity, day("2026-10-02"), Value::NegativeInfinity, day("2025-12-31")];
+        assert_eq!(sorted(days), [Value::NegativeInfinity, day("2025-12-31"), day("2026-10-02"), Value::Infinity]);
+    }
+
+    #[test]
+    fn null_compares_after_every_value() {
+        assert_eq!(sorted(vec![Value::Null, Value::Infinity, Value::Int(3)]), [Value::Int(3), Value::Infinity, Value::Null]);
     }
 }
