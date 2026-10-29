@@ -205,6 +205,9 @@ In the TUI, a bar above the editor shows one field per parameter.
 | --- | --- |
 | `⏎` | Run the statement under the cursor. |
 | `⌥⏎` `⇧⏎` | New line. |
+| `⌥←` `⌥→` `⌥b` `⌥f` | In the editor: a word left, right; `⌥b` `⌥f` are what a macOS terminal sends for `⌥←` `⌥→` when its option key is not meta. |
+| `^a` `^e` | In the editor: start, end of the line, as in a shell. |
+| `^k` `^u` | In the editor: delete to the end, the start of the line; at its edge, the line break. |
 | `esc` | Drop the faded rest after the cursor while one shows; else cancel the running statement. |
 | `tab` `⇧tab` | Next, previous pane: editor, parameters, result, sidebar; in the editor, `tab` takes the faded rest while one shows. |
 | `⇧←` `⇧→` `⇧↑` `⇧↓` | The pane on that side; a click on a pane does the same. |
@@ -222,7 +225,7 @@ In the TUI, a bar above the editor shows one field per parameter.
 | `y` `Y` `c` | Copy the cell; the row as CSV; the result as CSV, JSON or Markdown. |
 | `^s` | Save the query. |
 | `^q` | A new, empty query; the first `^s` asks for its path. |
-| `^e` | Edit the saved query in `$EDITOR`. |
+| `^x` | Edit the saved query in `$EDITOR`. |
 | `^v` | The versions of the saved query its saves replaced; `⏎` puts one back in the editor, unsaved. |
 | `F1` `?` | Every key of the pane you are in; `?` outside the editor and the parameters, where it types. |
 | `^c` | Quit. |

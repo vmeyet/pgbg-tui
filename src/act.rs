@@ -430,13 +430,21 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::CopyMarkdown, Pane::CopyAs, &[key(KeyCode::Char('m'))]).help("m", "copy it as a Markdown table").footer("m", "Markdown"),
     row(Act::Close, Pane::CopyAs, &[key(KeyCode::Esc)]).help("esc", "copy nothing").footer("esc", "cancel"),
     row(Act::Quit, Pane::CopyAs, &[control('c')]).help("^c", "quit"),
-    row(Act::EditOutside, Pane::Editor, &[control('e')]).help("^e", "edit the saved query in $EDITOR"),
+    row(Act::EditOutside, Pane::Editor, &[control('x')]).help("^x", "edit the saved query in $EDITOR"),
     row(Act::Save, Pane::Anywhere, &[control('s')]).help("^s", "save the query, naming a new one").footer("^s", "save"),
     row(Act::NewQuery, Pane::Anywhere, &[control('q')]).help("^q", "a new, empty query"),
     row(Act::History, Pane::Anywhere, &[control('r')]).help("^r", "search the statements run on this connection"),
     row(Act::Versions, Pane::Anywhere, &[control('v')]).help("^v", "the versions of the saved query its saves replaced"),
     row(Act::Connections, Pane::Anywhere, &[control('o')]).help("^o", "pick a connection").footer("^o", "connections"),
     row(Act::Quit, Pane::Anywhere, &[control('c')]).help("^c", "quit").footer("^c", "quit"),
+];
+
+/// The editor's keys that move the cursor or delete as in a shell: text keys, not acts, so listed in its help only.
+const EDITING_KEYS: &[Hint] = &[
+    Hint { keys: "⌥←→ ⌥b ⌥f", does: "a word left, right" },
+    Hint { keys: "^a ^e", does: "start, end of the line" },
+    Hint { keys: "^k ^u", does: "delete to the line's end, start" },
+    Hint { keys: "^w ⌥⌫", does: "delete the word before the cursor" },
 ];
 
 /// Whether `pressed` is `own`; a typed character is its own shift, so `G` matches with or without it, and a shifted
@@ -525,7 +533,8 @@ pub(crate) fn usage_groups() -> Vec<UsageGroup> {
 
 fn help_rows(pane: Pane) -> Vec<HelpRow> {
     let hints = ROWS.iter().filter(|row| row.pane == pane).filter_map(|row| row.help);
-    hints.map(|hint| HelpRow { keys: hint.keys.to_owned(), does: hint.does }).collect()
+    let editing = if pane == Pane::Editor { EDITING_KEYS } else { &[] };
+    hints.chain(editing.iter().copied()).map(|hint| HelpRow { keys: hint.keys.to_owned(), does: hint.does }).collect()
 }
 
 #[cfg(test)]
@@ -626,6 +635,19 @@ mod tests {
     fn command_k_finds_a_query_as_ctrl_p_does() {
         assert_eq!(act_for(command('k'), Pane::Editor), Some(Act::Find));
         assert_eq!(act_for(key(KeyCode::Char('k')), Pane::Editor), None);
+    }
+
+    #[test]
+    fn the_shell_keys_of_a_line_are_left_to_the_editor() {
+        for key in [control('a'), control('e'), control('k'), control('u'), KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT)] {
+            assert_eq!(act_for(key, Pane::Editor), None, "{key:?}");
+        }
+    }
+
+    #[test]
+    fn the_editor_help_lists_its_shell_keys() {
+        let keys: Vec<String> = help_rows(Pane::Editor).into_iter().map(|row| row.keys).collect();
+        assert!(keys.contains(&"^a ^e".to_owned()) && keys.contains(&"^k ^u".to_owned()), "{keys:?}");
     }
 
     #[test]
