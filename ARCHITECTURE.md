@@ -57,6 +57,7 @@ When a boundary or a flow changes, change this page in the same MR.
 | `lock.rs` | `lock::open`: a file opened to append (`0600` when made) under an exclusive `flock`, so two pgbg never lose each other's writes, opened again a few times at most when another pgbg moved or replaced it meanwhile; the history and the usage file take it |
 | `usage.rs` | `[usage]` counts: pgbg's `Rules` for vtui's `usage` (every act under the pane of its first row) and `UsageFile`, `usage.jsonl` in pgbg's cache folder, read, and merged under the file's `lock::open` through a temp file only its owner reads; `tui/usage.rs` is the loop's side, `tui/app/usage.rs` what the app answers |
 | `log.rs` | The log file, in pgbg's cache folder; never a secret, never a row |
+| `update.rs`, `release.rs` | What `pgbg update` runs, as a `Call` that `commands/update.rs` hands to its `Runner`: `brew upgrade` when the binary sits in brew's `Cellar`, else `cargo install --git` unless `git ls-remote` shows the running commit is the latest; `release.rs` holds the `Commit` that `build.rs` embeds and the label `pgbg --version` shows |
 | `signal.rs` | The signals that stop pgbg (`SIGINT`, `SIGTERM`, `SIGHUP`) and the exit code each gives |
 
 ## Data flow
