@@ -33,7 +33,7 @@ Each entry says what changed, then where, then how to use it.
   `⌘k` finds a saved query as `^p` does, in a terminal that speaks the kitty keyboard protocol (Ghostty, Kitty, WezTerm, iTerm2 with the option on); `?` shows the keys from the sidebar too, and `F1` from the editor.
 - **`ctrl-n` lists the names that fit at the cursor**, in the TUI's editor, as `ctrl-space` does: macOS takes `ctrl-space` to switch the input source unless you turn that shortcut off in System Settings › Keyboard › Keyboard Shortcuts › Input Sources.
 - **The idle ghost** in the TUI's editor: after a second without a key, your `[ai] command` is asked for the rest of the statement under the cursor, and the whole rest shows faded after the cursor, its other lines under it; when they do not fit, the last one says how many more there are.
-  The `--` lines right above the statement are what you ask for, sent as typed; on a blank line under them it writes the whole statement.
+  The `--` lines right above the statement are what you ask for, their values masked as the statement's are unless `[ai] literals = "sent"`; on a blank line under them it writes the whole statement.
   It waits while completion shows a name, and any key stops the command; `→` takes it, and it never runs by itself.
   Turn it on with `ghost = true` in the `[ai]` table of `config.toml`; a connection with `ai = "off"` never asks.
 - **`ctrl-g` asks your `[ai] command` for SQL**, in the TUI's editor: type what you want on the footer line and press `⏎`; the statement under the cursor and the tables it needs go along, its values masked unless `[ai] literals = "sent"`.

@@ -1,7 +1,9 @@
-//! The statement as a prompt shows it: each string and number literal a numbered marker, its comments gone.
+//! The statement as a prompt shows it: each string and number literal a numbered marker, its comments gone; and the
+//! comment an idle ask reads as its instruction, its values masked the same way.
 use crate::db::lex::{self, Token};
 use serde::Deserialize;
 use std::fmt;
+use std::ops::Range;
 
 /// Whether a prompt masks the statement's literals, the default, or sends them as typed (`[ai] literals = "sent"`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
@@ -28,7 +30,7 @@ enum LiteralKind {
     Number,
 }
 
-/// A statement with its literals masked and its comments stripped, and the literals it left out.
+/// A statement or a comment with its literals masked and its comments stripped, and the literals it left out.
 pub(super) struct Masked {
     pub(super) text: String,
     pub(super) literals: Literals,
@@ -48,22 +50,50 @@ struct Marker {
 /// `sql` with each comment a blank and, unless `policy` sends them, each string and number literal a marker; a
 /// `{{name}}` stays as it is.
 pub(super) fn masked(sql: &str, policy: LiteralPolicy) -> Masked {
+    masked_after(sql, policy, Literals(vec![]), &[])
+}
+
+/// `comment`, the words of the `--` lines above a statement, masked as `masked` masks a statement, with each word
+/// holding an `@`, as an email does, a string marker too; its markers count on from the `before` literals, so one answer
+/// puts back the values of both.
+pub(super) fn masked_comment(comment: &str, before: Literals) -> Masked {
+    masked_after(comment, LiteralPolicy::Masked, before, &words_with_at(comment))
+}
+
+fn masked_after(sql: &str, policy: LiteralPolicy, before: Literals, emails: &[Range<usize>]) -> Masked {
+    let Literals(mut literals) = before;
     let mut text = String::new();
-    let mut literals = vec![];
     let mut end = 0;
     for placed in lex::tokens(sql) {
+        if placed.range.start < end {
+            continue;
+        }
         text.push_str(without_comments(&sql[end..placed.range.start]));
-        let token = &sql[placed.range.clone()];
-        match literal_kind(token, &placed.token).filter(|_| policy == LiteralPolicy::Masked) {
+        let email = emails.iter().find(|email| email.contains(&placed.range.start));
+        let range = email.map_or(placed.range.clone(), |email| placed.range.start..email.end.max(placed.range.end));
+        let token = &sql[range.clone()];
+        let kind = if email.is_some() { Some(LiteralKind::String) } else { literal_kind(token, &placed.token) };
+        match kind.filter(|_| policy == LiteralPolicy::Masked) {
             Some(kind) => {
                 literals.push(Literal { kind, text: token.to_owned() });
                 text.push_str(&kind.marker(literals.len()));
             }
             None => text.push_str(token),
         }
-        end = placed.range.end;
+        end = range.end;
     }
     Masked { text: text.trim_matches(lex::is_blank).to_owned(), literals: Literals(literals) }
+}
+
+/// The byte range of each word of `text` holding an `@`, words parted by blanks, each one byte long, without the
+/// punctuation that ends it, as the comma after an email.
+fn words_with_at(text: &str) -> Vec<Range<usize>> {
+    let words = text.split(lex::is_blank).scan(0, |start, word| {
+        let range = *start..*start + word.trim_end_matches(|c: char| c.is_ascii_punctuation()).len();
+        *start += word.len() + 1;
+        Some(range)
+    });
+    words.filter(|range| text[range.clone()].contains('@')).collect()
 }
 
 /// The text between two tokens, blank as it is, else a blank in place of the comments it holds.
@@ -250,6 +280,28 @@ mod tests {
     #[test]
     fn text_that_only_looks_like_a_marker_stays() {
         assert_eq!(put_back("SELECT 1", "SELECT a < b, '<literal x>'").unwrap(), "SELECT a < b, '<literal x>'");
+    }
+
+    fn comment(text: &str) -> String {
+        masked_comment(text, Literals(vec![])).text
+    }
+
+    #[test]
+    fn a_word_of_a_comment_holding_an_at_is_a_string_marker_whole() {
+        assert_eq!(comment("orders of nina@example.com, order 4412"), "orders of '<literal 1>', order <number 2>");
+    }
+
+    #[test]
+    fn a_string_closing_after_an_email_is_masked_with_it() {
+        assert_eq!(comment("by nina@example.com'x y' then"), "by '<literal 1>' then");
+    }
+
+    #[test]
+    fn the_markers_of_a_comment_count_on_from_the_statement() {
+        let statement = masked("SELECT * FROM orders WHERE total > 10", LiteralPolicy::Masked);
+        let masked = masked_comment("for 'nina'", statement.literals);
+        assert_eq!(masked.text, "for '<literal 2>'");
+        assert_eq!(masked.literals.put_back("SELECT <number 1>, '<literal 2>'").unwrap(), "SELECT 10, 'nina'");
     }
 
     #[test]
