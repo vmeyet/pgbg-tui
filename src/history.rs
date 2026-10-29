@@ -4,26 +4,21 @@ use crate::config;
 use crate::connection::ConnectionName;
 use crate::db::model::{ResultSet, Statement};
 use crate::failure::Failure;
+use crate::lock;
 use crate::secret;
 use chrono::{DateTime, Utc};
-use rustix::fs::{FlockOperation, flock};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
-use std::fs::{DirBuilder, File, OpenOptions};
+use std::fs::{DirBuilder, File};
 use std::io::{self, Write};
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::task::JoinHandle;
 
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
 const DIR_MODE: u32 = 0o700;
-const FILE_MODE: u32 = 0o600;
-/// How many times a writer opens the file again when another one rolled it over while it waited for the lock.
-/// Without a cap, a file system whose files never stay the same (some FUSE and SMB mounts) would loop forever.
-const LOCK_ATTEMPTS: usize = 8;
-const KEPT_CHANGING: &str = "the history file kept changing while pgbg waited for its lock";
 const PASSWORD_KEPT_AS: &str = "-- not kept: it holds a password";
 
 /// What came of a statement, without the server's words: they can quote a row.
@@ -135,7 +130,7 @@ impl Store {
         DirBuilder::new().recursive(true).mode(DIR_MODE).create(&self.dir)?;
         let line = serde_json::to_string(&kept(entry)).map_err(io::Error::other)? + "\n";
         let path = self.file(&entry.connection);
-        let file = locked(&path)?;
+        let file = lock::open(&path)?;
         let is_full = file.metadata()?.len() > self.max_bytes;
         let mut file = if is_full { self.rolled_over(&path, &entry.connection)? } else { file };
         file.write_all(line.as_bytes())
@@ -144,7 +139,7 @@ impl Store {
     /// Moves the full file at `path` to `.1` and gives a new one, locked; the full one stays locked until it is dropped.
     fn rolled_over(&self, path: &Path, connection: &ConnectionName) -> io::Result<File> {
         std::fs::rename(path, self.rolled(connection))?;
-        locked(path)
+        lock::open(path)
     }
 
     /// Appends `entry` on a blocking thread, logging a failure: the history is best effort and never stops a run.
@@ -173,37 +168,6 @@ impl Store {
     fn rolled(&self, connection: &ConnectionName) -> PathBuf {
         self.dir.join(format!("{connection}.jsonl.1"))
     }
-}
-
-/// The file at `path`, opened to append and locked for this process alone; opened again, a few times at most, when
-/// another writer rolled it over while this one waited.
-fn locked(path: &Path) -> io::Result<File> {
-    first_some(LOCK_ATTEMPTS, || {
-        let file = OpenOptions::new().create(true).append(true).mode(FILE_MODE).open(path)?;
-        locked_if_current(file, path)
-    })
-}
-
-/// What the first of `attempts` tries gives, else an error.
-fn first_some<T>(attempts: usize, mut attempt: impl FnMut() -> io::Result<Option<T>>) -> io::Result<T> {
-    for _ in 0..attempts {
-        if let Some(found) = attempt()? {
-            return Ok(found);
-        }
-    }
-    Err(io::Error::other(KEPT_CHANGING))
-}
-
-/// `file` once locked, while it is still the one at `path`; `None` when it was rolled over before the lock was taken.
-fn locked_if_current(file: File, path: &Path) -> io::Result<Option<File>> {
-    flock(&file, FlockOperation::LockExclusive)?;
-    let held = file.metadata()?;
-    let current = match std::fs::metadata(path) {
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
-        current => current?,
-    };
-    let is_current = held.dev() == current.dev() && held.ino() == current.ino();
-    Ok(is_current.then_some(file))
 }
 
 fn kept(entry: &Entry) -> Entry {
@@ -274,12 +238,6 @@ mod tests {
     }
 
     #[test]
-    fn a_file_that_keeps_changing_under_the_lock_is_an_error_not_a_loop() {
-        let err = first_some(3, || Ok(None::<File>)).unwrap_err();
-        assert!(err.to_string().contains("kept"), "{err}");
-    }
-
-    #[test]
     fn an_entry_appended_is_read_back() {
         let dir = tempfile::tempdir().unwrap();
         store(&dir).append(&entry("shop", "SELECT 1", 1)).unwrap();
@@ -308,7 +266,7 @@ mod tests {
         store(&dir).append(&entry("shop", "SELECT 1", 1)).unwrap();
         let mode = |path: PathBuf| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(dir.path().join("history")), DIR_MODE);
-        assert_eq!(mode(dir.path().join("history/shop.jsonl")), FILE_MODE);
+        assert_eq!(mode(dir.path().join("history/shop.jsonl")), 0o600);
     }
 
     #[test]
@@ -347,16 +305,6 @@ mod tests {
             .append(&entry("shop", "SELECT dblink('postgresql://db.example.com/shop?oauth_client_secret=hunter2', 'SELECT 1')", 2))
             .unwrap();
         assert_eq!(statements(&store(&dir).read(&shop()).unwrap()), [PASSWORD_KEPT_AS, PASSWORD_KEPT_AS]);
-    }
-
-    #[test]
-    fn a_file_rolled_over_by_another_writer_is_not_locked() {
-        let dir = tempfile::tempdir().unwrap();
-        store(&dir).append(&entry("shop", "SELECT 1", 1)).unwrap();
-        let path = dir.path().join("history/shop.jsonl");
-        let opened_before = OpenOptions::new().append(true).open(&path).unwrap();
-        std::fs::rename(&path, dir.path().join("history/shop.jsonl.1")).unwrap();
-        assert!(locked_if_current(opened_before, &path).unwrap().is_none());
     }
 
     #[test]
