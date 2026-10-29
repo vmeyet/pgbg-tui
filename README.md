@@ -191,7 +191,7 @@ ORDER BY 1;
 | `-- connection:` | The connection it was written for; the query still runs on the one on screen. |
 | `-- chart:` | `bar` or `line`, with optional `x=` and `y=` columns (`y=orders,refunds`). |
 | `-- param:` | A parameter: `name type = default`, or `name type optional` for NULL when empty. |
-| `-- format:` | How columns open: `raw`, `local`, `relative`, `grouped`, `bytes` or `short`. |
+| `-- format:` | How columns open: `raw`, `local`, `relative`, `grouped`, `bytes`, `short` or `check`. |
 
 `{{name}}` in a statement is a parameter.
 Its value is always bound, never pasted into the SQL text.
@@ -228,6 +228,20 @@ In the TUI, a bar above the editor shows one field per parameter.
 | `^c` | Quit. |
 
 `pgbg tui <connection>` opens the TUI on another connection than the first.
+
+### Reading a result
+
+The grid colours each value by its kind, so a column reads at a glance.
+
+| Value | Looks like |
+| --- | --- |
+| `NULL` | Dimmed and slanted, never like the text `NULL`. |
+| A boolean | `true` green, `false` dimmed; `f` turns them into `✓` and `✗`. |
+| A number | On the right; a negative one red. |
+| A text column of a few values that repeat, as a status | One colour per value, the same in every result: eight values at most among the first 500 rows, each found twice on average. |
+| A UUID | Its first eight digits plain, the rest dimmed. |
+| A timestamp | Its date plain, its time dimmed. |
+| JSON | Keys, strings and numbers each in their colour. |
 
 ## Asking AI
 

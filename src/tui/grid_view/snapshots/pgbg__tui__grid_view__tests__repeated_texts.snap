@@ -1,0 +1,27 @@
+---
+source: src/tui/grid_view/mod.rs
+expression: "coloured(ColumnKind::Text, statuses.into(), 8)"
+---
+Reset/NONE "   "
+Cyan/BOLD "c"
+Reset/NONE "    "
+---
+Cyan/NONE " "
+Reset/NONE "  "
+Green/NONE "paid"
+Reset/NONE " "
+---
+Cyan/NONE " "
+Reset/NONE "  "
+LightRed/NONE "open"
+Reset/NONE " "
+---
+Cyan/NONE " "
+Reset/NONE "  "
+Green/NONE "paid"
+Reset/NONE " "
+---
+Cyan/NONE " "
+Reset/NONE "  "
+LightRed/NONE "open"
+Reset/NONE " "

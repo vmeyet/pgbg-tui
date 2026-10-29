@@ -9,6 +9,7 @@ use ask::Asks;
 use vtui::help::Help;
 
 pub(super) use ask::{AskStep, Suggestion};
+pub(super) use colouring::Colouring;
 pub(super) use completion::Completions;
 pub(super) use confirm::{Confirmed, WriteToSend};
 pub(super) use detail::{Detail, DetailFit, DetailScroll, DrawnDetail, DrawnRow};
@@ -31,6 +32,7 @@ pub(super) use table_finder::TableFinder;
 pub(super) use versions::{Listed, VersionList};
 
 pub(super) mod ask;
+mod colouring;
 mod completion;
 mod confirm;
 mod copy;

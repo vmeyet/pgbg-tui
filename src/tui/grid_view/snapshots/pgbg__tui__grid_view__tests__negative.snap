@@ -1,0 +1,15 @@
+---
+source: src/tui/grid_view/mod.rs
+expression: "coloured(ColumnKind::Int, vec![Value::Int(-12), Value::Int(7)], 8)"
+---
+Reset/NONE "     "
+Cyan/BOLD "c"
+Reset/NONE "  "
+---
+Cyan/NONE " "
+Reset/NONE "  "
+Red/NONE "-12"
+Reset/NONE "  "
+---
+Cyan/NONE " "
+Reset/NONE "    7  "

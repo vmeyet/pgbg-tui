@@ -1,5 +1,5 @@
 use super::axis::XAxis;
-use super::{ChartColumns, ChartKind, ChartSpec, default_x, default_y, is_numeric};
+use super::{ChartColumns, ChartKind, ChartSpec, default_x, default_y};
 use crate::db::model::{Column, ColumnName, ResultSet, Value};
 use std::fmt;
 
@@ -156,7 +156,7 @@ fn matching(columns: &[Column], is_match: impl Fn(&Column) -> bool) -> Vec<usize
 }
 
 fn numeric(columns: &[Column], index: usize) -> Result<usize, ChartError> {
-    if !is_numeric(&columns[index].kind) {
+    if !columns[index].kind.is_number() {
         return Err(ChartError::NotNumeric(columns[index].name.clone()));
     }
     Ok(index)

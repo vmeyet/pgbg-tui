@@ -1,0 +1,20 @@
+---
+source: src/tui/grid_view/mod.rs
+expression: "coloured(ColumnKind::Json, vec![Value::Json(json)], 30)"
+---
+Reset/NONE "   "
+Cyan/BOLD "c"
+Reset/NONE "                          "
+---
+Cyan/NONE " "
+Reset/NONE "  "
+Indexed(246)/NONE "{"
+Magenta/NONE "\"id\""
+Indexed(246)/NONE ":"
+Yellow/NONE "7"
+Indexed(246)/NONE ","
+Magenta/NONE "\"status\""
+Indexed(246)/NONE ":"
+Green/NONE "\"paid\""
+Indexed(246)/NONE "}"
+Reset/NONE "   "

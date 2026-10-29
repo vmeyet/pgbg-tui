@@ -80,7 +80,7 @@ fn default_x(result: &ResultSet) -> Option<usize> {
 
 /// The first numeric column, when it is an integer one whose every value is greater than the one before.
 fn ascending_integers(result: &ResultSet) -> Option<usize> {
-    let first = result.columns().iter().position(|column| is_numeric(&column.kind))?;
+    let first = result.columns().iter().position(|column| column.kind.is_number())?;
     let is_integer = result.columns()[first].kind == ColumnKind::Int;
     let integers: Option<Vec<i64>> = result.rows().iter().map(|row| integer(&row[first])).collect();
     let is_ascending = integers.is_some_and(|integers| integers.windows(2).all(|pair| pair[0] < pair[1]));
@@ -92,7 +92,7 @@ const fn integer(value: &Value) -> Option<i64> {
 }
 
 fn default_y(columns: &[Column], x: usize) -> Vec<usize> {
-    (0..columns.len()).filter(|&column| column != x && is_numeric(&columns[column].kind)).collect()
+    (0..columns.len()).filter(|&column| column != x && columns[column].kind.is_number()).collect()
 }
 
 fn suited_kind(x: &Column, rows: usize) -> ChartKind {
@@ -102,10 +102,6 @@ fn suited_kind(x: &Column, rows: usize) -> ChartKind {
 
 const fn is_label(kind: &ColumnKind) -> bool {
     matches!(kind, ColumnKind::Text | ColumnKind::Date | ColumnKind::Time | ColumnKind::Timestamp | ColumnKind::TimestampTz)
-}
-
-const fn is_numeric(kind: &ColumnKind) -> bool {
-    matches!(kind, ColumnKind::Int | ColumnKind::Float | ColumnKind::Numeric)
 }
 
 #[cfg(test)]

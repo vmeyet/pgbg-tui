@@ -120,6 +120,13 @@ pub(crate) enum ColumnKind {
     Other,
 }
 
+impl ColumnKind {
+    /// Whether its values are numbers: drawn on the right, charted on a scale.
+    pub(crate) const fn is_number(&self) -> bool {
+        matches!(self, Self::Int | Self::Float | Self::Numeric)
+    }
+}
+
 /// A column's name: as the server sent it, where one result may hold the same name twice or an empty one, or as a
 /// header names a column to find it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
