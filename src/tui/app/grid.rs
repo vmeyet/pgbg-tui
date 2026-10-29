@@ -3,6 +3,7 @@
 use super::colouring::{Colouring, colourings};
 use crate::db::model::{ColumnName, ResultSet};
 use crate::format::{self, Format, Mode};
+use crate::keys::{ColumnKey, Target};
 use crate::render;
 use chrono::Local;
 
@@ -10,6 +11,8 @@ use chrono::Local;
 const MAX_COLUMN_WIDTH: usize = 40;
 /// How many rows a column's width and colouring are measured on, so measuring a big result costs no more than a small one.
 const SAMPLE_ROWS: usize = 500;
+/// What follows the name of a column that points to another table's.
+const POINTS_TO_MARK: &str = " →";
 /// The space drawn before each column.
 pub(in crate::tui) const GAP: &str = "  ";
 
@@ -58,6 +61,8 @@ pub(in crate::tui) struct Grid {
     pub(in crate::tui) widths: Vec<usize>,
     /// How each column's cells are coloured, by index.
     pub(in crate::tui) colourings: Vec<Colouring>,
+    /// Each column's key in the table the result was read from, by index; none when that table is unknown.
+    keys: Vec<ColumnKey>,
     /// The cursor's row.
     pub(in crate::tui) row: usize,
     /// The cursor's column.
@@ -69,9 +74,10 @@ pub(in crate::tui) struct Grid {
 }
 
 impl Grid {
-    /// The grid on `result` with each column in its format from `formats`, the cursor on the first row.
-    pub(in crate::tui) fn new(result: &ResultSet, formats: Vec<Format>, clock: &Clock) -> Self {
-        let mut grid = Self { formats: vec![], widths: vec![], colourings: vec![], row: 0, column: 0, top: 0, left: 0 };
+    /// The grid on `result` with each column in its format from `formats` and its key from `keys`, the cursor on the
+    /// first row; `keys` is empty when the table the result was read from is unknown.
+    pub(in crate::tui) fn new(result: &ResultSet, formats: Vec<Format>, keys: Vec<ColumnKey>, clock: &Clock) -> Self {
+        let mut grid = Self { formats: vec![], widths: vec![], colourings: vec![], keys, row: 0, column: 0, top: 0, left: 0 };
         grid.set_formats(formats, result, clock);
         grid
     }
@@ -79,7 +85,24 @@ impl Grid {
     /// The grid on `result`, every column raw.
     #[cfg(test)]
     pub(in crate::tui) fn raw(result: &ResultSet) -> Self {
-        Self::new(result, vec![Format::Raw; result.columns().len()], &clock_at_epoch())
+        Self::new(result, vec![Format::Raw; result.columns().len()], vec![], &clock_at_epoch())
+    }
+
+    /// Whether the column at `column` is part of the primary key of the table the result was read from.
+    pub(in crate::tui) fn is_primary(&self, column: usize) -> bool {
+        self.keys.get(column).is_some_and(|key| key.is_primary)
+    }
+
+    /// Where the column at `column` points through a foreign key of the table the result was read from.
+    pub(in crate::tui) fn points_to(&self, column: usize) -> Option<&Target> {
+        self.keys.get(column)?.points_to.as_ref()
+    }
+
+    /// The header of the column at `column` of `result`: its name escaped, then `→` when it points to another table.
+    pub(in crate::tui) fn header(&self, result: &ResultSet, column: usize) -> String {
+        let name = render::printable(result.columns()[column].name.as_str());
+        let mark = if self.points_to(column).is_some() { POINTS_TO_MARK } else { "" };
+        format!("{name}{mark}")
     }
 
     /// Puts the cursor's column in the next format its kind allows; when its kind has no other, leaves it and returns
@@ -102,7 +125,7 @@ impl Grid {
     }
 
     fn set_formats(&mut self, formats: Vec<Format>, result: &ResultSet, clock: &Clock) {
-        self.widths = column_widths(result, &formats, clock);
+        self.widths = self.column_widths(result, &formats, clock);
         self.colourings = colourings(result, &formats, SAMPLE_ROWS);
         self.formats = formats;
     }
@@ -151,14 +174,14 @@ impl Grid {
     fn drawn_through_cursor(&self) -> usize {
         self.widths[self.left..=self.column].iter().map(|width| GAP.len() + width).sum()
     }
+
+    fn column_widths(&self, result: &ResultSet, formats: &[Format], clock: &Clock) -> Vec<usize> {
+        let header = |column| render::width(&self.header(result, column));
+        formats.iter().enumerate().map(|(column, &format)| column_width(result, column, header(column), format, clock)).collect()
+    }
 }
 
-fn column_widths(result: &ResultSet, formats: &[Format], clock: &Clock) -> Vec<usize> {
-    formats.iter().enumerate().map(|(column, &format)| column_width(result, column, format, clock)).collect()
-}
-
-fn column_width(result: &ResultSet, column: usize, format: Format, clock: &Clock) -> usize {
-    let header = render::width(&render::printable(result.columns()[column].name.as_str()));
+fn column_width(result: &ResultSet, column: usize, header: usize, format: Format, clock: &Clock) -> usize {
     let cells = result.rows().iter().take(SAMPLE_ROWS).filter_map(|row| row.get(column));
     let widest_cell = cells.map(|value| render::width(&format::cell(value, format, clock, MAX_COLUMN_WIDTH))).max().unwrap_or(0);
     header.max(widest_cell).max(format::least_width(format)).min(MAX_COLUMN_WIDTH)
@@ -167,7 +190,7 @@ fn column_width(result: &ResultSet, column: usize, format: Format, clock: &Clock
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::model::{ColumnKind, Value};
+    use crate::db::model::{ColumnKind, Statement, Value};
     use crate::fixtures::column;
 
     fn result(rows: usize) -> ResultSet {
@@ -244,7 +267,7 @@ mod tests {
             vec![column("at", ColumnKind::TimestampTz)],
             vec![vec![Value::TimestampTz(clock.now - chrono::Duration::minutes(1))]],
         );
-        assert_eq!(Grid::new(&result, vec![Format::Relative], &clock).widths, ["59 min ago".len()]);
+        assert_eq!(Grid::new(&result, vec![Format::Relative], vec![], &clock).widths, ["59 min ago".len()]);
     }
 
     #[test]
@@ -298,5 +321,26 @@ mod tests {
     #[test]
     fn an_empty_result_keeps_the_cursor_on_the_first_row() {
         assert_eq!(stepped(0, &[Move::Down, Move::Last, Move::PageDown], 5).row, 0);
+    }
+
+    fn keyed() -> Grid {
+        let result = ResultSet::whole(vec![column("id", ColumnKind::Int), column("customer_id", ColumnKind::Int)], vec![]);
+        let keys = crate::keys::column_keys(&crate::fixtures::shop_catalog(), &Statement::new("SELECT * FROM orders"), result.columns());
+        Grid::new(&result, vec![Format::Raw; 2], keys, &clock_at_epoch())
+    }
+
+    #[test]
+    fn a_column_pointing_to_another_table_is_marked_and_as_wide_as_its_mark() {
+        assert_eq!(keyed().widths, ["id".len(), "customer_id →".chars().count()]);
+    }
+
+    #[test]
+    fn a_column_of_the_primary_key_says_so() {
+        assert_eq!([keyed().is_primary(0), keyed().is_primary(1)], [true, false]);
+    }
+
+    #[test]
+    fn a_grid_without_keys_marks_no_column() {
+        assert_eq!(Grid::raw(&result(1)).points_to(0), None);
     }
 }

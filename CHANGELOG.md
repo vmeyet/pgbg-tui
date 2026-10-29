@@ -11,6 +11,8 @@ Each entry says what changed, then where, then how to use it.
 - **The grid colours a value by its kind**, in the TUI's result grid: `NULL` dimmed and slanted, `true` green and `false` dimmed, a negative number red, a UUID dimmed past its first eight digits, a timestamp's time dimmed after its date, and JSON keys, strings and numbers each in their colour.
   A text column of a few values that repeat, as a status, gives each value its own colour, the same in every result.
   Press `f` on a boolean column, or `F`, to read it as `✓` and `✗`, or name it in a saved query's header as `-- format: paid=check`.
+- **The grid's header shows the keys**, in the TUI, for a statement that reads one table: a primary-key column's name is bold, and a column with a foreign key ends with `→`, as `customer_id →`.
+  It needs the schema read, as completion does.
 - **Usage counts, opt-in**, for the TUI: with `[usage] enabled = true` in `config.toml`, pgbg counts the keys you use and the time on each pane, on this machine only, never a statement or a name.
   Run `pgbg usage` to see the keys never or rarely used, the most used and the time per pane; `--since 4w`, `7d` or `all` changes the window, `--json` gives it to a script.
 - **Your own saved queries belong to a connection**, in the TUI and `pgbg run --query`: they live in `queries/<connection>/` in pgbg's data folder, as `~/.local/share/pgbg/queries/prod/`.

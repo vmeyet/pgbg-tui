@@ -11,6 +11,7 @@ use crate::db::guard::{self, Write};
 use crate::db::model::{ColumnName, Extent, Page, ResultSet, Statement};
 use crate::failure::Failure;
 use crate::format::{self, Format};
+use crate::keys::{self, ColumnKey};
 use crate::query::params::{self, Numbering, ParamInput, ParamName};
 use crate::query::{Header, Query};
 use crossterm::event::KeyEvent;
@@ -346,7 +347,7 @@ impl Sheet {
         }
         let run = self.next_run();
         self.shown = Some(title);
-        let grid = Box::new(Grid::new(&result, format::opening(result.columns(), &[], reading.mode), &reading.clock));
+        let grid = Box::new(Grid::new(&result, format::opening(result.columns(), &[], reading.mode), vec![], &reading.clock));
         self.run = Run::Done { run, grid, result, took: Duration::ZERO, view: View::Grid, is_page_asked: false };
     }
 
@@ -403,7 +404,7 @@ impl Sheet {
                 let header_chart = self.header.chart.as_ref().and_then(|spec| Series::from_result(&result, spec).ok());
                 let view = header_chart.map_or(View::Grid, |series| View::Chart(Ok(series)));
                 let formats = format::opening(result.columns(), &self.header.formats, reading.mode);
-                let grid = Box::new(Grid::new(&result, formats, &reading.clock));
+                let grid = Box::new(Grid::new(&result, formats, self.keys_of(&result), &reading.clock));
                 self.run = Run::Done { run, grid, result, took, view, is_page_asked: false };
             }
             Incoming::Page { run, .. } | Incoming::PageFailed { run, .. } if !self.is_waiting_on_page(run) => {}
@@ -417,6 +418,12 @@ impl Sheet {
                 self.run = Run::Failed(failure.to_string());
             }
         }
+    }
+
+    /// The keys of the columns of `result` in the table the statement sent reads, once the schema is read.
+    fn keys_of(&self, result: &ResultSet) -> Vec<ColumnKey> {
+        let (Some(catalog), Some(sent)) = (self.catalog(), &self.sent) else { return vec![] };
+        keys::column_keys(catalog, &sent.statement, result.columns())
     }
 
     /// The statement that tried to write and waits to be asked about, once.
@@ -497,6 +504,7 @@ mod tests {
     use crate::fixtures::{column, orders, page};
     use crate::format::Mode;
     use crossterm::event::{KeyCode, KeyEvent};
+    use std::sync::Arc;
     use std::time::Duration;
 
     fn first_page() -> App {
@@ -649,5 +657,17 @@ mod tests {
     #[test]
     fn a_whole_result_never_asks_for_a_page() {
         assert_eq!(press(&mut on_the_result(orders()), 'G'), []);
+    }
+
+    #[test]
+    fn a_result_of_one_table_knows_where_its_foreign_key_points_once_the_schema_is_read() {
+        let mut app = app();
+        app.apply(to_shop(Incoming::Schema(Ok(Arc::new(crate::fixtures::shop_catalog())))));
+        "SELECT * FROM orders".chars().for_each(|c| _ = press(&mut app, c));
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        let result = ResultSet::whole(vec![column("id", ColumnKind::Int), column("customer_id", ColumnKind::Int)], vec![]);
+        app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result, took: Duration::from_millis(38) }));
+        let Run::Done { grid, .. } = &app.sheet().run else { panic!("no result") };
+        assert_eq!(grid.points_to(1).map(|target| target.table.as_str()), Some("customers"));
     }
 }

@@ -113,6 +113,11 @@ fn table_of(qualifier: &str, refs: &[TableRef]) -> String {
     refs.iter().find(is_named).map_or_else(|| qualifier.to_owned(), |table| table.name.clone())
 }
 
+/// The tables `statement` reads from, each as PostgreSQL resolves its name, `schema.table` when it names the schema.
+pub(crate) fn tables_named(statement: &str) -> Vec<String> {
+    table_refs(statement).into_iter().map(|table| table.name).collect()
+}
+
 /// The tables the statement reads from, each named as it names it.
 fn table_refs(statement: &str) -> Vec<TableRef> {
     let tokens = lex::tokens(statement);

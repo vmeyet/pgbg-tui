@@ -3,7 +3,7 @@ source: src/tui/grid_view/mod.rs
 expression: "coloured(ColumnKind::Bool, vec![Value::Bool(true), Value::Bool(false)], 8)"
 ---
 Reset/NONE "   "
-Cyan/BOLD "c"
+Cyan/NONE "c"
 Reset/NONE "    "
 ---
 Cyan/NONE " "

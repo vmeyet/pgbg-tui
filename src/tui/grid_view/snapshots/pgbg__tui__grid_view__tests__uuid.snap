@@ -3,7 +3,7 @@ source: src/tui/grid_view/mod.rs
 expression: "coloured(ColumnKind::Uuid, vec![Value::Uuid(id)], 40)"
 ---
 Reset/NONE "   "
-Cyan/BOLD "c"
+Cyan/NONE "c"
 Reset/NONE "                                    "
 ---
 Cyan/NONE " "

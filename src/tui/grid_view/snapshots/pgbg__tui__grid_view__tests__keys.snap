@@ -1,0 +1,10 @@
+---
+source: src/tui/grid_view/mod.rs
+expression: "styled::runs(render(&result, &grid, 30, 2).backend().buffer())"
+---
+Reset/NONE "   "
+Reset/BOLD "id"
+Reset/NONE "  customer_id →  total   "
+---
+Cyan/NONE "▶"
+Reset/NONE "   7              3  12.50   "

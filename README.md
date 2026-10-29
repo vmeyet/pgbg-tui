@@ -243,6 +243,8 @@ The grid colours each value by its kind, so a column reads at a glance.
 | A timestamp | Its date plain, its time dimmed. |
 | JSON | Keys, strings and numbers each in their colour. |
 
+When a statement reads one table, the header names its primary key in bold and ends a column with a foreign key with `→`.
+
 ## Asking AI
 
 `ctrl-g` in the editor asks a command of your choice for SQL, and the idle ghost asks it for the rest of the statement you are typing.
