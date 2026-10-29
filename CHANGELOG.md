@@ -135,7 +135,7 @@ Each entry says what changed, then where, then how to use it.
   A `ctrl-c`, a `kill` or a closed terminal stops its tunnel too.
 
 - **History** of every statement `pgbg run` sends: `pgbg history <connection>` lists the newest first, with when, how long and what came of it; `--limit n` and `--json` too.
-  It lives in `pgbg/history/` in your data folder, readable by you only; it never keeps a row, the server's words or a statement that holds a password, as a word or in a URL such as `postgresql://nina:...@db.example.com`.
+  It lives in `pgbg/history/` in your data folder, readable by you only; it never keeps a row, the server's words or a statement that holds a password, as a word or inside a connection URL.
   The TUI adds every statement it runs too: press `ctrl-r`, type a few letters, and `⏎` puts the statement under your editor's text, ready to run.
 - **The connection picker** in the TUI: press `ctrl-o`, type a few letters of a connection's name, and `⏎` to switch to it.
   Each connection shows its tier's colour, where it goes, whether it takes writes, and whether its session is open.
@@ -225,7 +225,7 @@ Each entry says what changed, then where, then how to use it.
 - **Copying over 100 KB works on Linux**, from the TUI's grid: it goes through `wl-copy`, `xclip` or `xsel`, and when none takes it the status line says the copy was too big for the terminal.
 - **A `before` or password command leaves nothing running**, in `config.toml`: a helper it started in the background is stopped once it ends.
 - **Completion and `ctrl-g` follow a closed connection you edited**, in the TUI: once picked again, it reads the schema of the connection as it now stands, where it kept the old one's tables.
-- **A password or a secret connection key inside a dollar-quoted string is kept out of the history and never sent to the AI**, as in `SELECT dblink_connect($$password=... host=...$$)` or `$q$sslpassword=...$q$`.
+- **A password or a secret connection key inside a dollar-quoted string is kept out of the history and never sent to the AI**, as in a `dblink_connect` call or an `sslpassword` setting written between `$$`.
 - **A statement naming `sslpassword` or `oauth_client_secret` is kept out of the history and never sent to the AI**, as one holding a password is.
 - **A `url` with `sslpassword` or `oauth_client_secret` in it is refused**, in `config.toml`, `--url` and the TUI's connection form, as one with a password is, so `pgbg connections` never prints the secret.
 - **A write inside a function call asks first**, on a connection that allows writes, outside your own transaction, in the TUI and `pgbg run`: `SELECT archive_orders()` or `SELECT setval(...)` runs with writes refused, then asks `this statement tried to write, and may run twice: run it?`.
