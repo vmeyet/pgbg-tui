@@ -48,12 +48,6 @@ impl App {
         let first_line = self.sheet().editor.first_line_in_view(inside.height);
         Place { line: first_line + usize::from(at.y.saturating_sub(inside.y)), column: usize::from(at.x.saturating_sub(inside.x)) }
     }
-
-    /// Copies the editor's selection; nothing when none.
-    pub(super) fn copy_selection(&self) -> Option<Action> {
-        let text = self.sheet().editor.selected()?;
-        Some(Action::Copy { text: text.to_owned(), done: "copied the selection".to_owned() })
-    }
 }
 
 #[cfg(test)]

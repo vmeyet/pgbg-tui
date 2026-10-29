@@ -224,6 +224,7 @@ In the TUI, a bar above the editor shows one field per parameter.
 | `v` | Show the result as a chart, or as a grid again. |
 | `f` `F` | Next format for this column; every column raw or readable. |
 | `⌥c` | In the editor: copy the statement under the cursor; a macOS terminal sends it only with its option key set as meta. |
+| `⌘c` `⌘v` | In the editor: copy the selection, else the statement under the cursor; paste the clipboard. Only where the terminal hands `⌘` over with the kitty keyboard protocol instead of copying or pasting itself. |
 | `y` `Y` `c` | Copy the cell; the row as CSV; the result as CSV, JSON or Markdown. |
 | `^s` | Save the query. |
 | `^q` | A new, empty query; the first `^s` asks for its path. |

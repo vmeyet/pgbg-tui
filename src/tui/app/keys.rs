@@ -180,6 +180,8 @@ impl App {
             Act::CopyCell => return self.copy_cell(),
             Act::CopyRow => return self.copy_row(),
             Act::CopyStatement => return self.copy_statement(),
+            Act::CopySelection => return self.copy_selection_or_statement(),
+            Act::Paste => return vec![Action::PasteClipboard],
             Act::CopyResult => self.ask_copy_format(),
             Act::SwitchTab => return self.switch_tab(),
             Act::Close | Act::Delete | Act::CloseSession | Act::Add | Act::Edit | Act::CopyCsv | Act::CopyJson | Act::CopyMarkdown => {}

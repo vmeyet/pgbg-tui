@@ -369,6 +369,8 @@ impl App {
             Answer::Versions { query, versions } => self.versions_read(&query, versions),
             Answer::Copied(note) => self.copied(note),
             Answer::Exported { text, done } => return vec![Action::Copy { text, done }],
+            Answer::Pasted(Some(text)) => return self.paste(&text),
+            Answer::Pasted(None) => self.note = Some("nothing pasted: the clipboard could not be read".to_owned()),
             Answer::Asked { ask, answer } => return self.asked(ask, answer),
         }
         vec![]

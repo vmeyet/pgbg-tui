@@ -89,6 +89,7 @@ impl Backend {
             Action::ListVersions { query, text } => self.queries.list_versions(query, text),
             Action::Copy { text, done } => clipboard::copy(text, done, self.answers.clone()),
             Action::CopyResult { result, format, done } => clipboard::export(result, format, done, self.answers.clone()),
+            Action::PasteClipboard => clipboard::paste(self.answers.clone()),
             Action::Ask { ask, prompt, settings } => self.asks.ask(ask, prompt, &settings),
             Action::DropAsk(ask) => self.asks.drop_ask(ask),
             Action::LogNoIdleGhost(why) => tracing::warn!("{why}"),

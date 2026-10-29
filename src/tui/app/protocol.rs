@@ -106,6 +106,8 @@ pub(in crate::tui) enum Action {
     Copy { text: String, done: String },
     /// Build the text of `result` in `format` off the loop, then copy it as `Copy` does.
     CopyResult { result: ResultSet, format: Format, done: String },
+    /// Read the machine's clipboard off the loop, for `⌘v` where the terminal hands the key over instead of pasting.
+    PasteClipboard,
     /// Ask the `[ai] command` of `settings` with `prompt`, killing the command of the ask before it.
     Ask { ask: AskId, prompt: Prompt, settings: AiSettings },
     /// Kill the command of `ask` if it still runs; its answer never comes.
@@ -158,6 +160,9 @@ pub(in crate::tui) enum Answer {
     Copied(String),
     /// The text of a result that `CopyResult` asked for, to copy before reporting `done`.
     Exported { text: String, done: String },
+    /// The machine's clipboard that `PasteClipboard` asked for, to paste as the terminal's paste is; `None` when no
+    /// program read it.
+    Pasted(Option<String>),
     /// The statements the `[ai] command` answered `ask` with, its literals put back, or why there are none.
     Asked { ask: AskId, answer: Result<Vec<Statement>, AskFailure> },
 }
