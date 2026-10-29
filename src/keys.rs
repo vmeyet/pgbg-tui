@@ -1,7 +1,8 @@
-//! The keys of a result's columns: which are the primary key, and where a foreign key points, read from the catalog.
+//! The keys of a result's columns: which are the primary key, and where a foreign key points, read from the catalog,
+//! and the read of the row a foreign key points to.
 //! Pure, and only sure when the statement reads one table: a result column is that table's column of the same name.
 use crate::complete;
-use crate::db::model::{Catalog, Column, ForeignKey, Statement, Table};
+use crate::db::model::{Catalog, Column, ForeignKey, Params, Statement, Table, Value, qualified, sql_name};
 
 /// The row a foreign key points to: its table, and the column there that each column of the key equals.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -25,6 +26,13 @@ pub(crate) struct ColumnKey {
     pub(crate) is_primary: bool,
     /// Where it points, when it is a column of a foreign key whose every column the result holds once.
     pub(crate) points_to: Option<Target>,
+}
+
+/// A read-only statement and the values bound to its `$n`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Lookup {
+    pub(crate) statement: Statement,
+    pub(crate) params: Params,
 }
 
 /// The key of each of `columns`, the result of `statement` read with `catalog`; none when the statement reads more than
@@ -54,6 +62,18 @@ fn only_column(columns: &[Column], name: &str) -> Option<usize> {
     named.next().is_none().then_some(first)
 }
 
+impl Target {
+    /// The read of the row the key of `row` points to, its values bound, never put in its text; none when one of them
+    /// is NULL, which points nowhere.
+    pub(crate) fn lookup(&self, row: &[Value]) -> Option<Lookup> {
+        let values: Option<Vec<_>> = self.pairs.iter().map(|pair| row.get(pair.at)?.as_param()).collect();
+        let equal = self.pairs.iter().enumerate().map(|(at, pair)| format!("{} = ${}", sql_name(&pair.column), at + 1));
+        let condition = equal.collect::<Vec<_>>().join(" AND ");
+        let statement = Statement::new(format!("SELECT * FROM {} WHERE {condition}", qualified(&self.schema, &self.table)));
+        Some(Lookup { statement, params: Params::new(values?.into_iter().map(Some).collect(), vec![]) })
+    }
+}
+
 /// The table `statement` reads, when it names exactly one, found as PostgreSQL resolves its name: with its schema, or
 /// bare in the first schema of the search path that holds it.
 fn one_table_read<'a>(catalog: &'a Catalog, statement: &Statement) -> Option<&'a Table> {
@@ -72,7 +92,7 @@ fn table_in<'a>(catalog: &'a Catalog, schema: &str, name: &str) -> Option<&'a Ta
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::model::ColumnKind;
+    use crate::db::model::{ColumnKind, ParamValue};
     use crate::fixtures::{column, shop_catalog};
 
     fn keys(statement: &str, names: &[&str]) -> Vec<ColumnKey> {
@@ -117,6 +137,19 @@ mod tests {
         let region = KeyPair { at: 2, column: "region".to_owned() };
         let both = Target { pairs: vec![KeyPair { at: 1, column: "id".to_owned() }, region], ..to_id("public", "customers", 1) };
         assert_eq!([&keys[1].points_to, &keys[2].points_to], [&Some(both.clone()), &Some(both)]);
+    }
+
+    #[test]
+    fn the_lookup_binds_the_rows_key_and_puts_no_value_in_its_text() {
+        let row = [Value::Int(7), Value::Text("3'; DROP TABLE orders".into())];
+        let lookup = to_id("public", "customers", 1).lookup(&row).unwrap();
+        assert_eq!(lookup.statement, Statement::new("SELECT * FROM public.customers WHERE id = $1"));
+        assert_eq!(lookup.params, Params::new(vec![Some(ParamValue::new("3'; DROP TABLE orders"))], vec![]));
+    }
+
+    #[test]
+    fn a_null_key_looks_nothing_up() {
+        assert_eq!(to_id("public", "customers", 1).lookup(&[Value::Int(12), Value::Null]), None);
     }
 
     #[test]

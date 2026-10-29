@@ -409,6 +409,7 @@ impl Sheet {
             }
             Incoming::Page { run, .. } | Incoming::PageFailed { run, .. } if !self.is_waiting_on_page(run) => {}
             Incoming::Page { page, .. } => self.push_page(page),
+            Incoming::LookedUp { .. } => {}
             Incoming::PageFailed { failure, .. } => {
                 self.push_page(Page { rows: vec![], extent: Extent::Cut });
                 self.page_failure = Some(format!("the next page failed: {failure}"));

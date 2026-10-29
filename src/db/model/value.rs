@@ -1,4 +1,4 @@
-use super::JsonText;
+use super::{JsonText, ParamValue};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use serde::{Serialize, Serializer};
 use std::fmt;
@@ -60,6 +60,15 @@ impl Value {
     /// The first `chars` characters it prints, formatting no further: a 10 MB JSON value costs no more than a short one.
     pub(crate) fn prefix(&self, chars: usize) -> String {
         prefixed(chars, format_args!("{self}"))
+    }
+
+    /// The text a parameter binds it as, for the server to read with the column's type; none for NULL, which no `=`
+    /// matches, and for a value pgbg could not decode.
+    pub(crate) fn as_param(&self) -> Option<ParamValue> {
+        match self {
+            Self::Null | Self::Unsupported => None,
+            other => Some(ParamValue::new(other.to_string())),
+        }
     }
 
     /// Like [`Value::prefix`], with JSON indented over several lines so a row's detail can show its shape.
@@ -131,6 +140,11 @@ mod tests {
     #[test]
     fn a_cell_holds_no_more_than_its_widest_inline_value_a_uuid() {
         assert!(size_of::<Value>() <= 24, "{} bytes", size_of::<Value>());
+    }
+
+    #[test]
+    fn a_null_binds_no_parameter_and_a_number_binds_its_text() {
+        assert_eq!((Value::Null.as_param(), Value::Int(7).as_param()), (None, Some(ParamValue::new("7"))));
     }
 
     #[test]

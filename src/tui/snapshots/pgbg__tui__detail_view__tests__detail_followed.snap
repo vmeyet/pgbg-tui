@@ -1,0 +1,18 @@
+---
+source: src/tui/detail_view.rs
+expression: "render(&app, 60, 14).0.backend()"
+---
+"                                                            "
+"      ╭ customers ───────────────────────────────────╮      "
+"      │ id                                           │      "
+"      │   3                                          │      "
+"      │                                              │      "
+"      │ name                                         │      "
+"      │   nina                                       │      "
+"      │                                              │      "
+"      │ user_id                                      │      "
+"      │   5                                          │      "
+"      │ j/k scroll · esc closes                      │      "
+"      ╰──────────────────────────────────────────────╯      "
+"                                                            "
+"                                                            "

@@ -10,7 +10,7 @@ use config::ConfigFile;
 use futures_util::future;
 use paging::PAGES_IDLE_LIMIT;
 use queries::QueryFiles;
-use session::{Job, Queued, SessionAnswers, SessionLink};
+use session::{Job, Queued, QueuedLookup, SessionAnswers, SessionLink};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -70,6 +70,7 @@ impl Backend {
             Action::Run { connection, run, statement, input, confirmed } => self.run(&connection, run, statement, input, confirmed),
             Action::NextPage { connection, session, run } => self.next_page(&connection, session, run),
             Action::ReadSchema { connection, session } => self.read_schema(&connection, session),
+            Action::LookUp { connection, look, lookup } => self.look_up(&connection, QueuedLookup { look, lookup }),
             Action::Cancel { connection, run } => self.cancel(&connection, run),
             Action::ListQueries(folder) => self.queries.list(folder),
             Action::OpenQuery { connection, query } => self.queries.open(connection, query),
@@ -140,6 +141,15 @@ impl Backend {
             return;
         };
         session.send(Job::Run(Queued { run, statement, input, confirmed }));
+    }
+
+    /// Queues `queued` on the session of `connection`; its rows come back as an `Answer`.
+    fn look_up(&self, connection: &ConnectionName, queued: QueuedLookup) {
+        let Some(session) = self.sessions.get(connection) else {
+            tracing::warn!("no session for `{connection}`: the lookup is dropped");
+            return;
+        };
+        session.send(Job::LookUp(queued));
     }
 
     /// Asks the session of `connection` for the next page of `run`; nothing comes back when its portal is closed.

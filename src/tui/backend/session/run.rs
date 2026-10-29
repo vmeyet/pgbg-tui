@@ -79,6 +79,13 @@ impl Cancels {
     }
 }
 
+impl Cancels {
+    /// Ends once the session is stopping, keeping the latest cancel heard meanwhile for the runs queued behind.
+    pub(super) async fn until_stopping(&mut self) {
+        while self.recv().await.is_some() {}
+    }
+}
+
 /// A run's answer for the app, its outcome for the history, and its portal while more pages wait in it.
 pub(super) struct Answered<'s> {
     pub(super) incoming: Incoming,

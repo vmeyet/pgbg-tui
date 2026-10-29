@@ -1,5 +1,6 @@
 //! The handle to one session task: it sends jobs, cancels and schema asks, and sees what the task has on the server so
 //! an abort can cancel it.
+use super::look_up::QueuedLookup;
 use super::open::Opener;
 use super::record::Recorder;
 use super::run::{Cancels, OnServer, warn_if_still_running};
@@ -51,6 +52,7 @@ pub(in crate::tui::backend) struct SessionLink {
 #[derive(Debug)]
 pub(in crate::tui::backend) enum Job {
     Run(Queued),
+    LookUp(QueuedLookup),
     /// Fetch the next page of this run's result, while its portal is open.
     NextPage {
         run: RunId,
