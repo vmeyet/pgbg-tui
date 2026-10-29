@@ -23,7 +23,7 @@ Each entry says what changed, then where, then how to use it.
   The first `ctrl-s` asks for its path; over unsaved text it asks first, as opening another query does.
 - **Completion after `JOIN` offers the join itself**, in the TUI's editor: a table a foreign key links to one the statement already names, either way, with a free alias and its `ON` condition, as `customers c ON c.id = o.customer_id`.
   Type the start of the table after `JOIN` and press `→` to take the faded rest, or `^space` to list every join first, then the plain tables.
-  `pgbg schema --json` lists each table's foreign keys too.
+  `pgbg schema --json` lists each table's foreign keys and comments too.
 - **Every save keeps the version it replaced**, for each saved query in the TUI, whether you save with `ctrl-s` or in `$EDITOR`: the newest 50, under `versions/` in pgbg's data folder, never in your project.
   Press `ctrl-v` to list them, newest first, with when each was replaced and the lines it would change; `⏎` puts one in the editor, unsaved, and `ctrl-s` makes it the query again.
   A text holding a password is kept as a note, as in the history, and cannot be put back.
@@ -38,6 +38,7 @@ Each entry says what changed, then where, then how to use it.
   It waits while completion shows a name, and any key stops the command; `→` takes it, and it never runs by itself.
   Turn it on with `ghost = true` in the `[ai]` table of `config.toml`; a connection with `ai = "off"` never asks.
 - **`ctrl-g` asks your `[ai] command` for SQL**, in the TUI's editor: type what you want on the footer line and press `⏎`; the statement under the cursor and the tables it needs go along, its values masked unless `[ai] literals = "sent"`.
+  Those tables come with their foreign keys, their comments and the tables one key away, so a join goes through the right table; when nothing names a table, as in `SELECT * FROM `, the names of all of them go.
   The answer shows as a diff of the statement under the cursor, each write in it named in red, and a last line says how many lines did not fit.
   Press `⇥` to put it in the editor, `esc` to drop it; it never runs by itself, and a write still asks before it is sent.
   Set `[ai] command` in `config.toml` to any program that reads a prompt on stdin and prints SQL, and `ai = "off"` on a connection to keep it from asking.

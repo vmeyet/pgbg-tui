@@ -51,6 +51,12 @@ const FOREIGN_KEYS: &str = "SELECT k.conrelid, t.nspname, t.relname,
     JOIN (SELECT c.oid, n.nspname, c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace) t ON t.oid = k.confrelid
     WHERE k.contype = 'f' AND k.conparentid = 0
     ORDER BY k.conrelid, k.conname";
+/// What `COMMENT ON` says of the visible tables and of their columns, each column's comment with its name.
+/// Its own query: joined into the table or column query, `pg_description` made a read of 20 000 tables 1 s slower.
+const COMMENTS: &str = "SELECT d.objoid, a.attname, d.description
+    FROM pg_description d JOIN visible v ON v.oid = d.objoid
+    LEFT JOIN pg_attribute a ON a.attrelid = d.objoid AND a.attnum = d.objsubid AND d.objsubid > 0
+    WHERE d.classoid = 'pg_class'::regclass";
 const SEARCH_PATH: &str = "SELECT current_schemas(false)::text[]";
 const DROPPED_RELATION: &str = "could not open relation with OID";
 
@@ -66,6 +72,19 @@ struct Listed {
     oid: u32,
     schema: String,
     table: Table,
+}
+
+/// What `COMMENT ON` says of a table, or of its `column` when it names one.
+struct Comment {
+    column: Option<String>,
+    text: String,
+}
+
+/// The comments of one table: on itself, and on its columns by name.
+#[derive(Default)]
+struct TableComments {
+    table: Option<String>,
+    columns: HashMap<String, String>,
 }
 
 /// A relation the read's snapshot lists was dropped by another session before the read could describe it.
@@ -117,10 +136,11 @@ impl Session {
             let columns = rows(transaction, COLUMNS, limit, filter).await?.iter().map(column).collect::<Result<Vec<_>>>()?;
             let indexes = rows(transaction, INDEXES, limit, filter).await?.iter().map(index).collect::<Result<Vec<_>>>()?;
             let keys = rows(transaction, FOREIGN_KEYS, limit, filter).await?.iter().map(foreign_key).collect::<Result<Vec<_>>>()?;
+            let comments = rows(transaction, COMMENTS, limit, filter).await?.iter().map(comment).collect::<Result<Vec<_>>>()?;
             let search_path = transaction.query_one(SEARCH_PATH, &[]).await.map_err(server_error)?.try_get(0)?;
             let is_cut = tables.len() > cap.0;
             let kept = tables.into_iter().take(cap.0).collect();
-            Ok(Catalog { schema: assembled(kept, columns, indexes, keys), search_path, is_cut })
+            Ok(Catalog { schema: assembled(kept, columns, indexes, keys, comments), search_path, is_cut })
         })
         .await
     }
@@ -154,7 +174,8 @@ fn is_dropped_relation(code: Option<&SqlState>, message: &str) -> bool {
 fn listed(row: &Row) -> Result<Listed> {
     let kind = table_kind(&row.try_get::<_, String>(3)?)?;
     let estimated_rows = estimated_rows(kind, row.try_get(4)?);
-    let table = Table { name: row.try_get(2)?, kind, estimated_rows, columns: vec![], indexes: vec![], foreign_keys: vec![] };
+    let table =
+        Table { name: row.try_get(2)?, kind, estimated_rows, columns: vec![], indexes: vec![], foreign_keys: vec![], comment: None };
     Ok(Listed { oid: row.try_get(0)?, schema: row.try_get(1)?, table })
 }
 
@@ -181,6 +202,7 @@ fn column(row: &Row) -> Result<(u32, SchemaColumn)> {
         type_name: TypeName::new(row.try_get::<_, String>(2)?),
         is_nullable: row.try_get(3)?,
         default: row.try_get(4)?,
+        comment: None,
     };
     Ok((row.try_get(0)?, column))
 }
@@ -200,17 +222,30 @@ fn foreign_key(row: &Row) -> Result<(u32, ForeignKey)> {
     Ok((row.try_get(0)?, key))
 }
 
-/// The tables, in order, each with its columns, indexes and foreign keys, grouped by schema.
-fn assembled(tables: Vec<Listed>, columns: Vec<(u32, SchemaColumn)>, indexes: Vec<(u32, Index)>, keys: Vec<(u32, ForeignKey)>) -> Schema {
+fn comment(row: &Row) -> Result<(u32, Comment)> {
+    Ok((row.try_get(0)?, Comment { column: row.try_get(1)?, text: row.try_get(2)? }))
+}
+
+/// The tables, in order, each with its columns, indexes, foreign keys and comments, grouped by schema.
+fn assembled(
+    tables: Vec<Listed>,
+    columns: Vec<(u32, SchemaColumn)>,
+    indexes: Vec<(u32, Index)>,
+    keys: Vec<(u32, ForeignKey)>,
+    comments: Vec<(u32, Comment)>,
+) -> Schema {
     let mut columns_by_table = grouped(columns);
     let mut indexes_by_table = grouped(indexes);
     let mut keys_by_table = grouped(keys);
+    let mut comments_by_table = comments_by_table(comments);
     let mut schemas: Vec<SchemaNode> = vec![];
     for Listed { oid, schema, table } in tables {
+        let comments = comments_by_table.remove(&oid).unwrap_or_default();
         let table = Table {
-            columns: columns_by_table.remove(&oid).unwrap_or_default(),
+            columns: commented(columns_by_table.remove(&oid).unwrap_or_default(), comments.columns),
             indexes: indexes_by_table.remove(&oid).unwrap_or_default(),
             foreign_keys: keys_by_table.remove(&oid).unwrap_or_default(),
+            comment: comments.table,
             ..table
         };
         match schemas.last_mut() {
@@ -219,6 +254,22 @@ fn assembled(tables: Vec<Listed>, columns: Vec<(u32, SchemaColumn)>, indexes: Ve
         }
     }
     Schema { schemas }
+}
+
+fn comments_by_table(comments: Vec<(u32, Comment)>) -> HashMap<u32, TableComments> {
+    let mut by_table: HashMap<u32, TableComments> = HashMap::new();
+    for (oid, Comment { column, text }) in comments {
+        let table = by_table.entry(oid).or_default();
+        match column {
+            Some(column) => _ = table.columns.insert(column, text),
+            None => table.table = Some(text),
+        }
+    }
+    by_table
+}
+
+fn commented(columns: Vec<SchemaColumn>, mut comments: HashMap<String, String>) -> Vec<SchemaColumn> {
+    columns.into_iter().map(|column| SchemaColumn { comment: comments.remove(&column.name), ..column }).collect()
 }
 
 fn grouped<T>(items: Vec<(u32, T)>) -> HashMap<u32, Vec<T>> {
@@ -376,6 +427,24 @@ mod tests {
             target_columns: vec!["region".to_owned(), "id".to_owned()],
         };
         assert_eq!((customers.foreign_keys.as_slice(), orders.foreign_keys.as_slice()), (&[][..], &[key][..]));
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn the_schema_gives_the_comments_of_a_table_and_its_columns() {
+        let mut session = session_on(
+            "shop_comments",
+            &[
+                "CREATE TABLE shop_comments.orders (id int, total numeric)",
+                "COMMENT ON TABLE shop_comments.orders IS 'one row a checkout'",
+                "COMMENT ON COLUMN shop_comments.orders.total IS 'in cents'",
+            ],
+        )
+        .await;
+        let schema = read(&mut session).await.schema;
+        let [orders] = tables_of(&schema, "shop_comments") else { panic!("{schema:?}") };
+        let comments: Vec<Option<&str>> = orders.columns.iter().map(|column| column.comment.as_deref()).collect();
+        assert_eq!((orders.comment.as_deref(), comments), (Some("one row a checkout"), vec![None, Some("in cents")]));
     }
 
     #[tokio::test]

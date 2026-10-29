@@ -32,7 +32,8 @@ mod tests {
     ];
 
     fn large_catalog() -> Catalog {
-        let column = |name: String| SchemaColumn { name, type_name: TypeName::new("integer"), is_nullable: false, default: None };
+        let column =
+            |name: String| SchemaColumn { name, type_name: TypeName::new("integer"), is_nullable: false, default: None, comment: None };
         let table = |at: usize| Table {
             name: format!("{}_{at}", WORDS[at % WORDS.len()]),
             kind: TableKind::Table,
@@ -40,6 +41,7 @@ mod tests {
             columns: COLUMN_WORDS.iter().take(COLUMNS_PER_TABLE).map(|word| column(format!("{word}_{at}"))).collect(),
             indexes: vec![],
             foreign_keys: vec![to_next(at)],
+            comment: None,
         };
         let public = SchemaNode { name: "public".to_owned(), tables: (0..TABLE_COUNT).map(table).collect() };
         Catalog { schema: Schema { schemas: vec![public] }, search_path: vec!["public".to_owned()], is_cut: false }
