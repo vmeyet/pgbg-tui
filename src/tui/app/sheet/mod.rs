@@ -421,16 +421,9 @@ impl Sheet {
         }
     }
 
-    /// The keys of the columns of `result` in the table the statement sent reads, once the schema is read.
+    /// The keys of the columns of `result` in the tables they were read from, once the schema is read.
     fn keys_of(&self, result: &ResultSet) -> Vec<ColumnKey> {
-        let (Some(catalog), Some(sent)) = (self.catalog(), &self.sent) else { return vec![] };
-        keys::column_keys(catalog, &sent.statement, result.columns())
-    }
-
-    /// The statement whose result the pane shows; none while it shows a table's columns.
-    pub(in crate::tui) fn shown_statement(&self) -> Option<&Statement> {
-        let is_run = matches!(self.run, Run::Done { .. }) && self.shown.is_none();
-        self.sent.as_ref().filter(|_| is_run).map(|sent| &sent.statement)
+        self.catalog().map(|catalog| keys::column_keys(catalog, result.columns())).unwrap_or_default()
     }
 
     /// The statement that tried to write and waits to be asked about, once.
@@ -529,7 +522,7 @@ mod tests {
     use super::*;
     use crate::db::model::{ColumnKind, Value};
     use crate::failure::Failure;
-    use crate::fixtures::{column, orders, page};
+    use crate::fixtures::{column, orders, page, shop_column};
     use crate::format::Mode;
     use crossterm::event::{KeyCode, KeyEvent};
     use std::sync::Arc;
@@ -688,13 +681,17 @@ mod tests {
     }
 
     #[test]
-    fn a_result_of_one_table_knows_where_its_foreign_key_points_once_the_schema_is_read() {
+    fn a_result_knows_where_its_foreign_key_points_once_the_schema_is_read() {
         let mut app = app();
         app.apply(to_shop(Incoming::Schema(Ok(Arc::new(crate::fixtures::shop_catalog())))));
         "SELECT * FROM orders".chars().for_each(|c| _ = press(&mut app, c));
         app.handle_key(KeyEvent::from(KeyCode::Enter));
-        let result = ResultSet::whole(vec![column("id", ColumnKind::Int), column("customer_id", ColumnKind::Int)], vec![]);
-        app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result, took: Duration::from_millis(38) }));
+        let columns = vec![shop_column("orders", "id", ColumnKind::Int), shop_column("orders", "customer_id", ColumnKind::Int)];
+        app.apply(to_shop(Incoming::Result {
+            run: RunId::FIRST,
+            result: ResultSet::whole(columns, vec![]),
+            took: Duration::from_millis(38),
+        }));
         let Run::Done { grid, .. } = &app.sheet().run else { panic!("no result") };
         assert_eq!(grid.points_to(1).map(|target| target.table.as_str()), Some("customers"));
     }

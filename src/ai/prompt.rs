@@ -184,8 +184,8 @@ impl std::error::Error for NotSent {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::model::{SchemaNode, Table, TableKind};
-    use crate::fixtures::shop_catalog;
+    use crate::db::model::SchemaNode;
+    use crate::fixtures::{schema_table, shop_catalog};
 
     fn prompt_with(statement: &str, instruction: &str, catalog: &Catalog, literals: LiteralPolicy) -> Result<Prompt, NotSent> {
         let instruction = Instruction::new(instruction);
@@ -280,15 +280,7 @@ mod tests {
     fn wide_catalog() -> Catalog {
         let mut catalog = shop_catalog();
         let columns = catalog.schema.schemas[1].tables[0].columns.clone();
-        let table = |n: usize| Table {
-            name: format!("orders_{n}"),
-            kind: TableKind::Table,
-            estimated_rows: None,
-            columns: columns.clone(),
-            indexes: vec![],
-            foreign_keys: vec![],
-            comment: None,
-        };
+        let table = |n: usize| schema_table(&format!("orders_{n}"), columns.clone());
         catalog.schema.schemas.push(SchemaNode { name: "archive".into(), tables: (0..400).map(table).collect() });
         catalog
     }

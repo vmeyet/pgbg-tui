@@ -284,8 +284,8 @@ fn column_width(result: &ResultSet, column: usize, header: usize, format: Format
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::model::{ColumnKind, Statement, Value};
-    use crate::fixtures::column;
+    use crate::db::model::{ColumnKind, Value};
+    use crate::fixtures::{column, shop_column};
 
     fn result(rows: usize) -> ResultSet {
         let int = |name: &str| column(name, ColumnKind::Int);
@@ -418,8 +418,11 @@ mod tests {
     }
 
     fn keyed() -> Grid {
-        let result = ResultSet::whole(vec![column("id", ColumnKind::Int), column("customer_id", ColumnKind::Int)], vec![]);
-        let keys = crate::keys::column_keys(&crate::fixtures::shop_catalog(), &Statement::new("SELECT * FROM orders"), result.columns());
+        let result = ResultSet::whole(
+            vec![shop_column("orders", "id", ColumnKind::Int), shop_column("orders", "customer_id", ColumnKind::Int)],
+            vec![],
+        );
+        let keys = crate::keys::column_keys(&crate::fixtures::shop_catalog(), result.columns());
         Grid::new(&result, vec![Format::Raw; 2], keys, &clock_at_epoch())
     }
 

@@ -152,8 +152,8 @@ mod tests {
     use super::super::app::Grid;
     use super::super::styled;
     use super::*;
-    use crate::db::model::{ColumnKind, JsonText, Statement};
-    use crate::fixtures::{column, orders};
+    use crate::db::model::{ColumnKind, JsonText};
+    use crate::fixtures::{column, orders, shop_column};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -300,10 +300,14 @@ mod tests {
     #[test]
     fn a_primary_key_header_is_bold_and_a_foreign_key_header_points_on() {
         let result = ResultSet::whole(
-            vec![column("id", ColumnKind::Int), column("customer_id", ColumnKind::Int), column("total", ColumnKind::Numeric)],
+            vec![
+                shop_column("orders", "id", ColumnKind::Int),
+                shop_column("orders", "customer_id", ColumnKind::Int),
+                shop_column("orders", "total", ColumnKind::Numeric),
+            ],
             vec![vec![Value::Int(7), Value::Int(3), Value::Numeric("12.50".into())]],
         );
-        let keys = crate::keys::column_keys(&crate::fixtures::shop_catalog(), &Statement::new("SELECT * FROM orders"), result.columns());
+        let keys = crate::keys::column_keys(&crate::fixtures::shop_catalog(), result.columns());
         let clock = Clock { now: at("2026-07-14T12:00:00Z"), zone: chrono::Local };
         let mut grid = Grid::new(&result, vec![Format::Raw; 3], keys, &clock);
         grid.column = usize::MAX;

@@ -1,5 +1,7 @@
 //! The schema the role can see, read from the catalogs in one read-only transaction.
-use super::model::{Catalog, ForeignKey, Index, Route, Schema, SchemaColumn, SchemaNode, Table, TableKind, TypeName};
+use super::model::{
+    Catalog, ColumnNumber, ForeignKey, Index, Route, Schema, SchemaColumn, SchemaNode, Table, TableKind, TableOid, TypeName,
+};
 use super::{Isolation, Session, server_error};
 use crate::connection::Connection;
 use anyhow::{Result, bail};
@@ -23,7 +25,7 @@ const VISIBLE: &str = "WITH visible AS (
 )";
 const TABLES: &str = "SELECT oid, nspname, relname, relkind::text, reltuples::float8 FROM visible ORDER BY nspname, relname";
 const COLUMNS: &str =
-    "SELECT a.attrelid, a.attname, format_type(a.atttypid, a.atttypmod), NOT a.attnotnull, pg_get_expr(d.adbin, d.adrelid)
+    "SELECT a.attrelid, a.attname, format_type(a.atttypid, a.atttypmod), NOT a.attnotnull, pg_get_expr(d.adbin, d.adrelid), a.attnum
     FROM pg_attribute a JOIN visible v ON v.oid = a.attrelid
     LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
     WHERE a.attnum > 0 AND NOT a.attisdropped AND has_column_privilege(a.attrelid, a.attnum, 'SELECT')
@@ -69,7 +71,6 @@ const TABLE_CAP: TableCap = TableCap(20_000);
 
 /// A table as the catalog query gives it, before its columns and indexes join it.
 struct Listed {
-    oid: u32,
     schema: String,
     table: Table,
 }
@@ -174,9 +175,17 @@ fn is_dropped_relation(code: Option<&SqlState>, message: &str) -> bool {
 fn listed(row: &Row) -> Result<Listed> {
     let kind = table_kind(&row.try_get::<_, String>(3)?)?;
     let estimated_rows = estimated_rows(kind, row.try_get(4)?);
-    let table =
-        Table { name: row.try_get(2)?, kind, estimated_rows, columns: vec![], indexes: vec![], foreign_keys: vec![], comment: None };
-    Ok(Listed { oid: row.try_get(0)?, schema: row.try_get(1)?, table })
+    let table = Table {
+        oid: TableOid::new(row.try_get(0)?),
+        name: row.try_get(2)?,
+        kind,
+        estimated_rows,
+        columns: vec![],
+        indexes: vec![],
+        foreign_keys: vec![],
+        comment: None,
+    };
+    Ok(Listed { schema: row.try_get(1)?, table })
 }
 
 fn table_kind(relkind: &str) -> Result<TableKind> {
@@ -198,6 +207,7 @@ fn estimated_rows(kind: TableKind, reltuples: f64) -> Option<u64> {
 
 fn column(row: &Row) -> Result<(u32, SchemaColumn)> {
     let column = SchemaColumn {
+        number: ColumnNumber::new(row.try_get(5)?),
         name: row.try_get(1)?,
         type_name: TypeName::new(row.try_get::<_, String>(2)?),
         is_nullable: row.try_get(3)?,
@@ -239,7 +249,8 @@ fn assembled(
     let mut keys_by_table = grouped(keys);
     let mut comments_by_table = comments_by_table(comments);
     let mut schemas: Vec<SchemaNode> = vec![];
-    for Listed { oid, schema, table } in tables {
+    for Listed { schema, table } in tables {
+        let oid = table.oid.get();
         let comments = comments_by_table.remove(&oid).unwrap_or_default();
         let table = Table {
             columns: commented(columns_by_table.remove(&oid).unwrap_or_default(), comments.columns),

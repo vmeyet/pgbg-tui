@@ -65,7 +65,7 @@ mod tests {
 
     /// The lookup of the customer in `table` that an order of customer 3 in `eu` points to, through a key of two columns.
     fn customer_of_an_order(table: &str) -> Lookup {
-        let pair = |at, column: &str| KeyPair { at, column: column.to_owned() };
+        let pair = |at, column: &str| KeyPair { at, from: format!("customer_{column}"), to: column.to_owned() };
         let target = Target { schema: "public".to_owned(), table: table.to_owned(), pairs: vec![pair(0, "id"), pair(1, "region")] };
         target.lookup(&[Value::Int(3), Value::Text("eu".into())]).unwrap()
     }

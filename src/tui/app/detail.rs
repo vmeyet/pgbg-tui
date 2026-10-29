@@ -7,7 +7,7 @@ use crate::act::{self, Act, Pane};
 use crate::connection::ConnectionName;
 use crate::db::model::{Column, ResultSet, Value};
 use crate::failure::Failure;
-use crate::keys::{self, ColumnKey, Hop, Joined, Lookup, Pointing, Prefilled, Referrer, Target};
+use crate::keys::{self, ColumnKey, Hop, Lookup, Prefilled, Referrer, TableIn, Target};
 use crossterm::event::KeyEvent;
 use ratatui::text::Line;
 
@@ -163,17 +163,31 @@ impl App {
 
     /// The row `detail` shows, with the keys of its columns.
     pub(in crate::tui) fn shown_row<'a>(&'a self, detail: &'a Detail) -> Option<ShownRow<'a>> {
-        let Run::Done { run, result, grid, .. } = &self.sheet().run else { return None };
-        let Some(last) = detail.trail.last() else {
-            let (row, of) = (result.rows().get(grid.row)?, RowOf::Grid { run: *run, row: grid.row });
-            return Some(ShownRow { columns: result.columns(), row, keys: grid.keys(), trail: vec![], of });
-        };
-        let statement = self.sheet().shown_statement();
-        let read = self.sheet().catalog().zip(statement).and_then(|(catalog, statement)| keys::one_table_read(catalog, statement));
+        let grid = self.grid_row()?;
+        let Some(last) = detail.trail.last() else { return Some(grid) };
+        let start = self.trail_start(&grid, detail);
         let followed = detail.trail.iter().map(|followed| followed.hop.table.as_str());
-        let trail = std::iter::once(read.map_or("row", |read| read.table.name.as_str())).chain(followed).collect();
+        let trail = std::iter::once(start.map_or("row", |start| start.table.name.as_str())).chain(followed).collect();
         let (row, of) = (last.result.rows().first()?, RowOf::Followed(last.look));
         Some(ShownRow { columns: last.result.columns(), row, keys: &last.keys, trail, of })
+    }
+
+    /// The grid's row under the cursor, with the keys of its columns.
+    fn grid_row(&self) -> Option<ShownRow<'_>> {
+        let Run::Done { run, result, grid, .. } = &self.sheet().run else { return None };
+        let (row, of) = (result.rows().get(grid.row)?, RowOf::Grid { run: *run, row: grid.row });
+        Some(ShownRow { columns: result.columns(), row, keys: grid.keys(), trail: vec![], of })
+    }
+
+    /// The table the trail of `detail` starts from: the one holding the key of `grid`, the grid's row, it first followed;
+    /// with no trail yet, the one holding the grid's first primary-key column.
+    fn trail_start<'a>(&'a self, grid: &ShownRow<'a>, detail: &Detail) -> Option<TableIn<'a>> {
+        let column = if detail.trail.is_empty() {
+            grid.keys.iter().position(|key| key.is_primary)?
+        } else {
+            first_followed(grid, detail)?.first_column()
+        };
+        keys::table_read(self.sheet().catalog()?, grid.columns.get(column)?)
     }
 
     /// Opens the detail of the grid's row at the cursor's column; on a foreign key's cell, reads the row it points to.
@@ -230,8 +244,7 @@ impl App {
     fn follow(&mut self, detail: Detail) -> Vec<Action> {
         let shown = self.shown_row(&detail);
         let targets = shown.as_ref().map(ShownRow::targets).unwrap_or_default();
-        let lookup =
-            targets.get(detail.key).zip(shown.as_ref()).map(|(target, shown)| (target.hop(shown.columns), target.lookup(shown.row)));
+        let lookup = targets.get(detail.key).zip(shown.as_ref()).map(|(target, shown)| (target.hop(), target.lookup(shown.row)));
         let referrer = detail.key.checked_sub(targets.len()).and_then(|at| detail.referrers.get(at));
         if let Some(prefilled) = referrer.and_then(|counted| counted.referrer.rows()) {
             return self.run_prefilled(prefilled);
@@ -268,14 +281,10 @@ impl App {
         actions
     }
 
-    /// The tables whose keys point to the row `detail` shows, once the schema is read and its table known.
+    /// The tables whose keys point to the row `detail` shows, once the schema is read.
     fn referrers_of(&self, detail: &Detail) -> Vec<Referrer> {
         let (Some(shown), Some(catalog)) = (self.shown_row(detail), self.sheet().catalog()) else { return vec![] };
-        let pointed = match detail.trail.last() {
-            Some(last) => keys::table_in(catalog, &last.hop.schema, &last.hop.table),
-            None => self.sheet().shown_statement().and_then(|statement| keys::one_table_read(catalog, statement)),
-        };
-        pointed.map(|pointed| keys::referrers(catalog, pointed, shown.columns, shown.row)).unwrap_or_default()
+        keys::referrers(catalog, shown.columns, shown.row)
     }
 
     /// `detail` waiting on `lookup`, the read of the row `hop` leads to, and the action that reads it.
@@ -296,7 +305,7 @@ impl App {
     pub(super) fn looked_up(&mut self, look: LookId, rows: Result<ResultSet, Failure>) -> Vec<Action> {
         let Some(Overlay::Detail(detail)) = &self.overlay else { return vec![] };
         let keys = match &detail.waiting {
-            Some(waiting) if waiting.look == look => self.keys_of(&waiting.lookup, rows.as_ref().ok()),
+            Some(waiting) if waiting.look == look => self.keys_of(rows.as_ref().ok()),
             _ => {
                 self.counted(look, rows.ok().as_ref());
                 return vec![];
@@ -317,10 +326,9 @@ impl App {
         vec![]
     }
 
-    /// The keys the catalog gives the columns of a row `lookup` read.
-    fn keys_of(&self, lookup: &Lookup, read: Option<&ResultSet>) -> Vec<ColumnKey> {
-        let keys = self.sheet().catalog().zip(read).map(|(catalog, read)| keys::column_keys(catalog, &lookup.statement, read.columns()));
-        keys.unwrap_or_default()
+    /// The keys the catalog gives the columns of a row a lookup read.
+    fn keys_of(&self, read: Option<&ResultSet>) -> Vec<ColumnKey> {
+        self.sheet().catalog().zip(read).map(|(catalog, read)| keys::column_keys(catalog, read.columns())).unwrap_or_default()
     }
 
     /// Takes the count the lookup `look` read, when it counts the rows of a table pointing to the row shown.
@@ -347,18 +355,19 @@ impl App {
     }
 
     fn trail_join(&self, detail: &Detail) -> Option<Prefilled> {
-        let Run::Done { result, grid, .. } = &self.sheet().run else { return None };
-        let start = keys::one_table_read(self.sheet().catalog()?, self.sheet().shown_statement()?)?;
-        let (columns, row) = (result.columns(), result.rows().get(grid.row)?);
+        let grid = self.grid_row()?;
+        let start = self.trail_start(&grid, detail)?;
         let first = Hop { schema: start.schema.to_owned(), table: start.table.name.clone(), on: vec![] };
         let tables: Vec<Hop> = std::iter::once(first).chain(detail.trail.iter().map(|followed| followed.hop.clone())).collect();
-        let primary: Vec<usize> = (0..columns.len()).filter(|&at| grid.is_primary(at)).collect();
-        let left_by = |on: &Joined| columns.iter().position(|column| column.name.as_str() == on.from);
-        let picked = if primary.is_empty() { tables.get(1)?.on.iter().filter_map(left_by).collect() } else { primary };
-        let pointing = |at: usize| Some(Pointing { column: columns.get(at)?.name.as_str().to_owned(), value: row.get(at)?.as_param()? });
-        let key: Vec<Pointing> = picked.into_iter().map(pointing).collect::<Option<_>>()?;
+        let left_by = || first_followed(&grid, detail)?.key(grid.row);
+        let key = keys::primary_key(start.table, grid.columns, grid.row).or_else(left_by)?;
         keys::trail_join(&tables, &key)
     }
+}
+
+/// The key of `grid`, the grid's row, that the trail of `detail` first followed; none with no trail.
+fn first_followed<'a>(grid: &ShownRow<'a>, detail: &Detail) -> Option<&'a Target> {
+    grid.targets().get(detail.trail.first()?.back_to.key).copied()
 }
 
 /// The detail of the row before the last one followed, where it stood; none on the grid's row, which `⌫` leaves.
@@ -370,11 +379,11 @@ fn back(detail: Detail) -> Option<Detail> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::fixtures::{on_the_keyed_orders, on_the_result, shop, to_shop, typed};
+    use super::super::fixtures::{on_keyed, on_the_keyed_orders, on_the_result, shop, to_shop, typed};
     use super::super::{Fit, Incoming, RunId};
     use super::*;
-    use crate::db::model::{ColumnKind, ParamValue, Params, Statement};
-    use crate::fixtures::{column, keyed_customer, orders};
+    use crate::db::model::{ColumnKind, ColumnName, ParamValue, Params, Statement};
+    use crate::fixtures::{column, keyed_customer, orders, shop_column};
     use crate::query::params::Given;
     use crossterm::event::{KeyCode, KeyModifiers};
     use std::time::Duration;
@@ -491,6 +500,25 @@ mod tests {
         press(&mut app, KeyCode::Char('e'));
         assert_eq!((app.sheet().editor.text(), app.overlay.is_none()), (ORDER_7_WITH_ITS_CUSTOMER, true));
         assert_eq!(app.sheet().bar.given(&["id".parse().unwrap()]), Given::typed([("id".parse().unwrap(), ParamValue::new("7"))].into()));
+    }
+
+    #[test]
+    fn e_joins_on_the_column_of_the_table_a_key_was_read_from_whatever_its_alias() {
+        let columns = vec![
+            shop_column("orders", "id", ColumnKind::Int),
+            Column { name: ColumnName::new("cust"), ..shop_column("orders", "customer_id", ColumnKind::Int) },
+        ];
+        let mut app =
+            on_keyed("SELECT id, customer_id AS cust FROM orders", ResultSet::whole(columns, vec![vec![Value::Int(7), Value::Int(3)]]));
+        press(&mut app, KeyCode::Char('l'));
+        press(&mut app, KeyCode::Enter);
+        app.apply(to_shop(Incoming::LookedUp { look: LookId::FIRST, rows: Ok(keyed_customer()) }));
+        press(&mut app, KeyCode::Char('e'));
+        assert!(
+            app.sheet().editor.text().ends_with("JOIN public.customers c ON c.id = o.customer_id\nWHERE o.id = {{id}}"),
+            "{}",
+            app.sheet().editor.text()
+        );
     }
 
     #[test]

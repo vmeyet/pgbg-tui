@@ -1,8 +1,11 @@
 //! The keys of a result's columns: which are the primary key, and where a foreign key points, read from the catalog,
 //! and the read of the row a foreign key points to.
-//! Pure, and only sure when the statement reads one table: a result column is that table's column of the same name.
+//! Pure, and sure: a result column has a key only when the server says it holds that column of a table as is, so an
+//! alias, a subquery or a join never mistakes one column for another, and a computed column has none.
 use crate::complete;
-use crate::db::model::{Catalog, Column, ForeignKey, ParamValue, Params, SchemaNode, Statement, Table, Value, qualified, sql_name};
+use crate::db::model::{
+    Catalog, Column, ForeignKey, Origin, ParamValue, Params, SchemaNode, Statement, Table, TableOid, Value, qualified, sql_name,
+};
 use crate::query::params::ParamName;
 use std::collections::BTreeMap;
 
@@ -15,14 +18,15 @@ pub(crate) struct Target {
     pub(crate) pairs: Vec<KeyPair>,
 }
 
-/// A column of a foreign key: its place in the result, and the column of the target it equals.
+/// A column of a foreign key: its place in the result, its name in its table, and the column of the target it equals.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct KeyPair {
     pub(crate) at: usize,
-    pub(crate) column: String,
+    pub(crate) from: String,
+    pub(crate) to: String,
 }
 
-/// What a result's column is in the table its statement reads.
+/// What a result's column is in the table it was read from.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ColumnKey {
     pub(crate) is_primary: bool,
@@ -87,38 +91,81 @@ pub(crate) struct Lookup {
     pub(crate) params: Params,
 }
 
-/// The key of each of `columns`, the result of `statement` read with `catalog`; none when the statement reads more than
-/// one table, or one the catalog does not hold.
-pub(crate) fn column_keys(catalog: &Catalog, statement: &Statement, columns: &[Column]) -> Vec<ColumnKey> {
-    let Some(TableIn { table, .. }) = one_table_read(catalog, statement) else { return vec![ColumnKey::default(); columns.len()] };
-    columns.iter().map(|column| key_of(table, column.name.as_str(), columns)).collect()
+/// The key of each of `columns`, a result read with `catalog`: none for a column read from no table, or from one the
+/// catalog does not hold.
+pub(crate) fn column_keys(catalog: &Catalog, columns: &[Column]) -> Vec<ColumnKey> {
+    let read = tables_read(catalog, columns);
+    columns.iter().map(|column| key_of(&read, column, columns).unwrap_or_default()).collect()
 }
 
-fn key_of(table: &Table, name: &str, columns: &[Column]) -> ColumnKey {
-    let is_primary = table.indexes.iter().any(|index| index.is_primary && index.columns.iter().any(|key| key == name));
-    let keys = table.foreign_keys.iter().filter(|key| key.columns.iter().any(|column| column == name));
-    ColumnKey { is_primary, points_to: keys.into_iter().find_map(|key| target_of(key, columns)) }
+/// The key of `column`, of `columns`, read from one of the tables `read`.
+fn key_of(read: &[TableIn<'_>], column: &Column, columns: &[Column]) -> Option<ColumnKey> {
+    let origin = column.origin?;
+    let from = read.iter().find(|table| table.table.oid == origin.table)?.table;
+    let name = &from.columns.iter().find(|read| read.number == origin.column)?.name;
+    let is_primary = from.indexes.iter().any(|index| index.is_primary && index.columns.contains(name));
+    let mut keys = from.foreign_keys.iter().filter(|key| key.columns.contains(name));
+    Some(ColumnKey { is_primary, points_to: keys.find_map(|key| target_of(from, key, columns)) })
 }
 
-/// Where `key` points from `columns`, when they hold each of its columns once.
-fn target_of(key: &ForeignKey, columns: &[Column]) -> Option<Target> {
-    let pair = |(from, to): (&String, &String)| Some(KeyPair { at: only_column(columns, from)?, column: to.clone() });
+/// Where `key`, of the table `from`, points from `columns`, when they hold each of its columns once.
+fn target_of(from: &Table, key: &ForeignKey, columns: &[Column]) -> Option<Target> {
+    let pair = |(name, to): (&String, &String)| Some(KeyPair { at: held_once(columns, from, name)?, from: name.clone(), to: to.clone() });
     let pairs: Option<Vec<KeyPair>> = key.columns.iter().zip(&key.target_columns).map(pair).collect();
     Some(Target { schema: key.target_schema.clone(), table: key.target_table.clone(), pairs: pairs? })
 }
 
-/// The place of the one column named `name`; none when `columns` hold no such column, or several.
-fn only_column(columns: &[Column], name: &str) -> Option<usize> {
-    let mut named = columns.iter().enumerate().filter(|(_, column)| column.name.as_str() == name).map(|(at, _)| at);
-    let first = named.next()?;
-    named.next().is_none().then_some(first)
+/// The place of the one result column read from the column `name` of `table`; none when `columns` hold no such column,
+/// or several.
+fn held_once(columns: &[Column], table: &Table, name: &str) -> Option<usize> {
+    let origin = Some(Origin { table: table.oid, column: table.column_number(name)? });
+    let mut held = columns.iter().enumerate().filter(|(_, column)| column.origin == origin).map(|(at, _)| at);
+    let first = held.next()?;
+    held.next().is_none().then_some(first)
+}
+
+/// The table of the catalog whose oid is `oid`.
+fn table_of(catalog: &Catalog, oid: TableOid) -> Option<TableIn<'_>> {
+    let mut tables = catalog.schema.schemas.iter().flat_map(|node| node.tables.iter().map(|table| TableIn { schema: &node.name, table }));
+    tables.find(|found| found.table.oid == oid)
+}
+
+/// The table `column` was read from, as the catalog holds it.
+pub(crate) fn table_read<'a>(catalog: &'a Catalog, column: &Column) -> Option<TableIn<'a>> {
+    table_of(catalog, column.origin?.table)
+}
+
+/// The tables `columns` were read from, each once, in the order of their first column: each found in the catalog once,
+/// however many columns it gave.
+fn tables_read<'a>(catalog: &'a Catalog, columns: &[Column]) -> Vec<TableIn<'a>> {
+    let mut oids: Vec<TableOid> = vec![];
+    for oid in columns.iter().filter_map(|column| column.origin).map(|origin| origin.table) {
+        if !oids.contains(&oid) {
+            oids.push(oid);
+        }
+    }
+    oids.into_iter().filter_map(|oid| table_of(catalog, oid)).collect()
+}
+
+/// The primary key of `table` and its values in `row`, of `columns`; none when the table has none, `columns` do not hold
+/// each of its columns once, or one of its values is NULL.
+pub(crate) fn primary_key(table: &Table, columns: &[Column], row: &[Value]) -> Option<Vec<Pointing>> {
+    let key = table.indexes.iter().find(|index| index.is_primary)?;
+    let value = |name: &String| row.get(held_once(columns, table, name)?)?.as_param();
+    key.columns.iter().map(|name| Some(Pointing { column: name.clone(), value: value(name)? })).collect()
 }
 
 impl Target {
-    /// The hop the key makes from a row of `columns` to the row it points to.
-    pub(crate) fn hop(&self, columns: &[Column]) -> Hop {
-        let joined = |pair: &KeyPair| Some(Joined { from: columns.get(pair.at)?.name.as_str().to_owned(), to: pair.column.clone() });
-        Hop { schema: self.schema.clone(), table: self.table.clone(), on: self.pairs.iter().filter_map(joined).collect() }
+    /// The hop the key makes from the row holding it to the row it points to.
+    pub(crate) fn hop(&self) -> Hop {
+        let joined = |pair: &KeyPair| Joined { from: pair.from.clone(), to: pair.to.clone() };
+        Hop { schema: self.schema.clone(), table: self.table.clone(), on: self.pairs.iter().map(joined).collect() }
+    }
+
+    /// The key's columns, named as in their table, and their values in `row`; none when one of them is NULL.
+    pub(crate) fn key(&self, row: &[Value]) -> Option<Vec<Pointing>> {
+        let pointing = |pair: &KeyPair| Some(Pointing { column: pair.from.clone(), value: row.get(pair.at)?.as_param()? });
+        self.pairs.iter().map(pointing).collect()
     }
 
     /// The place in the result of the key's first column.
@@ -129,38 +176,25 @@ impl Target {
     /// The read of the row the key of `row` points to, its values bound, never put in its text; none when one of them
     /// is NULL, which points nowhere.
     pub(crate) fn lookup(&self, row: &[Value]) -> Option<Lookup> {
-        let values: Option<Vec<_>> = self.pairs.iter().map(|pair| row.get(pair.at)?.as_param()).collect();
-        let equal = self.pairs.iter().enumerate().map(|(at, pair)| format!("{} = ${}", sql_name(&pair.column), at + 1));
+        let values = self.key(row)?.into_iter().map(|pointing| Some(pointing.value)).collect();
+        let equal = self.pairs.iter().enumerate().map(|(at, pair)| format!("{} = ${}", sql_name(&pair.to), at + 1));
         let condition = equal.collect::<Vec<_>>().join(" AND ");
         let statement = Statement::new(format!("SELECT * FROM {} WHERE {condition}", qualified(&self.schema, &self.table)));
-        Some(Lookup { statement, params: Params::new(values?.into_iter().map(Some).collect(), vec![]) })
+        Some(Lookup { statement, params: Params::new(values, vec![]) })
     }
 }
 
-/// The table `statement` reads, when it names exactly one, found as PostgreSQL resolves its name: with its schema, or
-/// bare in the first schema of the search path that holds it.
-pub(crate) fn one_table_read<'a>(catalog: &'a Catalog, statement: &Statement) -> Option<TableIn<'a>> {
-    let [name] = complete::tables_named(statement.as_str()).try_into().ok()?;
-    match name.split_once('.') {
-        Some((schema, table)) => table_in(catalog, schema, table),
-        None => catalog.search_path.iter().find_map(|schema| table_in(catalog, schema, &name)),
-    }
-}
-
-/// The table `name` of the schema `schema`, as the catalog spells them.
-pub(crate) fn table_in<'a>(catalog: &'a Catalog, schema: &str, name: &str) -> Option<TableIn<'a>> {
-    let node = catalog.schema.schemas.iter().find(|node| node.name == schema)?;
-    node.tables.iter().find(|table| table.name == name).map(|table| TableIn { schema: &node.name, table })
-}
-
-/// The keys of other tables that point to a row of the table `pointed`, whose `columns` hold `row`: each key whose
-/// target columns the row holds, its values not NULL, the first `REFERRERS_SHOWN` in the catalog's order.
-pub(crate) fn referrers(catalog: &Catalog, pointed: TableIn<'_>, columns: &[Column], row: &[Value]) -> Vec<Referrer> {
-    let is_pointed = |key: &&ForeignKey| key.target_schema == pointed.schema && key.target_table == pointed.table.name;
+/// The keys of other tables that point to a row whose `columns` hold `row`: each key pointing to a table those columns
+/// were read from, whose target columns they hold once, its values not NULL, the first `REFERRERS_SHOWN` in the
+/// catalog's order.
+pub(crate) fn referrers(catalog: &Catalog, columns: &[Column], row: &[Value]) -> Vec<Referrer> {
+    let read = tables_read(catalog, columns);
+    let pointed = |key: &ForeignKey| read.iter().find(|table| table.schema == key.target_schema && table.table.name == key.target_table);
     let tables = catalog.schema.schemas.iter().flat_map(|node| node.tables.iter().map(move |table| (node, table)));
-    let keys = tables.flat_map(|(node, table)| table.foreign_keys.iter().filter(is_pointed).map(move |key| (node, table, key)));
+    let keys = tables.flat_map(|(node, table)| table.foreign_keys.iter().map(move |key| (node, table, key)));
     let referrer = |(node, table, key): (&SchemaNode, &Table, &ForeignKey)| {
-        let value = |target: &String| row.get(only_column(columns, target)?)?.as_param();
+        let pointed = pointed(key)?.table;
+        let value = |target: &String| row.get(held_once(columns, pointed, target)?)?.as_param();
         let values: Option<Vec<ParamValue>> = key.target_columns.iter().map(value).collect();
         let pairs = key.columns.iter().cloned().zip(values?).map(|(column, value)| Pointing { column, value }).collect();
         Some(Referrer { schema: node.name.clone(), table: table.name.clone(), pairs })
@@ -233,39 +267,44 @@ mod tests {
     use super::*;
     use crate::connection::WritePolicy;
     use crate::db::guard;
-    use crate::db::model::ColumnKind;
-    use crate::fixtures::{self, column, shop_catalog};
+    use crate::db::model::{ColumnKind, ColumnName, ColumnNumber};
+    use crate::fixtures::{self, column, keyed_catalog, shop_catalog, shop_column};
     use crate::query::params::{self, Given};
 
-    fn keys(statement: &str, names: &[&str]) -> Vec<ColumnKey> {
-        let columns: Vec<Column> = names.iter().map(|name| column(name, ColumnKind::Int)).collect();
-        column_keys(&shop_catalog(), &Statement::new(statement), &columns)
+    fn keys(columns: &[Column]) -> Vec<ColumnKey> {
+        column_keys(&keyed_catalog(), columns)
     }
 
-    /// A key of the one column at `at` pointing to `id` of `schema.table`.
-    fn to_id(schema: &str, table: &str, at: usize) -> Target {
-        Target { schema: schema.to_owned(), table: table.to_owned(), pairs: vec![KeyPair { at, column: "id".to_owned() }] }
+    /// The integer column `name` of `table`, read as is.
+    fn read(table: &str, name: &str) -> Column {
+        shop_column(table, name, ColumnKind::Int)
     }
 
-    #[test]
-    fn a_column_of_the_primary_key_of_the_one_table_read_is_primary() {
-        assert!(keys("SELECT * FROM orders", &["id"])[0].is_primary);
-    }
-
-    #[test]
-    fn a_column_with_a_foreign_key_points_to_its_target() {
-        let keys = keys("SELECT id, customer_id FROM orders", &["id", "customer_id"]);
-        assert_eq!(keys[1].points_to, Some(to_id("public", "customers", 1)));
+    /// A key of the one column `from`, at `at`, pointing to `id` of `schema.table`.
+    fn to_id(schema: &str, table: &str, at: usize, from: &str) -> Target {
+        let pair = KeyPair { at, from: from.to_owned(), to: "id".to_owned() };
+        Target { schema: schema.to_owned(), table: table.to_owned(), pairs: vec![pair] }
     }
 
     #[test]
-    fn a_table_named_with_its_schema_is_found_in_that_schema() {
-        assert_eq!(keys("SELECT * FROM billing.invoices", &["order_id"])[0].points_to, Some(to_id("public", "orders", 0)));
+    fn a_column_read_from_a_primary_key_is_primary() {
+        assert!(keys(&[read("orders", "id")])[0].is_primary);
+    }
+
+    #[test]
+    fn a_column_read_from_a_foreign_key_points_to_its_target() {
+        let keys = keys(&[read("orders", "id"), read("orders", "customer_id")]);
+        assert_eq!(keys[1].points_to, Some(to_id("public", "customers", 1, "customer_id")));
+    }
+
+    #[test]
+    fn a_table_of_another_schema_is_found_by_its_oid() {
+        assert_eq!(keys(&[read("invoices", "order_id")])[0].points_to, Some(to_id("public", "orders", 0, "order_id")));
     }
 
     #[test]
     fn a_key_column_the_result_holds_twice_points_nowhere() {
-        assert_eq!(keys("SELECT customer_id, customer_id FROM orders", &["customer_id", "customer_id"])[0].points_to, None);
+        assert_eq!(keys(&[read("orders", "customer_id"), read("orders", "customer_id")])[0].points_to, None);
     }
 
     #[test]
@@ -274,45 +313,53 @@ mod tests {
         let key = &mut catalog.schema.schemas[1].tables[0].foreign_keys[0];
         key.columns.push("total".to_owned());
         key.target_columns.push("region".to_owned());
-        let columns = ["id", "customer_id", "total"].map(|name| column(name, ColumnKind::Int));
-        let keys = column_keys(&catalog, &Statement::new("SELECT * FROM orders"), &columns);
-        let region = KeyPair { at: 2, column: "region".to_owned() };
-        let both = Target { pairs: vec![KeyPair { at: 1, column: "id".to_owned() }, region], ..to_id("public", "customers", 1) };
+        let keys = column_keys(&catalog, &[read("orders", "id"), read("orders", "customer_id"), read("orders", "total")]);
+        let pair = |at, from: &str, to: &str| KeyPair { at, from: from.to_owned(), to: to.to_owned() };
+        let both = Target { pairs: vec![pair(1, "customer_id", "id"), pair(2, "total", "region")], ..to_id("public", "customers", 1, "") };
         assert_eq!([&keys[1].points_to, &keys[2].points_to], [&Some(both.clone()), &Some(both)]);
     }
 
     #[test]
-    fn the_lookup_binds_the_rows_key_and_puts_no_value_in_its_text() {
-        let row = [Value::Int(7), Value::Text("3'; DROP TABLE orders".into())];
-        let lookup = to_id("public", "customers", 1).lookup(&row).unwrap();
-        assert_eq!(lookup.statement, Statement::new("SELECT * FROM public.customers WHERE id = $1"));
-        assert_eq!(lookup.params, Params::new(vec![Some(ParamValue::new("3'; DROP TABLE orders"))], vec![]));
+    fn an_alias_is_not_taken_for_the_column_of_its_name() {
+        let alias = Column { name: ColumnName::new("id"), ..read("orders", "customer_id") };
+        let key = ColumnKey { is_primary: false, points_to: Some(to_id("public", "customers", 0, "customer_id")) };
+        assert_eq!(keys(&[alias]), [key]);
     }
 
     #[test]
-    fn a_null_key_looks_nothing_up() {
-        assert_eq!(to_id("public", "customers", 1).lookup(&[Value::Int(12), Value::Null]), None);
+    fn a_computed_column_has_no_key() {
+        assert_eq!(keys(&[column("id", ColumnKind::Int)]), [ColumnKey::default()]);
     }
 
     #[test]
-    fn a_bare_table_outside_the_search_path_is_not_found() {
-        assert_eq!(keys("SELECT * FROM invoices", &["order_id"]), [ColumnKey::default()]);
+    fn a_column_read_from_a_table_the_catalog_does_not_hold_has_no_key() {
+        let elsewhere = Column { origin: Some(Origin { table: TableOid::new(99), column: ColumnNumber::new(1) }), ..read("orders", "id") };
+        assert_eq!(keys(&[elsewhere]), [ColumnKey::default()]);
     }
 
     #[test]
-    fn a_statement_reading_two_tables_has_no_keys() {
-        assert_eq!(keys("SELECT * FROM orders JOIN customers ON true", &["id"]), [ColumnKey::default()]);
+    fn each_column_of_a_join_has_the_keys_of_its_own_table() {
+        let keys = keys(&[read("orders", "id"), read("orders", "customer_id"), read("customers", "id"), read("customers", "user_id")]);
+        let pointed: Vec<Option<&str>> = keys.iter().map(|key| key.points_to.as_ref().map(|target| target.table.as_str())).collect();
+        assert_eq!(pointed, [None, Some("customers"), None, Some("users")]);
     }
 
     #[test]
-    fn a_column_the_table_does_not_hold_has_no_key() {
-        assert_eq!(keys("SELECT count(*) AS total FROM orders", &["total"]), [ColumnKey::default()]);
+    fn the_key_of_a_target_is_named_as_in_its_table_with_the_rows_values() {
+        let key = to_id("public", "customers", 0, "customer_id").key(&[Value::Int(3)]);
+        assert_eq!(key, Some(vec![Pointing { column: "customer_id".to_owned(), value: ParamValue::new("3") }]));
+    }
+
+    #[test]
+    fn the_primary_key_of_a_table_is_read_from_the_columns_holding_it() {
+        let catalog = shop_catalog();
+        let orders = &catalog.schema.schemas[1].tables[0];
+        let key = primary_key(orders, &[read("orders", "customer_id"), read("orders", "id")], &[Value::Int(3), Value::Int(7)]);
+        assert_eq!(key, Some(vec![Pointing { column: "id".to_owned(), value: ParamValue::new("7") }]));
     }
 
     fn orders_referrers(row: &[Value]) -> Vec<Referrer> {
-        let catalog = shop_catalog();
-        let columns = ["id", "customer_id"].map(|name| column(name, ColumnKind::Int));
-        referrers(&catalog, table_in(&catalog, "public", "orders").unwrap(), &columns, row)
+        referrers(&shop_catalog(), &[read("orders", "id"), read("orders", "customer_id")], row)
     }
 
     fn invoices_of_order_7() -> Referrer {
@@ -328,6 +375,20 @@ mod tests {
     #[test]
     fn a_row_whose_pointed_value_is_null_has_no_referrer() {
         assert_eq!(orders_referrers(&[Value::Null, Value::Int(3)]), []);
+    }
+
+    #[test]
+    fn a_row_holding_the_pointed_column_only_under_an_alias_has_no_referrer() {
+        let alias = Column { name: ColumnName::new("id"), ..read("orders", "customer_id") };
+        assert_eq!(referrers(&shop_catalog(), &[alias], &[Value::Int(3)]), []);
+    }
+
+    #[test]
+    fn a_joined_row_lists_the_tables_pointing_to_each_table_it_was_read_from() {
+        let columns = [read("orders", "id"), read("orders", "customer_id"), read("customers", "id")];
+        let tables = referrers(&shop_catalog(), &columns, &[Value::Int(7), Value::Int(3), Value::Int(3)]);
+        let tables: Vec<&str> = tables.iter().map(|referrer| referrer.table.as_str()).collect();
+        assert_eq!(tables, ["invoices", "orders"]);
     }
 
     #[test]
@@ -399,6 +460,31 @@ mod tests {
         let admitted = params::admit(&Statement::new(rows.text), &Given::typed(rows.values), &[], WritePolicy::ReadOnly).unwrap();
         let read = fixtures::session(WritePolicy::ReadOnly).await.run(&admitted).await.unwrap();
         assert_eq!(read.rows().len(), 3);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn the_server_says_which_table_column_each_result_column_holds() {
+        let made = [
+            "DROP SCHEMA IF EXISTS pgbg_origins CASCADE",
+            "CREATE SCHEMA pgbg_origins",
+            "CREATE TABLE pgbg_origins.customers (id int PRIMARY KEY)",
+            "CREATE TABLE pgbg_origins.orders (id int PRIMARY KEY, customer_id int REFERENCES pgbg_origins.customers)",
+        ];
+        for sql in made {
+            fixtures::run(WritePolicy::Allowed, sql).await.unwrap();
+        }
+        let mut session = fixtures::session(WritePolicy::ReadOnly).await;
+        let catalog = {
+            let _reading = fixtures::reading_the_catalog().await;
+            session.read_schema().await.unwrap()
+        };
+        let sql = "SELECT s.id, o.id + 0 AS total, c.id FROM (SELECT customer_id AS id FROM pgbg_origins.orders) s, pgbg_origins.orders o
+            JOIN pgbg_origins.customers c ON c.id = o.customer_id";
+        let read = session.run(&guard::admit(Statement::new(sql), Params::default(), WritePolicy::ReadOnly).unwrap()).await.unwrap();
+        let keys = column_keys(&catalog, read.columns());
+        let pointed = keys[0].points_to.as_ref().map(|target| target.table.as_str());
+        assert_eq!((pointed, keys[0].is_primary, &keys[1], keys[2].is_primary), (Some("customers"), false, &ColumnKey::default(), true));
     }
 
     #[tokio::test]
