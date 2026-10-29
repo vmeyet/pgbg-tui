@@ -21,7 +21,7 @@ pub(super) enum Edited {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(in crate::tui) struct Revision(u64);
 
-/// The editor's text, its tokens, its colours and its undo.
+/// The editor's text, its tokens, its colours, its undo and the first line in view.
 /// The tokens are updated on each change; the colours are rebuilt by `recolour` after the text changes.
 #[derive(Debug, Default)]
 pub(in crate::tui) struct Editor {
@@ -31,6 +31,8 @@ pub(in crate::tui) struct Editor {
     lexed: Lexed,
     colours: Vec<Spans>,
     has_stale_colours: bool,
+    /// The first line the last frame drew: it moves only when the cursor leaves the view, so a click never scrolls.
+    first_line: usize,
 }
 
 impl Editor {
@@ -93,10 +95,25 @@ impl Editor {
         self.field.select_to(place);
     }
 
-    /// The first line in view in a pane `rows` lines high, which keeps the cursor's line on its last row at most.
+    /// The first line in view in a pane `rows` lines high: the one the last frame drew, moved only as far as the cursor's
+    /// line needs to show.
     pub(in crate::tui) fn first_line_in_view(&self, rows: u16) -> usize {
         let (before, _, _) = self.split();
-        before.matches('\n').count().saturating_sub(usize::from(rows.saturating_sub(1)))
+        let cursor_line = before.matches('\n').count();
+        self.first_line.clamp(cursor_line.saturating_sub(usize::from(rows.saturating_sub(1))), cursor_line)
+    }
+
+    /// Keeps the first line a frame drew in a pane `rows` lines high, which the next frame and the mouse start from; a
+    /// pane not drawn keeps the line it had.
+    pub(super) fn keep_in_view(&mut self, rows: u16) {
+        if rows > 0 {
+            self.first_line = self.first_line_in_view(rows);
+        }
+    }
+
+    /// The first line the last frame drew, under the pane's first row.
+    pub(super) fn first_line(&self) -> usize {
+        self.first_line
     }
 
     /// The colours of each line, as of the last `recolour`.

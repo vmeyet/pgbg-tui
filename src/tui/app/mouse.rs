@@ -45,17 +45,18 @@ impl App {
     /// The place in the editor's text drawn at `at`, as the last frame drew it.
     fn editor_place(&self, at: Position) -> Place {
         let inside = self.fit.editor_text;
-        let first_line = self.sheet().editor.first_line_in_view(inside.height);
+        let first_line = self.sheet().editor.first_line();
         Place { line: first_line + usize::from(at.y.saturating_sub(inside.y)), column: usize::from(at.x.saturating_sub(inside.x)) }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::fixtures::with_every_pane;
-    use super::super::{Focus, Overlay};
+    use super::super::fixtures::{every_pane, with_every_pane};
+    use super::super::{Fit, Focus, Overlay};
     use super::*;
     use crossterm::event::KeyModifiers;
+    use ratatui::layout::Rect;
     use std::time::Duration;
     use vtui::help::Help;
 
@@ -99,6 +100,36 @@ mod tests {
         click(&mut app, MouseEventKind::Down(LEFT), 36, 3);
         let (before, _, _) = app.sheet().editor.split();
         assert_eq!(before, "SELECT id\nFROM ");
+    }
+
+    /// Draws the editor ten rows high from its inside's corner, at column 31 and row 2.
+    fn draw_ten_rows(app: &mut App) {
+        app.fit(Fit { panes: every_pane(), editor_text: Rect::new(31, 2, 48, 10), ..Fit::default() });
+    }
+
+    /// Thirty lines, `line 0` to `line 29`, drawn ten rows high with the cursor on the last.
+    fn thirty_lines() -> App {
+        let mut app = editing(&(0..30).map(|n| format!("line {n}")).collect::<Vec<_>>().join("\n"));
+        draw_ten_rows(&mut app);
+        app
+    }
+
+    #[test]
+    fn a_press_and_a_drag_select_the_lines_drawn_under_the_mouse_and_never_scroll() {
+        let mut app = thirty_lines();
+        click(&mut app, MouseEventKind::Down(LEFT), 31, 2);
+        draw_ten_rows(&mut app);
+        click(&mut app, MouseEventKind::Drag(LEFT), 31, 3);
+        draw_ten_rows(&mut app);
+        assert_eq!((selected(&app), app.sheet().editor.first_line()), (Some("line 20\n"), 20));
+    }
+
+    #[test]
+    fn the_keys_still_scroll_the_view_to_the_cursor() {
+        let mut app = thirty_lines();
+        (0..25).for_each(|_| _ = app.handle_key(crossterm::event::KeyEvent::from(crossterm::event::KeyCode::Up)));
+        draw_ten_rows(&mut app);
+        assert_eq!(app.sheet().editor.first_line(), 4);
     }
 
     #[test]
