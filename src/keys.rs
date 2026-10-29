@@ -1,13 +1,21 @@
 //! The keys of a result's columns: which are the primary key, and where a foreign key points, read from the catalog.
 //! Pure, and only sure when the statement reads one table: a result column is that table's column of the same name.
 use crate::complete;
-use crate::db::model::{Catalog, Column, ColumnName, Statement, Table};
+use crate::db::model::{Catalog, Column, ForeignKey, Statement, Table};
 
-/// The column a foreign key points to.
+/// The row a foreign key points to: its table, and the column there that each column of the key equals.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Target {
     pub(crate) schema: String,
     pub(crate) table: String,
+    /// One for each column of the key, most keys having one.
+    pub(crate) pairs: Vec<KeyPair>,
+}
+
+/// A column of a foreign key: its place in the result, and the column of the target it equals.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct KeyPair {
+    pub(crate) at: usize,
     pub(crate) column: String,
 }
 
@@ -15,7 +23,7 @@ pub(crate) struct Target {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ColumnKey {
     pub(crate) is_primary: bool,
-    /// Where it points, when a foreign key of that column alone points elsewhere.
+    /// Where it points, when it is a column of a foreign key whose every column the result holds once.
     pub(crate) points_to: Option<Target>,
 }
 
@@ -23,19 +31,27 @@ pub(crate) struct ColumnKey {
 /// one table, or one the catalog does not hold.
 pub(crate) fn column_keys(catalog: &Catalog, statement: &Statement, columns: &[Column]) -> Vec<ColumnKey> {
     let Some(table) = one_table_read(catalog, statement) else { return vec![ColumnKey::default(); columns.len()] };
-    columns.iter().map(|column| key_of(table, &column.name)).collect()
+    columns.iter().map(|column| key_of(table, column.name.as_str(), columns)).collect()
 }
 
-fn key_of(table: &Table, column: &ColumnName) -> ColumnKey {
-    let name = column.as_str();
+fn key_of(table: &Table, name: &str, columns: &[Column]) -> ColumnKey {
     let is_primary = table.indexes.iter().any(|index| index.is_primary && index.columns.iter().any(|key| key == name));
-    let points_to = table.foreign_keys.iter().find_map(|key| match (key.columns.as_slice(), key.target_columns.as_slice()) {
-        ([from], [to]) if from == name => {
-            Some(Target { schema: key.target_schema.clone(), table: key.target_table.clone(), column: to.clone() })
-        }
-        _ => None,
-    });
-    ColumnKey { is_primary, points_to }
+    let keys = table.foreign_keys.iter().filter(|key| key.columns.iter().any(|column| column == name));
+    ColumnKey { is_primary, points_to: keys.into_iter().find_map(|key| target_of(key, columns)) }
+}
+
+/// Where `key` points from `columns`, when they hold each of its columns once.
+fn target_of(key: &ForeignKey, columns: &[Column]) -> Option<Target> {
+    let pair = |(from, to): (&String, &String)| Some(KeyPair { at: only_column(columns, from)?, column: to.clone() });
+    let pairs: Option<Vec<KeyPair>> = key.columns.iter().zip(&key.target_columns).map(pair).collect();
+    Some(Target { schema: key.target_schema.clone(), table: key.target_table.clone(), pairs: pairs? })
+}
+
+/// The place of the one column named `name`; none when `columns` hold no such column, or several.
+fn only_column(columns: &[Column], name: &str) -> Option<usize> {
+    let mut named = columns.iter().enumerate().filter(|(_, column)| column.name.as_str() == name).map(|(at, _)| at);
+    let first = named.next()?;
+    named.next().is_none().then_some(first)
 }
 
 /// The table `statement` reads, when it names exactly one, found as PostgreSQL resolves its name: with its schema, or
@@ -64,8 +80,9 @@ mod tests {
         column_keys(&shop_catalog(), &Statement::new(statement), &columns)
     }
 
-    fn customers() -> Target {
-        Target { schema: "public".to_owned(), table: "customers".to_owned(), column: "id".to_owned() }
+    /// A key of the one column at `at` pointing to `id` of `schema.table`.
+    fn to_id(schema: &str, table: &str, at: usize) -> Target {
+        Target { schema: schema.to_owned(), table: table.to_owned(), pairs: vec![KeyPair { at, column: "id".to_owned() }] }
     }
 
     #[test]
@@ -75,13 +92,31 @@ mod tests {
 
     #[test]
     fn a_column_with_a_foreign_key_points_to_its_target() {
-        assert_eq!(keys("SELECT id, customer_id FROM orders", &["id", "customer_id"])[1].points_to, Some(customers()));
+        let keys = keys("SELECT id, customer_id FROM orders", &["id", "customer_id"]);
+        assert_eq!(keys[1].points_to, Some(to_id("public", "customers", 1)));
     }
 
     #[test]
     fn a_table_named_with_its_schema_is_found_in_that_schema() {
-        let target = Target { schema: "public".to_owned(), table: "orders".to_owned(), column: "id".to_owned() };
-        assert_eq!(keys("SELECT * FROM billing.invoices", &["order_id"])[0].points_to, Some(target));
+        assert_eq!(keys("SELECT * FROM billing.invoices", &["order_id"])[0].points_to, Some(to_id("public", "orders", 0)));
+    }
+
+    #[test]
+    fn a_key_column_the_result_holds_twice_points_nowhere() {
+        assert_eq!(keys("SELECT customer_id, customer_id FROM orders", &["customer_id", "customer_id"])[0].points_to, None);
+    }
+
+    #[test]
+    fn each_column_of_a_key_of_several_points_to_the_whole_key() {
+        let mut catalog = shop_catalog();
+        let key = &mut catalog.schema.schemas[1].tables[0].foreign_keys[0];
+        key.columns.push("total".to_owned());
+        key.target_columns.push("region".to_owned());
+        let columns = ["id", "customer_id", "total"].map(|name| column(name, ColumnKind::Int));
+        let keys = column_keys(&catalog, &Statement::new("SELECT * FROM orders"), &columns);
+        let region = KeyPair { at: 2, column: "region".to_owned() };
+        let both = Target { pairs: vec![KeyPair { at: 1, column: "id".to_owned() }, region], ..to_id("public", "customers", 1) };
+        assert_eq!([&keys[1].points_to, &keys[2].points_to], [&Some(both.clone()), &Some(both)]);
     }
 
     #[test]
