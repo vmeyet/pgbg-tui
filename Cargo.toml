@@ -53,6 +53,9 @@ strip = true
 panic = "abort"
 codegen-units = 1
 
+[profile.dist]
+inherits = "release"
+
 [lints.rust]
 elided_lifetimes_in_paths = "warn"
 missing_debug_implementations = "warn"

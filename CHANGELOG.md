@@ -6,6 +6,8 @@ Each entry says what changed, then where, then how to use it.
 
 ## Unreleased
 
+## 0.1.0 - 2026-10-29
+
 ### New
 
 - **`pgbg update` installs the latest pgbg**, from the command line: with `brew upgrade` when brew installed it, else built again with cargo from GitHub, only when a newer commit is there.

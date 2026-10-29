@@ -25,7 +25,11 @@ Read your PostgreSQL databases from the terminal: local, staging, and production
 
 ## Install
 
-You need Rust 1.92 or newer.
+```sh
+brew install vmeyet/tap/pgbg
+```
+
+Or with cargo, which needs Rust 1.92 or newer:
 
 ```sh
 cargo install --git https://github.com/vmeyet/pgbg-tui
