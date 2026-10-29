@@ -194,6 +194,11 @@ Each step is one MR, in this order.
 - [x] `/` filters the rows on screen and `s` sorts them by the column under the cursor, without a new query
 - [x] `=` and `!` on a cell add `WHERE column = value` or `<>` to the statement
 - [x] `i` on a column shows its distinct count, NULLs, min, max and five most common values
+- [ ] The grid keeps the table a result reads, so a followed key does not lex the statement again on every frame
+- [ ] Count lookups that went stale are dropped from the queue, and going back keeps the counts already read
+- [ ] `keys` finds a table once and gives its keys, so a lookup does not parse its own SQL again
+- [ ] One builder writes `column = $n AND …` for a lookup and a referrer, and the footer hints share one fitting
+- [ ] A lookup's answer reaches the sheet as an `Answer`, not app-wide
 
 ## Later
 
