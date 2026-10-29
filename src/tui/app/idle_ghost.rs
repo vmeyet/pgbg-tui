@@ -5,13 +5,12 @@
 use super::editor::Revision;
 use super::ghost::Ghost;
 use super::{Action, App, AskFailure, AskId, Focus, NoIdleGhost, Sheet};
-use crate::ai::{Instruction, LiteralPolicy, Prompt};
+use crate::ai::{Instruction, LiteralPolicy, NotSent, Prompt};
 use crate::config::AiSettings;
 use crate::connection::{AiAsking, ConnectionName};
 use crate::db::lex::{self, Placed, Token};
 use crate::db::model::Statement;
 use crate::query::Header;
-use crate::secret;
 use std::cmp::Ordering;
 
 const NO_COMMENT: &str = "Complete the statement under the cursor.";
@@ -27,9 +26,18 @@ struct Question<'a> {
 
 impl Question<'_> {
     fn instruction(&self) -> Instruction {
-        let asked = if self.comment.is_empty() { NO_COMMENT.to_owned() } else { self.comment.join("\n") };
-        Instruction::new(format!("{asked}\n{KEEP_TYPED}"))
+        if self.comment.is_empty() { no_comment() } else { Instruction::under_comment(self.comment.join("\n"), KEEP_TYPED) }
     }
+}
+
+fn no_comment() -> Instruction {
+    Instruction::new(format!("{NO_COMMENT}\n{KEEP_TYPED}"))
+}
+
+/// The idle ask's prompt, and why it left out the comment above the statement when it did.
+struct IdlePrompt {
+    prompt: Prompt,
+    left_out: Option<NotSent>,
 }
 
 /// One sheet's editor at one revision: each editor counts its own revisions, so the sheet tells two of them apart.
@@ -93,13 +101,13 @@ impl App {
         let Some(settings) = self.idle_settings().filter(|_| self.wants_idle_ghost()) else { return vec![] };
         let settings = settings.without_passwords_of(&self.connections);
         let editor = self.editor_on_screen();
-        let Some(prompt) = self.sheet().idle_prompt(settings.literals) else {
+        let Some(IdlePrompt { prompt, left_out }) = self.sheet().idle_prompt(settings.literals) else {
             self.asks.idle = IdleAsk::Asked(editor);
             return vec![];
         };
         let ask = self.asks.take_id();
         self.asks.idle = IdleAsk::Waiting { ask, editor };
-        vec![Action::Ask { ask, prompt, settings }]
+        left_out.map(Action::LogCommentLeftOut).into_iter().chain([Action::Ask { ask, prompt, settings }]).collect()
     }
 
     /// Kills the idle ask still running, since a key or a paste makes its answer stale.
@@ -160,14 +168,19 @@ impl Sheet {
         }
     }
 
-    /// The prompt asking for the rest of the statement under the cursor; none when nothing is asked or it cannot be
-    /// sent, as when its comment holds a secret: the comment leaves the machine as typed.
-    fn idle_prompt(&self, literals: LiteralPolicy) -> Option<Prompt> {
+    /// The prompt asking for the rest of the statement under the cursor, with the comment above it as the instruction;
+    /// with the default instruction when `literals` masks it and it cannot be masked; none when nothing is asked or it
+    /// cannot be sent, as when the comment holds a secret.
+    fn idle_prompt(&self, literals: LiteralPolicy) -> Option<IdlePrompt> {
         let question = self.question()?;
-        if question.comment.iter().any(|line| secret::holds_secret(line)) {
-            return None;
+        let statement = Statement::new(question.typed);
+        let ask = |instruction: &Instruction| self.prompt_about(instruction, Some(&statement), literals);
+        match ask(&question.instruction()) {
+            Err(NotSent::UnmaskableComment) => {
+                ask(&no_comment()).ok().map(|prompt| IdlePrompt { prompt, left_out: Some(NotSent::UnmaskableComment) })
+            }
+            asked => asked.ok().map(|prompt| IdlePrompt { prompt, left_out: None }),
         }
-        self.prompt_about(&question.instruction(), Some(&Statement::new(question.typed)), literals).ok()
     }
 
     /// The ghost of what the first of `statements` adds after the statement typed before the cursor, when it starts
@@ -379,6 +392,44 @@ pub(in crate::tui) mod tests {
     fn a_comment_holding_a_secret_is_never_sent() {
         let mut app = idle_on("-- set the password of nina\n");
         assert_eq!(app.ask_idle_ghost(), []);
+    }
+
+    const PERSONAL_COMMENT: &str = "-- orders of nina@example.com, order 4412\nSELECT * FROM orders WHERE ";
+
+    #[test]
+    fn the_values_of_a_comment_are_masked_by_default() {
+        let text = prompt_text(&mut idle_on(PERSONAL_COMMENT));
+        assert!(text.contains("Instruction:\norders of '<literal 1>', order <number 2>\n"), "{text}");
+        assert!(!text.contains("nina@example.com") && !text.contains("4412"), "{text}");
+    }
+
+    #[test]
+    fn the_comment_is_sent_as_typed_with_literals_sent() {
+        let sent = AiSettings { ghost: true, literals: LiteralPolicy::Sent, ..ai_settings() };
+        let text = prompt_text(&mut idle_on(PERSONAL_COMMENT).with_ai(Some(sent)));
+        assert!(text.contains("Instruction:\norders of nina@example.com, order 4412\n"), "{text}");
+    }
+
+    #[test]
+    fn a_marker_of_the_comment_is_put_back_in_the_answer() {
+        let sent = idle_on(PERSONAL_COMMENT).ask_idle_ghost();
+        let [Action::Ask { prompt, .. }] = &*sent else { panic!("{sent:?}") };
+        let answer = prompt.answer("```sql\nSELECT * FROM orders WHERE id = <number 2>\n```").unwrap();
+        assert_eq!(answer, [Statement::new("SELECT * FROM orders WHERE id = 4412")]);
+    }
+
+    #[test]
+    fn a_comment_holding_a_secret_is_never_sent_with_literals_sent() {
+        let sent = AiSettings { ghost: true, literals: LiteralPolicy::Sent, ..ai_settings() };
+        let mut app = idle_on("-- set the password of nina@example.com\n").with_ai(Some(sent));
+        assert_eq!(app.ask_idle_ghost(), []);
+    }
+
+    #[test]
+    fn a_comment_that_cannot_be_masked_is_left_out_and_logged() {
+        let sent = idle_on("-- don't show nina\nSELECT * FROM orders WHERE ").ask_idle_ghost();
+        let [Action::LogCommentLeftOut(NotSent::UnmaskableComment), Action::Ask { prompt, .. }] = &*sent else { panic!("{sent:?}") };
+        assert!(prompt.text().contains(&format!("Instruction:\n{NO_COMMENT}\n")) && !prompt.text().contains("nina"), "{}", prompt.text());
     }
 
     #[test]

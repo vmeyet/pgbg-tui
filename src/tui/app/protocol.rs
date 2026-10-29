@@ -112,6 +112,8 @@ pub(in crate::tui) enum Action {
     DropAsk(AskId),
     /// Log why the idle ask shows no ghost, which nobody asked for and so nothing on screen says.
     LogNoIdleGhost(NoIdleGhost),
+    /// Log why the idle ask left out the comment above the statement and asked to complete the statement instead.
+    LogCommentLeftOut(NotSent),
 }
 
 /// A connection to add or edit: the keys it sets, and the password typed for its keychain item.

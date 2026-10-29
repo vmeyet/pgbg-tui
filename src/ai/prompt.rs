@@ -1,6 +1,6 @@
 //! The text sent on a command's stdin: the instruction, the masked statement, a slice of the schema and the tier.
 use super::answer::{self, AnswerError};
-use super::mask::{LiteralPolicy, Literals, masked};
+use super::mask::{LiteralPolicy, Literals, Masked, masked, masked_comment};
 use super::slice::slice;
 use crate::connection::Tier;
 use crate::db::lex::{Lexed, Span, Token};
@@ -11,12 +11,16 @@ use std::fmt;
 /// The most bytes a prompt holds, so a big schema never makes a slow or costly ask.
 const MAX_BYTES: usize = 16 * 1024;
 const CUT_NOTE: &str = "(The schema was cut to fit: more tables exist.)\n";
-const MASKING_NOTE: &str = "The statement's values are masked: keep each '<literal n>' and <number n> where its value stays, and pgbg \
-                            puts the values back. Never write a marker the statement does not hold.\n";
+const MASKING_NOTE: &str = "Values are masked: keep each '<literal n>' and <number n> where its value stays, and pgbg puts the values \
+                            back. Never write a marker the instruction or the statement does not hold.\n";
 
-/// What the user asked for, sent as typed: whatever it holds leaves the machine.
+/// What the user asked for: typed for the ask and sent as typed, whatever it holds leaving the machine; or read off the
+/// `--` lines above the statement, then pgbg's own words, the comment masked as the statement is, since nobody sent it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Instruction(String);
+pub(crate) struct Instruction {
+    comment: Option<String>,
+    text: String,
+}
 
 /// What one ask is built from.
 #[derive(Debug)]
@@ -47,11 +51,35 @@ pub(crate) enum NotSent {
     UnclosedQuote,
     /// The instruction and the statement alone pass the cap.
     TooLong,
+    /// The comment read as the instruction opens a quote or a `{{` it never closes, so its values cannot be masked.
+    UnmaskableComment,
 }
 
 impl Instruction {
     pub(crate) fn new(text: impl Into<String>) -> Self {
-        Self(text.into())
+        Self { comment: None, text: text.into() }
+    }
+
+    /// `comment`, the `--` lines above the statement, followed by `text`.
+    pub(crate) fn under_comment(comment: impl Into<String>, text: impl Into<String>) -> Self {
+        Self { comment: Some(comment.into()), text: text.into() }
+    }
+
+    /// The instruction as typed, the comment first, for the schema slice to read the names it points to.
+    fn whole(&self) -> String {
+        self.comment.iter().chain([&self.text]).map(String::as_str).collect::<Vec<_>>().join("\n")
+    }
+
+    /// The instruction as the prompt shows it, its comment sent as typed or masked, as `policy` says, with markers
+    /// counted on from the statement's `before` literals; the literals of both come back.
+    fn masked(&self, before: Literals, policy: LiteralPolicy) -> Result<Masked, NotSent> {
+        let Some(comment) = &self.comment else { return Ok(Masked { text: self.text.clone(), literals: before }) };
+        refuse_unsafe_comment(comment, policy)?;
+        let comment = match policy {
+            LiteralPolicy::Masked => masked_comment(comment, before),
+            LiteralPolicy::Sent => Masked { text: comment.clone(), literals: before },
+        };
+        Ok(Masked { text: format!("{}\n{}", comment.text, self.text), literals: comment.literals })
     }
 }
 
@@ -59,11 +87,21 @@ impl Instruction {
 pub(crate) fn prompt(input: &PromptInput<'_>) -> Result<Prompt, NotSent> {
     let sql = input.statement.map_or("", Statement::as_str);
     refuse_unsafe(sql)?;
-    let masked = masked(sql, input.literals);
-    let head = head(input, &masked.text);
+    let statement = masked(sql, input.literals);
+    let instruction = input.instruction.masked(statement.literals, input.literals)?;
+    let head = head(input, &instruction.text, &statement.text);
     let room = MAX_BYTES.checked_sub(head.len() + CUT_NOTE.len()).ok_or(NotSent::TooLong)?;
-    let schema = fitted(slice(input.catalog, sql, &input.instruction.0), room);
-    Ok(Prompt { text: head + &schema, literals: masked.literals })
+    let schema = fitted(slice(input.catalog, sql, &input.instruction.whole()), room);
+    Ok(Prompt { text: head + &schema, literals: instruction.literals })
+}
+
+/// A comment holding a secret is never sent; with literals masked, nor is one whose values no marker masks whole.
+fn refuse_unsafe_comment(comment: &str, policy: LiteralPolicy) -> Result<(), NotSent> {
+    match (refuse_unsafe(comment), policy) {
+        (Err(NotSent::HoldsSecret), _) => Err(NotSent::HoldsSecret),
+        (Err(_), LiteralPolicy::Masked) => Err(NotSent::UnmaskableComment),
+        _ => Ok(()),
+    }
 }
 
 fn refuse_unsafe(sql: &str) -> Result<(), NotSent> {
@@ -78,7 +116,7 @@ fn refuse_unsafe(sql: &str) -> Result<(), NotSent> {
     }
 }
 
-fn head(input: &PromptInput<'_>, statement: &str) -> String {
+fn head(input: &PromptInput<'_>, instruction: &str, statement: &str) -> String {
     let statement = if statement.is_empty() { "(none)" } else { statement };
     let masking = match input.literals {
         LiteralPolicy::Masked => MASKING_NOTE,
@@ -89,10 +127,10 @@ fn head(input: &PromptInput<'_>, statement: &str) -> String {
          {masking}\
          Keep each {{{{name}}}} parameter as it is.\n\
          The database is a {} one.\n\n\
-         Instruction:\n{}\n\n\
+         Instruction:\n{instruction}\n\n\
          Statement under the cursor:\n{statement}\n\n\
          Schema, names and types:\n",
-        input.tier, input.instruction.0
+        input.tier
     )
 }
 
@@ -134,6 +172,9 @@ impl fmt::Display for NotSent {
             Self::UnreadableParam => "the statement holds a `{{` that opens no parameter: close it as `{{name}}` first",
             Self::UnclosedQuote => "the statement opens a quote it never closes: close it first",
             Self::TooLong => "the instruction and the statement pass 16 KiB: shorten one of them",
+            Self::UnmaskableComment => {
+                "the comment above the statement opens a quote or a `{{` it never closes, so its values cannot be masked"
+            }
         })
     }
 }
@@ -268,6 +309,40 @@ mod tests {
         let prompt = prompt_for("SELECT * FROM customers WHERE name = 'nina'", "", &shop_catalog()).unwrap();
         let statements = prompt.answer("```sql\nSELECT id FROM customers WHERE name = '<literal 1>';\n```").unwrap();
         assert_eq!(statements, [Statement::new("SELECT id FROM customers WHERE name = 'nina'")]);
+    }
+
+    fn under_comment(comment: &str, literals: LiteralPolicy) -> Result<Prompt, NotSent> {
+        let instruction = Instruction::under_comment(comment, "finish it");
+        let statement = Statement::new("SELECT * FROM orders");
+        prompt(&PromptInput {
+            instruction: &instruction,
+            statement: Some(&statement),
+            catalog: &shop_catalog(),
+            tier: Tier::Production,
+            literals,
+        })
+    }
+
+    #[test]
+    fn a_comment_instruction_is_masked_before_the_words_of_pgbg() {
+        let text = under_comment("orders of nina@example.com", LiteralPolicy::Masked).unwrap().text().to_owned();
+        assert!(text.contains("Instruction:\norders of '<literal 1>'\nfinish it\n"), "{text}");
+    }
+
+    #[test]
+    fn a_comment_instruction_with_literals_sent_is_sent_as_typed() {
+        let text = under_comment("don't show nina -- yet", LiteralPolicy::Sent).unwrap().text().to_owned();
+        assert!(text.contains("Instruction:\ndon't show nina -- yet\nfinish it\n"), "{text}");
+    }
+
+    #[test]
+    fn a_comment_instruction_opening_a_quote_is_unmaskable() {
+        assert_eq!(under_comment("don't show nina", LiteralPolicy::Masked).unwrap_err(), NotSent::UnmaskableComment);
+    }
+
+    #[test]
+    fn a_comment_instruction_holding_a_secret_is_never_sent_even_with_literals_sent() {
+        assert_eq!(under_comment("set the password of nina", LiteralPolicy::Sent).unwrap_err(), NotSent::HoldsSecret);
     }
 
     #[test]

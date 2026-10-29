@@ -252,7 +252,10 @@ timeout = 60                                    # seconds; 60 by default
 
 `ai = "off"` on a connection keeps both from asking there.
 
-The `--` lines right above the statement tell the idle ghost what you want, and are sent as typed; header lines such as `-- name:` are left out.
+The `--` lines right above the statement tell the idle ghost what you want; header lines such as `-- name:` are left out.
+Their values are masked as the statement's are: strings, numbers and any word holding an `@`, such as an email.
+A comment that opens a quote it never closes, as `don't`, cannot be masked: the idle ghost then only asks to complete the statement, and `pgbg.log` says so.
+With `literals = "sent"`, the comment is sent as typed; one holding a password is never sent.
 On a blank line under `-- the ten biggest orders`, with nothing typed yet, it asks for the whole statement.
 
 When the idle ghost shows nothing, `pgbg.log` in pgbg's cache folder says why.
