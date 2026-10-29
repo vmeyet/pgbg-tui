@@ -12,8 +12,9 @@ use std::ops::Range;
 use vtui::pane;
 use vtui::theme::Theme;
 
-/// The editor in `area`, scrolled so the cursor's line shows, with the terminal's cursor in it when it has the keys.
-pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
+/// The editor in `area`, scrolled so the cursor's line shows, with the terminal's cursor in it when it has the keys;
+/// returns where it drew the text.
+pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) -> Rect {
     let focused = app.focus() == Focus::Editor;
     let block = pane::framed(app.theme(), &title(app), focused).title(badge(app)).title(header_notes(app)).title(open_error(app));
     let inside = block.inner(area);
@@ -24,16 +25,20 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
     let mark = Style::default().fg(app.theme().danger).add_modifier(Modifier::REVERSED);
     let window = Window { first: scroll, rows: usize::from(inside.height) };
     let ghost = sheet.ghost.as_ref().filter(|_| focused).map(|ghost| Ghost { at: before.len(), rest: &ghost.rest });
-    let text = coloured(
-        sheet.editor.text(),
-        Paint { colours: sheet.editor.colours(), mark: sheet.error_mark, mark_style: mark, ghost, theme: app.theme() },
-        window,
-    );
+    let paint = Paint {
+        colours: sheet.editor.colours(),
+        mark: sheet.error_mark,
+        mark_style: mark,
+        selection: sheet.editor.selection(),
+        ghost,
+        theme: app.theme(),
+    };
+    let text = coloured(sheet.editor.text(), &paint, window);
     f.render_widget(Paragraph::new(text), inside);
-    if !focused {
-        return;
+    if focused {
+        f.set_cursor_position(cursor_position(inside, column, row - scroll));
     }
-    f.set_cursor_position(cursor_position(inside, column, row - scroll));
+    inside
 }
 
 /// The line and column of the cursor in the text, and the first line in view in `inside`, chosen so the cursor's line
@@ -45,10 +50,11 @@ struct Place {
 }
 
 fn place(app: &App, inside: Rect) -> Place {
-    let (before, _, _) = app.sheet().editor.split();
+    let editor = &app.sheet().editor;
+    let (before, _, _) = editor.split();
     let row = before.matches('\n').count();
     let column = Line::from(before.rsplit('\n').next().unwrap_or_default()).width();
-    Place { row, column, scroll: row.saturating_sub(usize::from(inside.height.saturating_sub(1))) }
+    Place { row, column, scroll: editor.first_line_in_view(inside.height) }
 }
 
 /// The position of the terminal's cursor in the editor pane drawn in `area`.
@@ -72,13 +78,13 @@ struct Window {
     rows: usize,
 }
 
-/// How the text is painted: its colours per line, the character at byte `mark` drawn on top in `mark_style`, and the
-/// ghost.
-#[derive(Clone, Copy)]
+/// How the text is painted: its colours per line, the bytes of `selection` reversed, the character at byte `mark` drawn
+/// on top in `mark_style`, and the ghost.
 struct Paint<'a> {
     colours: &'a [Spans],
     mark: Option<usize>,
     mark_style: Style,
+    selection: Option<Range<usize>>,
     ghost: Option<Ghost<'a>>,
     theme: &'a Theme,
 }
@@ -100,10 +106,10 @@ impl<'a> Ghost<'a> {
     }
 }
 
-/// The lines of `text` in `window`, each token in its colour and the mark on top; a mark at a line's end draws a space
-/// there.
+/// The lines of `text` in `window`, each token in its colour, the selection reversed and the mark on top; a mark at a
+/// line's end draws a space there.
 /// The ghost's lines past its first push the text under the cursor's line down, as many as the window holds.
-fn coloured<'a>(text: &'a str, paint: Paint<'_>, window: Window) -> Text<'a> {
+fn coloured<'a>(text: &'a str, paint: &Paint<'_>, window: Window) -> Text<'a> {
     let faded = Style::default().fg(paint.theme.faded);
     let mut line_start = 0;
     let mut lines = Vec::new();
@@ -117,7 +123,8 @@ fn coloured<'a>(text: &'a str, paint: Paint<'_>, window: Window) -> Text<'a> {
                 .and_then(|ghost| Some(Ghost { at: ghost.at.checked_sub(line_start)?, ..ghost }))
                 .filter(|ghost| ghost.at <= line.len());
             let (ghost, below) = ghost.map(Ghost::first_line).unzip();
-            let drawn = coloured_line(line, spans, Cuts { mark: marked, ghost }, paint);
+            let selected = paint.selection.as_ref().and_then(|selection| within_line(selection, line_start, line.len()));
+            let drawn = coloured_line(line, spans, Cuts { mark: marked, selected, ghost }, paint);
             match below {
                 Some(below) => {
                     let room = (window.first + window.rows).saturating_sub(index + 1);
@@ -151,22 +158,35 @@ fn marked_range(line: &str, at: usize) -> Range<usize> {
     at..at + line[at..].chars().next().map_or(0, char::len_utf8)
 }
 
-/// What is inserted into one line, at byte positions of that line: the mark and the ghost.
+/// The part of `range`, bytes of the whole text, that falls in the line starting at byte `line_start`, in bytes of that
+/// line; `None` when none does.
+fn within_line(range: &Range<usize>, line_start: usize, line_len: usize) -> Option<Range<usize>> {
+    let start = range.start.saturating_sub(line_start);
+    let end = range.end.checked_sub(line_start)?.min(line_len);
+    (start < end).then_some(start..end)
+}
+
+/// What is inserted into one line, at byte positions of that line: the mark, the selection and the ghost.
 struct Cuts<'a> {
     mark: Option<Range<usize>>,
+    selected: Option<Range<usize>>,
     ghost: Option<Ghost<'a>>,
 }
 
-/// The line as runs of one style each, built in one pass over its spans, then the mark drawn on top and the ghost
-/// after the cursor.
-fn coloured_line<'a>(line: &'a str, spans: &[Painted], cuts: Cuts<'_>, paint: Paint<'_>) -> Line<'a> {
+/// The line as runs of one style each, built in one pass over its spans, then the selection reversed, the mark drawn on
+/// top and the ghost after the cursor.
+fn coloured_line<'a>(line: &'a str, spans: &[Painted], cuts: Cuts<'_>, paint: &Paint<'_>) -> Line<'a> {
     let runs = token_runs(line, spans, paint.theme);
+    let runs = match &cuts.selected {
+        Some(selected) => runs.iter().flat_map(|run| cut(run, selected, run.style.add_modifier(Modifier::REVERSED))).collect(),
+        None => runs,
+    };
     let runs = match &cuts.mark {
-        Some(mark) => runs.iter().flat_map(|run| cut_by_mark(run, mark, paint.mark_style)).collect(),
+        Some(mark) => runs.iter().flat_map(|run| cut(run, mark, paint.mark_style)).collect(),
         None => runs,
     };
     let runs: Vec<Run> = match cuts.ghost {
-        Some(ghost) => runs.iter().flat_map(|run| cut_by_mark(run, &(ghost.at..ghost.at), run.style)).collect(),
+        Some(ghost) => runs.iter().flat_map(|run| cut(run, &(ghost.at..ghost.at), run.style)).collect(),
         None => runs,
     };
     let runs = runs.into_iter().filter(|run| !run.bytes.is_empty());
@@ -218,13 +238,13 @@ fn token_runs(line: &str, spans: &[Painted], theme: &Theme) -> Vec<Run> {
     runs
 }
 
-/// `run` split where `mark` starts and ends, with the marked part in `mark_style`.
-fn cut_by_mark(run: &Run, mark: &Range<usize>, mark_style: Style) -> [Run; 3] {
+/// `run` split where `range` starts and ends, its part inside drawn in `style`.
+fn cut(run: &Run, range: &Range<usize>, style: Style) -> [Run; 3] {
     let clamp = |at: usize| at.clamp(run.bytes.start, run.bytes.end);
-    let (start, end) = (clamp(mark.start), clamp(mark.end));
+    let (start, end) = (clamp(range.start), clamp(range.end));
     [
         Run { bytes: run.bytes.start..start, style: run.style },
-        Run { bytes: start..end, style: mark_style },
+        Run { bytes: start..end, style },
         Run { bytes: end..run.bytes.end, style: run.style },
     ]
 }
@@ -287,18 +307,28 @@ mod tests {
 
     const EVERY_LINE: Window = Window { first: 0, rows: usize::MAX / 2 };
 
-    fn marked_text(text: &str, mark: usize) -> Vec<String> {
+    /// The lines drawn with each reversed run in brackets.
+    fn reversed_runs(text: &str, mark: Option<usize>, selection: Option<Range<usize>>) -> Vec<String> {
         let style = Style::default().add_modifier(Modifier::REVERSED);
         let shown = |span: &Span<'_>| if span.style == style { format!("[{}]", span.content) } else { span.content.to_string() };
         let theme = Theme::default();
-        let text = coloured(text, Paint { colours: &[], mark: Some(mark), mark_style: style, ghost: None, theme: &theme }, EVERY_LINE);
-        text.lines.iter().map(|line| line.spans.iter().map(shown).collect()).collect()
+        let paint = Paint { colours: &[], mark, mark_style: style, selection, ghost: None, theme: &theme };
+        coloured(text, &paint, EVERY_LINE).lines.iter().map(|line| line.spans.iter().map(shown).collect()).collect()
+    }
+
+    fn marked_text(text: &str, mark: usize) -> Vec<String> {
+        reversed_runs(text, Some(mark), None)
+    }
+
+    #[test]
+    fn the_selection_is_drawn_reversed_across_its_lines() {
+        assert_eq!(reversed_runs("SELECT id\nFROM orders", None, Some(7..14)), ["SELECT [id]", "[FROM] orders"]);
     }
 
     fn painted(text: &str, mark: Option<usize>) -> String {
         let mark_style = Style::default().fg(Theme::default().danger).add_modifier(Modifier::REVERSED);
         let (colours, theme) = (syntax::highlight(text), Theme::default());
-        let text = coloured(text, Paint { colours: &colours, mark, mark_style, ghost: None, theme: &theme }, EVERY_LINE);
+        let text = coloured(text, &Paint { colours: &colours, mark, mark_style, selection: None, ghost: None, theme: &theme }, EVERY_LINE);
         let piece = |span: &Span<'_>| format!("{:?}/{:?} {:?}", span.style.fg, span.style.add_modifier, span.content);
         text.lines.iter().map(|line| line.spans.iter().map(piece).collect::<Vec<_>>().join("\n")).collect::<Vec<_>>().join("\n---\n")
     }
@@ -319,7 +349,11 @@ mod tests {
         let ghost = Some(Ghost { at, rest });
         let shown =
             |span: &Span<'_>| if span.style.fg == Some(theme.faded) { format!("<{}>", span.content) } else { span.content.to_string() };
-        let text = coloured(text, Paint { colours: &[], mark: None, mark_style: Style::default(), ghost, theme: &theme }, window);
+        let text = coloured(
+            text,
+            &Paint { colours: &[], mark: None, mark_style: Style::default(), selection: None, ghost, theme: &theme },
+            window,
+        );
         text.lines.iter().map(|line| line.spans.iter().map(shown).collect()).collect()
     }
 
@@ -357,7 +391,7 @@ mod tests {
     fn the_ghost_shows_only_while_the_editor_has_the_keys() {
         let app = with_focus(typed("sel"), Focus::Result);
         let mut terminal = Terminal::new(TestBackend::new(30, 5)).unwrap();
-        terminal.draw(|f| draw(f, &app, f.area())).unwrap();
+        terminal.draw(|f| _ = draw(f, &app, f.area())).unwrap();
         assert!(!terminal.backend().to_string().contains("select"), "{}", terminal.backend());
     }
 
@@ -366,7 +400,7 @@ mod tests {
         let mut app = idle_ghosted("SELECT * FROM orders WHERE ", "SELECT * FROM orders WHERE total > 10");
         app.recolour();
         let mut terminal = Terminal::new(TestBackend::new(44, 3)).unwrap();
-        terminal.draw(|f| draw(f, &app, f.area())).unwrap();
+        terminal.draw(|f| _ = draw(f, &app, f.area())).unwrap();
         insta::assert_snapshot!("idle_ghost", styled::runs(terminal.backend().buffer()));
     }
 
@@ -374,7 +408,7 @@ mod tests {
         let mut app = idle_ghosted("SELECT * ", "SELECT * FROM orders\nWHERE total > 10\nORDER BY total DESC\nLIMIT 10");
         app.recolour();
         let mut terminal = Terminal::new(TestBackend::new(30, height)).unwrap();
-        terminal.draw(|f| draw(f, &app, f.area())).unwrap();
+        terminal.draw(|f| _ = draw(f, &app, f.area())).unwrap();
         styled::runs(terminal.backend().buffer())
     }
 
@@ -399,7 +433,7 @@ mod tests {
         let text: String = (1..=70_000).map(|line| format!("{line}\n")).collect();
         app.paste(&(text + "last"));
         let mut terminal = Terminal::new(TestBackend::new(30, 5)).unwrap();
-        terminal.draw(|f| draw(f, &app, f.area())).unwrap();
+        terminal.draw(|f| _ = draw(f, &app, f.area())).unwrap();
         assert_eq!(terminal.backend_mut().get_cursor_position().unwrap(), Position { x: 6, y: 3 });
         assert!(terminal.backend().to_string().contains("last"), "{}", terminal.backend());
     }
@@ -412,7 +446,7 @@ mod tests {
         }
         app.handle_key(KeyEvent::from(KeyCode::Char('1')));
         let mut terminal = Terminal::new(TestBackend::new(30, 5)).unwrap();
-        terminal.draw(|f| draw(f, &app, f.area())).unwrap();
+        terminal.draw(|f| _ = draw(f, &app, f.area())).unwrap();
         assert_eq!(terminal.backend_mut().get_cursor_position().unwrap(), Position { x: 3, y: 3 });
         insta::assert_snapshot!("editor_scrolled", terminal.backend());
     }

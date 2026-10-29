@@ -211,6 +211,7 @@ In the TUI, a bar above the editor shows one field per parameter.
 | `esc` | Drop the faded rest after the cursor while one shows; else cancel the running statement. |
 | `tab` `⇧tab` | Next, previous pane: editor, parameters, result, sidebar; in the editor, `tab` takes the faded rest while one shows. |
 | `⇧←` `⇧→` `⇧↑` `⇧↓` | The pane on that side; a click on a pane does the same. |
+| Mouse | In the editor: a click places the cursor; a drag selects, a double click a word, a triple click a line, and letting go copies it, as tmux does; any key drops the selection. |
 | `^o` | Pick another connection; sessions stay open. |
 | `^p` `⌘k` | Find a saved query; `⌘k` needs a terminal with the kitty keyboard protocol, as Ghostty, Kitty or WezTerm. |
 | `^t` | Find a table of the schema. |
@@ -222,6 +223,8 @@ In the TUI, a bar above the editor shows one field per parameter.
 | `^space` `^n` | List the names that fit at the cursor, after `JOIN` the tables a foreign key links first; `^n` where macOS takes `^space` to switch the input source. |
 | `v` | Show the result as a chart, or as a grid again. |
 | `f` `F` | Next format for this column; every column raw or readable. |
+| `⌥c` | In the editor: copy the statement under the cursor; a macOS terminal sends it only with its option key set as meta. |
+| `⌘c` `⌘v` | In the editor: copy the selection, else the statement under the cursor; paste the clipboard. Only where the terminal hands `⌘` over with the kitty keyboard protocol instead of copying or pasting itself. |
 | `y` `Y` `c` | Copy the cell; the row as CSV; the result as CSV, JSON or Markdown. |
 | `^s` | Save the query. |
 | `^q` | A new, empty query; the first `^s` asks for its path. |

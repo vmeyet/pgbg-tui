@@ -1,4 +1,5 @@
-//! `y`, `Y` and `c` on the grid: copy the cell, the row or the whole result to the clipboard, with raw values.
+//! `y`, `Y` and `c` on the grid: copy the cell, the row or the whole result to the clipboard, with raw values; `⌥c` in
+//! the editor: copy the statement under the cursor; letting go of the mouse or `⌘c` there: copy the selection.
 use super::{Action, App, Overlay, Run};
 use crate::act::{self, Act, Pane};
 use crate::db::model::{ResultSet, Value};
@@ -40,6 +41,30 @@ impl App {
     pub(super) fn copy_row(&self) -> Vec<Action> {
         let Some((number, values)) = self.current_row() else { return vec![] };
         vec![Action::Copy { text: export::row(values), done: format!("copied row {number} as CSV{}", undecodable(values)) }]
+    }
+
+    /// Copies the editor's selection; nothing when none.
+    pub(super) fn copy_selection(&self) -> Option<Action> {
+        let text = self.sheet().editor.selected()?;
+        Some(Action::Copy { text: text.to_owned(), done: "copied the selection".to_owned() })
+    }
+
+    /// Copies the editor's selection, else the statement under its cursor.
+    pub(super) fn copy_selection_or_statement(&mut self) -> Vec<Action> {
+        match self.copy_selection() {
+            Some(copy) => vec![copy],
+            None => self.copy_statement(),
+        }
+    }
+
+    /// Copies the statement under the editor's cursor, or notes that there is none.
+    pub(super) fn copy_statement(&mut self) -> Vec<Action> {
+        let sheet = self.sheet();
+        let Some(range) = sheet.range_under_cursor() else {
+            self.note = Some("no statement under the cursor to copy".to_owned());
+            return vec![];
+        };
+        vec![Action::Copy { text: sheet.editor.text()[range].to_owned(), done: "copied the statement".to_owned() }]
     }
 
     /// Asks on the footer line which format the whole result is copied as.
@@ -86,6 +111,8 @@ mod tests {
     use super::*;
     use crate::fixtures::orders;
     use crossterm::event::{KeyCode, KeyModifiers};
+    use vtui::click::Click;
+    use vtui::field::Place;
 
     fn with_an_undecodable_name() -> App {
         on_the_result(orders().with_cell(0, 2, Value::Unsupported))
@@ -181,6 +208,59 @@ mod tests {
         let mut app = typed("SELECT ");
         assert_eq!(press(&mut app, 'y'), []);
         assert_eq!(app.sheet().editor.text(), "SELECT y");
+    }
+
+    fn alt(app: &mut App, c: char) -> Vec<Action> {
+        app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT))
+    }
+
+    #[test]
+    fn alt_c_in_the_editor_copies_the_statement_under_the_cursor() {
+        let mut app = typed("SELECT 1;\nSELECT id FROM orders");
+        assert_eq!(alt(&mut app, 'c'), copied("SELECT id FROM orders", "copied the statement"));
+    }
+
+    #[test]
+    fn alt_c_on_no_statement_says_so() {
+        let mut app = typed("");
+        assert_eq!(alt(&mut app, 'c'), []);
+        assert_eq!(app.note.as_deref(), Some("no statement under the cursor to copy"));
+    }
+
+    fn command(app: &mut App, c: char) -> Vec<Action> {
+        app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::SUPER))
+    }
+
+    #[test]
+    fn command_c_copies_the_selection() {
+        let mut app = typed("SELECT id FROM orders");
+        app.sheet_mut().editor.click(Place { line: 0, column: 16 }, Click::Double);
+        assert_eq!(command(&mut app, 'c'), copied("orders", "copied the selection"));
+    }
+
+    #[test]
+    fn command_c_without_a_selection_copies_the_statement_under_the_cursor() {
+        let mut app = typed("SELECT id FROM orders");
+        assert_eq!(command(&mut app, 'c'), copied("SELECT id FROM orders", "copied the statement"));
+    }
+
+    #[test]
+    fn command_v_asks_for_the_machine_s_clipboard() {
+        assert_eq!(command(&mut typed("SELECT "), 'v'), [Action::PasteClipboard]);
+    }
+
+    #[test]
+    fn the_clipboard_read_is_pasted_at_the_cursor() {
+        let mut app = typed("SELECT ");
+        app.apply(Answer::Pasted(Some("id\r\nFROM orders".into())));
+        assert_eq!(app.sheet().editor.text(), "SELECT id\nFROM orders");
+    }
+
+    #[test]
+    fn a_clipboard_no_program_read_says_so() {
+        let mut app = typed("SELECT ");
+        app.apply(Answer::Pasted(None));
+        assert_eq!(app.note.as_deref(), Some("nothing pasted: the clipboard could not be read"));
     }
 
     #[test]

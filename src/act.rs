@@ -51,6 +51,9 @@ pub(crate) enum Act {
     CopyCsv,
     CopyJson,
     CopyMarkdown,
+    CopyStatement,
+    CopySelection,
+    Paste,
     SwitchTab,
     Filter,
     ReadAgain,
@@ -111,6 +114,9 @@ impl Act {
             Self::CopyCsv => "copy_csv",
             Self::CopyJson => "copy_json",
             Self::CopyMarkdown => "copy_markdown",
+            Self::CopyStatement => "copy_statement",
+            Self::CopySelection => "copy_selection",
+            Self::Paste => "paste",
             Self::SwitchTab => "switch_tab",
             Self::Filter => "filter",
             Self::ReadAgain => "read_again",
@@ -270,6 +276,11 @@ const fn control(c: char) -> KeyEvent {
     KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
 }
 
+/// `⌥` and a letter, which a macOS terminal sends only with its option key set as meta.
+const fn alt(c: char) -> KeyEvent {
+    KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT)
+}
+
 /// `⌘` and a letter, which only a terminal that speaks the kitty keyboard protocol reports.
 const fn command(c: char) -> KeyEvent {
     KeyEvent::new(KeyCode::Char(c), KeyModifiers::SUPER)
@@ -318,6 +329,9 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Ask, Pane::Editor, &[control('g')]).help("^g", "ask the [ai] command for SQL"),
     row(Act::Undo, Pane::Editor, &[control('z')]).help("^z", "undo the last change"),
     row(Act::Redo, Pane::Editor, &[control('Z'), control('y')]).help("⇧^z ^y", "redo the change undone"),
+    row(Act::CopyStatement, Pane::Editor, &[alt('c')]).help("⌥c", "copy the statement under the cursor"),
+    row(Act::CopySelection, Pane::Editor, &[command('c')]).help("⌘c", "copy the selection, else the statement"),
+    row(Act::Paste, Pane::Editor, &[command('v')]).help("⌘v", "paste the clipboard"),
     row(Act::Run, Pane::Params, &[key(KeyCode::Enter)]).help("⏎", "run the statement with these values").footer("⏎", "run"),
     row(Act::Down, Pane::Params, &[key(KeyCode::Tab)]).help("⇥ ⇧⇥", "next, previous parameter").footer("⇥", "next"),
     row(Act::Up, Pane::Params, &[key(KeyCode::BackTab)]),

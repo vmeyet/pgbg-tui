@@ -2,6 +2,7 @@
 //! `wl-copy`, `xclip` or `xsel` elsewhere.
 //! The loop also sends the terminal's OSC 52, which may not reach a clipboard inside tmux or from a phone, so each copy
 //! tries both.
+//! A paste reads it back through the first of `pbpaste`, or `wl-paste`, `xclip` and `xsel`, that prints it.
 use super::super::app::Answer;
 use super::send;
 use crate::db::model::ResultSet;
@@ -16,20 +17,31 @@ use tokio::sync::mpsc::UnboundedSender;
 /// drop it.
 const TERMINAL_LIMIT_BYTES: usize = 100 * 1024;
 
-/// A program that puts what it reads on the machine's clipboard.
-struct Copier {
+/// A program that puts what it reads on the machine's clipboard, or prints what the clipboard holds.
+struct ClipboardProgram {
     program: &'static str,
     args: &'static [&'static str],
 }
 
 /// The programs a copy tries in turn: Wayland's first, then X11's, which also serve an X11 app under Wayland.
-const COPIERS: &[Copier] = if cfg!(target_os = "macos") {
-    &[Copier { program: "pbcopy", args: &[] }]
+const COPIERS: &[ClipboardProgram] = if cfg!(target_os = "macos") {
+    &[ClipboardProgram { program: "pbcopy", args: &[] }]
 } else {
     &[
-        Copier { program: "wl-copy", args: &[] },
-        Copier { program: "xclip", args: &["-selection", "clipboard"] },
-        Copier { program: "xsel", args: &["--clipboard", "--input"] },
+        ClipboardProgram { program: "wl-copy", args: &[] },
+        ClipboardProgram { program: "xclip", args: &["-selection", "clipboard"] },
+        ClipboardProgram { program: "xsel", args: &["--clipboard", "--input"] },
+    ]
+};
+
+/// The programs a paste tries in turn, in the order of [`COPIERS`].
+const PASTERS: &[ClipboardProgram] = if cfg!(target_os = "macos") {
+    &[ClipboardProgram { program: "pbpaste", args: &[] }]
+} else {
+    &[
+        ClipboardProgram { program: "wl-paste", args: &["--no-newline"] },
+        ClipboardProgram { program: "xclip", args: &["-selection", "clipboard", "-out"] },
+        ClipboardProgram { program: "xsel", args: &["--clipboard", "--output"] },
     ]
 };
 
@@ -63,8 +75,39 @@ pub(super) fn copy(text: String, done: String, answers: UnboundedSender<Answer>)
     });
 }
 
+/// Reads the machine's clipboard off the loop; its text comes back as `Answer::Pasted`, `None` when no program read it.
+pub(super) fn paste(answers: UnboundedSender<Answer>) {
+    tokio::spawn(async move {
+        send(&answers, Answer::Pasted(from_the_machine(PASTERS).await));
+    });
+}
+
+/// What the first of `pasters` that works prints, each failure logged.
+async fn from_the_machine(pasters: &[ClipboardProgram]) -> Option<String> {
+    for paster in pasters {
+        match read(paster).await {
+            Ok(text) => return Some(text),
+            Err(err) => tracing::warn!("{} did not read the clipboard: {err:#}", paster.program),
+        }
+    }
+    None
+}
+
+async fn read(paster: &ClipboardProgram) -> Result<String> {
+    let output = Command::new(paster.program)
+        .args(paster.args)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .output()
+        .await
+        .with_context(|| format!("running {}", paster.program))?;
+    anyhow::ensure!(output.status.success(), "{} failed", paster.program);
+    String::from_utf8(output.stdout).context("the clipboard holds no UTF-8 text")
+}
+
 /// The first of `copiers` that takes `text`, each failure logged.
-async fn to_the_machine(text: &str, copiers: &[Copier]) -> Option<&'static str> {
+async fn to_the_machine(text: &str, copiers: &[ClipboardProgram]) -> Option<&'static str> {
     for copier in copiers {
         match run(copier, text).await {
             Ok(()) => return Some(copier.program),
@@ -86,7 +129,7 @@ fn note(done: String, clipboards: Clipboards) -> String {
 }
 
 /// The programs of `copiers` as one list: `wl-copy, xclip or xsel`.
-fn names(copiers: &[Copier]) -> String {
+fn names(copiers: &[ClipboardProgram]) -> String {
     let programs: Vec<_> = copiers.iter().map(|copier| copier.program).collect();
     match programs.split_last() {
         Some((last, [])) => (*last).to_owned(),
@@ -95,7 +138,7 @@ fn names(copiers: &[Copier]) -> String {
     }
 }
 
-async fn run(copier: &Copier, text: &str) -> Result<()> {
+async fn run(copier: &ClipboardProgram, text: &str) -> Result<()> {
     let mut child = Command::new(copier.program)
         .args(copier.args)
         .stdin(Stdio::piped())
@@ -134,8 +177,18 @@ mod tests {
     #[tokio::test]
     #[ignore = "starts a process"]
     async fn a_copy_tries_each_clipboard_program_until_one_takes_it() {
-        let programs = [Copier { program: "pgbg-no-such-clipboard", args: &[] }, Copier { program: "cat", args: &[] }];
+        let programs = [ClipboardProgram { program: "pgbg-no-such-clipboard", args: &[] }, ClipboardProgram { program: "cat", args: &[] }];
         assert_eq!(to_the_machine(&"x".repeat(TERMINAL_LIMIT_BYTES + 1), &programs).await, Some("cat"));
+    }
+
+    #[tokio::test]
+    #[ignore = "starts a process"]
+    async fn a_paste_tries_each_clipboard_program_until_one_prints_it() {
+        let programs = [
+            ClipboardProgram { program: "pgbg-no-such-clipboard", args: &[] },
+            ClipboardProgram { program: "printf", args: &["SELECT 1"] },
+        ];
+        assert_eq!(from_the_machine(&programs).await.as_deref(), Some("SELECT 1"));
     }
 
     #[test]
@@ -154,8 +207,11 @@ mod tests {
 
     #[test]
     fn the_programs_a_copy_tries_read_as_a_list() {
-        let programs =
-            [Copier { program: "wl-copy", args: &[] }, Copier { program: "xclip", args: &[] }, Copier { program: "xsel", args: &[] }];
+        let programs = [
+            ClipboardProgram { program: "wl-copy", args: &[] },
+            ClipboardProgram { program: "xclip", args: &[] },
+            ClipboardProgram { program: "xsel", args: &[] },
+        ];
         assert_eq!(names(&programs), "wl-copy, xclip or xsel");
         assert_eq!(names(&programs[..1]), "wl-copy");
     }

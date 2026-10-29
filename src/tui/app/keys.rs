@@ -21,10 +21,11 @@ fn help_after(help: Help, key: KeyEvent, pane: Pane) -> Option<Help> {
 }
 
 impl App {
-    /// Takes one key; returns what the runner should do about it.
+    /// Takes one key; returns what the runner should do about it. Any key drops the editor's selection once it acted.
     pub(in crate::tui) fn handle_key(&mut self, key: KeyEvent) -> Vec<Action> {
         let dropped = self.drop_idle_ask();
         let actions = self.take_key(key);
+        self.sheet_mut().editor.deselect();
         let asked = self.ask_under_an_ended_comment();
         self.ask_for_hidden_write();
         self.and_the_schema_shown(dropped.into_iter().chain(actions).chain(asked).collect())
@@ -178,6 +179,9 @@ impl App {
             Act::Detail => self.open_detail(),
             Act::CopyCell => return self.copy_cell(),
             Act::CopyRow => return self.copy_row(),
+            Act::CopyStatement => return self.copy_statement(),
+            Act::CopySelection => return self.copy_selection_or_statement(),
+            Act::Paste => return vec![Action::PasteClipboard],
             Act::CopyResult => self.ask_copy_format(),
             Act::SwitchTab => return self.switch_tab(),
             Act::Close | Act::Delete | Act::CloseSession | Act::Add | Act::Edit | Act::CopyCsv | Act::CopyJson | Act::CopyMarkdown => {}

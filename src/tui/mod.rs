@@ -41,7 +41,7 @@ use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures_util::StreamExt;
 use ratatui::DefaultTerminal;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use theme::Theme;
 use tokio::sync::mpsc::{self, UnboundedReceiver};
 use tokio::time::sleep;
@@ -142,7 +142,7 @@ async fn event_loop(
                 match event {
                     Event::Key(key) if key.kind != KeyEventKind::Release => app.handle_key(key),
                     Event::Paste(text) => app.paste(&text),
-                    Event::Mouse(mouse) => app.handle_mouse(mouse),
+                    Event::Mouse(mouse) => app.handle_mouse(mouse, Instant::now()),
                     _ => vec![],
                 }
             }

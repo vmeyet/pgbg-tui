@@ -8,11 +8,17 @@ Each entry says what changed, then where, then how to use it.
 
 ### New
 
+- **`⌘c` and `⌘v` copy and paste**, in the TUI's editor: `⌘c` copies the selection, else the statement under the cursor, and `⌘v` pastes the clipboard as the terminal's paste does.
+  They work where the terminal hands `⌘` over with the kitty keyboard protocol instead of copying or pasting itself; the paste reads the clipboard through `pbpaste`, or `wl-paste`, `xclip` or `xsel`.
+- **`⌥c` copies the statement under the cursor**, in the TUI's editor; the status line says so, or that there is none.
+  A macOS terminal sends `⌥c` only with its option key set as meta.
 - **The grid colours a value by its kind**, in the TUI's result grid: `NULL` dimmed and slanted, `true` green and `false` dimmed, a negative number red, a UUID dimmed past its first eight digits, a timestamp's time dimmed after its date, and JSON keys, strings and numbers each in their colour.
   A text column of a few values that repeat, as a status, gives each value its own colour, the same in every result.
   Press `f` on a boolean column, or `F`, to read it as `✓` and `✗`, or name it in a saved query's header as `-- format: paid=check`.
 - **The grid's header shows the keys**, in the TUI, for a statement that reads one table: a primary-key column's name is bold, and a column with a foreign key ends with `→`, as `customer_id →`.
   It needs the schema read, as completion does.
+- **Select with the mouse in the editor**, in the TUI: a click places the cursor, a drag selects, a double click takes a word and a triple click a line.
+  Letting go copies the selection, as tmux does, and any key drops it.
 - **Shell moves in the editor**, in the TUI: `ctrl-a` and `ctrl-e` go to the start and the end of the line, `ctrl-k` and `ctrl-u` delete to them, and `⌥b` `⌥f` move by word as `⌥←` `⌥→` do.
   `⌥b` `⌥f` are what a macOS terminal sends for `⌥←` `⌥→` when its option key is not set as meta; each delete is one step for `ctrl-z`.
   `$EDITOR` on a saved query moves from `ctrl-e` to `ctrl-x`, so `ctrl-e` ends the line as in a shell.

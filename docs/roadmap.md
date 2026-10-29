@@ -184,9 +184,9 @@ The review of #194 to #208 found these, most severe first; real use of the AI as
 Each step is one MR, in this order.
 
 - [x] Editor moves as in a shell: `⌥b` `⌥f` by word as `⌥←` `⌥→`, `^a` `^e` to the line's ends, `^k` `^u` delete to them; in vtui's field, so every app has them
-- [ ] A mouse drag selects in the editor and copies on release; a double click takes a word, a triple click a line
-- [ ] `⌥c` copies the statement under the cursor
-- [ ] `⌘c` and `⌘v` copy and paste where the terminal sends them
+- [x] A mouse drag selects in the editor and copies on release; a double click takes a word, a triple click a line
+- [x] `⌥c` copies the statement under the cursor
+- [x] `⌘c` and `⌘v` copy and paste where the terminal sends them
 - [x] The grid colours a value by its kind: `NULL` dimmed, one colour per repeated text value, booleans, negative numbers, keys, uuids, json and times
 - [ ] An FK column says so; `⏎` on its cell opens the row it points to, deeper with a trail and `⌫` back
 - [ ] The row's detail lists the tables that point to it; `⏎` runs that query as a new result

@@ -6,6 +6,8 @@ use crate::config::AiSettings;
 use crate::connection::Connection;
 use crate::format::Mode;
 use ask::Asks;
+use ratatui::layout::Rect;
+use vtui::click::Clicks;
 use vtui::help::Help;
 
 pub(super) use ask::{AskStep, Suggestion};
@@ -95,6 +97,8 @@ pub(super) struct Fit {
     pub(super) grid: Room,
     /// Where each pane was drawn; a terminal narrower than 80 columns leaves the sidebar out.
     pub(super) panes: Panes,
+    /// Where the editor drew its text, inside its frame, so a click finds the character it lands on.
+    pub(super) editor_text: Rect,
     /// Where the row's detail started and how far it scrolls.
     pub(super) detail: DetailFit,
 }
@@ -160,6 +164,8 @@ pub(super) struct App {
     /// The format mode new results open in, and the clock the loop last read.
     reading: Reading,
     asks: Asks,
+    /// The last press of the mouse, so the next one can make a double or triple click.
+    clicks: Clicks,
 }
 
 impl App {
@@ -184,6 +190,7 @@ impl App {
             note: None,
             reading: Reading { mode: Mode::Raw, clock: grid::clock_at_epoch() },
             asks: Asks::new(None),
+            clicks: Clicks::default(),
         }
     }
 
@@ -362,6 +369,8 @@ impl App {
             Answer::Versions { query, versions } => self.versions_read(&query, versions),
             Answer::Copied(note) => self.copied(note),
             Answer::Exported { text, done } => return vec![Action::Copy { text, done }],
+            Answer::Pasted(Some(text)) => return self.paste(&text),
+            Answer::Pasted(None) => self.note = Some("nothing pasted: the clipboard could not be read".to_owned()),
             Answer::Asked { ask, answer } => return self.asked(ask, answer),
         }
         vec![]
