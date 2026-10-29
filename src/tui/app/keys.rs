@@ -25,8 +25,9 @@ impl App {
     pub(in crate::tui) fn handle_key(&mut self, key: KeyEvent) -> Vec<Action> {
         let dropped = self.drop_idle_ask();
         let actions = self.take_key(key);
+        let asked = self.ask_under_an_ended_comment();
         self.ask_for_hidden_write();
-        self.and_the_schema_shown(dropped.into_iter().chain(actions).collect())
+        self.and_the_schema_shown(dropped.into_iter().chain(actions).chain(asked).collect())
     }
 
     fn take_key(&mut self, key: KeyEvent) -> Vec<Action> {

@@ -178,6 +178,11 @@ impl App {
         self.sheet_mut().take_suggestion(suggestion);
     }
 
+    /// The program the `[ai] command` runs, as the footer names it while an ask waits.
+    pub(in crate::tui) fn ai_program(&self) -> Option<&str> {
+        self.asks.settings.as_ref().map(AiSettings::program_name)
+    }
+
     pub(in crate::tui) fn ask_failure(&self) -> Option<&AskFailure> {
         self.asks.failure.as_ref()
     }

@@ -5,6 +5,7 @@ use crate::secret::SecretSource;
 use anyhow::{Result, bail};
 use serde::Deserialize;
 use std::collections::BTreeSet;
+use std::path::Path;
 use std::time::Duration;
 
 /// The variables every command gets, when pgbg has them.
@@ -71,6 +72,12 @@ impl AiSettings {
         let passwords = password_variables(connections);
         let env = self.env.iter().filter(|name| !passwords.contains(name.as_str())).cloned().collect();
         Self { env, ..self.clone() }
+    }
+
+    /// The program's file name, `claude` for `/opt/bin/claude`, as the footer names it while it runs.
+    pub(crate) fn program_name(&self) -> &str {
+        let program = self.command.first().map_or("", String::as_str);
+        Path::new(program).file_name().and_then(|name| name.to_str()).unwrap_or(program)
     }
 }
 
@@ -157,6 +164,12 @@ mod tests {
             ghost: false,
         };
         assert_eq!((read.settings, read.warnings.len()), (Some(expected), 0));
+    }
+
+    #[test]
+    fn the_program_name_is_the_file_name_of_the_program() {
+        let read = settings("command = [\"/opt/bin/claude\", \"-p\"]", &[]).unwrap().settings.unwrap();
+        assert_eq!(read.program_name(), "claude");
     }
 
     #[test]

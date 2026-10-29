@@ -176,6 +176,8 @@ The review of #194 to #208 found these, most severe first; real use of the AI as
 - [x] The slice brings the tables one foreign key away from those it keeps, the closest first within the cap
 - [x] The slice shows table and column comments, one holding a secret left out
 - [x] With no table named, the slice sends the table names alone
+- [x] While an ask runs, the footer says `asking <command>…`
+- [x] Ending a `--` line with a newline asks at once, without the idle second
 
 ## 21. A pleasure to use
 

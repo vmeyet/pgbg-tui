@@ -129,6 +129,9 @@ fn status(app: &App, width: usize) -> Line<'static> {
     if let Some(note) = app.note() {
         return Line::styled(truncate(&format!("✓ {} ", printable(note)), width), Style::default().fg(app.theme().muted));
     }
+    if app.is_asking_idle() {
+        return Line::styled(truncate(ask_view::asking(app).trim_start(), width), Style::default().fg(app.theme().warn));
+    }
     let sheet = app.sheet();
     if let Some(why) = &sheet.page_failure {
         return failure(app, why, width);
