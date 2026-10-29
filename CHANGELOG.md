@@ -42,7 +42,8 @@ Each entry says what changed, then where, then how to use it.
   The row is read with the key's values bound, read only whatever the connection allows, and kept out of the history.
 - **The row's detail lists the tables that point to it**, in the TUI: under its columns, each table whose foreign key points to the row, with how many of its rows do, counted up to 1000.
   Press `tab` to reach one and `⏎` to run its rows as a new result: the statement goes at the end of the editor, the row's values in the parameter bar, as `WHERE order_id = {{order_id}}`.
-  The first 12 such tables are counted, each with one read-only read under the connection's statement timeout.
+  Of the first 12 such tables, those whose key an index starts with are counted, one read-only read at a time, each stopped after 2 seconds or the connection's statement timeout when shorter, so a run waits behind one at most.
+  A table without such an index shows `—` instead of a count that could read it whole, and a count that failed shows `!`, its reason on the footer once `tab` reaches it.
 - **`e` in the row's detail writes the join of its trail** into the TUI's editor, unsaved: from `orders › customers › users`, `SELECT * FROM public.orders o JOIN public.customers c ON c.id = o.customer_id JOIN public.users u ON u.id = c.user_id`, aliased as completion aliases a join.
   Its `WHERE` picks the grid's row by its primary key as `{{id}}`, the value in the parameter bar; `ctrl-z` takes it back.
 - **Usage counts, opt-in**, for the TUI: with `[usage] enabled = true` in `config.toml`, pgbg counts the keys you use and the time on each pane, on this machine only, never a statement or a name.

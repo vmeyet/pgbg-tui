@@ -283,7 +283,7 @@ pub(crate) fn shop_schema() -> Schema {
 }
 
 /// [`shop_catalog`] whose `customers.user_id` points to `users`, a table of `public` of oid 4, so a key leads two tables
-/// deep.
+/// deep, and whose `invoices.order_id` an index starts with.
 pub(crate) fn keyed_catalog() -> Catalog {
     let mut catalog = shop_catalog();
     let public = &mut catalog.schema.schemas[1];
@@ -292,6 +292,8 @@ pub(crate) fn keyed_catalog() -> Catalog {
     customers.foreign_keys.push(key_to_id("user_id", "public", "users"));
     let users = schema_table("users", vec![schema_column("id", "integer", None), schema_column("email", "text", None)]);
     public.tables.push(Table { oid: TableOid::new(4), ..users });
+    let order = Index { name: "invoices_order_id".to_owned(), columns: vec!["order_id".to_owned()], is_unique: false, is_primary: false };
+    catalog.schema.schemas[0].tables[0].indexes.push(order);
     catalog
 }
 

@@ -3,8 +3,9 @@
 //! Pure, and sure: a result column has a key only when the server says it holds that column of a table as is, so an
 //! alias, a subquery or a join never mistakes one column for another, and a computed column has none.
 use crate::complete;
+use crate::connection::StatementTimeout;
 use crate::db::model::{
-    Catalog, Column, ForeignKey, Origin, ParamValue, Params, SchemaNode, Statement, Table, TableOid, Value, qualified, sql_name,
+    Catalog, Column, ForeignKey, Index, Origin, ParamValue, Params, SchemaNode, Statement, Table, TableOid, Value, qualified, sql_name,
 };
 use crate::query::params::ParamName;
 use std::collections::BTreeMap;
@@ -38,6 +39,8 @@ pub(crate) struct ColumnKey {
 const REFERRERS_SHOWN: usize = 12;
 /// How far a count of the rows pointing to a row goes before it says only that there are more.
 pub(crate) const COUNTED_ROWS: u64 = 1000;
+/// How long a count may run, or the connection's timeout when it is shorter: the detail only adds it beside the row.
+const COUNT_TIMEOUT: StatementTimeout = StatementTimeout::from_millis(2_000);
 
 /// A table of the catalog, with the schema that holds it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,6 +56,8 @@ pub(crate) struct Referrer {
     pub(crate) schema: String,
     pub(crate) table: String,
     pub(crate) pairs: Vec<Pointing>,
+    /// Whether an index of that table starts with the key's columns, so a count of its rows finds them without a scan.
+    pub(crate) is_indexed: bool,
 }
 
 /// A column of a key that points to a row, and the value of that row it equals.
@@ -84,11 +89,13 @@ pub(crate) struct Prefilled {
     pub(crate) values: BTreeMap<ParamName, ParamValue>,
 }
 
-/// A read-only statement and the values bound to its `$n`.
+/// A read-only statement, the values bound to its `$n`, and the timeout of its own when it has one stricter than the
+/// connection's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Lookup {
     pub(crate) statement: Statement,
     pub(crate) params: Params,
+    pub(crate) own_timeout: Option<StatementTimeout>,
 }
 
 /// The key of each of `columns`, a result read with `catalog`: none for a column read from no table, or from one the
@@ -180,7 +187,7 @@ impl Target {
         let equal = self.pairs.iter().enumerate().map(|(at, pair)| format!("{} = ${}", sql_name(&pair.to), at + 1));
         let condition = equal.collect::<Vec<_>>().join(" AND ");
         let statement = Statement::new(format!("SELECT * FROM {} WHERE {condition}", qualified(&self.schema, &self.table)));
-        Some(Lookup { statement, params: Params::new(values, vec![]) })
+        Some(Lookup { statement, params: Params::new(values, vec![]), own_timeout: None })
     }
 }
 
@@ -197,14 +204,20 @@ pub(crate) fn referrers(catalog: &Catalog, columns: &[Column], row: &[Value]) ->
         let value = |target: &String| row.get(held_once(columns, pointed, target)?)?.as_param();
         let values: Option<Vec<ParamValue>> = key.target_columns.iter().map(value).collect();
         let pairs = key.columns.iter().cloned().zip(values?).map(|(column, value)| Pointing { column, value }).collect();
-        Some(Referrer { schema: node.name.clone(), table: table.name.clone(), pairs })
+        Some(Referrer { schema: node.name.clone(), table: table.name.clone(), pairs, is_indexed: leads_an_index(table, &key.columns) })
     };
     keys.filter_map(referrer).take(REFERRERS_SHOWN).collect()
 }
 
+/// Whether an index of `table` starts with `columns`, in any order.
+fn leads_an_index(table: &Table, columns: &[String]) -> bool {
+    let leads = |index: &Index| index.columns.get(..columns.len()).is_some_and(|first| columns.iter().all(|column| first.contains(column)));
+    table.indexes.iter().any(leads)
+}
+
 impl Referrer {
     /// How many of its rows point to the row, counted up to `COUNTED_ROWS` and one more, so a big table costs no more
-    /// than a small one.
+    /// than a small one, within `COUNT_TIMEOUT`.
     pub(crate) fn count(&self) -> Lookup {
         let statement = format!(
             "SELECT count(*) FROM (SELECT FROM {} WHERE {} LIMIT {}) AS pointing",
@@ -213,7 +226,7 @@ impl Referrer {
             COUNTED_ROWS + 1
         );
         let values = self.pairs.iter().map(|pair| Some(pair.value.clone())).collect();
-        Lookup { statement: Statement::new(statement), params: Params::new(values, vec![]) }
+        Lookup { statement: Statement::new(statement), params: Params::new(values, vec![]), own_timeout: Some(COUNT_TIMEOUT) }
     }
 
     /// Its rows that point to the row, as a statement whose `{{name}}` parameters hold the row's values.
@@ -364,12 +377,40 @@ mod tests {
 
     fn invoices_of_order_7() -> Referrer {
         let pairs = vec![Pointing { column: "order_id".to_owned(), value: ParamValue::new("7") }];
-        Referrer { schema: "billing".to_owned(), table: "invoices".to_owned(), pairs }
+        Referrer { schema: "billing".to_owned(), table: "invoices".to_owned(), pairs, is_indexed: false }
     }
 
     #[test]
     fn a_table_whose_key_points_to_the_row_refers_to_it_by_the_rows_values() {
         assert_eq!(orders_referrers(&[Value::Int(7), Value::Int(3)]), [invoices_of_order_7()]);
+    }
+
+    /// The tables pointing to order 7 in [`shop_catalog`] with an index of `columns` on `billing.invoices`.
+    fn referrers_with_an_index_of(columns: &[&str]) -> Vec<Referrer> {
+        let mut catalog = shop_catalog();
+        let index = Index {
+            name: "invoices_key".to_owned(),
+            columns: columns.iter().map(|&c| c.to_owned()).collect(),
+            is_unique: false,
+            is_primary: false,
+        };
+        catalog.schema.schemas[0].tables[0].indexes.push(index);
+        referrers(&catalog, &[read("orders", "id"), read("orders", "customer_id")], &[Value::Int(7), Value::Int(3)])
+    }
+
+    #[test]
+    fn a_referrer_whose_key_starts_an_index_is_indexed() {
+        assert!(referrers_with_an_index_of(&["order_id", "id"])[0].is_indexed);
+    }
+
+    #[test]
+    fn a_referrer_whose_key_comes_later_in_an_index_is_not_indexed() {
+        assert!(!referrers_with_an_index_of(&["id", "order_id"])[0].is_indexed);
+    }
+
+    #[test]
+    fn a_count_runs_under_a_short_timeout_of_its_own() {
+        assert_eq!(invoices_of_order_7().count().own_timeout, Some(StatementTimeout::from_millis(2_000)));
     }
 
     #[test]

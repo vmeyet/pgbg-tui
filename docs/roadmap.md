@@ -206,14 +206,14 @@ Each step is one MR, in this order.
 The review of #214 to #231 found these, most severe first.
 
 - [x] A result column's key comes from the table and column the server says it was read from, so an alias or a computed column is never taken for a key
-- [ ] Referrer counts run only on a key covered by an index, or on demand, each with a short timeout of its own, and never hold the user's next run behind them
+- [x] Referrer counts run only on a key covered by an index, or on demand, each with a short timeout of its own, and never hold the user's next run behind them
 - [x] The editor keeps its scroll as state, so a click or a drag never moves the view and a drag selects the lines under the mouse
 - [ ] Sort and figures refuse a column pgbg cannot decode and say so, instead of counting its values as one
 - [ ] NUMERIC compares by its decimal text, never through a float
 - [ ] `=` and `!` bind a cell through `Value::as_param`, and refuse a value pgbg could not decode, as a lookup does
 - [ ] Every act on the cursor's cell (`=`, `!`, `i`) is refused while the filter hides its row
 - [ ] A schema comment sent to the AI is cut to a few hundred bytes, and a line that does not fit is skipped, not the end of the slice
-- [ ] A failed referrer count keeps its failure, shown in the detail or logged
+- [x] A failed referrer count keeps its failure, shown in the detail or logged
 - [ ] A double click selects an SQL word (letters, digits, `_`), not everything between two spaces
 
 ## Later

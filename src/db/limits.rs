@@ -19,7 +19,7 @@ const STANDARD_STRINGS: &str = "standard_conforming_strings = on";
 
 /// What every read-only transaction sets for itself with `SET LOCAL`: behind a pooler that hands each transaction any
 /// server link, a session-wide `SET` would miss the next transaction and reach other clients.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub(super) struct ReadLimits {
     pub(super) statement_timeout: StatementTimeout,
     pub(super) idle: IdleTimeout,
@@ -45,7 +45,7 @@ impl IdleTimeout {
 
 impl ReadLimits {
     pub(super) fn sql(&self) -> String {
-        let statement = format!("SET LOCAL {STANDARD_STRINGS}; SET LOCAL statement_timeout = {}", self.statement_timeout.as_millis());
+        let statement = format!("SET LOCAL {STANDARD_STRINGS}; {}", local_statement_timeout(self.statement_timeout));
         match self.idle {
             IdleTimeout::Server(_) => statement,
             IdleTimeout::Backstop => {
@@ -53,6 +53,15 @@ impl ReadLimits {
             }
         }
     }
+
+    /// What a read with a timeout of its own, `own`, sets in its transaction: `own`, or the session's when stricter.
+    pub(super) fn own_timeout_sql(&self, own: StatementTimeout) -> String {
+        local_statement_timeout(own.stricter(self.statement_timeout))
+    }
+}
+
+fn local_statement_timeout(timeout: StatementTimeout) -> String {
+    format!("SET LOCAL statement_timeout = {}", timeout.as_millis())
 }
 
 /// The timeouts the server applies already: a role's or a database's default, or the URL's `options`.

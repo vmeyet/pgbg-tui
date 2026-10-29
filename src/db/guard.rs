@@ -3,7 +3,7 @@
 use super::lex::{self, Lexed, Placed, Token};
 use super::model::words::{LOCKS, WRITES};
 use super::model::{Params, Statement};
-use crate::connection::WritePolicy;
+use crate::connection::{StatementTimeout, WritePolicy};
 use std::fmt;
 use std::ops::Range;
 
@@ -95,6 +95,8 @@ pub(crate) struct Admitted {
     pub(super) transaction_step: TransactionStep,
     /// A query the guard reads as changing nothing, so a cursor can hold it.
     pub(super) is_query: bool,
+    /// A timeout of its own for a read-only statement, which runs under it or the session's, whichever is stricter.
+    pub(super) own_timeout: Option<StatementTimeout>,
     write: Option<Write>,
 }
 
@@ -109,6 +111,11 @@ impl Admitted {
     pub(crate) fn confirmed(self) -> Self {
         let mode = if self.mode == Mode::ReadThenAsk { Mode::Writes } else { self.mode };
         Self { mode, ..self }
+    }
+
+    /// The statement run under `timeout` too, when it gives one and the statement is read only.
+    pub(crate) fn with_own_timeout(self, timeout: Option<StatementTimeout>) -> Self {
+        Self { own_timeout: timeout, ..self }
     }
 }
 
@@ -200,7 +207,7 @@ pub(crate) fn admit(statement: Statement, params: Params, writes: WritePolicy) -
     check_params(&tokens, &params)?;
     let is_query = words.first().is_some_and(|first| QUERIES.contains(first)) && found.is_none();
     let write = found.and_then(|found| named(statement.as_str(), &tokens, &words, &found));
-    Ok(Admitted { statement, params, mode, transaction_step, is_query, write })
+    Ok(Admitted { statement, params, mode, transaction_step, is_query, own_timeout: None, write })
 }
 
 /// The words of `tokens` out of `sql`, in upper case as the guard's lists write them; PostgreSQL folds ASCII only.
