@@ -47,6 +47,7 @@ pub(crate) enum Act {
     Detail,
     WhereEqual,
     WhereNotEqual,
+    ColumnStats,
     CopyCell,
     CopyRow,
     CopyResult,
@@ -114,6 +115,7 @@ impl Act {
             Self::Detail => "detail",
             Self::WhereEqual => "where_equal",
             Self::WhereNotEqual => "where_not_equal",
+            Self::ColumnStats => "column_stats",
             Self::CopyCell => "copy_cell",
             Self::CopyRow => "copy_row",
             Self::CopyResult => "copy_result",
@@ -155,6 +157,7 @@ impl Act {
                 | Self::Detail
                 | Self::WhereEqual
                 | Self::WhereNotEqual
+                | Self::ColumnStats
                 | Self::CopyCell
                 | Self::CopyRow
                 | Self::StepFormat
@@ -201,6 +204,8 @@ pub(crate) enum Pane {
     Confirm,
     /// The detail of the grid's row over the screen, a popup like the finder.
     Detail,
+    /// The figures of the grid's column over the screen, a popup like the row's detail.
+    ColumnStats,
     /// A question on the footer line, the format to copy the result as: while open it takes every key.
     CopyAs,
     /// The `ctrl-space` list of names at the cursor: while open it takes every key.
@@ -215,7 +220,7 @@ pub(crate) enum Pane {
 
 impl Pane {
     /// The order the `?` help lists the panes in.
-    const IN_HELP: [Self; 20] = [
+    const IN_HELP: [Self; 21] = [
         Self::Editor,
         Self::Params,
         Self::Result,
@@ -230,6 +235,7 @@ impl Pane {
         Self::Prompt,
         Self::Confirm,
         Self::Detail,
+        Self::ColumnStats,
         Self::CopyAs,
         Self::Completion,
         Self::Instruction,
@@ -255,6 +261,7 @@ impl Pane {
             Self::Prompt => "prompt",
             Self::Confirm => "write",
             Self::Detail => "row",
+            Self::ColumnStats => "column",
             Self::CopyAs => "copy as",
             Self::Completion => "names",
             Self::Instruction => "ask",
@@ -379,6 +386,8 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::WhereEqual, Pane::Result, &[key(KeyCode::Char('='))])
         .help("= !", "add WHERE column = the cell's value, or <>, to the statement under the editor's cursor"),
     row(Act::WhereNotEqual, Pane::Result, &[key(KeyCode::Char('!'))]),
+    row(Act::ColumnStats, Pane::Result, &[key(KeyCode::Char('i'))])
+        .help("i", "the column's distinct values, NULLs, least, greatest and most common, over the rows loaded"),
     row(Act::Help, Pane::Result, &[key(KeyCode::Char('?'))]).help("?", HELP_KEYS),
     row(Act::Down, Pane::Queries, &[key(KeyCode::Char('j')), key(KeyCode::Down)]).help("j k", "next, previous query").footer("j/k", "move"),
     row(Act::Up, Pane::Queries, &[key(KeyCode::Char('k')), key(KeyCode::Up)]),
@@ -457,6 +466,10 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Back, Pane::Detail, &[key(KeyCode::Backspace)]).help("⌫", "back to the row before").footer("⌫", "back"),
     row(Act::Close, Pane::Detail, &[key(KeyCode::Esc)]).help("esc", "back to the grid").footer("esc", "closes"),
     row(Act::Quit, Pane::Detail, &[control('c')]).help("^c", "quit"),
+    row(Act::Close, Pane::ColumnStats, &[key(KeyCode::Esc), key(KeyCode::Char('i'))])
+        .help("esc i", "back to the grid")
+        .footer("esc", "closes"),
+    row(Act::Quit, Pane::ColumnStats, &[control('c')]).help("^c", "quit"),
     row(Act::Down, Pane::Completion, &[key(KeyCode::Down), control('n')]).help("↓ ^n", "next, previous name").footer("↑↓", "pick"),
     row(Act::Up, Pane::Completion, &[key(KeyCode::Up), control('p')]),
     row(Act::Open, Pane::Completion, &[key(KeyCode::Enter), key(KeyCode::Tab)]).help("⏎ ⇥", "take the name").footer("⏎", "takes"),
@@ -518,6 +531,7 @@ fn works_in(row: &Row, pane: Pane) -> bool {
                     | Pane::Prompt
                     | Pane::Confirm
                     | Pane::Detail
+                    | Pane::ColumnStats
                     | Pane::CopyAs
                     | Pane::SchemaFilter
                     | Pane::RowFilter
@@ -641,6 +655,7 @@ mod tests {
             Pane::Prompt,
             Pane::Confirm,
             Pane::Detail,
+            Pane::ColumnStats,
             Pane::CopyAs,
             Pane::Completion,
             Pane::Instruction,
@@ -729,6 +744,6 @@ mod tests {
     fn the_first_help_lists_the_focused_pane_and_what_works_anywhere() {
         let titles: Vec<&str> = sections(Pane::Result, false).iter().map(|section| section.title).collect();
         assert_eq!(titles, ["result", "anywhere"]);
-        assert_eq!(sections(Pane::Result, true).len(), 20);
+        assert_eq!(sections(Pane::Result, true).len(), 21);
     }
 }

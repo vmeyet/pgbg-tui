@@ -13,6 +13,7 @@ use vtui::help::Help;
 
 pub(super) use ask::{AskStep, Suggestion};
 pub(super) use colouring::Colouring;
+pub(super) use column_stats::ColumnStats;
 pub(super) use completion::Completions;
 pub(super) use confirm::{Confirmed, WriteToSend};
 pub(super) use detail::{Count, Counted, Detail, DetailFit, DetailScroll, DrawnDetail, DrawnRow, RowOf, ShownRow};
@@ -37,6 +38,7 @@ pub(super) use versions::{Listed, VersionList};
 
 pub(super) mod ask;
 mod colouring;
+mod column_stats;
 mod completion;
 mod condition;
 mod confirm;
@@ -126,6 +128,8 @@ pub(super) enum Overlay {
     Prompt(Prompt),
     /// The row under the grid's cursor, one column per line.
     Detail(Detail),
+    /// The figures of the grid's column over the rows loaded.
+    ColumnStats(Box<ColumnStats>),
     /// A question on the footer line: which format the whole result is copied as.
     CopyAs,
     /// The schema tab's filter line, typed into from `/` until `⏎` or `esc`.
