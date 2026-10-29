@@ -44,6 +44,11 @@ impl ParamBar {
         self.field_mut(name).paste(&text.replace(['\r', '\n'], " "));
     }
 
+    /// Puts `value` in the field of `name`, in place of what it held.
+    pub(super) fn put(&mut self, name: &ParamName, value: &str) {
+        *self.field_mut(name) = Field::secret(value);
+    }
+
     /// The field of `name`, created on first use as a secret field, so a value never shows in `Debug` or a log.
     fn field_mut(&mut self, name: &ParamName) -> &mut Field {
         self.fields.entry(name.clone()).or_insert_with(|| Field::secret(""))

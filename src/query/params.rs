@@ -259,6 +259,21 @@ fn byte_of_char(text: &str, nth: usize) -> Option<usize> {
     text.char_indices().map(|(at, _)| at).chain(std::iter::once(text.len())).nth(nth)
 }
 
+impl ParamName {
+    /// A name for a value of the column `column`: its letters and digits in lower case, the rest `_`, then `_2`, `_3`
+    /// past the names `taken`.
+    pub(crate) fn for_column(column: &str, taken: &[Self]) -> Self {
+        let lowered: String = column.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' }).collect();
+        let base = match lowered.trim_matches('_') {
+            "" => "value".to_owned(),
+            digit_first if digit_first.starts_with(|c: char| c.is_ascii_digit()) => format!("_{digit_first}"),
+            plain => plain.to_owned(),
+        };
+        let numbered = (2..).map(|number| Self(format!("{base}_{number}")));
+        std::iter::once(Self(base.clone())).chain(numbered).find(|name| !taken.contains(name)).unwrap_or(Self(base))
+    }
+}
+
 impl FromStr for ParamName {
     type Err = String;
 
@@ -347,6 +362,19 @@ mod tests {
 
     fn name(name: &str) -> ParamName {
         name.parse().unwrap()
+    }
+
+    #[test]
+    fn a_columns_parameter_reads_its_name_in_lower_case_without_what_a_name_cannot_hold() {
+        assert_eq!(
+            ["Total Amount", "?column?", "2024", "Σ"].map(|column| ParamName::for_column(column, &[])),
+            [name("total_amount"), name("column"), name("_2024"), name("value")]
+        );
+    }
+
+    #[test]
+    fn a_columns_parameter_takes_a_number_past_the_names_taken() {
+        assert_eq!(ParamName::for_column("customer", &[name("customer"), name("customer_2")]), name("customer_3"));
     }
 
     #[test]

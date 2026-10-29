@@ -45,6 +45,8 @@ pub(crate) enum Act {
     History,
     Versions,
     Detail,
+    WhereEqual,
+    WhereNotEqual,
     CopyCell,
     CopyRow,
     CopyResult,
@@ -110,6 +112,8 @@ impl Act {
             Self::History => "history",
             Self::Versions => "versions",
             Self::Detail => "detail",
+            Self::WhereEqual => "where_equal",
+            Self::WhereNotEqual => "where_not_equal",
             Self::CopyCell => "copy_cell",
             Self::CopyRow => "copy_row",
             Self::CopyResult => "copy_result",
@@ -149,6 +153,8 @@ impl Act {
                 | Self::Left
                 | Self::Right
                 | Self::Detail
+                | Self::WhereEqual
+                | Self::WhereNotEqual
                 | Self::CopyCell
                 | Self::CopyRow
                 | Self::StepFormat
@@ -370,6 +376,9 @@ pub(crate) const ROWS: &[Row] = &[
         .help("/", "keep the rows loaded with a cell holding what you type")
         .footer("/", "filter"),
     row(Act::Sort, Pane::Result, &[key(KeyCode::Char('s'))]).help("s", "sort the rows loaded by the column: up, down, then as read"),
+    row(Act::WhereEqual, Pane::Result, &[key(KeyCode::Char('='))])
+        .help("= !", "add WHERE column = the cell's value, or <>, to the statement under the editor's cursor"),
+    row(Act::WhereNotEqual, Pane::Result, &[key(KeyCode::Char('!'))]),
     row(Act::Help, Pane::Result, &[key(KeyCode::Char('?'))]).help("?", HELP_KEYS),
     row(Act::Down, Pane::Queries, &[key(KeyCode::Char('j')), key(KeyCode::Down)]).help("j k", "next, previous query").footer("j/k", "move"),
     row(Act::Up, Pane::Queries, &[key(KeyCode::Char('k')), key(KeyCode::Up)]),

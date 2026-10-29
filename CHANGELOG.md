@@ -8,6 +8,9 @@ Each entry says what changed, then where, then how to use it.
 
 ### New
 
+- **`=` and `!` on a cell narrow the statement**, in the TUI's result grid: `=` adds `WHERE column = {{column}}` to the statement under the editor's cursor, `!` adds `<>`, and a NULL cell adds `IS NULL` or `IS NOT NULL`.
+  The condition joins an existing `WHERE` with `AND`, or comes before `ORDER BY`, `LIMIT` or `GROUP BY`; the cell's value waits in the parameter bar, bound when the statement runs, never pasted into its text.
+  `ctrl-z` in the editor takes it back in one step.
 - **`/` filters the rows**, in the TUI's result grid, without running the statement again: on the rows loaded, so the title says `12 of 3 400 rows`, or `of the first 500 rows` when the result holds only its first rows.
   Press `/` and type: a row stays when one of its cells, as the grid shows it, holds the text, whatever the case; `⏎` keeps the filter and `esc` drops it.
 - **`s` sorts the rows by a column**, in the TUI's result grid, without running the statement again: on the rows loaded.
