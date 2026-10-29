@@ -38,7 +38,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> Fit {
     if let Some(params) = panes.params {
         param_bar_view::draw(f, app, params);
     }
-    editor_view::draw(f, app, panes.editor);
+    let editor_text = editor_view::draw(f, app, panes.editor);
     let grid = result_view::draw(f, app, panes.result);
     ask_view::draw(f, app, panes.result);
     completion_view::draw(f, app, panes.editor);
@@ -51,7 +51,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> Fit {
     form_view::draw(f, app);
     let detail = detail_view::draw(f, app);
     help_view::draw(f, app);
-    Fit { grid, panes, detail }
+    Fit { grid, panes, editor_text, detail }
 }
 
 /// The outer frame and its `● name · tier` label in the tier's colour, so the tier is clear even without colour; returns

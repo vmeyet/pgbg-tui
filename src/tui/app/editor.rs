@@ -7,7 +7,8 @@ use crate::query::Header;
 use crate::syntax::{self, Spans};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::ops::Range;
-use vtui::field::Field;
+use vtui::click::Click;
+use vtui::field::{Field, Place};
 
 /// Whether an edit changed the text, or only moved the cursor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,6 +61,42 @@ impl Editor {
     /// The text before the cursor, the character under it, and the rest.
     pub(in crate::tui) fn split(&self) -> (&str, &str, &str) {
         self.field.split()
+    }
+
+    /// The bytes a drag or a double or triple click selected; `None` when nothing is.
+    pub(in crate::tui) fn selection(&self) -> Option<Range<usize>> {
+        self.field.selection()
+    }
+
+    /// The text a drag or a double or triple click selected.
+    pub(super) fn selected(&self) -> Option<&str> {
+        self.selection().map(|range| &self.field.text()[range])
+    }
+
+    pub(super) fn deselect(&mut self) {
+        self.field.deselect();
+    }
+
+    /// Puts the cursor at `place`, where the mouse pressed; a double click selects the word there, a triple its line.
+    pub(super) fn click(&mut self, place: Place, click: Click) {
+        self.undo.end_typing();
+        self.field.move_to(place);
+        match click {
+            Click::Single => {}
+            Click::Double => self.field.select_word(),
+            Click::Triple => self.field.select_line(),
+        }
+    }
+
+    /// Selects from where the mouse pressed, or the selection started, to `place`.
+    pub(super) fn drag_to(&mut self, place: Place) {
+        self.field.select_to(place);
+    }
+
+    /// The first line in view in a pane `rows` lines high, which keeps the cursor's line on its last row at most.
+    pub(in crate::tui) fn first_line_in_view(&self, rows: u16) -> usize {
+        let (before, _, _) = self.split();
+        before.matches('\n').count().saturating_sub(usize::from(rows.saturating_sub(1)))
     }
 
     /// The colours of each line, as of the last `recolour`.

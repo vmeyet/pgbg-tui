@@ -13,6 +13,8 @@ Each entry says what changed, then where, then how to use it.
   Press `f` on a boolean column, or `F`, to read it as `✓` and `✗`, or name it in a saved query's header as `-- format: paid=check`.
 - **The grid's header shows the keys**, in the TUI, for a statement that reads one table: a primary-key column's name is bold, and a column with a foreign key ends with `→`, as `customer_id →`.
   It needs the schema read, as completion does.
+- **Select with the mouse in the editor**, in the TUI: a click places the cursor, a drag selects, a double click takes a word and a triple click a line.
+  Letting go copies the selection, as tmux does, and any key drops it.
 - **Shell moves in the editor**, in the TUI: `ctrl-a` and `ctrl-e` go to the start and the end of the line, `ctrl-k` and `ctrl-u` delete to them, and `⌥b` `⌥f` move by word as `⌥←` `⌥→` do.
   `⌥b` `⌥f` are what a macOS terminal sends for `⌥←` `⌥→` when its option key is not set as meta; each delete is one step for `ctrl-z`.
   `$EDITOR` on a saved query moves from `ctrl-e` to `ctrl-x`, so `ctrl-e` ends the line as in a shell.

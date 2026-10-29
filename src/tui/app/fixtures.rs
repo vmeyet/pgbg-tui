@@ -85,7 +85,7 @@ pub(in crate::tui) fn view(app: &App) -> &View {
 /// [`with_result`] on a screen that drew every pane.
 pub(in crate::tui) fn with_every_pane() -> App {
     let mut app = with_result();
-    app.fit(Fit { panes: every_pane(), ..Fit::default() });
+    app.fit(Fit { panes: every_pane(), editor_text: Rect::new(31, 2, 48, 7), ..Fit::default() });
     app
 }
 

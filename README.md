@@ -211,6 +211,7 @@ In the TUI, a bar above the editor shows one field per parameter.
 | `esc` | Drop the faded rest after the cursor while one shows; else cancel the running statement. |
 | `tab` `⇧tab` | Next, previous pane: editor, parameters, result, sidebar; in the editor, `tab` takes the faded rest while one shows. |
 | `⇧←` `⇧→` `⇧↑` `⇧↓` | The pane on that side; a click on a pane does the same. |
+| Mouse | In the editor: a click places the cursor; a drag selects, a double click a word, a triple click a line, and letting go copies it, as tmux does; any key drops the selection. |
 | `^o` | Pick another connection; sessions stay open. |
 | `^p` `⌘k` | Find a saved query; `⌘k` needs a terminal with the kitty keyboard protocol, as Ghostty, Kitty or WezTerm. |
 | `^t` | Find a table of the schema. |
