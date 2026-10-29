@@ -253,7 +253,8 @@ When a statement reads one table, the header names its primary key in bold and e
 
 ### Following keys
 
-`⏎` on a cell of a column marked `→` opens the row it points to, titled by its table.
+`⏎` on a cell of a column marked `→` opens the row it points to; its own keys say where they point, as `user_id → users`.
+In it, `tab` steps through its keys, `⏎` goes one row deeper and the title shows the trail, as `orders › customers › users`; `⌫` goes back one row, `esc` closes them all.
 Each row is read with the key's values bound, in a read-only transaction whatever the connection allows, and never goes to the history.
 
 ## Asking AI

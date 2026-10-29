@@ -98,6 +98,11 @@ impl Grid {
         self.keys.get(column)?.points_to.as_ref()
     }
 
+    /// Each column's key in the table the result was read from, by index; empty when that table is unknown.
+    pub(in crate::tui) fn keys(&self) -> &[ColumnKey] {
+        &self.keys
+    }
+
     /// The header of the column at `column` of `result`: its name escaped, then `→` when it points to another table.
     pub(in crate::tui) fn header(&self, result: &ResultSet, column: usize) -> String {
         let name = render::printable(result.columns()[column].name.as_str());

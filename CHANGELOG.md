@@ -22,7 +22,8 @@ Each entry says what changed, then where, then how to use it.
 - **Shell moves in the editor**, in the TUI: `ctrl-a` and `ctrl-e` go to the start and the end of the line, `ctrl-k` and `ctrl-u` delete to them, and `⌥b` `⌥f` move by word as `⌥←` `⌥→` do.
   `⌥b` `⌥f` are what a macOS terminal sends for `⌥←` `⌥→` when its option key is not set as meta; each delete is one step for `ctrl-z`.
   `$EDITOR` on a saved query moves from `ctrl-e` to `ctrl-x`, so `ctrl-e` ends the line as in a shell.
-- **`⏎` on a foreign key opens the row it points to**, in the TUI's grid: on a cell of a column marked `→`, the row's detail shows that row, titled by its table.
+- **`⏎` on a foreign key opens the row it points to**, in the TUI's grid: on a cell of a column marked `→`, the row's detail shows that row, its own keys marked as `user_id → users`.
+  In it, `tab` steps through its keys, `⏎` goes one row deeper along a trail the title shows, as `orders › customers › users`, `⌫` goes back and `esc` closes them all.
   A key of several columns works too; a NULL key, or one that points to no row, says so.
   The row is read with the key's values bound, read only whatever the connection allows, and kept out of the history.
 - **Usage counts, opt-in**, for the TUI: with `[usage] enabled = true` in `config.toml`, pgbg counts the keys you use and the time on each pane, on this machine only, never a statement or a name.

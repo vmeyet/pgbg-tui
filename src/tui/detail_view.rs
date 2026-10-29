@@ -2,7 +2,7 @@
 //! indented and coloured.
 //! Every piece of text is drawn through `render::printable`.
 use super::app::{App, DetailFit, DetailScroll, DrawnDetail, DrawnRow, Overlay, RowOf, Run, ShownRow};
-use crate::act::{self, Pane};
+use crate::act::{self, Hint, Pane};
 use crate::db::model::{Column, Value};
 use crate::render;
 use crate::syntax::{self, Painted};
@@ -18,6 +18,7 @@ use vtui::{pane, text};
 const VALUE_MAX_CHARS: usize = 64 * 1024;
 const INDENT: &str = "  ";
 const SHARE_OF_SCREEN_PCT: u16 = 80;
+const HINT_SEPARATOR: &str = " · ";
 
 /// The detail when it is open; returns the line it started at, how far it can scroll, and its lines when it built
 /// them.
@@ -37,11 +38,15 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> DetailFit {
         DetailScroll::Lines(line) => line,
     };
     let first_line = wanted.min(last_scroll);
-    let shown: Vec<Line<'static>> = lines.iter().skip(first_line).take(usize::from(body.height)).cloned().collect();
+    let on_key = shown.targets().get(detail.key).and_then(|target| column_starts.get(target.first_column())).copied();
+    let lit = |(at, line): (usize, &Line<'static>)| {
+        if Some(at) == on_key { line.clone().patch_style(Style::default().add_modifier(Modifier::REVERSED)) } else { line.clone() }
+    };
+    let visible: Vec<Line<'static>> = lines.iter().enumerate().skip(first_line).take(usize::from(body.height)).map(lit).collect();
     f.render_widget(Clear, area);
     f.render_widget(block.style(Style::default().bg(app.theme().surface)), area);
-    f.render_widget(Paragraph::new(shown), body);
-    f.render_widget(Paragraph::new(footer_line(app.theme(), detail.note.as_deref())), footer);
+    f.render_widget(Paragraph::new(visible), body);
+    f.render_widget(Paragraph::new(footer_line(app.theme(), detail.note.as_deref(), footer.width)), footer);
     DetailFit { first_line, last_scroll, drawn: built }
 }
 
@@ -54,17 +59,19 @@ fn title(app: &App, shown: &ShownRow<'_>) -> String {
 }
 
 /// Why the last key followed nothing, else the keys.
-fn footer_line(theme: &Theme, note: Option<&str>) -> Line<'static> {
+fn footer_line(theme: &Theme, note: Option<&str>, columns: u16) -> Line<'static> {
     match note {
         Some(note) => Line::styled(render::printable(note).into_owned(), Style::default().fg(theme.warn)),
-        None => Line::styled(hints(), Style::default().fg(theme.faded)),
+        None => Line::styled(hints(columns), Style::default().fg(theme.faded)),
     }
 }
 
-/// Every column of the row shown as lines `of.width` columns wide.
+/// Every column of the row shown as lines `of.width` columns wide, a key's column naming the table it points to.
 fn drawn(theme: &Theme, shown: &ShownRow<'_>, of: DrawnRow) -> DrawnDetail {
+    let points_to = |at: usize| shown.points_to(at).map(|target| target.table.as_str());
+    let columns = shown.columns.iter().zip(shown.row).enumerate();
     let by_column: Vec<Vec<Line<'static>>> =
-        shown.columns.iter().zip(shown.row).map(|(column, value)| column_lines(theme, column, value, of.width)).collect();
+        columns.map(|(at, (column, value))| column_lines(theme, column, points_to(at), value, of.width)).collect();
     let column_starts = by_column.iter().scan(0, |start, lines| Some(std::mem::replace(start, *start + lines.len()))).collect();
     DrawnDetail { of, lines: by_column.into_iter().flatten().collect(), column_starts }
 }
@@ -80,15 +87,24 @@ fn share_of_screen(cells: u16) -> u16 {
     u16::try_from(u32::from(cells) * u32::from(SHARE_OF_SCREEN_PCT) / 100).unwrap_or(cells)
 }
 
-fn hints() -> String {
-    act::footer(Pane::Detail).map(|hint| format!("{} {}", hint.keys, hint.does)).collect::<Vec<_>>().join(" · ")
+/// The hints that fit in `columns`, the way out kept longest.
+fn hints(columns: u16) -> String {
+    let width = |hint: Hint| written(hint).chars().count() + HINT_SEPARATOR.chars().count();
+    let room = usize::from(columns) + HINT_SEPARATOR.chars().count();
+    act::footer_within(Pane::Detail, room, width).into_iter().map(written).collect::<Vec<_>>().join(HINT_SEPARATOR)
 }
 
-/// The column's name and type, its value below, then a blank line.
-fn column_lines(theme: &Theme, column: &Column, value: &Value, width: u16) -> Vec<Line<'static>> {
+fn written(hint: Hint) -> String {
+    format!("{} {}", hint.keys, hint.does)
+}
+
+/// The column's name, its type and the table its key points to, its value below, then a blank line.
+fn column_lines(theme: &Theme, column: &Column, points_to: Option<&str>, value: &Value, width: u16) -> Vec<Line<'static>> {
     let name = Span::styled(render::printable(column.name.as_str()).into_owned(), Style::default().add_modifier(Modifier::BOLD));
     let type_name = Span::styled(format!("  {}", render::printable(column.type_name.as_str())), Style::default().fg(theme.muted));
-    let header = if column.type_name.as_str().is_empty() { Line::from(name) } else { Line::from(vec![name, type_name]) };
+    let type_name = (!column.type_name.as_str().is_empty()).then_some(type_name);
+    let key = points_to.map(|table| Span::styled(format!("  → {}", render::printable(table)), Style::default().fg(theme.link)));
+    let header = Line::from(std::iter::once(name).chain(type_name).chain(key).collect::<Vec<_>>());
     let room = usize::from(width).saturating_sub(INDENT.len());
     let value_lines = value_spans(theme, value).into_iter().flat_map(|spans| text::wrap_line(&Line::from(spans), room));
     let indented = value_lines.map(|line| Line::from(std::iter::once(Span::raw(INDENT)).chain(line.spans).collect::<Vec<_>>()));
@@ -224,10 +240,18 @@ mod tests {
     }
 
     #[test]
-    fn a_followed_row_shows_the_trail_that_led_to_it() {
+    fn a_followed_row_shows_the_trail_that_led_to_it_and_where_its_keys_point() {
         let mut app = on_a_key();
         app.apply(to_shop(Incoming::LookedUp { look: LookId::FIRST, rows: Ok(keyed_customer()) }));
         insta::assert_snapshot!("detail_followed", render(&app, 60, 14).0.backend());
+    }
+
+    #[test]
+    fn the_key_under_the_cursor_is_lit() {
+        let mut app = on_a_key();
+        app.apply(to_shop(Incoming::LookedUp { look: LookId::FIRST, rows: Ok(keyed_customer()) }));
+        let runs = styled::runs(render(&app, 60, 14).0.backend().buffer());
+        assert!(runs.contains("REVERSED \"user_id\""), "{runs}");
     }
 
     #[test]
