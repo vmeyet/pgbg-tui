@@ -1,0 +1,20 @@
+---
+source: src/tui/detail_view.rs
+expression: "render(&app, 60, 16).0.backend()"
+---
+"                                                            "
+"                                                            "
+"      ╭ Row 1 of 2 ──────────────────────────────────╮      "
+"      │                                              │      "
+"      │ customer_id  → customers                     │      "
+"      │   3                                          │      "
+"      │                                              │      "
+"      │ total                                        │      "
+"      │   12.50                                      │      "
+"      │                                              │      "
+"      │ Pointing to it                               │      "
+"      │   invoices.order_id  1000+                   │      "
+"      │ j/k scroll · ⇥ keys · ⏎ follow · esc closes  │      "
+"      ╰──────────────────────────────────────────────╯      "
+"                                                            "
+"                                                            "

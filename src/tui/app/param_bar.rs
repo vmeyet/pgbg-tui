@@ -49,6 +49,13 @@ impl ParamBar {
         self.fields.entry(name.clone()).or_insert_with(|| Field::secret(""))
     }
 
+    /// Puts each of `values` in the field of its name, as if typed there.
+    pub(super) fn fill(&mut self, values: BTreeMap<ParamName, ParamValue>) {
+        for (name, value) in values {
+            self.fields.insert(name, Field::secret(value.as_str()));
+        }
+    }
+
     /// The values typed for `names`; a name left empty falls back to its header's default.
     pub(super) fn given(&self, names: &[ParamName]) -> Given {
         let typed = |name: &ParamName| self.fields.get(name).map(|field| (name.clone(), ParamValue::new(field.text())));

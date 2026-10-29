@@ -3,6 +3,7 @@ use super::search::{Search, Searching};
 use super::{Action, App, Focus, Overlay};
 use crate::act::Pane;
 use crate::connection::ConnectionName;
+use crate::db::lex::Token;
 use crate::history::Entry;
 use crossterm::event::KeyEvent;
 
@@ -46,10 +47,15 @@ impl App {
         vec![]
     }
 
-    /// Adds `statement` at the end of the editor after a blank line, with the cursor on it so `⏎` runs it.
-    fn put_in_editor(&mut self, statement: &str) {
+    /// Adds `statement` at the end of the editor after a blank line, with the cursor on it; the last statement before
+    /// it gets a `;` right after its last token, before any comment, so `⏎` runs `statement` alone.
+    pub(super) fn put_in_editor(&mut self, statement: &str) {
         let held = self.sheet().editor.text().trim_end();
-        let text = if held.is_empty() { statement.to_owned() } else { format!("{held}\n\n{statement}") };
+        let text = match self.sheet().editor.lexed().tokens().last() {
+            None if held.is_empty() => statement.to_owned(),
+            Some(last) if last.token != Token::End => format!("{};{}\n\n{statement}", &held[..last.range.end], &held[last.range.end..]),
+            _ => format!("{held}\n\n{statement}"),
+        };
         self.replace_editor_text(&text);
     }
 
@@ -115,6 +121,12 @@ mod tests {
     #[test]
     fn a_picked_statement_goes_under_the_text_already_there() {
         assert_eq!(recalled(typed("SELECT 1;"), "").sheet().editor.text(), "SELECT 1;\n\nSELECT total FROM orders");
+    }
+
+    #[test]
+    fn a_statement_left_open_is_ended_before_its_trailing_comment() {
+        let app = recalled(typed("SELECT 1 -- one"), "");
+        assert_eq!(app.sheet().editor.text(), "SELECT 1; -- one\n\nSELECT total FROM orders");
     }
 
     #[test]
