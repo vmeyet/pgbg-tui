@@ -3,6 +3,7 @@
 //! vtui counts, keeps the file's format and sums the report; pgbg names what it counts and keeps the file.
 use crate::act;
 use crate::config;
+use crate::lock;
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
 use std::fs::DirBuilder;
@@ -44,11 +45,18 @@ impl UsageFile {
         Ok(rules().parse(&config::read_kept(&self.path)?))
     }
 
-    /// Adds `counts` to `date`'s line, through a temp file only its owner reads, so the file is the old one or the new.
+    /// Adds `counts` to `date`'s line under the file's lock, so two pgbg never lose each other's counts, through a temp
+    /// file only its owner reads, so the file is the old one or the new.
     pub(crate) fn add(&self, date: NaiveDate, counts: &Counts) -> Result<()> {
-        let text = rules().merge(&config::read_kept(&self.path)?, date, counts)?;
         let dir = self.path.parent().context("the usage file has no folder")?;
         DirBuilder::new().recursive(true).mode(DIR_MODE).create(dir).with_context(|| format!("creating {}", dir.display()))?;
+        let _held = lock::open(&self.path).with_context(|| format!("locking {}", self.path.display()))?;
+        self.merge(date, counts)
+    }
+
+    /// Adds `counts` to `date`'s line; only the holder of the file's lock may call it.
+    fn merge(&self, date: NaiveDate, counts: &Counts) -> Result<()> {
+        let text = rules().merge(&config::read_kept(&self.path)?, date, counts)?;
         config::write_whole(&self.path, &text)
     }
 }
@@ -81,6 +89,21 @@ mod tests {
         file.add(date("2026-10-26"), &ran("run", 1)).unwrap();
         let days = file.read().unwrap();
         assert_eq!((days.len(), days[0].counts.actions["run"]), (1, 3));
+    }
+
+    #[test]
+    fn a_merge_waiting_for_the_lock_keeps_the_counts_of_the_one_holding_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = UsageFile::in_dir(dir.path());
+        let held = lock::open(&file.path).unwrap();
+        let waiting = std::thread::spawn({
+            let file = file.clone();
+            move || file.add(date("2026-10-26"), &ran("run", 1))
+        });
+        file.merge(date("2026-10-26"), &ran("run", 2)).unwrap();
+        drop(held);
+        waiting.join().unwrap().unwrap();
+        assert_eq!(file.read().unwrap()[0].counts.actions["run"], 3);
     }
 
     #[test]

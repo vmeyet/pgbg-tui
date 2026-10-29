@@ -165,7 +165,7 @@ The review of #194 to #208 found these, most severe first.
 - [ ] The idle ask sends a comment as its instruction only with `[ai] literals = "sent"`, and masks it otherwise
 - [ ] A version whose text holds a secret is kept as a note, as the history keeps it
 - [x] The user's own queries folders are made `0700`, as the versions folder is
-- [ ] The usage file is merged under the same lock the history takes
+- [x] The usage file is merged under the same lock the history takes
 - [ ] Editing in `$EDITOR` keeps the replaced text whatever the editor's exit status
 - [ ] Undo copies the editor's text only when a key changes it, and its doc states the 1 MiB worst case
 - [ ] The usage counts live in pgbg's data folder, and the cache folder follows XDG as the others do

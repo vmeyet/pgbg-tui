@@ -15,6 +15,7 @@ mod fixtures;
 mod format;
 mod groups;
 mod history;
+mod lock;
 pub mod log;
 mod program;
 mod query;
