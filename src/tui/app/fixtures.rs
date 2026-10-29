@@ -2,11 +2,12 @@
 use super::{Action, Answer, App, Fit, Focus, Incoming, Panes, Run, RunId, SessionId, View};
 use crate::connection::{Connection, ConnectionName};
 use crate::db::model::{ResultSet, Statement};
-use crate::fixtures::{self, orders};
+use crate::fixtures::{self, keyed_catalog, keyed_orders, orders};
 use crate::query::params::ParamInput;
 use crate::tui::theme::Theme;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
+use std::sync::Arc;
 use std::time::Duration;
 
 pub(in crate::tui) fn connection(tier: &str, writes: &str) -> Connection {
@@ -39,6 +40,17 @@ pub(in crate::tui) fn on_the_result(result: ResultSet) -> App {
     let mut app = typed("SELECT 1");
     app.handle_key(KeyEvent::from(KeyCode::Enter));
     app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result, took: Duration::from_millis(38) }));
+    app.handle_key(KeyEvent::from(KeyCode::Tab));
+    app
+}
+
+/// The app with [`keyed_orders`] from `SELECT * FROM orders` on screen, the schema of [`keyed_catalog`] read, the keys
+/// on the grid.
+pub(in crate::tui) fn on_the_keyed_orders() -> App {
+    let mut app = typed("SELECT * FROM orders");
+    app.handle_key(KeyEvent::from(KeyCode::Enter));
+    app.apply(to_shop(Incoming::Schema(Ok(Arc::new(keyed_catalog())))));
+    app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result: keyed_orders(), took: Duration::from_millis(38) }));
     app.handle_key(KeyEvent::from(KeyCode::Tab));
     app
 }

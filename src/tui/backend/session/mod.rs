@@ -14,11 +14,14 @@ use std::time::Duration;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 mod link;
+mod look_up;
 mod open;
 mod record;
 mod run;
 
 pub(super) use link::{Job, Queued, SessionAnswers, SessionLink};
+pub(super) use look_up::QueuedLookup;
+use look_up::look_up;
 pub(super) use open::ended;
 pub(super) use run::{Cancels, OnServer, warn_if_still_running};
 
@@ -59,11 +62,13 @@ pub(super) struct Mailbox {
 }
 
 impl Mailbox {
-    /// Fails every statement queued with `failure`, so a later open never sends one.
+    /// Fails every statement and lookup queued with `failure`, so a later open never sends one.
     fn fail_queued(&mut self, failure: &Failure) {
         while let Ok(job) = self.queue.try_recv() {
-            if let Job::Run(queued) = job {
-                self.answers.say(Incoming::Failed { run: queued.run, failure: failure.clone() });
+            match job {
+                Job::Run(queued) => self.answers.say(Incoming::Failed { run: queued.run, failure: failure.clone() }),
+                Job::LookUp(queued) => self.answers.say(Incoming::LookedUp { look: queued.look, rows: Err(failure.clone()) }),
+                Job::NextPage { .. } | Job::Open => {}
             }
         }
     }
@@ -97,6 +102,7 @@ impl SessionTask {
         match woken {
             Woken::Queued(Some(_)) if self.mailbox.queue.is_closed() => {}
             Woken::Queued(Some(Job::Run(queued))) => return self.run(queued).await,
+            Woken::Queued(Some(Job::LookUp(queued))) => return self.look_up(queued).await,
             Woken::Queued(Some(Job::NextPage { .. })) => {}
             Woken::Queued(Some(Job::Open)) if !self.opener.is_open() => self.open_or_fail_queued().await,
             Woken::Queued(Some(Job::Open)) => {}
@@ -135,6 +141,21 @@ impl SessionTask {
         }
         let next = self.answer_and_page(&mut session, queued, start).await;
         self.keep_unless_lost(session, next)
+    }
+
+    /// Reads `queued` on the open session, or on one opened for it, and answers its rows; returns what the task does next.
+    async fn look_up(&mut self, queued: QueuedLookup) -> Next {
+        let look = queued.look;
+        let mut session = match self.opener.take_or_open(&self.mailbox.answers).await {
+            Ok(session) => session,
+            Err(failure) => {
+                self.send(Incoming::LookedUp { look, rows: Err(failure) });
+                return Next::Wait;
+            }
+        };
+        let answer = look_up(&mut session, queued, &mut self.mailbox.cancelled, &self.mailbox.on_server).await;
+        self.send(answer);
+        self.keep_unless_lost(session, Next::Wait)
     }
 
     /// Records and answers `run` as failed, since its session did not open.

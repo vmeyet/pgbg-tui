@@ -1,7 +1,7 @@
 //! The row's detail over the screen: each column's name and type, with its whole value below, wrapped, and JSON
 //! indented and coloured.
 //! Every piece of text is drawn through `render::printable`.
-use super::app::{App, DetailFit, DetailScroll, DrawnDetail, DrawnRow, Overlay, Run};
+use super::app::{App, DetailFit, DetailScroll, DrawnDetail, DrawnRow, Overlay, RowOf, Run, ShownRow};
 use crate::act::{self, Pane};
 use crate::db::model::{Column, Value};
 use crate::render;
@@ -23,14 +23,13 @@ const SHARE_OF_SCREEN_PCT: u16 = 80;
 /// them.
 pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> DetailFit {
     let Some(Overlay::Detail(detail)) = app.overlay() else { return DetailFit::default() };
-    let Run::Done { run, result, grid, .. } = &app.sheet().run else { return DetailFit::default() };
-    let Some(row) = result.rows().get(grid.row) else { return DetailFit::default() };
+    let Some(shown) = app.shown_row(detail) else { return DetailFit::default() };
     let area = centred(f.area());
-    let block = pane::framed(app.theme(), &format!("Row {} of {}", grid.row + 1, result.rows().len()), true);
+    let block = pane::framed(app.theme(), &title(app, &shown), true);
     let [body, footer] = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(block.inner(area));
-    let of = DrawnRow { connection: app.sheet().name().clone(), run: *run, row: grid.row, width: body.width };
+    let of = DrawnRow { connection: app.sheet().name().clone(), row: shown.of, width: body.width };
     let kept = app.drawn_detail().filter(|drawn| drawn.of == of);
-    let built = kept.is_none().then(|| drawn(app.theme(), result.columns(), row, of));
+    let built = kept.is_none().then(|| drawn(app.theme(), &shown, of));
     let Some(DrawnDetail { lines, column_starts, .. }) = kept.or(built.as_ref()) else { return DetailFit::default() };
     let last_scroll = lines.len().saturating_sub(usize::from(body.height));
     let wanted = match detail.scroll {
@@ -42,14 +41,30 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> DetailFit {
     f.render_widget(Clear, area);
     f.render_widget(block.style(Style::default().bg(app.theme().surface)), area);
     f.render_widget(Paragraph::new(shown), body);
-    f.render_widget(Paragraph::new(Line::styled(hints(), Style::default().fg(app.theme().faded))), footer);
+    f.render_widget(Paragraph::new(footer_line(app.theme(), detail.note.as_deref())), footer);
     DetailFit { first_line, last_scroll, drawn: built }
 }
 
-/// Every column of `row` as lines `of.width` columns wide.
-fn drawn(theme: &Theme, columns: &[Column], row: &[Value], of: DrawnRow) -> DrawnDetail {
+/// `Row 2 of 4` on the grid's row, else the tables of the trail that led to the row shown.
+fn title(app: &App, shown: &ShownRow<'_>) -> String {
+    match (shown.of, &app.sheet().run) {
+        (RowOf::Grid { row, .. }, Run::Done { result, .. }) => format!("Row {} of {}", row + 1, result.rows().len()),
+        _ => shown.trail.iter().map(|table| render::printable(table)).collect::<Vec<_>>().join(" › "),
+    }
+}
+
+/// Why the last key followed nothing, else the keys.
+fn footer_line(theme: &Theme, note: Option<&str>) -> Line<'static> {
+    match note {
+        Some(note) => Line::styled(render::printable(note).into_owned(), Style::default().fg(theme.warn)),
+        None => Line::styled(hints(), Style::default().fg(theme.faded)),
+    }
+}
+
+/// Every column of the row shown as lines `of.width` columns wide.
+fn drawn(theme: &Theme, shown: &ShownRow<'_>, of: DrawnRow) -> DrawnDetail {
     let by_column: Vec<Vec<Line<'static>>> =
-        columns.iter().zip(row).map(|(column, value)| column_lines(theme, column, value, of.width)).collect();
+        shown.columns.iter().zip(shown.row).map(|(column, value)| column_lines(theme, column, value, of.width)).collect();
     let column_starts = by_column.iter().scan(0, |start, lines| Some(std::mem::replace(start, *start + lines.len()))).collect();
     DrawnDetail { of, lines: by_column.into_iter().flatten().collect(), column_starts }
 }
@@ -114,12 +129,12 @@ fn painted_spans(theme: &Theme, line: &str, painted: &[Painted]) -> Vec<Span<'st
 
 #[cfg(test)]
 mod tests {
-    use super::super::app::fixtures::{to_shop, typed};
-    use super::super::app::{Fit, Incoming, RunId};
+    use super::super::app::fixtures::{on_the_keyed_orders, to_shop, typed};
+    use super::super::app::{Fit, Incoming, LookId, RunId};
     use super::super::styled;
     use super::*;
     use crate::db::model::{ColumnKind, JsonText, ResultSet, TypeName};
-    use crate::fixtures::{column, orders};
+    use crate::fixtures::{column, keyed_customer, orders};
     use crossterm::event::{KeyCode, KeyEvent};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -198,6 +213,29 @@ mod tests {
     #[test]
     fn the_popup_takes_its_share_of_a_screen_wider_than_820_columns() {
         assert_eq!(centred(Rect::new(0, 0, 1000, 50)), Rect::new(100, 5, 800, 40));
+    }
+
+    /// The keyed orders with `⏎` pressed on order 7's customer.
+    fn on_a_key() -> App {
+        let mut app = on_the_keyed_orders();
+        app.handle_key(KeyEvent::from(KeyCode::Char('l')));
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        app
+    }
+
+    #[test]
+    fn a_followed_row_shows_the_trail_that_led_to_it() {
+        let mut app = on_a_key();
+        app.apply(to_shop(Incoming::LookedUp { look: LookId::FIRST, rows: Ok(keyed_customer()) }));
+        insta::assert_snapshot!("detail_followed", render(&app, 60, 14).0.backend());
+    }
+
+    #[test]
+    fn a_key_pointing_to_no_row_says_so_on_the_footer() {
+        let mut app = on_a_key();
+        app.apply(to_shop(Incoming::LookedUp { look: LookId::FIRST, rows: Ok(ResultSet::whole(vec![], vec![])) }));
+        let drawn = render(&app, 60, 14).0.backend().to_string();
+        assert!(drawn.contains("no row of customers has this key"), "{drawn}");
     }
 
     #[test]

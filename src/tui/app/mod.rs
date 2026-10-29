@@ -14,7 +14,7 @@ pub(super) use ask::{AskStep, Suggestion};
 pub(super) use colouring::Colouring;
 pub(super) use completion::Completions;
 pub(super) use confirm::{Confirmed, WriteToSend};
-pub(super) use detail::{Detail, DetailFit, DetailScroll, DrawnDetail, DrawnRow};
+pub(super) use detail::{Detail, DetailFit, DetailScroll, DrawnDetail, DrawnRow, RowOf, ShownRow};
 pub(super) use diff::Change;
 pub(super) use form::{Form, PasswordFrom, Slot};
 pub(super) use grid::{Clock, GAP, Grid, Reading, Room};
@@ -22,7 +22,7 @@ pub(super) use history::Recall;
 pub(super) use panes::Panes;
 pub(super) use picker::{Note, Picker};
 pub(super) use protocol::{
-    Action, Answer, AskFailure, AskId, ConfigAnswer, ConfigChangeId, Incoming, KeychainPassword, NoIdleGhost, QueryAnswer, RunId,
+    Action, Answer, AskFailure, AskId, ConfigAnswer, ConfigChangeId, Incoming, KeychainPassword, LookId, NoIdleGhost, QueryAnswer, RunId,
     SaveConnection, Saving, SessionId, TunnelState,
 };
 pub(super) use queries::{Finder, Queries};
@@ -155,6 +155,8 @@ pub(super) struct App {
     should_quit: bool,
     /// The id the next change to the config takes.
     next_config_change: ConfigChangeId,
+    /// The id the next lookup takes.
+    next_look: LookId,
     /// The id the next session opened takes.
     next_session: SessionId,
     /// Why a change to the config failed when no form waits on it; the status line says it until the next key.
@@ -186,6 +188,7 @@ impl App {
             should_quit: false,
             next_config_change: ConfigChangeId::FIRST,
             next_session: SessionId::FIRST.next(),
+            next_look: LookId::FIRST,
             config_failure: None,
             note: None,
             reading: Reading { mode: Mode::Raw, clock: grid::clock_at_epoch() },
@@ -343,6 +346,7 @@ impl App {
 
     fn take_answer(&mut self, answer: Answer) -> Vec<Action> {
         match answer {
+            Answer::Session { incoming: Incoming::LookedUp { look, rows }, .. } => self.looked_up(look, rows),
             Answer::Session { connection, session, incoming } => {
                 let reading = self.reading;
                 if let Some(sheet) = self.sheet_of_mut(&connection).filter(|sheet| sheet.session_id == session) {

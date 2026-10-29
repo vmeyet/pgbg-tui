@@ -9,6 +9,7 @@ use crate::db::model::{Catalog, LocalPort, Page, ResultSet, Statement};
 use crate::export::Format;
 use crate::failure::{Failure, Lost};
 use crate::history::Entry;
+use crate::keys::Lookup;
 use crate::query::params::ParamInput;
 use crate::query::{Query, QueryPath};
 use crate::secret::{KeychainItem, Secret};
@@ -65,6 +66,18 @@ impl AskId {
     }
 }
 
+/// Which lookup an answer is about, so the row of a lookup the user moved away from never shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::tui) struct LookId(u64);
+
+impl LookId {
+    pub(in crate::tui) const FIRST: Self = Self(1);
+
+    pub(in crate::tui) fn next(self) -> Self {
+        Self(self.0 + 1)
+    }
+}
+
 /// What the app asks the runner to do.
 #[derive(Debug, PartialEq)]
 pub(in crate::tui) enum Action {
@@ -76,6 +89,9 @@ pub(in crate::tui) enum Action {
     NextPage { connection: ConnectionName, session: SessionId, run: RunId },
     /// Read the connection's schema on a second session that takes the same route as `session`, once that one is open.
     ReadSchema { connection: ConnectionName, session: SessionId },
+    /// Read the rows of `lookup` on the connection's session, read only whatever the connection allows, kept out of the
+    /// history.
+    LookUp { connection: ConnectionName, look: LookId, lookup: Lookup },
     /// Cancel this run if the connection's session is still running it.
     Cancel { connection: ConnectionName, run: RunId },
     /// List the project's saved queries and the user's own of this connection's queries folder.
@@ -261,6 +277,11 @@ pub(in crate::tui) enum Incoming {
     PageFailed {
         run: RunId,
         failure: Failure,
+    },
+    /// The rows a lookup read, or why it read none.
+    LookedUp {
+        look: LookId,
+        rows: Result<ResultSet, Failure>,
     },
     /// The statement gave no result: pgbg kept it from the server, or it failed on the server or on the link to it.
     Failed {

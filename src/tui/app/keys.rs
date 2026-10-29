@@ -176,7 +176,7 @@ impl App {
             Act::History => return self.recall(),
             Act::Versions => return self.list_versions(),
             Act::FindTable => return self.find_table(),
-            Act::Detail => self.open_detail(),
+            Act::Detail => return self.open_detail(),
             Act::CopyCell => return self.copy_cell(),
             Act::CopyRow => return self.copy_row(),
             Act::CopyStatement => return self.copy_statement(),

@@ -264,6 +264,33 @@ pub(crate) fn shop_schema() -> Schema {
     Schema { schemas: vec![billing, public] }
 }
 
+/// [`shop_catalog`] whose `customers.user_id` points to `users`, a table of `public`, so a key leads two tables deep.
+pub(crate) fn keyed_catalog() -> Catalog {
+    let mut catalog = shop_catalog();
+    let public = &mut catalog.schema.schemas[1];
+    let customers = &mut public.tables[1];
+    customers.columns.push(schema_column("user_id", "integer", None));
+    customers.foreign_keys.push(key_to_id("user_id", "public", "users"));
+    public.tables.push(schema_table("users", vec![schema_column("id", "integer", None), schema_column("email", "text", None)]));
+    catalog
+}
+
+/// `SELECT * FROM orders` on [`keyed_catalog`]: order 7 of customer 3, and order 12 of no customer.
+pub(crate) fn keyed_orders() -> ResultSet {
+    let columns = vec![column("id", ColumnKind::Int), column("customer_id", ColumnKind::Int), column("total", ColumnKind::Numeric)];
+    let rows = vec![
+        vec![Value::Int(7), Value::Int(3), Value::Numeric("12.50".into())],
+        vec![Value::Int(12), Value::Null, Value::Numeric("1499.00".into())],
+    ];
+    ResultSet::whole(columns, rows)
+}
+
+/// The row of `customers` that order 7 points to: customer 3, Nina, user 5.
+pub(crate) fn keyed_customer() -> ResultSet {
+    let columns = vec![column("id", ColumnKind::Int), column("name", ColumnKind::Text), column("user_id", ColumnKind::Int)];
+    ResultSet::whole(columns, vec![vec![Value::Int(3), Value::Text("nina".into()), Value::Int(5)]])
+}
+
 /// The shortest of five runs of `step`, so a busy machine slows one run, not the measure.
 #[cfg(not(debug_assertions))]
 pub(crate) fn best_of<T>(mut step: impl FnMut() -> T) -> Duration {
