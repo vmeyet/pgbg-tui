@@ -8,6 +8,9 @@ Each entry says what changed, then where, then how to use it.
 
 ### New
 
+- **`i` on a column shows its figures**, in the TUI's result grid: how many distinct values and NULLs it holds, its least and greatest value, and its five most common values with how many rows hold each.
+  They count the rows loaded, as the popup's title says, and compare values as their type does: numbers as numbers, dates as dates.
+  `esc` or `i` again closes it.
 - **`=` and `!` on a cell narrow the statement**, in the TUI's result grid: `=` adds `WHERE column = {{column}}` to the statement under the editor's cursor, `!` adds `<>`, and a NULL cell adds `IS NULL` or `IS NOT NULL`.
   The condition joins an existing `WHERE` with `AND`, or comes before `ORDER BY`, `LIMIT` or `GROUP BY`; the cell's value waits in the parameter bar, bound when the statement runs, never pasted into its text.
   `ctrl-z` in the editor takes it back in one step.

@@ -34,6 +34,7 @@ impl App {
             Some(Overlay::Form(_)) => Pane::Form,
             Some(Overlay::Prompt(prompt)) => prompt.pane(),
             Some(Overlay::Detail(_)) => Pane::Detail,
+            Some(Overlay::ColumnStats(_)) => Pane::ColumnStats,
             Some(Overlay::CopyAs) => Pane::CopyAs,
             Some(Overlay::SchemaFilter) => Pane::SchemaFilter,
             Some(Overlay::RowFilter(_)) => Pane::RowFilter,

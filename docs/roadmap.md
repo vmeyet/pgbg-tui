@@ -193,7 +193,7 @@ Each step is one MR, in this order.
 - [x] `e` in that detail writes the join into the editor
 - [x] `/` filters the rows on screen and `s` sorts them by the column under the cursor, without a new query
 - [x] `=` and `!` on a cell add `WHERE column = value` or `<>` to the statement
-- [ ] `i` on a column shows its distinct count, NULLs, min, max and five most common values
+- [x] `i` on a column shows its distinct count, NULLs, min, max and five most common values
 
 ## Later
 

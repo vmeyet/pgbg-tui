@@ -224,6 +224,7 @@ In the TUI, a bar above the editor shows one field per parameter.
 | `v` | Show the result as a chart, or as a grid again. |
 | `f` `F` | Next format for this column; every column raw or readable. |
 | `=` `!` | Add `WHERE column = value`, or `<>`, to the statement under the editor's cursor, the value bound as a parameter. |
+| `i` | The column's distinct values, NULLs, least, greatest and five most common, over the rows loaded. |
 | `⌥c` | In the editor: copy the statement under the cursor; a macOS terminal sends it only with its option key set as meta. |
 | `⌘c` `⌘v` | In the editor: copy the selection, else the statement under the cursor; paste the clipboard. Only where the terminal hands `⌘` over with the kitty keyboard protocol instead of copying or pasting itself. |
 | `/` | Keep the rows loaded with a cell holding what you type; `esc` drops the filter. |
