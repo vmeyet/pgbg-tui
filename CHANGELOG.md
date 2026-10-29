@@ -8,6 +8,8 @@ Each entry says what changed, then where, then how to use it.
 
 ### New
 
+- **`s` sorts the rows by a column**, in the TUI's result grid, without running the statement again: on the rows loaded.
+  Press `s` on a column to sort it ascending, again for descending, a third time for the result's order; numbers sort as numbers, dates as dates, `NULL` last, and the header shows `▲` or `▼`.
 - **`⌘c` and `⌘v` copy and paste**, in the TUI's editor: `⌘c` copies the selection, else the statement under the cursor, and `⌘v` pastes the clipboard as the terminal's paste does.
   They work where the terminal hands `⌘` over with the kitty keyboard protocol instead of copying or pasting itself; the paste reads the clipboard through `pbpaste`, or `wl-paste`, `xclip` or `xsel`.
 - **`⌥c` copies the statement under the cursor**, in the TUI's editor; the status line says so, or that there is none.

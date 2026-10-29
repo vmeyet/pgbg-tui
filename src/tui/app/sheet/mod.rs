@@ -449,13 +449,14 @@ impl Sheet {
         Some(ToRun { statement, start, input })
     }
 
-    /// Moves the grid's cursor by `step` in the `room` it has, and asks for the next page once it nears the last row.
+    /// Moves the grid's cursor by `step` in the `room` it has, and asks for the next page once it nears the last row,
+    /// unless a sort works on the rows loaded.
     pub(super) fn step_grid(&mut self, step: Move, room: Room) -> Vec<Action> {
         let Run::Done { run, result, grid, is_page_asked, .. } = &mut self.run else { return vec![] };
         grid.step(step, result, room);
         let is_near_end = result.rows().len().saturating_sub(grid.row) <= NEAR_END_ROWS;
         let has_more = result.extent() == Extent::More;
-        if !has_more || !is_near_end || *is_page_asked {
+        if !has_more || !is_near_end || *is_page_asked || !grid.shown().is_whole() {
             return vec![];
         }
         *is_page_asked = true;
@@ -466,6 +467,13 @@ impl Sheet {
     pub(super) fn step_format(&mut self, clock: &Clock) -> Option<ColumnName> {
         let Run::Done { result, grid, .. } = &mut self.run else { return None };
         grid.step_format(result, clock)
+    }
+
+    /// Sorts the grid's rows by the column under its cursor, the next way.
+    pub(super) fn step_sort(&mut self, clock: &Clock) {
+        if let Run::Done { result, grid, .. } = &mut self.run {
+            grid.step_sort(result, clock);
+        }
     }
 
     /// Puts every column of the grid raw, or readable when all are raw.
@@ -485,10 +493,11 @@ impl Sheet {
         matches!(&self.run, Run::Done { run, result, .. } if *run == of && result.extent() == Extent::More)
     }
 
-    /// Adds `page` to the result, keeping the grid's widths from the first page.
+    /// Adds `page` to the result, keeping the grid's widths from the first page, in its sort.
     fn push_page(&mut self, page: Page) {
-        if let Run::Done { result, is_page_asked, .. } = &mut self.run {
+        if let Run::Done { result, grid, is_page_asked, .. } = &mut self.run {
             result.push(page);
+            grid.take_rows(result);
             *is_page_asked = false;
         }
     }

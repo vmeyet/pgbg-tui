@@ -66,9 +66,10 @@ pub(super) fn draw(f: &mut Frame<'_>, view: GridView<'_>, area: Rect) -> Room {
     if area.height > 0 {
         draw_header(buffer, view, &shown, area.y);
     }
-    let rows = view.result.rows().iter().enumerate().skip(view.grid.top).take(body_rows);
-    for (y, (index, row)) in (area.y + 1..).zip(rows) {
-        draw_row(buffer, view, &shown, Position { x: area.x, y }, index, row);
+    let loaded = view.result.rows();
+    let rows = (view.grid.top..view.grid.top + body_rows).map_while(|place| view.grid.shown().row_at(place, loaded.len()));
+    for (y, index) in (area.y + 1..).zip(rows) {
+        draw_row(buffer, view, &shown, Position { x: area.x, y }, index, &loaded[index]);
     }
     Room { rows: body_rows, columns: usize::from(room) }
 }
@@ -170,48 +171,12 @@ mod tests {
     #[cfg(not(debug_assertions))]
     mod budget {
         use super::*;
-        use crate::db::model::{Extent, Page};
-        use crate::fixtures::best_of;
+        use crate::fixtures::{best_of, capped};
         use std::time::Duration;
 
         /// A 200 × 50 frame takes 0.3 ms on a laptop whatever the row in view, CI about four times that: ten times slower
         /// fails, as drawing every row instead of the window would.
         const FRAME_BUDGET: Duration = Duration::from_millis(4);
-
-        /// Ten thousand rows, the cap, of fifty columns: one of each kind the grid colours, and plain text.
-        fn capped() -> ResultSet {
-            let kinds = [
-                ColumnKind::Int,
-                ColumnKind::Text,
-                ColumnKind::Numeric,
-                ColumnKind::TimestampTz,
-                ColumnKind::Bool,
-                ColumnKind::Uuid,
-                ColumnKind::Json,
-                ColumnKind::Text,
-                ColumnKind::Int,
-                ColumnKind::Text,
-            ];
-            let columns = (0..50).map(|index| column(&format!("c{index}"), kinds[index % kinds.len()].clone())).collect();
-            let statuses = ["paid", "open", "void"];
-            let cells = |n: i64| {
-                let at = chrono::DateTime::UNIX_EPOCH + chrono::Duration::hours(n);
-                [
-                    Value::Int(n),
-                    Value::Text(format!("customer {n}").into()),
-                    Value::Numeric(format!("{n}.50").into()),
-                    Value::TimestampTz(at),
-                    Value::Bool(n % 2 == 0),
-                    Value::Uuid(uuid::Uuid::from_u128(u128::from(n.unsigned_abs()) << 64)),
-                    Value::Json(JsonText::of(&serde_json::json!({"id": n, "status": "paid"}))),
-                    Value::Text(statuses[n.unsigned_abs() as usize % statuses.len()].into()),
-                    Value::Int(-n),
-                    Value::Null,
-                ]
-            };
-            let rows = (0..10_000).map(|n| cells(n).into_iter().cycle().take(50).collect()).collect();
-            ResultSet::new(columns, Page { rows, extent: Extent::Cut })
-        }
 
         #[test]
         #[ignore = "reads the wall clock: CI runs it in release"]

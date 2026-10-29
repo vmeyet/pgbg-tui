@@ -59,6 +59,7 @@ mod save;
 mod schema_tab;
 mod search;
 mod sheet;
+mod shown_rows;
 mod table_finder;
 mod undo;
 mod usage;

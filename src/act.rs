@@ -56,6 +56,7 @@ pub(crate) enum Act {
     Paste,
     SwitchTab,
     Filter,
+    Sort,
     ReadAgain,
     TakeGhost,
     DropGhost,
@@ -120,6 +121,7 @@ impl Act {
             Self::Paste => "paste",
             Self::SwitchTab => "switch_tab",
             Self::Filter => "filter",
+            Self::Sort => "sort",
             Self::ReadAgain => "read_again",
             Self::TakeGhost => "take_ghost",
             Self::DropGhost => "drop_ghost",
@@ -151,6 +153,7 @@ impl Act {
                 | Self::CopyRow
                 | Self::StepFormat
                 | Self::SwitchFormats
+                | Self::Sort
         )
     }
 
@@ -358,6 +361,7 @@ pub(crate) const ROWS: &[Row] = &[
         .help("f", "the column in its next format: raw, then readable ones")
         .footer("f", "format"),
     row(Act::SwitchFormats, Pane::Result, &[key(KeyCode::Char('F'))]).help("F", "every column raw, or readable"),
+    row(Act::Sort, Pane::Result, &[key(KeyCode::Char('s'))]).help("s", "sort the rows loaded by the column: up, down, then as read"),
     row(Act::Help, Pane::Result, &[key(KeyCode::Char('?'))]).help("?", HELP_KEYS),
     row(Act::Down, Pane::Queries, &[key(KeyCode::Char('j')), key(KeyCode::Down)]).help("j k", "next, previous query").footer("j/k", "move"),
     row(Act::Up, Pane::Queries, &[key(KeyCode::Char('k')), key(KeyCode::Up)]),
