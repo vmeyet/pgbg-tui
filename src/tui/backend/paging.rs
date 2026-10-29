@@ -1,5 +1,5 @@
 //! A result's portal, kept open across jobs: the session task serves its pages here until the portal closes.
-use super::session::{Cancels, Job, Mailbox, Next, OnServer, SessionAnswers, Woken, ended, warn_if_still_running};
+use super::session::{Cancels, Job, Mailbox, Next, OnServer, OnSession, SessionAnswers, Woken, ended, look_up, warn_if_still_running};
 use crate::db::model::{CancelToken, Extent, Page};
 use crate::db::{Fetched, Pages};
 use crate::failure::{Failure, Lost};
@@ -118,6 +118,10 @@ pub(super) async fn serve_pages(paging: Paging<'_, '_>) -> Next {
                         return Next::Stop;
                     }
                 }
+            }
+            Held::Queued(Some(Job::LookUp(queued))) if !is_queue_closed => {
+                let on = OnSession { token: &token, cancelled, on_server };
+                outbox.say(look_up(queued, async |admitted| pages.read_beside(admitted).await, on).await);
             }
             Held::Queued(Some(Job::NextPage { .. } | Job::Open)) if !is_queue_closed => {}
             Held::Cancelled(Some(of)) if of != run => {}

@@ -180,12 +180,7 @@ impl Session {
     }
 
     async fn run_read_only(&mut self, admitted: &Admitted) -> Result<ResultSet> {
-        self.read_only(Isolation::EachStatement, async |transaction| {
-            let statement = bind::prepare(transaction, admitted).await?;
-            let portal = bind_portal(transaction, &statement, &admitted.params).await?;
-            Ok(ResultSet::new(columns(&statement), fetch_capped(transaction, &portal).await?))
-        })
-        .await
+        self.read_only(Isolation::EachStatement, async |transaction| read_in(transaction, admitted).await).await
     }
 
     /// Runs `read` inside `BEGIN READ ONLY` at `isolation`, always rolled back; the session is mid-statement meanwhile,
@@ -226,6 +221,13 @@ pub(super) async fn begin_read_only<'c>(client: &'c mut Client, limits: &ReadLim
     let transaction = client.build_transaction().read_only(true).isolation_level(level).start().await.map_err(server_error)?;
     transaction.batch_execute(&limits.sql()).await.map_err(server_error).context("setting the transaction's limits")?;
     Ok(transaction)
+}
+
+/// The first `ROW_CAP` rows of `admitted`, read through a portal in `transaction`.
+pub(super) async fn read_in(transaction: &Transaction<'_>, admitted: &Admitted) -> Result<ResultSet> {
+    let statement = bind::prepare(transaction, admitted).await?;
+    let portal = bind_portal(transaction, &statement, &admitted.params).await?;
+    Ok(ResultSet::new(columns(&statement), fetch_capped(transaction, &portal).await?))
 }
 
 /// `statement` bound to a portal with `params`, each in text.

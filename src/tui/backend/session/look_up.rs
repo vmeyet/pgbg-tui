@@ -1,8 +1,8 @@
 //! A lookup: a read the app built, admitted read only whatever the connection allows, kept out of the history.
 use super::run::{Cancels, OnServer, warn_if_still_running};
 use crate::connection::WritePolicy;
-use crate::db::Session;
-use crate::db::guard;
+use crate::db::guard::{self, Admitted};
+use crate::db::model::{CancelToken, ResultSet};
 use crate::failure::Failure;
 use crate::keys::Lookup;
 use crate::tui::app::{Incoming, LookId};
@@ -14,18 +14,28 @@ pub(in crate::tui::backend) struct QueuedLookup {
     pub(in crate::tui::backend) lookup: Lookup,
 }
 
-/// Answers `queued` with the rows it reads on `session` once the guard admitted it read only, so a write in it is
-/// refused as on a read-only connection; a stop ends it as every stop does.
-pub(super) async fn look_up(session: &mut Session, queued: QueuedLookup, cancelled: &mut Cancels, on_server: &OnServer) -> Incoming {
+/// Where a lookup runs and how a stop reaches it.
+pub(in crate::tui::backend) struct OnSession<'a> {
+    pub(in crate::tui::backend) token: &'a CancelToken,
+    pub(in crate::tui::backend) cancelled: &'a mut Cancels,
+    pub(in crate::tui::backend) on_server: &'a OnServer,
+}
+
+/// Answers `queued` with the rows `read` gives for it once the guard admitted it read only, so a write in it is refused
+/// as on a read-only connection; a stop ends it as every stop does.
+pub(in crate::tui::backend) async fn look_up(
+    queued: QueuedLookup,
+    read: impl AsyncFnOnce(&Admitted) -> anyhow::Result<ResultSet>,
+    on: OnSession<'_>,
+) -> Incoming {
     let QueuedLookup { look, lookup } = queued;
     let admitted = match guard::admit(lookup.statement, lookup.params, WritePolicy::ReadOnly) {
         Ok(admitted) => admitted,
         Err(refusal) => return Incoming::LookedUp { look, rows: Err(Failure::Refused(refusal.to_string())) },
     };
-    let token = session.cancel_token();
-    on_server.starts(&token);
-    let read = token.unless_stopped(session.run(&admitted), cancelled.until_stopping()).await;
-    on_server.ended();
+    on.on_server.starts(on.token);
+    let read = on.token.unless_stopped(read(&admitted), on.cancelled.until_stopping()).await;
+    on.on_server.ended();
     let rows = match read {
         Ok(rows) => rows.map_err(|err| Failure::from(&err)),
         Err(interrupted) => {
@@ -43,6 +53,8 @@ mod tests {
     use crate::db::model::{Params, Statement, Value};
     use crate::fixtures;
     use crate::keys::{KeyPair, Target};
+    use crate::query::params::ParamInput;
+    use crate::tui::app::{RunId, SessionId};
 
     /// A fresh `table` of customers, whose key is `(id, region)`, holding customer 3 in `eu` and in `us`.
     async fn customers(table: &str) {
@@ -76,5 +88,20 @@ mod tests {
         backend.look_up(&shop(), QueuedLookup { look: LookId::FIRST, lookup });
         let answer = next_answer(&mut answers).await;
         assert!(matches!(answer, Incoming::LookedUp { rows: Err(Failure::Refused(_)), .. }), "{answer:?}");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_lookup_failing_while_a_result_pages_leaves_its_next_page_waiting() {
+        let (backend, mut answers) = started();
+        let pages = Statement::new("SELECT n FROM generate_series(1, 1000) AS n");
+        backend.run(&shop(), RunId::FIRST, pages, ParamInput::default(), None);
+        next_answer(&mut answers).await;
+        backend.look_up(&shop(), QueuedLookup { look: LookId::FIRST, lookup: customer_of_an_order("pgbg_follow_missing") });
+        let looked_up = next_answer(&mut answers).await;
+        assert!(matches!(looked_up, Incoming::LookedUp { rows: Err(Failure::Server { .. }), .. }), "{looked_up:?}");
+        backend.next_page(&shop(), SessionId::FIRST, RunId::FIRST);
+        let Incoming::Page { page, .. } = next_answer(&mut answers).await else { panic!("no page") };
+        assert_eq!(page.rows.len(), 500);
     }
 }
