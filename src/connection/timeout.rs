@@ -34,7 +34,7 @@ impl StatementTimeout {
     }
 
     /// The timeout of `ms` milliseconds, as `pg_settings` gives it; zero is none.
-    pub(crate) fn from_millis(ms: u64) -> Self {
+    pub(crate) const fn from_millis(ms: u64) -> Self {
         Self(Duration::from_millis(ms))
     }
 
@@ -43,7 +43,7 @@ impl StatementTimeout {
     }
 
     /// The shorter of the two, where none is the longest of all.
-    fn stricter(self, other: Self) -> Self {
+    pub(crate) fn stricter(self, other: Self) -> Self {
         if self.is_none() {
             return other;
         }

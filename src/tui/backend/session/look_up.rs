@@ -22,7 +22,7 @@ pub(in crate::tui::backend) struct OnSession<'a> {
 }
 
 /// Answers `queued` with the rows `read` gives for it once the guard admitted it read only, so a write in it is refused
-/// as on a read-only connection; a stop ends it as every stop does.
+/// as on a read-only connection, under its own timeout when it has one; a stop ends it as every stop does.
 pub(in crate::tui::backend) async fn look_up(
     queued: QueuedLookup,
     read: impl AsyncFnOnce(&Admitted) -> anyhow::Result<ResultSet>,
@@ -30,7 +30,7 @@ pub(in crate::tui::backend) async fn look_up(
 ) -> Incoming {
     let QueuedLookup { look, lookup } = queued;
     let admitted = match guard::admit(lookup.statement, lookup.params, WritePolicy::ReadOnly) {
-        Ok(admitted) => admitted,
+        Ok(admitted) => admitted.with_own_timeout(lookup.own_timeout),
         Err(refusal) => return Incoming::LookedUp { look, rows: Err(Failure::Refused(refusal.to_string())) },
     };
     on.on_server.starts(on.token);
@@ -84,7 +84,7 @@ mod tests {
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_lookup_that_writes_is_refused_on_a_connection_that_allows_writes() {
         let (backend, mut answers) = started_on(fixtures::test_database("local", "writes = \"allowed\"\n"));
-        let lookup = Lookup { statement: Statement::new("DELETE FROM pgbg_follow_read"), params: Params::default() };
+        let lookup = Lookup { statement: Statement::new("DELETE FROM pgbg_follow_read"), params: Params::default(), own_timeout: None };
         backend.look_up(&shop(), QueuedLookup { look: LookId::FIRST, lookup });
         let answer = next_answer(&mut answers).await;
         assert!(matches!(answer, Incoming::LookedUp { rows: Err(Failure::Refused(_)), .. }), "{answer:?}");

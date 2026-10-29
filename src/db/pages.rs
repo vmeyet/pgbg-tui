@@ -1,5 +1,6 @@
 //! A result shown a page at a time: its portal stays open between pages, in its `BEGIN READ ONLY` transaction.
 use super::guard::{Admitted, Mode};
+use super::limits::ReadLimits;
 use super::model::{Column, Extent, Page, ResultSet};
 use super::run::{FetchSize, begin_read_only, bind_portal, columns, fetch_page, read_in};
 use super::{Isolation, Marks, Session, roll_back, server_error, why_ended};
@@ -33,6 +34,7 @@ pub(crate) struct Pages<'s> {
     marks: &'s mut Marks,
     ended: &'s watch::Receiver<Option<Lost>>,
     idle_limit_on_server: Duration,
+    limits: ReadLimits,
 }
 
 /// A statement bound to its portal, and the columns it returns.
@@ -59,7 +61,7 @@ impl Session {
                 return Err(err);
             }
         };
-        let Fetched { page, rest } = Pages { transaction, portal, marks, ended, idle_limit_on_server }.next().await?;
+        let Fetched { page, rest } = Pages { transaction, portal, marks, ended, idle_limit_on_server, limits: *limits }.next().await?;
         Ok(Started { result: ResultSet::new(columns, page), rest })
     }
 }
@@ -81,16 +83,16 @@ impl<'s> Pages<'s> {
 
     /// Reads `admitted`, a read the guard admitted read only, in the portal's transaction behind a savepoint, so the
     /// result's next pages still wait whether the read fails or not.
+    /// The savepoint is always rolled back: a read keeps nothing, and its own timeout must not outlive it.
     pub(crate) async fn read_beside(&mut self, admitted: &Admitted) -> Result<ResultSet> {
         anyhow::ensure!(admitted.mode == Mode::ReadOnly, "only a read-only statement runs beside a result's pages");
-        let Self { transaction, marks, .. } = self;
+        let Self { transaction, marks, limits, .. } = self;
         marks
             .during(async {
                 let savepoint = transaction.savepoint(BESIDE_SAVEPOINT).await.map_err(server_error)?;
-                match read_in(&savepoint, admitted).await {
-                    Ok(rows) => savepoint.commit().await.map_err(server_error).map(|()| rows),
-                    Err(err) => savepoint.rollback().await.map_err(server_error).and(Err(err)),
-                }
+                let read = read_in(&savepoint, admitted, limits).await;
+                savepoint.rollback().await.map_err(server_error)?;
+                read
             })
             .await
     }
@@ -129,7 +131,7 @@ async fn bind(transaction: &Transaction<'_>, admitted: &Admitted) -> Result<Boun
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connection::WritePolicy;
+    use crate::connection::{StatementTimeout, WritePolicy};
     use crate::db::guard;
     use crate::db::model::{ParamValue, Params, Route, Statement, Value};
     use crate::db::run::ROW_CAP;
@@ -183,6 +185,27 @@ mod tests {
         let Started { rest, .. } = session.start(&admitted.unwrap()).await.unwrap();
         let last = rest.unwrap().next().await.unwrap();
         assert_eq!((last.page.rows.len(), last.page.extent), (200, Extent::All));
+    }
+
+    fn within_50_ms(sql: &str) -> Admitted {
+        read_only(sql).with_own_timeout(Some(StatementTimeout::from_millis(50)))
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_read_with_a_timeout_of_its_own_stops_past_it() {
+        let err = session("").await.run(&within_50_ms("SELECT pg_sleep(5)")).await.unwrap_err();
+        assert!(format!("{err:#}").contains("statement timeout"), "{err:#}");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_timeout_of_its_own_ends_with_the_read_beside_the_pages() {
+        let mut session = session("").await;
+        let mut pages = session.start(&read_only(&numbers_up_to(1200))).await.unwrap().rest.unwrap();
+        let own = pages.read_beside(&within_50_ms("SHOW statement_timeout")).await.unwrap().rows().to_vec();
+        let after = pages.read_beside(&read_only("SHOW statement_timeout")).await.unwrap().rows().to_vec();
+        assert_eq!((own, after), (vec![vec![Value::Text("50ms".into())]], vec![vec![Value::Text("0".into())]]));
     }
 
     #[tokio::test]

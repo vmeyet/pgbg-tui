@@ -261,6 +261,7 @@ The header names a primary-key column in bold and ends a column with a foreign k
 In it, `tab` steps through its keys, `⏎` goes one row deeper and the title shows the trail, as `orders › customers › users`; `⌫` goes back one row, `esc` closes them all.
 Each row is read with the key's values bound, in a read-only transaction whatever the connection allows, and never goes to the history.
 Under its columns, a row lists the tables that point to it, each with how many of its rows do; `⏎` on one runs those rows, its statement at the end of the editor and the row's values in the parameter bar.
+A table is counted only when an index starts with its key, one count at a time, each stopped after 2 seconds; one without such an index shows `—`, and a count that failed shows `!`, its reason on the footer once `tab` reaches it.
 `e` writes the join of the trail at the end of the editor, unsaved, the grid's row picked by its primary key as a `{{name}}` parameter.
 
 ## Asking AI

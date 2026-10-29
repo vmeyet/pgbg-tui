@@ -79,7 +79,7 @@ fn pointing_lines(theme: &Theme, referrers: &[Counted], width: u16) -> Vec<Line<
         Span::styled(rule, faded(theme)),
     ]);
     let line = |counted: &Counted| {
-        let count = count_text(counted.count);
+        let count = count_text(&counted.count);
         let columns: Vec<&str> = counted.referrer.pairs.iter().map(|pair| pair.column.as_str()).collect();
         let room = width.saturating_sub(INDENT.len() + render::width(&count));
         let key = text::truncate(&render::printable(&format!("{}.{}", counted.referrer.table, columns.join(", "))), room - GAP.len());
@@ -91,12 +91,13 @@ fn pointing_lines(theme: &Theme, referrers: &[Counted], width: u16) -> Vec<Line<
     std::iter::once(heading).chain(referrers.iter().map(line)).collect()
 }
 
-fn count_text(count: Count) -> String {
+fn count_text(count: &Count) -> String {
     match count {
-        Count::Counting(_) => "…".to_owned(),
-        Count::Rows(rows) if rows > COUNTED_ROWS => format!("{COUNTED_ROWS}+"),
+        Count::Queued | Count::Counting(_) => "…".to_owned(),
+        Count::Rows(rows) if *rows > COUNTED_ROWS => format!("{COUNTED_ROWS}+"),
         Count::Rows(rows) => rows.to_string(),
-        Count::Failed => "?".to_owned(),
+        Count::NotCounted => "—".to_owned(),
+        Count::Failed(_) => "!".to_owned(),
     }
 }
 
@@ -413,8 +414,6 @@ mod tests {
     fn a_followed_row_shows_the_trail_that_led_to_it_where_its_keys_point_and_what_points_to_it() {
         let mut app = on_a_key();
         app.apply(to_shop(Incoming::LookedUp { look: LookId::FIRST, rows: Ok(keyed_customer()) }));
-        let count = ResultSet::whole(vec![column("count", ColumnKind::Int)], vec![vec![Value::Int(2)]]);
-        app.apply(to_shop(Incoming::LookedUp { look: LookId::FIRST.next(), rows: Ok(count) }));
         insta::assert_snapshot!("detail_followed", render(&app, 60, 14).0.backend());
     }
 

@@ -12,6 +12,7 @@ use crossterm::event::KeyEvent;
 use ratatui::text::Line;
 
 const NULL_KEY: &str = "this key is NULL: it points to no row";
+const NOT_COUNTED: &str = "not counted, as no index starts with its key: ⏎ runs its rows";
 
 /// The open detail: the grid's row or the rows followed from it, where it is scrolled to, and the key under its cursor.
 #[derive(Clone, Debug, PartialEq)]
@@ -69,12 +70,17 @@ pub(in crate::tui) struct Counted {
 }
 
 /// How many rows of a table point to the row shown.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::tui) enum Count {
+    /// Waiting for the count before it: one goes at a time, so a run waits behind one at most.
+    Queued,
     Counting(LookId),
     /// Past `keys::COUNTED_ROWS`, there are more than it.
     Rows(u64),
-    Failed,
+    /// No index starts with the key, so a count could read the whole table: `⏎` runs its rows instead.
+    NotCounted,
+    /// Why the count gave no number.
+    Failed(String),
 }
 
 /// The row the detail shows, the keys of its columns, and the tables of the trail that led to it.
@@ -125,6 +131,29 @@ pub(in crate::tui) struct DrawnRow {
 impl Detail {
     fn at_column(column: usize) -> Self {
         Self { scroll: DetailScroll::ToColumn(column), key: 0, trail: vec![], referrers: vec![], waiting: None, note: None }
+    }
+
+    /// The table pointing to the row at `key`, which counts the row's `targets` first, then the tables.
+    fn referrer_at(&self, key: usize, targets: usize) -> Option<&Counted> {
+        self.referrers.get(key.checked_sub(targets)?)
+    }
+
+    /// The count of the first table still queued, marked as counting by `look`; none while a count is on its way.
+    fn start_next_count(&mut self, look: LookId) -> Option<Lookup> {
+        if self.referrers.iter().any(|counted| matches!(counted.count, Count::Counting(_))) {
+            return None;
+        }
+        let next = self.referrers.iter_mut().find(|counted| counted.count == Count::Queued)?;
+        next.count = Count::Counting(look);
+        Some(next.referrer.count())
+    }
+}
+
+/// The number a count read: the one value of its one row.
+fn count_in(read: &ResultSet) -> Option<u64> {
+    match read.rows().first()?.first()? {
+        Value::Int(rows) => u64::try_from(*rows).ok(),
+        _ => None,
     }
 }
 
@@ -226,7 +255,8 @@ impl App {
         vec![]
     }
 
-    /// `detail` with the cursor `step` places further, round the row's keys and the tables pointing to it, scrolled to it.
+    /// `detail` with the cursor `step` places further, round the row's keys and the tables pointing to it, scrolled to it;
+    /// on a table not counted, or whose count failed, the note says why.
     fn on_key(&self, detail: Detail, step: isize) -> Detail {
         let Some(shown) = self.shown_row(&detail) else { return detail };
         let targets = shown.targets();
@@ -236,7 +266,12 @@ impl App {
         }
         let key = (detail.key + count).saturating_add_signed(step) % count;
         let column = targets.get(key).map_or(shown.columns.len(), |target| target.first_column());
-        Detail { key, scroll: DetailScroll::ToColumn(column), ..detail }
+        let note = match detail.referrer_at(key, targets.len()).map(|counted| &counted.count) {
+            Some(Count::NotCounted) => Some(NOT_COUNTED.to_owned()),
+            Some(Count::Failed(why)) => Some(format!("the count failed: {why}")),
+            _ => None,
+        };
+        Detail { key, scroll: DetailScroll::ToColumn(column), note, ..detail }
     }
 
     /// Follows what is under the cursor of `detail`: reads the row its key points to, or runs the rows of a table
@@ -245,7 +280,7 @@ impl App {
         let shown = self.shown_row(&detail);
         let targets = shown.as_ref().map(ShownRow::targets).unwrap_or_default();
         let lookup = targets.get(detail.key).zip(shown.as_ref()).map(|(target, shown)| (target.hop(), target.lookup(shown.row)));
-        let referrer = detail.key.checked_sub(targets.len()).and_then(|at| detail.referrers.get(at));
+        let referrer = detail.referrer_at(detail.key, targets.len());
         if let Some(prefilled) = referrer.and_then(|counted| counted.referrer.rows()) {
             return self.run_prefilled(prefilled);
         }
@@ -266,19 +301,21 @@ impl App {
         self.run_editor()
     }
 
-    /// Opens `detail` and counts the rows of each table pointing to the row it shows.
+    /// Opens `detail` and counts the rows of each table pointing to the row it shows whose key an index starts with.
     fn show_detail(&mut self, detail: Detail) -> Vec<Action> {
-        let referrers = self.referrers_of(&detail);
-        let connection = self.sheet().name().clone();
-        let mut counted = vec![];
-        let mut actions = vec![];
-        for referrer in referrers {
-            let look = self.new_look();
-            actions.push(Action::LookUp { connection: connection.clone(), look, lookup: referrer.count() });
-            counted.push(Counted { referrer, count: Count::Counting(look) });
-        }
-        self.overlay = Some(Overlay::Detail(Detail { referrers: counted, ..detail }));
-        actions
+        let counted = |referrer: Referrer| Counted { count: if referrer.is_indexed { Count::Queued } else { Count::NotCounted }, referrer };
+        let referrers = self.referrers_of(&detail).into_iter().map(counted).collect();
+        self.overlay = Some(Overlay::Detail(Detail { referrers, ..detail }));
+        self.count_next()
+    }
+
+    /// Sends the count of the first table still queued, once no count is on its way.
+    fn count_next(&mut self) -> Vec<Action> {
+        let look = self.next_look;
+        let Some(Overlay::Detail(detail)) = &mut self.overlay else { return vec![] };
+        let Some(lookup) = detail.start_next_count(look) else { return vec![] };
+        self.next_look = look.next();
+        vec![Action::LookUp { connection: self.sheet().name().clone(), look, lookup }]
     }
 
     /// The tables whose keys point to the row `detail` shows, once the schema is read.
@@ -307,8 +344,8 @@ impl App {
         let keys = match &detail.waiting {
             Some(waiting) if waiting.look == look => self.keys_of(rows.as_ref().ok()),
             _ => {
-                self.counted(look, rows.ok().as_ref());
-                return vec![];
+                self.counted(look, rows.as_ref());
+                return self.count_next();
             }
         };
         let Some(Overlay::Detail(mut detail)) = self.overlay.take() else { return vec![] };
@@ -332,14 +369,13 @@ impl App {
     }
 
     /// Takes the count the lookup `look` read, when it counts the rows of a table pointing to the row shown.
-    fn counted(&mut self, look: LookId, read: Option<&ResultSet>) {
+    fn counted(&mut self, look: LookId, read: Result<&ResultSet, &Failure>) {
         let Some(Overlay::Detail(detail)) = &mut self.overlay else { return };
         let Some(counted) = detail.referrers.iter_mut().find(|counted| counted.count == Count::Counting(look)) else { return };
-        let rows = read.and_then(|read| match read.rows().first()?.first()? {
-            Value::Int(rows) => u64::try_from(*rows).ok(),
-            _ => None,
-        });
-        counted.count = rows.map_or(Count::Failed, Count::Rows);
+        counted.count = match read {
+            Ok(read) => count_in(read).map_or_else(|| Count::Failed("it read no number".to_owned()), Count::Rows),
+            Err(failure) => Count::Failed(failure.to_string()),
+        };
     }
 
     /// Puts at the end of the editor, unsaved, the statement joining the tables of `detail`'s trail from the grid's
@@ -412,6 +448,7 @@ mod tests {
         let lookup = Lookup {
             statement: Statement::new("SELECT * FROM public.customers WHERE id = $1"),
             params: Params::new(vec![Some(ParamValue::new("3"))], vec![]),
+            own_timeout: None,
         };
         assert_eq!(press(&mut app, KeyCode::Enter), [Action::LookUp { connection: shop(), look: LookId::FIRST, lookup }]);
     }
@@ -561,6 +598,66 @@ mod tests {
         let read = ResultSet::whole(vec![column("count", ColumnKind::Int)], vec![vec![Value::Int(12)]]);
         app.apply(to_shop(Incoming::LookedUp { look: LookId::FIRST, rows: Ok(read) }));
         assert_eq!(detail(&app).referrers[0].count, Count::Rows(12));
+    }
+
+    #[test]
+    fn a_table_whose_key_no_index_starts_with_is_not_counted() {
+        let mut app = on_a_key();
+        let actions = app.apply(to_shop(Incoming::LookedUp { look: LookId::FIRST, rows: Ok(keyed_customer()) }));
+        assert_eq!((actions, &detail(&app).referrers[0].count), (vec![], &Count::NotCounted));
+    }
+
+    #[test]
+    fn tab_on_a_table_not_counted_says_why() {
+        let mut app = on_the_customer();
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(detail(&app).note.as_deref(), Some(NOT_COUNTED));
+    }
+
+    fn with_a_failed_count() -> App {
+        let mut app = on_the_keyed_orders();
+        press(&mut app, KeyCode::Enter);
+        let failure = Failure::Server { message: "canceling statement due to statement timeout".into(), position: None };
+        app.apply(to_shop(Incoming::LookedUp { look: LookId::FIRST, rows: Err(failure) }));
+        app
+    }
+
+    #[test]
+    fn a_failed_count_keeps_why_it_failed() {
+        let app = with_a_failed_count();
+        assert_eq!(detail(&app).referrers[0].count, Count::Failed("canceling statement due to statement timeout".into()));
+    }
+
+    #[test]
+    fn tab_on_a_failed_count_says_why_it_failed() {
+        let mut app = with_a_failed_count();
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(detail(&app).note.as_deref(), Some("the count failed: canceling statement due to statement timeout"));
+    }
+
+    /// A detail pointed to by `invoices` and by `refunds`, both counted.
+    fn pointed_twice() -> Detail {
+        let counted = |table: &str| Counted {
+            referrer: Referrer { schema: "billing".into(), table: table.into(), pairs: vec![], is_indexed: true },
+            count: Count::Queued,
+        };
+        Detail { referrers: vec![counted("invoices"), counted("refunds")], ..Detail::at_column(0) }
+    }
+
+    #[test]
+    fn a_count_waits_while_another_is_on_its_way() {
+        let mut detail = pointed_twice();
+        detail.start_next_count(LookId::FIRST);
+        assert_eq!(detail.start_next_count(LookId::FIRST.next()), None);
+    }
+
+    #[test]
+    fn the_next_count_goes_once_the_one_before_is_read() {
+        let mut detail = pointed_twice();
+        detail.start_next_count(LookId::FIRST);
+        detail.referrers[0].count = Count::Rows(3);
+        detail.start_next_count(LookId::FIRST.next());
+        assert_eq!(detail.referrers[1].count, Count::Counting(LookId::FIRST.next()));
     }
 
     #[test]
