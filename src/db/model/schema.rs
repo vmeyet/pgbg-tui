@@ -1,4 +1,4 @@
-use super::TypeName;
+use super::{ColumnNumber, TableOid, TypeName};
 use serde::Serialize;
 
 /// Every schema the role can see, with its tables, their columns, their indexes and their foreign keys.
@@ -40,6 +40,8 @@ pub(crate) enum TableKind {
 /// A table, a view or any other relation a statement can read from.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct Table {
+    #[serde(skip)]
+    pub(crate) oid: TableOid,
     pub(crate) name: String,
     pub(crate) kind: TableKind,
     /// The planner's guess from the last `ANALYZE`; none for a view or a table never analyzed.
@@ -55,6 +57,8 @@ pub(crate) struct Table {
 /// A column of a table, as the catalog declares it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct SchemaColumn {
+    #[serde(skip)]
+    pub(crate) number: ColumnNumber,
     pub(crate) name: String,
     /// The type as PostgreSQL writes it: `integer`, `character varying(80)`, `timestamp with time zone`.
     #[serde(rename = "type")]
@@ -83,6 +87,13 @@ pub(crate) struct ForeignKey {
     pub(crate) target_schema: String,
     pub(crate) target_table: String,
     pub(crate) target_columns: Vec<String>,
+}
+
+impl Table {
+    /// The number of its column `name`.
+    pub(crate) fn column_number(&self, name: &str) -> Option<ColumnNumber> {
+        self.columns.iter().find(|column| column.name == name).map(|column| column.number)
+    }
 }
 
 impl SchemaNode {

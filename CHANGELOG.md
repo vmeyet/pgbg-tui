@@ -27,7 +27,8 @@ Each entry says what changed, then where, then how to use it.
 - **The grid colours a value by its kind**, in the TUI's result grid: `NULL` dimmed and slanted, `true` green and `false` dimmed, a negative number red, a UUID dimmed past its first eight digits, a timestamp's time dimmed after its date, and JSON keys, strings and numbers each in their colour.
   A text column of a few values that repeat, as a status, gives each value its own colour, the same in every result.
   Press `f` on a boolean column, or `F`, to read it as `✓` and `✗`, or name it in a saved query's header as `-- format: paid=check`.
-- **The grid's header shows the keys**, in the TUI, for a statement that reads one table: a primary-key column's name is bold, and a column with a foreign key ends with `→`, as `customer_id →`, each column of a key of several too.
+- **The grid's header shows the keys**, in the TUI: a primary-key column's name is bold, and a column with a foreign key ends with `→`, as `customer_id →`, each column of a key of several too.
+  The key is the one of the table column the server says the result column holds, so an alias or a computed column is never taken for a key, and each column of a join has its own table's keys.
   It needs the schema read, as completion does.
 - **Select with the mouse in the editor**, in the TUI: a click places the cursor, a drag selects, a double click takes a word and a triple click a line.
   Letting go copies the selection, as tmux does, and any key drops it.

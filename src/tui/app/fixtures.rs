@@ -47,10 +47,15 @@ pub(in crate::tui) fn on_the_result(result: ResultSet) -> App {
 /// The app with [`keyed_orders`] from `SELECT * FROM orders` on screen, the schema of [`keyed_catalog`] read, the keys
 /// on the grid.
 pub(in crate::tui) fn on_the_keyed_orders() -> App {
-    let mut app = typed("SELECT * FROM orders");
+    on_keyed("SELECT * FROM orders", keyed_orders())
+}
+
+/// The app with `result` of `sql` on screen, the schema of [`keyed_catalog`] read, the keys on the grid.
+pub(in crate::tui) fn on_keyed(sql: &str, result: ResultSet) -> App {
+    let mut app = typed(sql);
     app.handle_key(KeyEvent::from(KeyCode::Enter));
     app.apply(to_shop(Incoming::Schema(Ok(Arc::new(keyed_catalog())))));
-    app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result: keyed_orders(), took: Duration::from_millis(38) }));
+    app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result, took: Duration::from_millis(38) }));
     app.handle_key(KeyEvent::from(KeyCode::Tab));
     app
 }

@@ -61,8 +61,12 @@ const DESCRIBED: [&str; 4] = ["", "name", "type", "detail"];
 
 /// A table's columns, then its indexes, one per row: what it is, its name, its type or keys, and the rest.
 fn described(table: &Table) -> ResultSet {
-    let columns =
-        DESCRIBED.iter().map(|name| Column { name: ColumnName::new(*name), kind: ColumnKind::Text, type_name: TypeName::new("text") });
+    let columns = DESCRIBED.iter().map(|name| Column {
+        name: ColumnName::new(*name),
+        kind: ColumnKind::Text,
+        type_name: TypeName::new("text"),
+        origin: None,
+    });
     let rows = table.columns.iter().map(column_row).chain(table.indexes.iter().map(index_row));
     ResultSet::new(columns.collect(), Page { rows: rows.collect(), extent: Extent::All })
 }

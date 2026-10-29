@@ -1,8 +1,8 @@
 //! Invented fixtures the tests share: the connection `shop`, the test database, tunnels to it, and results of `orders`.
 use crate::connection::{Connection, Entry, WritePolicy};
 use crate::db::model::{
-    Catalog, Column, ColumnKind, ColumnName, Extent, ForeignKey, Index, Page, Params, ResultSet, Route, Schema, SchemaColumn, SchemaNode,
-    Statement, Table, TableKind, TypeName, Value,
+    Catalog, Column, ColumnKind, ColumnName, ColumnNumber, Extent, ForeignKey, Index, Origin, Page, Params, ResultSet, Route, Schema,
+    SchemaColumn, SchemaNode, Statement, Table, TableKind, TableOid, TypeName, Value,
 };
 use crate::db::{Session, guard};
 use rustix::process::{Pid, test_kill_process};
@@ -174,8 +174,16 @@ fn through_forwarder(program: &str, marker: &str, writes: WritePolicy, hop: Dura
     connection(&format!("tier = \"local\"\nurl = \"{database}\"\ntls = \"off\"\n{writes}tunnel = {{ command = {command} }}\n"))
 }
 
+/// A computed column of a result: read from no table.
 pub(crate) fn column(name: &str, kind: ColumnKind) -> Column {
-    Column { name: ColumnName::new(name), kind, type_name: TypeName::new("") }
+    Column { name: ColumnName::new(name), kind, type_name: TypeName::new(""), origin: None }
+}
+
+/// A column of a result read as is from the column `name` of `table` in [`keyed_catalog`], and named so.
+pub(crate) fn shop_column(table: &str, name: &str, kind: ColumnKind) -> Column {
+    let catalog = keyed_catalog();
+    let table = catalog.schema.schemas.iter().flat_map(|node| &node.tables).find(|found| found.name == table).unwrap();
+    Column { origin: Some(Origin { table: table.oid, column: table.column_number(name).unwrap() }), ..column(name, kind) }
 }
 
 /// `count` rows of one integer each, `0` and on.
@@ -204,6 +212,7 @@ pub(crate) fn orders() -> ResultSet {
 
 pub(crate) fn schema_column(name: &str, type_name: &str, default: Option<&str>) -> SchemaColumn {
     SchemaColumn {
+        number: ColumnNumber::new(0),
         name: name.to_owned(),
         type_name: TypeName::new(type_name),
         is_nullable: default.is_some(),
@@ -212,12 +221,15 @@ pub(crate) fn schema_column(name: &str, type_name: &str, default: Option<&str>) 
     }
 }
 
+/// The table `name` of oid 0, its columns numbered in order from 1.
 pub(crate) fn schema_table(name: &str, columns: Vec<SchemaColumn>) -> Table {
+    let numbered = |(at, column): (usize, SchemaColumn)| SchemaColumn { number: ColumnNumber::new(at as i16 + 1), ..column };
     Table {
+        oid: TableOid::new(0),
         name: name.to_owned(),
         kind: TableKind::Table,
         estimated_rows: None,
-        columns,
+        columns: columns.into_iter().enumerate().map(numbered).collect(),
         indexes: vec![],
         foreign_keys: vec![],
         comment: None,
@@ -240,7 +252,8 @@ pub(crate) fn shop_catalog() -> Catalog {
 }
 
 /// The schema of `shop`: `orders` and `customers` in `public`, `invoices` in `billing`; `orders` has its key, a
-/// default and a row estimate; `orders.customer_id` points to `customers` and `invoices.order_id` to `orders`.
+/// default and a row estimate; `orders.customer_id` points to `customers` and `invoices.order_id` to `orders`; their
+/// oids are 1 for `invoices`, 2 for `orders` and 3 for `customers`.
 pub(crate) fn shop_schema() -> Schema {
     let key = Index { name: "orders_pkey".to_owned(), columns: vec!["id".to_owned()], is_unique: true, is_primary: true };
     let orders_columns = vec![
@@ -249,13 +262,18 @@ pub(crate) fn shop_schema() -> Schema {
         schema_column("total", "numeric(10,2)", Some("0")),
     ];
     let orders = Table {
+        oid: TableOid::new(2),
         estimated_rows: Some(1200),
         indexes: vec![key],
         foreign_keys: vec![key_to_id("customer_id", "public", "customers")],
         ..schema_table("orders", orders_columns)
     };
-    let customers = schema_table("customers", vec![schema_column("id", "integer", None), schema_column("name", "text", None)]);
+    let customers = Table {
+        oid: TableOid::new(3),
+        ..schema_table("customers", vec![schema_column("id", "integer", None), schema_column("name", "text", None)])
+    };
     let invoices = Table {
+        oid: TableOid::new(1),
         foreign_keys: vec![key_to_id("order_id", "public", "orders")],
         ..schema_table("invoices", vec![schema_column("id", "integer", None), schema_column("order_id", "integer", None)])
     };
@@ -264,19 +282,22 @@ pub(crate) fn shop_schema() -> Schema {
     Schema { schemas: vec![billing, public] }
 }
 
-/// [`shop_catalog`] whose `customers.user_id` points to `users`, a table of `public`, so a key leads two tables deep.
+/// [`shop_catalog`] whose `customers.user_id` points to `users`, a table of `public` of oid 4, so a key leads two tables
+/// deep.
 pub(crate) fn keyed_catalog() -> Catalog {
     let mut catalog = shop_catalog();
     let public = &mut catalog.schema.schemas[1];
     let customers = &mut public.tables[1];
-    customers.columns.push(schema_column("user_id", "integer", None));
+    customers.columns.push(SchemaColumn { number: ColumnNumber::new(3), ..schema_column("user_id", "integer", None) });
     customers.foreign_keys.push(key_to_id("user_id", "public", "users"));
-    public.tables.push(schema_table("users", vec![schema_column("id", "integer", None), schema_column("email", "text", None)]));
+    let users = schema_table("users", vec![schema_column("id", "integer", None), schema_column("email", "text", None)]);
+    public.tables.push(Table { oid: TableOid::new(4), ..users });
     catalog
 }
 
 /// `SELECT * FROM orders` on [`keyed_catalog`]: order 7 of customer 3, and order 12 of no customer.
 pub(crate) fn keyed_orders() -> ResultSet {
+    let column = |name: &str, kind| shop_column("orders", name, kind);
     let columns = vec![column("id", ColumnKind::Int), column("customer_id", ColumnKind::Int), column("total", ColumnKind::Numeric)];
     let rows = vec![
         vec![Value::Int(7), Value::Int(3), Value::Numeric("12.50".into())],
@@ -287,6 +308,7 @@ pub(crate) fn keyed_orders() -> ResultSet {
 
 /// The row of `customers` that order 7 points to: customer 3, Nina, user 5.
 pub(crate) fn keyed_customer() -> ResultSet {
+    let column = |name: &str, kind| shop_column("customers", name, kind);
     let columns = vec![column("id", ColumnKind::Int), column("name", ColumnKind::Text), column("user_id", ColumnKind::Int)];
     ResultSet::whole(columns, vec![vec![Value::Int(3), Value::Text("nina".into()), Value::Int(5)]])
 }

@@ -253,7 +253,7 @@ The grid colours each value by its kind, so a column reads at a glance.
 | A timestamp | Its date plain, its time dimmed. |
 | JSON | Keys, strings and numbers each in their colour. |
 
-When a statement reads one table, the header names its primary key in bold and ends a column with a foreign key with `→`.
+The header names a primary-key column in bold and ends a column with a foreign key with `→`, whatever the statement calls it and in a join too: pgbg asks the server which table column each result column holds, so a computed column has no key.
 
 ### Following keys
 

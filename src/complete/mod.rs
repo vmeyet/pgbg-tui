@@ -1,6 +1,6 @@
 //! Completion, pure: what the cursor wants from the statement under it, an `Index` of one catalog's names, and the
 //! candidates ranked for the ghost and the list.
-pub(crate) use context::{Ask, tables_named};
+pub(crate) use context::Ask;
 pub(crate) use index::Index;
 pub(crate) use join::alias_of;
 pub(crate) use rank::{Candidate, Kind};
@@ -16,7 +16,8 @@ mod tests {
     use super::rank::Ghosted;
     use super::*;
     use crate::db::lex::Lexed;
-    use crate::db::model::{Catalog, ForeignKey, Schema, SchemaColumn, SchemaNode, Table, TableKind, TypeName};
+    use crate::db::model::{Catalog, ForeignKey, Schema, SchemaNode, Table};
+    use crate::fixtures::{schema_column, schema_table};
 
     const TABLE_COUNT: usize = 20_000;
     const COLUMNS_PER_TABLE: usize = 10;
@@ -33,16 +34,12 @@ mod tests {
     ];
 
     fn large_catalog() -> Catalog {
-        let column =
-            |name: String| SchemaColumn { name, type_name: TypeName::new("integer"), is_nullable: false, default: None, comment: None };
+        let columns = |at: usize| {
+            COLUMN_WORDS.iter().take(COLUMNS_PER_TABLE).map(move |word| schema_column(&format!("{word}_{at}"), "integer", None))
+        };
         let table = |at: usize| Table {
-            name: format!("{}_{at}", WORDS[at % WORDS.len()]),
-            kind: TableKind::Table,
-            estimated_rows: None,
-            columns: COLUMN_WORDS.iter().take(COLUMNS_PER_TABLE).map(|word| column(format!("{word}_{at}"))).collect(),
-            indexes: vec![],
             foreign_keys: vec![to_next(at)],
-            comment: None,
+            ..schema_table(&format!("{}_{at}", WORDS[at % WORDS.len()]), columns(at).collect())
         };
         let public = SchemaNode { name: "public".to_owned(), tables: (0..TABLE_COUNT).map(table).collect() };
         Catalog { schema: Schema { schemas: vec![public] }, search_path: vec!["public".to_owned()], is_cut: false }

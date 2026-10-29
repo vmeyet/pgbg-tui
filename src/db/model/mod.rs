@@ -3,6 +3,7 @@ pub(crate) use cancel::CancelToken;
 pub(crate) use error::{InsideUserTransaction, ServerError, TriedToWrite, UnknownType};
 pub(crate) use json::JsonText;
 pub(crate) use name::{needs_quotes, qualified, sql_name};
+pub(crate) use origin::{ColumnNumber, Origin, TableOid};
 pub(crate) use result::{Extent, Page, ResultSet};
 pub(crate) use route::{LocalPort, Route};
 pub(crate) use schema::{Catalog, ForeignKey, Index, Schema, SchemaColumn, SchemaNode, Table, TableKind};
@@ -15,6 +16,7 @@ mod cancel;
 mod error;
 mod json;
 mod name;
+mod origin;
 mod result;
 mod route;
 mod schema;
@@ -155,7 +157,7 @@ impl fmt::Display for ColumnName {
     }
 }
 
-/// A column of a result: its name and the kind of its values.
+/// A column of a result: its name, the kind of its values, and the table column it was read from.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct Column {
     pub(crate) name: ColumnName,
@@ -163,6 +165,8 @@ pub(crate) struct Column {
     /// The server's name for the type: `int4`, `timestamptz`, `inet`.
     #[serde(rename = "type")]
     pub(crate) type_name: TypeName,
+    #[serde(skip)]
+    pub(crate) origin: Option<Origin>,
 }
 
 #[cfg(test)]

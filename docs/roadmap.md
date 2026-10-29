@@ -205,7 +205,7 @@ Each step is one MR, in this order.
 
 The review of #214 to #231 found these, most severe first.
 
-- [ ] A result column's key comes from the table and column the server says it was read from, so an alias or a computed column is never taken for a key
+- [x] A result column's key comes from the table and column the server says it was read from, so an alias or a computed column is never taken for a key
 - [ ] Referrer counts run only on a key covered by an index, or on demand, each with a short timeout of its own, and never hold the user's next run behind them
 - [ ] The editor keeps its scroll as state, so a click or a drag never moves the view and a drag selects the lines under the mouse
 - [ ] Sort and figures refuse a column pgbg cannot decode and say so, instead of counting its values as one
