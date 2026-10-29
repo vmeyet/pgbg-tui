@@ -180,13 +180,20 @@ fn change_of(key: KeyEvent) -> Change {
     }
 }
 
-/// Applies `key` to `field` as the editor does: keys that type, delete or move the cursor.
+/// Applies `key` to `field` as the editor does: keys that type, delete or move the cursor, those of a shell line
+/// included; `⌥b` `⌥f` are what a macOS terminal sends for `⌥←` `⌥→` unless its option key is set as meta.
 pub(super) fn apply(field: &mut Field, key: KeyEvent) {
     let alt = key.modifiers.contains(KeyModifiers::ALT);
     let control = key.modifiers.contains(KeyModifiers::CONTROL);
     match key.code {
         KeyCode::Enter => field.insert('\n'),
         KeyCode::Char('w') if control => field.delete_word(),
+        KeyCode::Char('a') if control => field.line_start(),
+        KeyCode::Char('e') if control => field.line_end(),
+        KeyCode::Char('k') if control => field.delete_to_line_end(),
+        KeyCode::Char('u') if control => field.delete_to_line_start(),
+        KeyCode::Char('b') if alt => field.word_left(),
+        KeyCode::Char('f') if alt => field.word_right(),
         KeyCode::Char(c) if !control => field.insert(c),
         KeyCode::Backspace if alt => field.delete_word(),
         KeyCode::Backspace => field.backspace(),
@@ -296,6 +303,35 @@ mod tests {
     }
 
     #[test]
+    fn alt_b_and_alt_f_move_by_word_as_alt_and_an_arrow_do() {
+        assert_eq!(press("FROM orders", &[with(KeyCode::Char('b'), KeyModifiers::ALT)]), "FROM |orders");
+        assert_eq!(
+            press("FROM orders", &[with(KeyCode::Home, KeyModifiers::NONE), with(KeyCode::Char('f'), KeyModifiers::ALT)]),
+            "FROM| orders"
+        );
+    }
+
+    #[test]
+    fn ctrl_k_deletes_to_the_end_of_the_line() {
+        let keys = [KeyEvent::from(KeyCode::Home), with(KeyCode::Char('k'), KeyModifiers::CONTROL)];
+        assert_eq!(press("SELECT id\nFROM orders", &keys), "|\nFROM orders");
+    }
+
+    #[test]
+    fn ctrl_u_deletes_to_the_start_of_the_line() {
+        assert_eq!(press("SELECT id\nFROM orders", &[with(KeyCode::Char('u'), KeyModifiers::CONTROL)]), "SELECT id\n|");
+    }
+
+    #[test]
+    fn ctrl_a_and_ctrl_e_go_to_the_ends_of_the_line_in_the_editor() {
+        let mut app = typed("SELECT id\nFROM orders");
+        control(&mut app, 'a');
+        assert_eq!(shown(&app.sheet().editor), "SELECT id\n|FROM orders");
+        control(&mut app, 'e');
+        assert_eq!(shown(&app.sheet().editor), "SELECT id\nFROM orders|");
+    }
+
+    #[test]
     fn a_control_key_types_nothing() {
         assert_eq!(press("FROM", &[with(KeyCode::Char('x'), KeyModifiers::CONTROL)]), "FROM|");
     }
@@ -401,6 +437,15 @@ mod tests {
         (0..2).for_each(|_| _ = app.handle_key(KeyEvent::from(KeyCode::Backspace)));
         control(&mut app, 'z');
         assert_eq!(app.sheet().editor.text(), "SELECT i");
+    }
+
+    #[test]
+    fn a_delete_to_the_end_of_the_line_is_one_step() {
+        let mut app = typed("SELECT id, total");
+        app.handle_key(KeyEvent::from(KeyCode::Home));
+        control(&mut app, 'k');
+        control(&mut app, 'z');
+        assert_eq!(app.sheet().editor.text(), "SELECT id, total");
     }
 
     #[test]

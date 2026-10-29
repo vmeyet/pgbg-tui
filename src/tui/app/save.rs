@@ -288,17 +288,17 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_e_hands_a_saved_query_to_the_users_editor() {
+    fn ctrl_x_hands_a_saved_query_to_the_users_editor() {
         let mut app = opened("SELECT 1");
         let edit = Action::EditOutside { connection: shop(), query: query("daily.sql") };
-        assert_eq!(press(&mut app, KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL)), [edit]);
+        assert_eq!(press(&mut app, KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)), [edit]);
     }
 
     #[test]
-    fn ctrl_e_on_unsaved_text_asks_for_a_save_first() {
+    fn ctrl_x_on_unsaved_text_asks_for_a_save_first() {
         let mut app = opened("SELECT 1");
         press(&mut app, KeyCode::Char(';'));
-        assert_eq!(press(&mut app, KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL)), []);
+        assert_eq!(press(&mut app, KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)), []);
         assert_eq!(app.sheet().query_error.as_deref(), Some(SAVE_FIRST));
     }
 }
