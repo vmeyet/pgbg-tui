@@ -8,6 +8,7 @@ use crate::query::{Query, Version};
 use crossterm::event::KeyEvent;
 
 const NOT_SAVED: &str = "save the query with ^s first: each save after keeps the version it replaces";
+const NOT_KEPT: &str = "that version held a password: only a note was kept, so it cannot be put back";
 
 /// The versions of one query, and the search over them; empty until the backend has read them.
 #[derive(Clone, Debug, PartialEq)]
@@ -30,7 +31,8 @@ pub(in crate::tui) struct Listed {
 impl Listed {
     /// `version` against the editor's `text`; the line diff grows with both sides, so the backend runs it off the loop.
     pub(in crate::tui) fn against(version: Version, text: &str) -> Self {
-        let lines = diff::lines(text, &version.text);
+        let Some(old) = &version.text else { return Self { version, added: 0, removed: 0, first_changed: None } };
+        let lines = diff::lines(text, old);
         let count = |change| lines.iter().filter(|line| line.change == change).count();
         let first = |change| lines.iter().find(|line| line.change == change).map(|line| line.text.clone());
         let (added, removed) = (count(Change::Added), count(Change::Removed));
@@ -70,7 +72,8 @@ impl App {
                 self.overlay = Some(Overlay::Versions(VersionList { query, all, search }));
             }
             Searching::Closed => {}
-            Searching::Picked(listed) => self.replace_editor_text(&listed.version.text),
+            Searching::Picked(Listed { version: Version { text: Some(text), .. }, .. }) => self.replace_editor_text(&text),
+            Searching::Picked(_) => self.sheet_mut().query_error = Some(NOT_KEPT.to_owned()),
             Searching::Quit => return self.quit(),
         }
         vec![]
@@ -87,7 +90,7 @@ pub(in crate::tui) mod tests {
     use crossterm::event::{KeyCode, KeyModifiers};
 
     pub(in crate::tui) fn version(text: &str) -> Version {
-        Version { replaced_at: DateTime::parse_from_rfc3339("2026-10-26T09:30:00Z").unwrap().to_utc(), text: text.to_owned() }
+        Version { replaced_at: DateTime::parse_from_rfc3339("2026-10-26T09:30:00Z").unwrap().to_utc(), text: Some(text.to_owned()) }
     }
 
     fn ctrl_v(app: &mut App) -> Vec<Action> {
@@ -100,15 +103,20 @@ pub(in crate::tui) mod tests {
         app
     }
 
-    /// The versions of `daily.sql` with `texts`, as the backend lists them against the editor's `text`.
-    pub(in crate::tui) fn versions_of_daily(texts: &[&str], text: &str) -> Answer {
-        Answer::Versions { query: query("daily.sql"), versions: texts.iter().map(|old| Listed::against(version(old), text)).collect() }
+    /// A version that held a password, read back as the note kept in its place.
+    pub(in crate::tui) fn not_kept() -> Version {
+        Version { text: None, ..version("") }
     }
 
-    fn listed(app: &mut App, texts: &[&str]) {
+    /// The `versions` of `daily.sql`, as the backend lists them against the editor's `text`.
+    pub(in crate::tui) fn daily_versions(versions: Vec<Version>, text: &str) -> Answer {
+        Answer::Versions { query: query("daily.sql"), versions: versions.into_iter().map(|old| Listed::against(old, text)).collect() }
+    }
+
+    fn listed(app: &mut App, versions: Vec<Version>) {
         ctrl_v(app);
         let text = app.sheet().editor.text().to_owned();
-        app.apply(versions_of_daily(texts, &text));
+        app.apply(daily_versions(versions, &text));
     }
 
     fn list(app: &App) -> &VersionList {
@@ -131,7 +139,7 @@ pub(in crate::tui) mod tests {
     #[test]
     fn a_picked_version_replaces_the_editor_text_unsaved() {
         let mut app = on_daily("SELECT 2");
-        listed(&mut app, &["SELECT 1"]);
+        listed(&mut app, vec![version("SELECT 1")]);
         app.handle_key(KeyEvent::from(KeyCode::Enter));
         let sheet = app.sheet();
         assert_eq!((sheet.editor.text(), sheet.is_dirty, sheet.opened.clone()), ("SELECT 1", true, Some(query("daily.sql"))));
@@ -140,7 +148,7 @@ pub(in crate::tui) mod tests {
     #[test]
     fn ctrl_z_takes_back_a_version_put_back() {
         let mut app = on_daily("SELECT 2");
-        listed(&mut app, &["SELECT 1"]);
+        listed(&mut app, vec![version("SELECT 1")]);
         app.handle_key(KeyEvent::from(KeyCode::Enter));
         app.handle_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL));
         assert_eq!(app.sheet().editor.text(), "SELECT 2");
@@ -149,14 +157,14 @@ pub(in crate::tui) mod tests {
     #[test]
     fn putting_a_version_back_writes_nothing() {
         let mut app = on_daily("SELECT 2");
-        listed(&mut app, &["SELECT 1"]);
+        listed(&mut app, vec![version("SELECT 1")]);
         assert_eq!(app.handle_key(KeyEvent::from(KeyCode::Enter)), []);
     }
 
     #[test]
     fn esc_closes_the_list_and_leaves_the_editor_as_it_was() {
         let mut app = on_daily("SELECT 2");
-        listed(&mut app, &["SELECT 1"]);
+        listed(&mut app, vec![version("SELECT 1")]);
         app.handle_key(KeyEvent::from(KeyCode::Esc));
         assert_eq!((app.overlay.is_none(), app.sheet().editor.text(), app.sheet().is_dirty), (true, "SELECT 2", false));
     }
@@ -178,5 +186,14 @@ pub(in crate::tui) mod tests {
     #[test]
     fn a_version_with_the_editor_text_changes_nothing() {
         assert_eq!(Listed::against(version("SELECT 1"), "SELECT 1").first_changed, None);
+    }
+
+    #[test]
+    fn a_version_that_held_a_password_is_never_put_back_and_says_why() {
+        let mut app = on_daily("SELECT 2");
+        listed(&mut app, vec![not_kept()]);
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        let sheet = app.sheet();
+        assert_eq!((sheet.editor.text(), sheet.is_dirty, sheet.query_error.as_deref()), ("SELECT 2", false, Some(NOT_KEPT)));
     }
 }

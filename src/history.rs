@@ -19,7 +19,6 @@ use tokio::task::JoinHandle;
 
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
 const DIR_MODE: u32 = 0o700;
-const PASSWORD_KEPT_AS: &str = "-- not kept: it holds a password";
 
 /// What came of a statement, without the server's words: they can quote a row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -171,7 +170,7 @@ impl Store {
 }
 
 fn kept(entry: &Entry) -> Entry {
-    let statement = if secret::holds_secret(entry.statement.as_str()) { Statement::new(PASSWORD_KEPT_AS) } else { entry.statement.clone() };
+    let statement = Statement::new(secret::kept_or_note(entry.statement.as_str()));
     Entry { statement, ..entry.clone() }
 }
 
@@ -285,7 +284,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         store(&dir).append(&entry("shop", "ALTER ROLE nina PASSWORD 'hunter2'", 1)).unwrap();
         store(&dir).append(&entry("shop", "SELECT password_hash FROM customers", 2)).unwrap();
-        assert_eq!(statements(&store(&dir).read(&shop()).unwrap()), ["SELECT password_hash FROM customers", PASSWORD_KEPT_AS]);
+        assert_eq!(statements(&store(&dir).read(&shop()).unwrap()), ["SELECT password_hash FROM customers", secret::NOT_KEPT]);
     }
 
     #[test]
@@ -294,7 +293,7 @@ mod tests {
         let dblink = "SELECT * FROM dblink('postgresql://nina:hunter2@db.example.com/shop', 'SELECT 1')";
         store(&dir).append(&entry("shop", dblink, 1)).unwrap();
         store(&dir).append(&entry("shop", "SELECT 'https://db.example.com/nina@shop'", 2)).unwrap();
-        assert_eq!(statements(&store(&dir).read(&shop()).unwrap()), ["SELECT 'https://db.example.com/nina@shop'", PASSWORD_KEPT_AS]);
+        assert_eq!(statements(&store(&dir).read(&shop()).unwrap()), ["SELECT 'https://db.example.com/nina@shop'", secret::NOT_KEPT]);
     }
 
     #[test]
@@ -304,7 +303,7 @@ mod tests {
         store(&dir)
             .append(&entry("shop", "SELECT dblink('postgresql://db.example.com/shop?oauth_client_secret=hunter2', 'SELECT 1')", 2))
             .unwrap();
-        assert_eq!(statements(&store(&dir).read(&shop()).unwrap()), [PASSWORD_KEPT_AS, PASSWORD_KEPT_AS]);
+        assert_eq!(statements(&store(&dir).read(&shop()).unwrap()), [secret::NOT_KEPT, secret::NOT_KEPT]);
     }
 
     #[test]

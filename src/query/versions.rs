@@ -2,6 +2,7 @@
 //! `versions/<hash of the query's real path>/<when it was replaced>.sql`, the newest `MAX_VERSIONS` of each query.
 use super::{Query, Roots};
 use crate::config;
+use crate::secret;
 use anyhow::Result;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use std::fs::{self, DirBuilder};
@@ -23,7 +24,8 @@ const NAME_FORMAT: &str = "%Y%m%dT%H%M%S%.3fZ";
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Version {
     pub(crate) replaced_at: DateTime<Utc>,
-    pub(crate) text: String,
+    /// None when it held a password: only the history's note was kept in its place.
+    pub(crate) text: Option<String>,
 }
 
 /// The versions of every saved query.
@@ -78,9 +80,10 @@ impl Versions {
         config::data_dir().map(|dir| Self { dir: dir.join("versions") })
     }
 
-    /// Keeps `text` as the version of `file` replaced `at`, unless it is already the newest one, then drops the oldest
-    /// past `MAX_VERSIONS`; safe to run twice. Blocks on the file system.
+    /// Keeps `text` as the version of `file` replaced `at`, as a note when it holds a password, unless it is already the
+    /// newest one, then drops the oldest past `MAX_VERSIONS`; safe to run twice. Blocks on the file system.
     fn keep(&self, file: &Path, text: &str, at: DateTime<Utc>) -> io::Result<()> {
+        let text = secret::kept_or_note(text);
         let folder = self.folder(file);
         let names = names_newest_first(&folder)?;
         if let Some(newest) = names.first()
@@ -141,6 +144,7 @@ fn names_newest_first(folder: &Path) -> io::Result<Vec<String>> {
 
 fn version(folder: &Path, name: &str) -> Option<Version> {
     let text = fs::read_to_string(folder.join(name)).inspect_err(|err| tracing::warn!("a version pgbg cannot read: {err}")).ok()?;
+    let text = Some(text).filter(|text| text != secret::NOT_KEPT);
     Some(Version { replaced_at: replaced_at(name)?, text })
 }
 
@@ -162,7 +166,7 @@ mod tests {
     }
 
     fn texts(versions: &Versions) -> Vec<String> {
-        versions.list(Path::new(DAILY)).unwrap().into_iter().map(|version| version.text).collect()
+        versions.list(Path::new(DAILY)).unwrap().into_iter().filter_map(|version| version.text).collect()
     }
 
     /// A project whose queries live in `queries` and whose versions live in `data`.
@@ -177,14 +181,14 @@ mod tests {
     }
 
     fn version_texts(roots: &Roots) -> Vec<String> {
-        roots.versions(&daily()).unwrap().into_iter().map(|version| version.text).collect()
+        roots.versions(&daily()).unwrap().into_iter().filter_map(|version| version.text).collect()
     }
 
     #[test]
     fn a_version_is_read_back_with_when_it_was_replaced() {
         let dir = tempfile::tempdir().unwrap();
         store(&dir).keep(Path::new(DAILY), "SELECT 1", at(0)).unwrap();
-        assert_eq!(store(&dir).list(Path::new(DAILY)).unwrap(), [Version { replaced_at: at(0), text: "SELECT 1".into() }]);
+        assert_eq!(store(&dir).list(Path::new(DAILY)).unwrap(), [Version { replaced_at: at(0), text: Some("SELECT 1".into()) }]);
     }
 
     #[test]
@@ -285,5 +289,26 @@ mod tests {
         roots.write(&daily(), "SELECT 1", Write::Create).unwrap();
         roots.edit_kept(&daily(), |_| Ok(())).unwrap();
         assert_eq!(version_texts(&roots), Vec::<String>::new());
+    }
+
+    fn files_in(dir: &Path) -> Vec<String> {
+        let entries = fs::read_dir(dir).unwrap().map(|entry| entry.unwrap().path());
+        entries.flat_map(|path| if path.is_dir() { files_in(&path) } else { vec![fs::read_to_string(path).unwrap()] }).collect()
+    }
+
+    #[test]
+    fn a_replaced_text_holding_a_password_leaves_no_password_on_disk() {
+        let (queries, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let roots = kept(&queries, &data);
+        roots.write(&daily(), "ALTER ROLE nina PASSWORD 'hunter2'", Write::Create).unwrap();
+        roots.write(&daily(), "SELECT 1", Write::Replace).unwrap();
+        assert_eq!(files_in(data.path()), [secret::NOT_KEPT]);
+    }
+
+    #[test]
+    fn a_version_kept_as_the_note_is_read_back_without_a_text() {
+        let dir = tempfile::tempdir().unwrap();
+        store(&dir).keep(Path::new(DAILY), "ALTER ROLE nina PASSWORD 'hunter2'", at(0)).unwrap();
+        assert_eq!(store(&dir).list(Path::new(DAILY)).unwrap(), [Version { replaced_at: at(0), text: None }]);
     }
 }

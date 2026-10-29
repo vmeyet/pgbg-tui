@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::env::VarError;
 use std::fmt;
 use std::process::Stdio;
-pub(crate) use words::holds_secret;
+pub(crate) use words::{NOT_KEPT, holds_secret, kept_or_note};
 use zeroize::Zeroize;
 
 mod keychain;

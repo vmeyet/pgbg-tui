@@ -1,0 +1,16 @@
+---
+source: src/tui/versions_view.rs
+expression: "render(vec![not_kept()]).backend()"
+---
+"                ╭ Versions of daily.sql ───────────────────────╮                "
+"                │ › ▌                                          │                "
+"                │                                              │                "
+"                │ ▎↺ -- not ke…  3 h ago · cannot be put back  │                "
+"                │   ↑↓ pick · ⏎ opens · esc closes             │                "
+"                │                                              │                "
+"                │                                              │                "
+"                │                                              │                "
+"                │                                              │                "
+"                │                                              │                "
+"                │                                              │                "
+"                ╰──────────────────────────────────────────────╯                "

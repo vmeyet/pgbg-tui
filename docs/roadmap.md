@@ -163,7 +163,7 @@ What a first real session asked for, one MR per step.
 The review of #194 to #208 found these, most severe first.
 
 - [x] The idle ask sends a comment as its instruction only with `[ai] literals = "sent"`, and masks it otherwise
-- [ ] A version whose text holds a secret is kept as a note, as the history keeps it
+- [x] A version whose text holds a secret is kept as a note, as the history keeps it
 - [x] The user's own queries folders are made `0700`, as the versions folder is
 - [x] The usage file is merged under the same lock the history takes
 - [ ] Editing in `$EDITOR` keeps the replaced text whatever the editor's exit status
