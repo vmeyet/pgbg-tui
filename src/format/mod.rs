@@ -14,7 +14,8 @@ mod columns;
 mod number;
 mod time;
 
-const SHORT_UUID_DIGITS: usize = 8;
+/// The digits of a UUID that tell it apart at a glance.
+pub(crate) const SHORT_UUID_DIGITS: usize = 8;
 
 /// One way a column's cells read.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -32,10 +33,12 @@ pub(crate) enum Format {
     Bytes,
     /// A UUID's first eight digits.
     Short,
+    /// A boolean as `✓` or `✗`.
+    Check,
 }
 
 impl Format {
-    const ALL: [Self; 6] = [Self::Raw, Self::Local, Self::Relative, Self::Grouped, Self::Bytes, Self::Short];
+    const ALL: [Self; 7] = [Self::Raw, Self::Local, Self::Relative, Self::Grouped, Self::Bytes, Self::Short, Self::Check];
 
     /// The word a `-- format:` header and the config use for it.
     pub(crate) const fn name(self) -> &'static str {
@@ -46,6 +49,7 @@ impl Format {
             Self::Grouped => "grouped",
             Self::Bytes => "bytes",
             Self::Short => "short",
+            Self::Check => "check",
         }
     }
 
@@ -90,7 +94,8 @@ pub(crate) fn allowed(kind: &ColumnKind) -> &'static [Format] {
         ColumnKind::TimestampTz => &[Format::Raw, Format::Local, Format::Relative],
         ColumnKind::Uuid => &[Format::Raw, Format::Short],
         ColumnKind::Bytes => &[Format::Raw, Format::Bytes],
-        ColumnKind::Bool | ColumnKind::Text | ColumnKind::Json | ColumnKind::Time | ColumnKind::Other => &[Format::Raw],
+        ColumnKind::Bool => &[Format::Raw, Format::Check],
+        ColumnKind::Text | ColumnKind::Json | ColumnKind::Time | ColumnKind::Other => &[Format::Raw],
     }
 }
 
@@ -109,7 +114,7 @@ pub(crate) fn readable(kind: &ColumnKind) -> Format {
 pub(crate) const fn least_width(format: Format) -> usize {
     match format {
         Format::Relative => time::WIDEST_UNDER_A_YEAR.len(),
-        Format::Raw | Format::Local | Format::Grouped | Format::Bytes | Format::Short => 0,
+        Format::Raw | Format::Local | Format::Grouped | Format::Bytes | Format::Short | Format::Check => 0,
     }
 }
 
@@ -145,6 +150,7 @@ fn formatted<Tz: TimeZone>(value: &Value, format: Format, clock: &Clock<Tz>) -> 
         (Format::Bytes, Value::Numeric(text)) => text.parse().ok().filter(|bytes: &f64| bytes.is_finite()).map(number::size),
         (Format::Bytes, Value::Bytes(bytes)) => Some(number::size(bytes.len() as f64)),
         (Format::Short, Value::Uuid(id)) => Some(id.simple().to_string()[..SHORT_UUID_DIGITS].to_owned()),
+        (Format::Check, Value::Bool(value)) => Some(if *value { "✓" } else { "✗" }.to_owned()),
         _ => None,
     }
 }
@@ -229,7 +235,7 @@ mod tests {
     #[test]
     fn an_unknown_format_name_says_which_ones_exist() {
         let error = "pretty".parse::<Format>().unwrap_err();
-        assert_eq!(error.to_string(), "`pretty` is not a format: raw, local, relative, grouped, bytes, short");
+        assert_eq!(error.to_string(), "`pretty` is not a format: raw, local, relative, grouped, bytes, short, check");
     }
 
     #[test]
@@ -330,6 +336,16 @@ mod tests {
     fn a_uuid_reads_short_as_its_first_eight_digits() {
         let id = uuid::Uuid::parse_str("1b4e28ba-2fa1-11d2-883f-0016d3cca427").unwrap();
         assert_eq!(read(&Value::Uuid(id), Format::Short), "1b4e28ba");
+    }
+
+    #[test]
+    fn a_boolean_reads_as_a_check_mark_or_a_cross() {
+        assert_eq!([read(&Value::Bool(true), Format::Check), read(&Value::Bool(false), Format::Check)], ["✓", "✗"]);
+    }
+
+    #[test]
+    fn a_boolean_steps_to_check_and_is_a_check_when_readable() {
+        assert_eq!((Format::Raw.next(&ColumnKind::Bool), readable(&ColumnKind::Bool)), (Format::Check, Format::Check));
     }
 
     #[test]

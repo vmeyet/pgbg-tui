@@ -1,0 +1,12 @@
+---
+source: src/tui/grid_view/mod.rs
+expression: "coloured(ColumnKind::TimestampTz,\nvec![Value::TimestampTz(at(\"2026-07-14T09:30:00Z\"))], 30)"
+---
+Reset/NONE "   "
+Cyan/BOLD "c"
+Reset/NONE "                          "
+---
+Cyan/NONE " "
+Reset/NONE "  2026-07-14"
+Indexed(245)/NONE " 09:30:00+00:00"
+Reset/NONE "  "

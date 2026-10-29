@@ -1,4 +1,6 @@
-//! The results grid's state: the cursor's cell, the first row and column in view, and each column's format and width.
+//! The results grid's state: the cursor's cell, the first row and column in view, and each column's format, width and
+//! colouring.
+use super::colouring::{Colouring, colourings};
 use crate::db::model::{ColumnName, ResultSet};
 use crate::format::{self, Format, Mode};
 use crate::render;
@@ -6,8 +8,8 @@ use chrono::Local;
 
 /// No column is drawn wider, so one long text never hides the others.
 const MAX_COLUMN_WIDTH: usize = 40;
-/// How many rows a column's width is measured on, so measuring a big result costs no more than a small one.
-const WIDTH_SAMPLE_ROWS: usize = 500;
+/// How many rows a column's width and colouring are measured on, so measuring a big result costs no more than a small one.
+const SAMPLE_ROWS: usize = 500;
 /// The space drawn before each column.
 pub(in crate::tui) const GAP: &str = "  ";
 
@@ -47,13 +49,15 @@ pub(super) enum Move {
 }
 
 /// The cursor and scroll position in a result, and how each column is shown.
-/// Widths are measured on the first page, when the result arrives and when a format changes.
+/// Widths and colourings are measured on the first page, when the result arrives and when a format changes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::tui) struct Grid {
     /// Each column's format, by index.
     pub(in crate::tui) formats: Vec<Format>,
     /// Each column's width in terminal columns: its header or its widest sampled cell, capped.
     pub(in crate::tui) widths: Vec<usize>,
+    /// How each column's cells are coloured, by index.
+    pub(in crate::tui) colourings: Vec<Colouring>,
     /// The cursor's row.
     pub(in crate::tui) row: usize,
     /// The cursor's column.
@@ -67,8 +71,9 @@ pub(in crate::tui) struct Grid {
 impl Grid {
     /// The grid on `result` with each column in its format from `formats`, the cursor on the first row.
     pub(in crate::tui) fn new(result: &ResultSet, formats: Vec<Format>, clock: &Clock) -> Self {
-        let widths = column_widths(result, &formats, clock);
-        Self { formats, widths, row: 0, column: 0, top: 0, left: 0 }
+        let mut grid = Self { formats: vec![], widths: vec![], colourings: vec![], row: 0, column: 0, top: 0, left: 0 };
+        grid.set_formats(formats, result, clock);
+        grid
     }
 
     /// The grid on `result`, every column raw.
@@ -98,6 +103,7 @@ impl Grid {
 
     fn set_formats(&mut self, formats: Vec<Format>, result: &ResultSet, clock: &Clock) {
         self.widths = column_widths(result, &formats, clock);
+        self.colourings = colourings(result, &formats, SAMPLE_ROWS);
         self.formats = formats;
     }
 
@@ -153,7 +159,7 @@ fn column_widths(result: &ResultSet, formats: &[Format], clock: &Clock) -> Vec<u
 
 fn column_width(result: &ResultSet, column: usize, format: Format, clock: &Clock) -> usize {
     let header = render::width(&render::printable(result.columns()[column].name.as_str()));
-    let cells = result.rows().iter().take(WIDTH_SAMPLE_ROWS).filter_map(|row| row.get(column));
+    let cells = result.rows().iter().take(SAMPLE_ROWS).filter_map(|row| row.get(column));
     let widest_cell = cells.map(|value| render::width(&format::cell(value, format, clock, MAX_COLUMN_WIDTH))).max().unwrap_or(0);
     header.max(widest_cell).max(format::least_width(format)).min(MAX_COLUMN_WIDTH)
 }

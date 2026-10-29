@@ -1,19 +1,25 @@
 //! The results grid: the header, then only the rows and columns in view, with numbers right-aligned.
-//! `▶` marks the cursor's row and its cell is highlighted; each cell shows in its column's format.
+//! `▶` marks the cursor's row and its cell is highlighted; each cell shows in its column's format and colouring.
+//! Cells are written straight into the frame's buffer, so a cell in several colours costs no more than one.
 use super::app::{Clock, GAP, Grid, Room};
-use crate::db::model::{Column, ColumnKind, ResultSet, Value};
+use crate::db::model::{Column, ResultSet, Value};
 use crate::format::{self, Format};
 use crate::render;
+use crate::syntax::highlight_json_line;
+use ink::{Ink, ink};
 use ratatui::Frame;
-use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Position, Rect};
+use ratatui::style::{Color, Modifier, Style};
 use vtui::text::truncate;
 use vtui::theme::Theme;
 
+mod ink;
+
 const CURSOR: &str = "▶";
 const NO_CURSOR: &str = " ";
+/// The terminal columns the cursor's mark takes, before the first column.
+const MARK_WIDTH: u16 = 1;
 
 /// What the grid is drawn from.
 #[derive(Clone, Copy, Debug)]
@@ -25,86 +31,119 @@ pub(super) struct GridView<'a> {
     pub(super) clock: &'a Clock,
 }
 
-/// A column in view: its index in the result and the terminal columns it is drawn in.
+/// A column in view: its index in the result, the terminal column it starts at and the terminal columns it is drawn in.
 #[derive(Clone, Copy, Debug)]
 struct Shown {
     index: usize,
-    width: usize,
+    x: u16,
+    width: u16,
 }
 
-/// The columns from `first` onward that fit in `room`, each after its gap; the last one is cut to the space left.
-fn in_view(widths: &[usize], first: usize, room: usize) -> Vec<Shown> {
-    let mut left = room;
+/// The columns from `first` onward that fit between terminal columns `left` and `end`, each after its gap; the last one
+/// is cut to the space left.
+fn in_view(widths: &[usize], first: usize, left: u16, end: u16) -> Vec<Shown> {
+    let gap = GAP.len() as u16;
+    let mut x = left;
     let mut shown = vec![];
     for (index, &width) in widths.iter().enumerate().skip(first) {
-        if left <= GAP.len() {
+        if end - x <= gap {
             break;
         }
-        left -= GAP.len();
-        let drawn = width.min(left);
-        shown.push(Shown { index, width: drawn });
-        left -= drawn;
+        x += gap;
+        let drawn = u16::try_from(width).unwrap_or(u16::MAX).min(end - x);
+        shown.push(Shown { index, x, width: drawn });
+        x += drawn;
     }
     shown
 }
 
 /// The grid in `area`; returns the room it had below its header and next to the cursor's mark.
 pub(super) fn draw(f: &mut Frame<'_>, view: GridView<'_>, area: Rect) -> Room {
-    let room = usize::from(area.width).saturating_sub(CURSOR.chars().count());
-    let shown = in_view(&view.grid.widths, view.grid.left, room);
+    let room = area.width.saturating_sub(MARK_WIDTH);
+    let shown = in_view(&view.grid.widths, view.grid.left, area.x + MARK_WIDTH, area.right().max(area.x + MARK_WIDTH));
     let body_rows = usize::from(area.height).saturating_sub(1);
+    let buffer = f.buffer_mut();
+    if area.height > 0 {
+        draw_header(buffer, view, &shown, area.y);
+    }
     let rows = view.result.rows().iter().enumerate().skip(view.grid.top).take(body_rows);
-    let lines: Vec<Line<'_>> =
-        std::iter::once(header(view, &shown)).chain(rows.map(|(index, row)| row_line(view, &shown, index, row))).collect();
-    f.render_widget(Paragraph::new(lines), area);
-    Room { rows: body_rows, columns: room }
+    for (y, (index, row)) in (area.y + 1..).zip(rows) {
+        draw_row(buffer, view, &shown, Position { x: area.x, y }, index, row);
+    }
+    Room { rows: body_rows, columns: usize::from(room) }
 }
 
-fn header<'a>(view: GridView<'a>, shown: &[Shown]) -> Line<'a> {
+fn draw_header(buffer: &mut Buffer, view: GridView<'_>, shown: &[Shown], y: u16) {
     let style = Style::default().add_modifier(Modifier::BOLD);
-    let cursor_style = style.fg(cursor_colour(view));
-    let cells = shown.iter().map(|column| {
+    for column in shown {
         let name = &view.result.columns()[column.index];
-        let style = if column.index == view.grid.column { cursor_style } else { style };
-        (aligned(&render::printable(name.name.as_str()), name, column.width), style)
-    });
-    line(Span::raw(NO_CURSOR), cells.collect())
+        let style = if column.index == view.grid.column { style.fg(cursor_colour(view)) } else { style };
+        let text = truncate(&render::printable(name.name.as_str()), column.width.into());
+        draw_aligned(buffer, Position { x: column.x, y }, column.width, name, &text, Ink::Whole(style), view.theme);
+    }
 }
 
-fn row_line<'a>(view: GridView<'a>, shown: &[Shown], index: usize, row: &[Value]) -> Line<'a> {
+fn draw_row(buffer: &mut Buffer, view: GridView<'_>, shown: &[Shown], mark: Position, index: usize, row: &[Value]) {
     let is_current = index == view.grid.row;
-    let cells = shown.iter().map(|column| {
-        let is_cursor = is_current && column.index == view.grid.column;
-        let style = if is_cursor { Style::default().add_modifier(Modifier::REVERSED) } else { Style::default() };
-        let text = cell(&row[column.index], view.grid.formats[column.index], view.clock, column.width);
-        (aligned(&text, &view.result.columns()[column.index], column.width), style)
-    });
-    let marker = Span::styled(if is_current { CURSOR } else { NO_CURSOR }, Style::default().fg(cursor_colour(view)));
-    line(marker, cells.collect())
+    let marker = if is_current { CURSOR } else { NO_CURSOR };
+    buffer.set_string(mark.x, mark.y, marker, Style::default().fg(cursor_colour(view)));
+    for column in shown {
+        let at = Position { x: column.x, y: mark.y };
+        if is_current && column.index == view.grid.column {
+            buffer.set_style(Rect { x: at.x, y: at.y, width: column.width, height: 1 }, Style::default().add_modifier(Modifier::REVERSED));
+        }
+        let value = &row[column.index];
+        let text = cell(value, view.grid.formats[column.index], view.clock, column.width.into());
+        let ink = ink(&text, value, view.grid.colourings[column.index], view.theme);
+        draw_aligned(buffer, at, column.width, &view.result.columns()[column.index], &text, ink, view.theme);
+    }
 }
 
-fn cursor_colour(view: GridView<'_>) -> ratatui::style::Color {
+fn cursor_colour(view: GridView<'_>) -> Color {
     if view.focused { view.theme.accent } else { view.theme.faded }
 }
 
-fn line(marker: Span<'static>, cells: Vec<(String, Style)>) -> Line<'static> {
-    let spans = cells.into_iter().flat_map(|(text, style)| [Span::raw(GAP), Span::styled(text, style)]);
-    Line::from(std::iter::once(marker).chain(spans).collect::<Vec<_>>())
-}
-
-/// Enough of `value` in `format` to fill `width`, and show that it continues past it.
+/// Enough of `value` in `format` to fill `width`, cut there with `…` when it continues past it.
 fn cell(value: &Value, format: Format, clock: &Clock, width: usize) -> String {
-    format::cell(value, format, clock, width + 1)
+    let text = format::cell(value, format, clock, width + 1);
+    if render::width(&text) <= width { text } else { truncate(&text, width) }
 }
 
-/// `text` cut and padded to `width`: numbers on the right, so their digits line up, and other values on the left.
-fn aligned(text: &str, column: &Column, width: usize) -> String {
-    let cut = truncate(text, width);
-    let padding = " ".repeat(width.saturating_sub(Span::raw(cut.as_str()).width()));
-    match column.kind {
-        ColumnKind::Int | ColumnKind::Float | ColumnKind::Numeric => padding + &cut,
-        _ => cut + &padding,
+/// `text`, which fits `width`, in `ink` at `at`: numbers on the right, so their digits line up, and other values on the
+/// left.
+fn draw_aligned(buffer: &mut Buffer, at: Position, width: u16, column: &Column, text: &str, ink: Ink, theme: &Theme) {
+    let padding = usize::from(width).saturating_sub(render::width(text));
+    let x = if column.kind.is_number() { at.x + u16::try_from(padding).unwrap_or(0) } else { at.x };
+    draw_inked(buffer, Position { x, y: at.y }, text, ink, theme);
+}
+
+fn draw_inked(buffer: &mut Buffer, at: Position, text: &str, ink: Ink, theme: &Theme) {
+    match ink {
+        Ink::Whole(style) => _ = draw_piece(buffer, at, text, style),
+        Ink::Split { at: split, head, tail } => {
+            let x = draw_piece(buffer, at, &text[..split], head);
+            draw_piece(buffer, Position { x, y: at.y }, &text[split..], tail);
+        }
+        Ink::Json => draw_json(buffer, at, text, theme),
     }
+}
+
+/// `text` in one pass: each JSON token in its colour, and what lies between plain.
+fn draw_json(buffer: &mut Buffer, at: Position, text: &str, theme: &Theme) {
+    let mut x = at.x;
+    let mut drawn = 0;
+    for painted in highlight_json_line(text) {
+        let colour = Style::default().fg(theme.syntax.colour(painted.token));
+        x = draw_piece(buffer, Position { x, y: at.y }, &text[drawn..painted.bytes.start], Style::default());
+        x = draw_piece(buffer, Position { x, y: at.y }, &text[painted.bytes.clone()], colour);
+        drawn = painted.bytes.end;
+    }
+    draw_piece(buffer, Position { x, y: at.y }, &text[drawn..], Style::default());
+}
+
+/// `piece` at `at` in `style`, over the cell's own; returns the terminal column after it.
+fn draw_piece(buffer: &mut Buffer, at: Position, piece: &str, style: Style) -> u16 {
+    buffer.set_stringn(at.x, at.y, piece, usize::MAX, style).0
 }
 
 #[cfg(test)]
@@ -112,6 +151,7 @@ mod tests {
     use super::super::app::Grid;
     use super::super::styled;
     use super::*;
+    use crate::db::model::{ColumnKind, JsonText};
     use crate::fixtures::{column, orders};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -132,14 +172,26 @@ mod tests {
         use crate::fixtures::best_of;
         use std::time::Duration;
 
-        /// A 200 × 50 frame takes 0.4 ms on a laptop whatever the row in view, CI about four times that: ten times slower
+        /// A 200 × 50 frame takes 0.3 ms on a laptop whatever the row in view, CI about four times that: ten times slower
         /// fails, as drawing every row instead of the window would.
         const FRAME_BUDGET: Duration = Duration::from_millis(4);
 
-        /// Ten thousand rows, the cap, of twenty columns: numbers, texts and times.
+        /// Ten thousand rows, the cap, of fifty columns: one of each kind the grid colours, and plain text.
         fn capped() -> ResultSet {
-            let kinds = [ColumnKind::Int, ColumnKind::Text, ColumnKind::Numeric, ColumnKind::TimestampTz];
-            let columns = (0..20).map(|index| column(&format!("c{index}"), kinds[index % 4].clone())).collect();
+            let kinds = [
+                ColumnKind::Int,
+                ColumnKind::Text,
+                ColumnKind::Numeric,
+                ColumnKind::TimestampTz,
+                ColumnKind::Bool,
+                ColumnKind::Uuid,
+                ColumnKind::Json,
+                ColumnKind::Text,
+                ColumnKind::Int,
+                ColumnKind::Text,
+            ];
+            let columns = (0..50).map(|index| column(&format!("c{index}"), kinds[index % kinds.len()].clone())).collect();
+            let statuses = ["paid", "open", "void"];
             let cells = |n: i64| {
                 let at = chrono::DateTime::UNIX_EPOCH + chrono::Duration::hours(n);
                 [
@@ -147,9 +199,15 @@ mod tests {
                     Value::Text(format!("customer {n}").into()),
                     Value::Numeric(format!("{n}.50").into()),
                     Value::TimestampTz(at),
+                    Value::Bool(n % 2 == 0),
+                    Value::Uuid(uuid::Uuid::from_u128(u128::from(n.unsigned_abs()) << 64)),
+                    Value::Json(JsonText::of(&serde_json::json!({"id": n, "status": "paid"}))),
+                    Value::Text(statuses[n.unsigned_abs() as usize % statuses.len()].into()),
+                    Value::Int(-n),
+                    Value::Null,
                 ]
             };
-            let rows = (0..10_000).map(|n| cells(n).into_iter().cycle().take(20).collect()).collect();
+            let rows = (0..10_000).map(|n| cells(n).into_iter().cycle().take(50).collect()).collect();
             ResultSet::new(columns, Page { rows, extent: Extent::Cut })
         }
 
@@ -217,6 +275,61 @@ mod tests {
     fn a_narrow_grid_cuts_its_last_column() {
         let result = orders();
         insta::assert_snapshot!("narrow", render(&result, &Grid::raw(&result), 22, 5).backend());
+    }
+
+    /// The styled runs of `rows` of one column of `kind`, each column raw, the cursor off them on a row beyond.
+    fn coloured(kind: ColumnKind, rows: Vec<Value>, width: u16) -> String {
+        let height = u16::try_from(rows.len()).unwrap() + 1;
+        let result = ResultSet::whole(vec![column("c", kind)], rows.into_iter().map(|value| vec![value]).collect());
+        let mut grid = Grid::raw(&result);
+        grid.row = usize::MAX;
+        styled::runs(render(&result, &grid, width, height).backend().buffer())
+    }
+
+    #[test]
+    fn a_null_is_dimmed_and_slanted_beside_the_text_null() {
+        insta::assert_snapshot!("null", coloured(ColumnKind::Text, vec![Value::Null, Value::Text("NULL".into())], 8));
+    }
+
+    #[test]
+    fn each_repeated_text_takes_its_own_colour() {
+        let statuses = ["paid", "open", "paid", "open"].map(|status| Value::Text(status.into()));
+        insta::assert_snapshot!("repeated_texts", coloured(ColumnKind::Text, statuses.into(), 8));
+    }
+
+    #[test]
+    fn true_is_in_the_success_colour_and_false_dimmed() {
+        insta::assert_snapshot!("booleans", coloured(ColumnKind::Bool, vec![Value::Bool(true), Value::Bool(false)], 8));
+    }
+
+    #[test]
+    fn a_boolean_reads_as_a_mark_when_checked() {
+        let result = ResultSet::whole(vec![column("paid", ColumnKind::Bool)], vec![vec![Value::Bool(true)], vec![Value::Bool(false)]]);
+        let clock = Clock { now: at("2026-07-14T12:00:00Z"), zone: chrono::Local };
+        let grid = Grid::new(&result, vec![Format::Check], &clock);
+        insta::assert_snapshot!("checked", render(&result, &grid, 8, 3).backend());
+    }
+
+    #[test]
+    fn a_negative_number_is_in_the_failure_colour() {
+        insta::assert_snapshot!("negative", coloured(ColumnKind::Int, vec![Value::Int(-12), Value::Int(7)], 8));
+    }
+
+    #[test]
+    fn a_uuid_dims_all_but_its_first_eight_digits() {
+        let id = uuid::Uuid::parse_str("1b4e28ba-2fa1-11d2-883f-0016d3cca427").unwrap();
+        insta::assert_snapshot!("uuid", coloured(ColumnKind::Uuid, vec![Value::Uuid(id)], 40));
+    }
+
+    #[test]
+    fn a_json_value_colours_its_keys_strings_and_numbers() {
+        let json = JsonText::of(&serde_json::json!({"id": 7, "status": "paid"}));
+        insta::assert_snapshot!("json", coloured(ColumnKind::Json, vec![Value::Json(json)], 30));
+    }
+
+    #[test]
+    fn a_timestamp_dims_its_time_after_its_date() {
+        insta::assert_snapshot!("timestamp", coloured(ColumnKind::TimestampTz, vec![Value::TimestampTz(at("2026-07-14T09:30:00Z"))], 30));
     }
 
     #[test]

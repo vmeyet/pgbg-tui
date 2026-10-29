@@ -1,0 +1,12 @@
+---
+source: src/tui/grid_view/mod.rs
+expression: "coloured(ColumnKind::Uuid, vec![Value::Uuid(id)], 40)"
+---
+Reset/NONE "   "
+Cyan/BOLD "c"
+Reset/NONE "                                    "
+---
+Cyan/NONE " "
+Reset/NONE "  1b4e28ba"
+Indexed(245)/NONE "-2fa1-11d2-883f-0016d3cca427"
+Reset/NONE " "
