@@ -1,6 +1,6 @@
 //! Completion, pure: what the cursor wants from the statement under it, an `Index` of one catalog's names, and the
 //! candidates ranked for the ghost and the list.
-pub(crate) use context::Ask;
+pub(crate) use context::{Ask, tables_named};
 pub(crate) use index::Index;
 pub(crate) use rank::{Candidate, Kind};
 

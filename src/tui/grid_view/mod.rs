@@ -73,13 +73,15 @@ pub(super) fn draw(f: &mut Frame<'_>, view: GridView<'_>, area: Rect) -> Room {
     Room { rows: body_rows, columns: usize::from(room) }
 }
 
+/// Each column's name, bold when it is part of the primary key, followed by `→` when it points to another table.
 fn draw_header(buffer: &mut Buffer, view: GridView<'_>, shown: &[Shown], y: u16) {
-    let style = Style::default().add_modifier(Modifier::BOLD);
     for column in shown {
-        let name = &view.result.columns()[column.index];
+        let is_bold = view.grid.is_primary(column.index);
+        let style = if is_bold { Style::default().add_modifier(Modifier::BOLD) } else { Style::default() };
         let style = if column.index == view.grid.column { style.fg(cursor_colour(view)) } else { style };
-        let text = truncate(&render::printable(name.name.as_str()), column.width.into());
-        draw_aligned(buffer, Position { x: column.x, y }, column.width, name, &text, Ink::Whole(style), view.theme);
+        let text = truncate(&view.grid.header(view.result, column.index), column.width.into());
+        let at = Position { x: column.x, y };
+        draw_aligned(buffer, at, column.width, &view.result.columns()[column.index], &text, Ink::Whole(style), view.theme);
     }
 }
 
@@ -151,7 +153,7 @@ mod tests {
     use super::super::app::Grid;
     use super::super::styled;
     use super::*;
-    use crate::db::model::{ColumnKind, JsonText};
+    use crate::db::model::{ColumnKind, JsonText, Statement};
     use crate::fixtures::{column, orders};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -267,7 +269,7 @@ mod tests {
         let columns = vec![column("amount", ColumnKind::Int), column("paid_at", ColumnKind::TimestampTz)];
         let result = ResultSet::whole(columns, vec![paid_at("2026-07-14T09:00:00Z"), paid_at("2026-07-12T12:00:00Z")]);
         let clock = Clock { now: at("2026-07-14T12:00:00Z"), zone: chrono::Local };
-        let grid = Grid::new(&result, vec![Format::Grouped, Format::Relative], &clock);
+        let grid = Grid::new(&result, vec![Format::Grouped, Format::Relative], vec![], &clock);
         insta::assert_snapshot!("formatted", render(&result, &grid, 30, 3).backend());
     }
 
@@ -306,7 +308,7 @@ mod tests {
     fn a_boolean_reads_as_a_mark_when_checked() {
         let result = ResultSet::whole(vec![column("paid", ColumnKind::Bool)], vec![vec![Value::Bool(true)], vec![Value::Bool(false)]]);
         let clock = Clock { now: at("2026-07-14T12:00:00Z"), zone: chrono::Local };
-        let grid = Grid::new(&result, vec![Format::Check], &clock);
+        let grid = Grid::new(&result, vec![Format::Check], vec![], &clock);
         insta::assert_snapshot!("checked", render(&result, &grid, 8, 3).backend());
     }
 
@@ -330,6 +332,19 @@ mod tests {
     #[test]
     fn a_timestamp_dims_its_time_after_its_date() {
         insta::assert_snapshot!("timestamp", coloured(ColumnKind::TimestampTz, vec![Value::TimestampTz(at("2026-07-14T09:30:00Z"))], 30));
+    }
+
+    #[test]
+    fn a_primary_key_header_is_bold_and_a_foreign_key_header_points_on() {
+        let result = ResultSet::whole(
+            vec![column("id", ColumnKind::Int), column("customer_id", ColumnKind::Int), column("total", ColumnKind::Numeric)],
+            vec![vec![Value::Int(7), Value::Int(3), Value::Numeric("12.50".into())]],
+        );
+        let keys = crate::keys::column_keys(&crate::fixtures::shop_catalog(), &Statement::new("SELECT * FROM orders"), result.columns());
+        let clock = Clock { now: at("2026-07-14T12:00:00Z"), zone: chrono::Local };
+        let mut grid = Grid::new(&result, vec![Format::Raw; 3], keys, &clock);
+        grid.column = usize::MAX;
+        insta::assert_snapshot!("keys", styled::runs(render(&result, &grid, 30, 2).backend().buffer()));
     }
 
     #[test]

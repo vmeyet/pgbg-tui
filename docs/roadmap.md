@@ -187,7 +187,7 @@ Each step is one MR, in this order.
 - [ ] A mouse drag selects in the editor and copies on release; a double click takes a word, a triple click a line
 - [ ] `⌥c` copies the statement under the cursor
 - [ ] `⌘c` and `⌘v` copy and paste where the terminal sends them
-- [ ] The grid colours a value by its kind: `NULL` dimmed, one colour per repeated text value, booleans, negative numbers, keys, uuids, json and times
+- [x] The grid colours a value by its kind: `NULL` dimmed, one colour per repeated text value, booleans, negative numbers, keys, uuids, json and times
 - [ ] An FK column says so; `⏎` on its cell opens the row it points to, deeper with a trail and `⌫` back
 - [ ] The row's detail lists the tables that point to it; `⏎` runs that query as a new result
 - [ ] `e` in that detail writes the join into the editor

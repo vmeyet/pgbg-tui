@@ -3,7 +3,7 @@ source: src/tui/grid_view/mod.rs
 expression: "coloured(ColumnKind::Json, vec![Value::Json(json)], 30)"
 ---
 Reset/NONE "   "
-Cyan/BOLD "c"
+Cyan/NONE "c"
 Reset/NONE "                          "
 ---
 Cyan/NONE " "
