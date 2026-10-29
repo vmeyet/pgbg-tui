@@ -259,7 +259,7 @@ pgbg's own read-only transaction (`Session::read_only`) is refused with `InsideU
 
 ## Saved queries
 
-- One `.sql` file per query under `.pgbg/queries/`, found by walking up from the working directory like `.git`, which every connection shows, then under `queries/<connection>/` in pgbg's data folder, the user's own of the connection on screen (`Source::User`).
+- One `.sql` file per query under `.pgbg/queries/`, found by walking up from the working directory like `.git`, which every connection shows, then under `queries/<connection>/` in pgbg's data folder, the user's own of the connection on screen (`Source::User`), whose folders pgbg makes `0700`; a project's follow the umask.
 - A connection's `queries` key names another connection whose folder it uses; the config refuses a name that is no connection, and a connection name of only dots, so the folder stays inside `queries/`.
 - The app asks for the list of the folder of the connection on screen (`Action::ListQueries`), drops a list of another folder, and asks again after a switch to a connection with another folder, its list emptied until it comes, and after each save.
 - The walk stops at the home folder or at the first folder holding `.git`, so a folder above the project never gives its queries.
