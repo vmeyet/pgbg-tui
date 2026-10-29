@@ -31,6 +31,7 @@ Each entry says what changed, then where, then how to use it.
   The key is the one of the table column the server says the result column holds, so an alias or a computed column is never taken for a key, and each column of a join has its own table's keys.
   It needs the schema read, as completion does.
 - **Select with the mouse in the editor**, in the TUI: a click places the cursor, a drag selects, a double click takes a word and a triple click a line.
+  The view stays still under the mouse, so a drag selects the lines drawn under it; it scrolls only when the keys move the cursor out of it.
   Letting go copies the selection, as tmux does, and any key drops it.
 - **Shell moves in the editor**, in the TUI: `ctrl-a` and `ctrl-e` go to the start and the end of the line, `ctrl-k` and `ctrl-u` delete to them, and `⌥b` `⌥f` move by word as `⌥←` `⌥→` do.
   `⌥b` `⌥f` are what a macOS terminal sends for `⌥←` `⌥→` when its option key is not set as meta; each delete is one step for `ctrl-z`.

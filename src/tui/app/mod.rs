@@ -316,8 +316,9 @@ impl App {
     /// leave a sidebar no longer drawn.
     pub(super) fn fit(&mut self, mut fit: Fit) {
         let built = fit.detail.drawn.take();
-        let room = fit.grid;
+        let (room, editor_rows) = (fit.grid, fit.editor_text.height);
         self.fit = fit;
+        self.sheet_mut().editor.keep_in_view(editor_rows);
         if let Run::Done { grid, view: View::Grid, .. } = &mut self.sheet_mut().run {
             grid.keep_in_view(room);
         }
