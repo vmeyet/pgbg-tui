@@ -1,9 +1,13 @@
-//! The row's detail over the screen: each column's name and type, with its whole value below, wrapped, and JSON
-//! indented and coloured.
+//! The row's detail over the screen: each column's name on the left and its whole value beside it, wrapped under
+//! itself, in the grid's format and colours, then the tables pointing to the row.
 //! Every piece of text is drawn through `render::printable`.
-use super::app::{App, Count, Counted, DetailFit, DetailScroll, DrawnDetail, DrawnRow, Overlay, RowOf, Run, ShownRow};
+use super::app::{
+    App, Clock, Colouring, Count, Counted, Detail, DetailFit, DetailScroll, DrawnDetail, DrawnRow, GAP, Grid, Overlay, RowOf, Run, ShownRow,
+};
+use super::ink::{Ink, ink};
 use crate::act::{self, Hint, Pane};
 use crate::db::model::{Column, Value};
+use crate::format::{self, Format};
 use crate::keys::COUNTED_ROWS;
 use crate::render;
 use crate::syntax::{self, Painted};
@@ -17,9 +21,14 @@ use vtui::{pane, text};
 
 /// The longest value drawn, so a 10 MB document costs no more than a page of it.
 const VALUE_MAX_CHARS: usize = 64 * 1024;
+/// The widest column name drawn whole; a longer one is cut with `…`, so one long name never squeezes every value.
+const LABEL_MAX_WIDTH: usize = 28;
 const INDENT: &str = "  ";
 const SHARE_OF_SCREEN_PCT: u16 = 80;
+/// The narrowest popup, so a value keeps room on a small terminal; a screen narrower than it is taken whole.
+const MIN_WIDTH: u16 = 60;
 const HINT_SEPARATOR: &str = " · ";
+const POINTING_HEADING: &str = "Pointing to it ";
 
 /// The detail when it is open; returns the line it started at, how far it can scroll, and its lines when it built
 /// them.
@@ -31,9 +40,9 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> DetailFit {
     let [body, footer] = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(block.inner(area));
     let of = DrawnRow { connection: app.sheet().name().clone(), row: shown.of, width: body.width };
     let kept = app.drawn_detail().filter(|drawn| drawn.of == of);
-    let built = kept.is_none().then(|| drawn(app.theme(), &shown, of));
+    let built = kept.is_none().then(|| drawn(app, detail, &shown, of));
     let Some(DrawnDetail { lines, column_starts, .. }) = kept.or(built.as_ref()) else { return DetailFit::default() };
-    let pointing = pointing_lines(app.theme(), &detail.referrers);
+    let pointing = pointing_lines(app.theme(), &detail.referrers, body.width);
     let last_scroll = (lines.len() + pointing.len()).saturating_sub(usize::from(body.height));
     let wanted = match detail.scroll {
         DetailScroll::ToColumn(column) => column_starts.get(column).copied().unwrap_or(lines.len()),
@@ -57,16 +66,27 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> DetailFit {
     DetailFit { first_line, last_scroll, drawn: built }
 }
 
-/// The tables whose keys point to the row, each with how many of its rows do, under a heading; none when no table does.
-fn pointing_lines(theme: &Theme, referrers: &[Counted]) -> Vec<Line<'static>> {
+/// A faint rule headed `Pointing to it`, then the tables whose keys point to the row, each with how many of its rows do
+/// on the right; none when no table does.
+fn pointing_lines(theme: &Theme, referrers: &[Counted], width: u16) -> Vec<Line<'static>> {
     if referrers.is_empty() {
         return vec![];
     }
-    let heading = Line::styled("Pointing to it", Style::default().fg(theme.muted).add_modifier(Modifier::BOLD));
+    let width = usize::from(width);
+    let rule = "─".repeat(width.saturating_sub(POINTING_HEADING.len()));
+    let heading = Line::from(vec![
+        Span::styled(POINTING_HEADING, Style::default().fg(theme.muted).add_modifier(Modifier::BOLD)),
+        Span::styled(rule, faded(theme)),
+    ]);
     let line = |counted: &Counted| {
+        let count = count_text(counted.count);
         let columns: Vec<&str> = counted.referrer.pairs.iter().map(|pair| pair.column.as_str()).collect();
-        let key = render::printable(&format!("{}.{}", counted.referrer.table, columns.join(", "))).into_owned();
-        Line::from(vec![Span::raw(format!("{INDENT}{key}  ")), Span::styled(count_text(counted.count), Style::default().fg(theme.muted))])
+        let room = width.saturating_sub(INDENT.len() + render::width(&count));
+        let key = text::truncate(&render::printable(&format!("{}.{}", counted.referrer.table, columns.join(", "))), room - GAP.len());
+        Line::from(vec![
+            Span::raw(format!("{INDENT}{}", render::padded(&key, room))),
+            Span::styled(count, Style::default().fg(theme.muted)),
+        ])
     };
     std::iter::once(heading).chain(referrers.iter().map(line)).collect()
 }
@@ -92,22 +112,136 @@ fn title(app: &App, shown: &ShownRow<'_>) -> String {
 fn footer_line(theme: &Theme, note: Option<&str>, columns: u16) -> Line<'static> {
     match note {
         Some(note) => Line::styled(render::printable(note).into_owned(), Style::default().fg(theme.warn)),
-        None => Line::styled(hints(columns), Style::default().fg(theme.faded)),
+        None => Line::styled(hints(columns), faded(theme)),
+    }
+}
+
+/// How the grid reads a column: its format, and how its values are coloured.
+#[derive(Clone, Copy, Debug)]
+struct Look {
+    format: Format,
+    colouring: Colouring,
+}
+
+impl Look {
+    const RAW: Self = Self { format: Format::Raw, colouring: Colouring::Plain };
+}
+
+/// Each column's look: the grid's on the grid's row, and the one a new grid opens in on a row a key led to.
+fn looks(app: &App, detail: &Detail) -> Vec<Look> {
+    let opened;
+    let grid = match (detail.trail.last(), &app.sheet().run) {
+        (Some(followed), _) => {
+            let formats = format::opening(followed.result.columns(), &[], app.format_mode());
+            opened = Grid::new(&followed.result, formats, vec![], app.clock());
+            &opened
+        }
+        (None, Run::Done { grid, .. }) => grid,
+        (None, _) => return vec![],
+    };
+    grid.formats.iter().zip(&grid.colourings).map(|(&format, &colouring)| Look { format, colouring }).collect()
+}
+
+/// The terminal columns of the names on the left, and of the values beside them.
+#[derive(Clone, Copy, Debug)]
+struct Widths {
+    label: usize,
+    value: usize,
+}
+
+impl Widths {
+    /// Room for the longest name, at most `LABEL_MAX_WIDTH` and a third of `width`; the rest goes to the values.
+    fn of(columns: &[Column], width: u16) -> Self {
+        let width = usize::from(width);
+        let longest = columns.iter().map(|column| render::width(&render::printable(column.name.as_str()))).max().unwrap_or(0);
+        let label = longest.min(LABEL_MAX_WIDTH).min(width / 3);
+        Self { label, value: width.saturating_sub(label + GAP.len()) }
     }
 }
 
 /// Every column of the row shown as lines `of.width` columns wide, a key's column naming the table it points to.
-fn drawn(theme: &Theme, shown: &ShownRow<'_>, of: DrawnRow) -> DrawnDetail {
-    let points_to = |at: usize| shown.points_to(at).map(|target| target.table.as_str());
-    let columns = shown.columns.iter().zip(shown.row).enumerate();
-    let by_column: Vec<Vec<Line<'static>>> =
-        columns.map(|(at, (column, value))| column_lines(theme, column, points_to(at), value, of.width)).collect();
+fn drawn(app: &App, detail: &Detail, shown: &ShownRow<'_>, of: DrawnRow) -> DrawnDetail {
+    let (theme, looks, widths) = (app.theme(), looks(app, detail), Widths::of(shown.columns, of.width));
+    let column = |(at, (column, value)): (usize, (&Column, &Value))| {
+        let mut value = value_spans(theme, value, looks.get(at).copied().unwrap_or(Look::RAW), app.clock());
+        let key = shown.points_to(at).map(|target| Span::styled(format!("{GAP}→ {}", render::printable(&target.table)), faded(theme)));
+        if let (Some(last), Some(key)) = (value.last_mut(), key) {
+            last.push(key);
+        }
+        column_lines(label(theme, column, shown.is_primary(at), widths.label), value, widths)
+    };
+    let by_column: Vec<Vec<Line<'static>>> = shown.columns.iter().zip(shown.row).enumerate().map(column).collect();
     let column_starts = by_column.iter().scan(0, |start, lines| Some(std::mem::replace(start, *start + lines.len()))).collect();
     DrawnDetail { of, lines: by_column.into_iter().flatten().collect(), column_starts }
 }
 
+/// The column's name cut and padded to `width`, muted, bold for a primary key.
+fn label(theme: &Theme, column: &Column, is_primary: bool, width: usize) -> Span<'static> {
+    let style = Style::default().fg(theme.muted);
+    let style = if is_primary { style.add_modifier(Modifier::BOLD) } else { style };
+    Span::styled(render::padded(&text::truncate(&render::printable(column.name.as_str()), width), width), style)
+}
+
+/// `label` beside the first line of `value`; each line of `value` wrapped within the values' width, under itself.
+fn column_lines(label: Span<'static>, value: Vec<Vec<Span<'static>>>, widths: Widths) -> Vec<Line<'static>> {
+    let under = Span::raw(" ".repeat(widths.label));
+    let heads = std::iter::once(label).chain(std::iter::repeat(under));
+    let wrapped = value.into_iter().flat_map(|spans| text::wrap_line(&Line::from(spans), widths.value));
+    heads.zip(wrapped).map(|(head, line)| Line::from([head, Span::raw(GAP)].into_iter().chain(line.spans).collect::<Vec<_>>())).collect()
+}
+
+/// Each line of the value in its column's format and the grid's colours, the raw text faded after a format that
+/// changed it, then a note when the value was cut.
+fn value_spans(theme: &Theme, value: &Value, look: Look, clock: &Clock) -> Vec<Vec<Span<'static>>> {
+    let mut raw = value.pretty_prefix(VALUE_MAX_CHARS + 1);
+    let cut_at = raw.char_indices().nth(VALUE_MAX_CHARS).map(|(at, _)| at);
+    if let Some(at) = cut_at {
+        raw.truncate(at);
+    }
+    let formatted = format::formatted(value, look.format, clock).filter(|formatted| *formatted != raw);
+    let lines = match formatted {
+        Some(formatted) => {
+            let raw = Span::styled(format!("{GAP}{}", render::printable(&raw)), faded(theme));
+            vec![inked(theme, &formatted, value, look.colouring).into_iter().chain([raw]).collect()]
+        }
+        None => raw.split('\n').map(|line| inked(theme, line, value, look.colouring)).collect(),
+    };
+    let note = cut_at.map(|_| vec![Span::styled(format!("… the first {VALUE_MAX_CHARS} characters"), Style::default().fg(theme.muted))]);
+    lines.into_iter().chain(note).collect()
+}
+
+/// One line of a value in the colours the grid gives it, each piece escaped on its own.
+fn inked(theme: &Theme, line: &str, value: &Value, colouring: Colouring) -> Vec<Span<'static>> {
+    let piece = |text: &str, style: Style| Span::styled(render::printable(text).into_owned(), style);
+    let spans = match ink(line, value, colouring, theme) {
+        Ink::Whole(style) => vec![piece(line, style)],
+        Ink::Split { at, head, tail } => vec![piece(&line[..at], head), piece(&line[at..], tail)],
+        Ink::Json => painted_spans(theme, line, &syntax::highlight_json_line(line)),
+    };
+    spans.into_iter().filter(|span| !span.content.is_empty()).collect()
+}
+
+/// `line` split at its painted pieces, each piece escaped on its own and drawn in its token's colour.
+fn painted_spans(theme: &Theme, line: &str, painted: &[Painted]) -> Vec<Span<'static>> {
+    let mut spans = vec![];
+    let mut at = 0;
+    for piece in painted {
+        spans.push(Span::raw(render::printable(&line[at..piece.bytes.start]).into_owned()));
+        let colour = Style::default().fg(theme.syntax.colour(piece.token));
+        spans.push(Span::styled(render::printable(&line[piece.bytes.clone()]).into_owned(), colour));
+        at = piece.bytes.end;
+    }
+    spans.push(Span::raw(render::printable(&line[at..]).into_owned()));
+    spans
+}
+
+fn faded(theme: &Theme) -> Style {
+    Style::default().fg(theme.faded)
+}
+
+/// `SHARE_OF_SCREEN_PCT` of the screen, and at least `MIN_WIDTH` columns wide.
 fn centred(area: Rect) -> Rect {
-    let width = share_of_screen(area.width);
+    let width = share_of_screen(area.width).max(area.width.min(MIN_WIDTH));
     let height = share_of_screen(area.height);
     Rect { x: area.x + (area.width - width) / 2, y: area.y + (area.height - height) / 2, width, height }
 }
@@ -128,58 +262,13 @@ fn written(hint: Hint) -> String {
     format!("{} {}", hint.keys, hint.does)
 }
 
-/// The column's name, its type and the table its key points to, its value below, then a blank line.
-fn column_lines(theme: &Theme, column: &Column, points_to: Option<&str>, value: &Value, width: u16) -> Vec<Line<'static>> {
-    let name = Span::styled(render::printable(column.name.as_str()).into_owned(), Style::default().add_modifier(Modifier::BOLD));
-    let type_name = Span::styled(format!("  {}", render::printable(column.type_name.as_str())), Style::default().fg(theme.muted));
-    let type_name = (!column.type_name.as_str().is_empty()).then_some(type_name);
-    let key = points_to.map(|table| Span::styled(format!("  → {}", render::printable(table)), Style::default().fg(theme.link)));
-    let header = Line::from(std::iter::once(name).chain(type_name).chain(key).collect::<Vec<_>>());
-    let room = usize::from(width).saturating_sub(INDENT.len());
-    let value_lines = value_spans(theme, value).into_iter().flat_map(|spans| text::wrap_line(&Line::from(spans), room));
-    let indented = value_lines.map(|line| Line::from(std::iter::once(Span::raw(INDENT)).chain(line.spans).collect::<Vec<_>>()));
-    std::iter::once(header).chain(indented).chain([Line::default()]).collect()
-}
-
-/// Each line of the value as coloured spans, then a note when the value was cut.
-fn value_spans(theme: &Theme, value: &Value) -> Vec<Vec<Span<'static>>> {
-    if *value == Value::Null {
-        return vec![vec![Span::styled("NULL", Style::default().fg(theme.faded))]];
-    }
-    let text = value.pretty_prefix(VALUE_MAX_CHARS + 1);
-    let is_cut = text.chars().nth(VALUE_MAX_CHARS).is_some();
-    let kept: String = text.chars().take(VALUE_MAX_CHARS).collect();
-    let is_json = matches!(value, Value::Json(_));
-    let lines = kept.split('\n').map(|line| painted_spans(theme, line, &line_colours(line, is_json)));
-    let note = is_cut.then(|| vec![Span::styled(format!("… the first {VALUE_MAX_CHARS} characters"), Style::default().fg(theme.muted))]);
-    lines.chain(note).collect()
-}
-
-fn line_colours(line: &str, is_json: bool) -> Vec<Painted> {
-    if is_json { syntax::highlight_json_line(line) } else { vec![] }
-}
-
-/// `line` split at its painted pieces, each piece escaped on its own and drawn in its token's colour.
-fn painted_spans(theme: &Theme, line: &str, painted: &[Painted]) -> Vec<Span<'static>> {
-    let mut spans = vec![];
-    let mut at = 0;
-    for piece in painted {
-        spans.push(Span::raw(render::printable(&line[at..piece.bytes.start]).into_owned()));
-        let colour = Style::default().fg(theme.syntax.colour(piece.token));
-        spans.push(Span::styled(render::printable(&line[piece.bytes.clone()]).into_owned(), colour));
-        at = piece.bytes.end;
-    }
-    spans.push(Span::raw(render::printable(&line[at..]).into_owned()));
-    spans.into_iter().filter(|span| !span.content.is_empty()).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::app::fixtures::{on_the_keyed_orders, to_shop, typed};
     use super::super::app::{Fit, Incoming, LookId, RunId};
     use super::super::styled;
     use super::*;
-    use crate::db::model::{ColumnKind, JsonText, ResultSet, TypeName};
+    use crate::db::model::{ColumnKind, JsonText, ResultSet};
     use crate::fixtures::{column, keyed_customer, orders};
     use crossterm::event::{KeyCode, KeyEvent};
     use ratatui::Terminal;
@@ -206,15 +295,66 @@ mod tests {
     fn a_note() -> ResultSet {
         let note = "Leave at the door.\nRing twice: the bell is \u{202e}broken";
         let orders = orders();
-        let columns =
-            orders.columns().iter().cloned().chain([Column { type_name: TypeName::new("text"), ..column("note", ColumnKind::Text) }]);
+        let columns = orders.columns().iter().cloned().chain([column("note", ColumnKind::Text)]);
         let rows = orders.rows().iter().map(|row| row.iter().cloned().chain([Value::Text(note.into())]).collect());
         ResultSet::whole(columns.collect(), rows.collect())
     }
 
+    /// A row of every kind the grid colours, a long name and a long text among them.
+    fn of_every_kind() -> ResultSet {
+        let columns = vec![
+            column("id", ColumnKind::Int),
+            column("paid", ColumnKind::Bool),
+            column("reference", ColumnKind::Uuid),
+            column("placed_at", ColumnKind::TimestampTz),
+            column("items", ColumnKind::Json),
+            column("instructions_for_the_courier_on_arrival", ColumnKind::Text),
+            column("customer_id", ColumnKind::Int),
+        ];
+        let row = vec![
+            Value::Int(7),
+            Value::Bool(true),
+            Value::Uuid(uuid::Uuid::from_u128(0x0a1b_2c3d_4e5f_4a6b_8c7d_9e0f_1a2b_3c4d)),
+            Value::TimestampTz(chrono::DateTime::UNIX_EPOCH),
+            Value::Json(JsonText::of(&serde_json::json!({"sku": "TEA-01", "count": 2}))),
+            Value::Text("Leave the parcel at the door of the shop and ring twice, the bell is weak.".into()),
+            Value::Null,
+        ];
+        ResultSet::whole(columns, vec![row.clone(), row])
+    }
+
     #[test]
-    fn each_column_shows_its_name_type_and_whole_value_wrapped() {
+    fn each_name_sits_on_the_left_and_its_value_wraps_beside_it() {
         insta::assert_snapshot!("detail", render(&detail_of(a_note()), 40, 20).0.backend());
+    }
+
+    #[test]
+    fn a_long_name_is_cut_and_every_value_lines_up_after_the_names() {
+        insta::assert_snapshot!("detail_every_kind", render(&detail_of(of_every_kind()), 100, 24).0.backend());
+    }
+
+    #[test]
+    fn each_value_takes_the_colours_the_grid_gives_it() {
+        insta::assert_snapshot!(
+            "detail_every_kind_styled",
+            styled::runs(render(&detail_of(of_every_kind()), 100, 24).0.backend().buffer())
+        );
+    }
+
+    #[test]
+    fn a_narrow_terminal_keeps_a_third_for_the_names_and_the_rest_for_the_values() {
+        insta::assert_snapshot!("detail_narrow", render(&detail_of(of_every_kind()), 60, 24).0.backend());
+    }
+
+    #[test]
+    fn a_column_in_another_format_shows_it_then_its_raw_value_faded() {
+        let mut app = detail_of(of_every_kind());
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        (0..2).for_each(|_| _ = app.handle_key(KeyEvent::from(KeyCode::Char('l'))));
+        app.handle_key(KeyEvent::from(KeyCode::Char('f')));
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        let runs = styled::runs(render(&app, 100, 24).0.backend().buffer());
+        assert!(runs.contains("0a1b2c3d\"\nIndexed(240)/NONE \"  0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d\""), "{runs}");
     }
 
     #[test]
@@ -233,13 +373,13 @@ mod tests {
     #[test]
     fn a_detail_taller_than_the_popup_says_how_far_it_scrolls() {
         let (_, fit) = render(&detail_of(a_note()), 40, 10);
-        assert_eq!(fit.last_scroll, 9);
+        assert_eq!(fit.last_scroll, 1);
     }
 
     #[test]
     fn a_scrolled_detail_starts_further_down() {
         let mut app = detail_of(a_note());
-        app.fit(Fit { detail: DetailFit { first_line: 0, last_scroll: 9, ..DetailFit::default() }, ..Fit::default() });
+        app.fit(Fit { detail: DetailFit { first_line: 0, last_scroll: 1, ..DetailFit::default() }, ..Fit::default() });
         (0..3).for_each(|_| _ = app.handle_key(KeyEvent::from(KeyCode::Char('j'))));
         insta::assert_snapshot!("detail_scrolled", render(&app, 40, 10).0.backend());
     }
@@ -250,7 +390,7 @@ mod tests {
         app.handle_key(KeyEvent::from(KeyCode::Esc));
         (0..3).for_each(|_| _ = app.handle_key(KeyEvent::from(KeyCode::Char('l'))));
         app.handle_key(KeyEvent::from(KeyCode::Enter));
-        let (_, fit) = render(&app, 40, 20);
+        let (_, fit) = render(&app, 40, 10);
         assert_eq!((fit.first_line, fit.last_scroll), (1, 1));
         let (terminal, fit) = render(&app, 40, 30);
         assert_eq!(fit.first_line, 0, "{:?}", terminal.backend());
@@ -270,9 +410,11 @@ mod tests {
     }
 
     #[test]
-    fn a_followed_row_shows_the_trail_that_led_to_it_and_where_its_keys_point() {
+    fn a_followed_row_shows_the_trail_that_led_to_it_where_its_keys_point_and_what_points_to_it() {
         let mut app = on_a_key();
         app.apply(to_shop(Incoming::LookedUp { look: LookId::FIRST, rows: Ok(keyed_customer()) }));
+        let count = ResultSet::whole(vec![column("count", ColumnKind::Int)], vec![vec![Value::Int(2)]]);
+        app.apply(to_shop(Incoming::LookedUp { look: LookId::FIRST.next(), rows: Ok(count) }));
         insta::assert_snapshot!("detail_followed", render(&app, 60, 14).0.backend());
     }
 
@@ -292,6 +434,14 @@ mod tests {
         app.apply(to_shop(Incoming::LookedUp { look: LookId::FIRST, rows: Ok(keyed_customer()) }));
         let runs = styled::runs(render(&app, 60, 14).0.backend().buffer());
         assert!(runs.contains("REVERSED \"user_id\""), "{runs}");
+    }
+
+    #[test]
+    fn the_name_of_a_primary_key_is_bold() {
+        let mut app = on_the_keyed_orders();
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        let runs = styled::runs(render(&app, 60, 16).0.backend().buffer());
+        assert!(runs.contains("BOLD \"id ") && !runs.contains("BOLD \"total"), "{runs}");
     }
 
     #[test]

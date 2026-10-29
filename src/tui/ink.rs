@@ -1,5 +1,5 @@
 //! The colours of one cell's text, from its value and its column's colouring.
-use super::super::app::Colouring;
+use super::app::Colouring;
 use crate::db::model::Value;
 use crate::format::SHORT_UUID_DIGITS;
 use ratatui::style::{Modifier, Style};
