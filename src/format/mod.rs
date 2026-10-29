@@ -136,8 +136,9 @@ pub(crate) fn cell<Tz: TimeZone>(value: &Value, format: Format, clock: &Clock<Tz
     formatted(value, format, clock).unwrap_or_else(|| render::cell_text(value, chars))
 }
 
+/// The text of `value` in `format`; none when the format has no form for it, as raw has none.
 #[expect(clippy::cast_precision_loss, reason = "a size reads to one decimal, far from the digits a float loses")]
-fn formatted<Tz: TimeZone>(value: &Value, format: Format, clock: &Clock<Tz>) -> Option<String> {
+pub(crate) fn formatted<Tz: TimeZone>(value: &Value, format: Format, clock: &Clock<Tz>) -> Option<String> {
     match (format, value) {
         (Format::Local, Value::TimestampTz(at)) => Some(time::local(*at, &clock.zone)),
         (Format::Relative, Value::TimestampTz(at)) => Some(relative(*at, clock.now)),

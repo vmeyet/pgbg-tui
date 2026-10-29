@@ -129,6 +129,11 @@ impl Detail {
 }
 
 impl<'a> ShownRow<'a> {
+    /// Whether the column at `column` is part of its table's primary key.
+    pub(in crate::tui) fn is_primary(&self, column: usize) -> bool {
+        self.keys.get(column).is_some_and(|key| key.is_primary)
+    }
+
     /// Where the column at `column` points through a foreign key.
     pub(in crate::tui) fn points_to(&self, column: usize) -> Option<&'a Target> {
         self.keys.get(column)?.points_to.as_ref()

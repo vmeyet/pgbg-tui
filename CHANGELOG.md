@@ -8,6 +8,8 @@ Each entry says what changed, then where, then how to use it.
 
 ### New
 
+- **The row's detail reads as two columns**, in the TUI's row detail opened with `⏎` on the grid: each column's name on the left, bold for a primary key, and its whole value beside it in the grid's format and colours.
+  A value in another format than raw shows its raw text faded after it, and the tables pointing to the row follow a faint rule with their counts on the right.
 - **`i` on a column shows its figures**, in the TUI's result grid: how many distinct values and NULLs it holds, its least and greatest value, and its five most common values with how many rows hold each.
   They count the rows loaded, as the popup's title says, and compare values as their type does: numbers as numbers, dates as dates.
   `esc` or `i` again closes it.

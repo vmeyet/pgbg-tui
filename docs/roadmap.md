@@ -194,6 +194,7 @@ Each step is one MR, in this order.
 - [x] `/` filters the rows on screen and `s` sorts them by the column under the cursor, without a new query
 - [x] `=` and `!` on a cell add `WHERE column = value` or `<>` to the statement
 - [x] `i` on a column shows its distinct count, NULLs, min, max and five most common values
+- [x] The row's detail scans as two columns: names on the left, a primary key's bold, values beside them in the grid's format and colours, a faint rule before the tables pointing to it
 - [ ] The grid keeps the table a result reads, so a followed key does not lex the statement again on every frame
 - [ ] Count lookups that went stale are dropped from the queue, and going back keeps the counts already read
 - [ ] `keys` finds a table once and gives its keys, so a lookup does not parse its own SQL again

@@ -270,6 +270,11 @@ impl App {
         &self.reading.clock
     }
 
+    /// The format mode new results open in.
+    pub(super) fn format_mode(&self) -> Mode {
+        self.reading.mode
+    }
+
     /// The sheet on screen.
     pub(super) fn sheet(&self) -> &Sheet {
         &self.sheets[self.shown]

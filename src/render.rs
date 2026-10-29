@@ -61,7 +61,8 @@ fn line(row: &[Cow<'_, str>], widths: &[usize]) -> String {
     padded.join(GAP).trim_end().to_owned() + "\n"
 }
 
-fn padded(cell: &str, columns: usize) -> String {
+/// `cell` followed by the spaces that make it `columns` wide.
+pub(crate) fn padded(cell: &str, columns: usize) -> String {
     format!("{cell}{}", " ".repeat(columns.saturating_sub(width(cell))))
 }
 

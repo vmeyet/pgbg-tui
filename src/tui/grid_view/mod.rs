@@ -2,19 +2,17 @@
 //! `▶` marks the cursor's row and its cell is highlighted; each cell shows in its column's format and colouring.
 //! Cells are written straight into the frame's buffer, so a cell in several colours costs no more than one.
 use super::app::{Clock, GAP, Grid, Room};
+use super::ink::{Ink, ink};
 use crate::db::model::{Column, ResultSet, Value};
 use crate::format::{self, Format};
 use crate::render;
 use crate::syntax::highlight_json_line;
-use ink::{Ink, ink};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use vtui::text::truncate;
 use vtui::theme::Theme;
-
-mod ink;
 
 const CURSOR: &str = "▶";
 const NO_CURSOR: &str = " ";

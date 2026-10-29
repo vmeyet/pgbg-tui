@@ -12,6 +12,7 @@ mod form_view;
 mod grid_view;
 mod help_view;
 mod history_view;
+mod ink;
 mod outside;
 mod palette_footer;
 mod param_bar_view;
