@@ -46,7 +46,7 @@ impl Roots {
             bail!("there is no data folder: set $PGBG_DATA_DIR");
         };
         DirBuilder::new().recursive(true).mode(DIR_MODE).create(data_dir)?;
-        make_folders(data_dir, &user_dir)
+        make_folders(DirBuilder::new().mode(DIR_MODE), data_dir, &user_dir)
     }
 }
 
@@ -74,7 +74,7 @@ fn write_inside(root: &Root, query: &Query, text: &str, write: Write) -> Result<
     }
     let target = query.path.under(&root.dir);
     let folder = target.parent().unwrap_or(&root.dir);
-    make_folders(&root.dir, folder)?;
+    make_folders(&folder_builder(&query.source), &root.dir, folder)?;
     if !fs::canonicalize(folder)?.starts_with(&root.real) {
         bail!("it leads out of the queries folder");
     }
@@ -90,8 +90,18 @@ fn write_inside(root: &Root, query: &Query, text: &str, write: Write) -> Result<
     Ok(())
 }
 
-/// Makes each folder from `root` down to `folder`; one that is a link or a file is refused, so the write stays in the root.
-fn make_folders(root: &Path, folder: &Path) -> Result<()> {
+/// How pgbg makes a folder under `source`: the user's own are for the user alone, a project's follow its umask.
+fn folder_builder(source: &Source) -> DirBuilder {
+    let mut builder = DirBuilder::new();
+    if let Source::User(_) = source {
+        builder.mode(DIR_MODE);
+    }
+    builder
+}
+
+/// Makes each folder from `root` down to `folder` with `builder`; one that is a link or a file is refused, so the write
+/// stays in the root.
+fn make_folders(builder: &DirBuilder, root: &Path, folder: &Path) -> Result<()> {
     let below = folder.strip_prefix(root)?;
     let mut at = root.to_path_buf();
     for part in below.components() {
@@ -99,7 +109,7 @@ fn make_folders(root: &Path, folder: &Path) -> Result<()> {
         match fs::symlink_metadata(&at) {
             Ok(metadata) if metadata.is_dir() => {}
             Ok(_) => bail!("{} is not a folder", at.display()),
-            Err(_) => fs::create_dir(&at)?,
+            Err(_) => builder.create(&at)?,
         }
     }
     Ok(())
@@ -120,6 +130,7 @@ fn check_replaceable(target: &Path, old: &fs::Metadata, text: &str, write: Write
 mod tests {
     use super::*;
     use crate::query::Places;
+    use std::os::unix::fs::PermissionsExt;
 
     fn project(root: &Path) -> Roots {
         Roots { project: Root::checked(root.into(), vec![root.into()]), ..Roots::default() }
@@ -135,6 +146,10 @@ mod tests {
 
     fn shop() -> ConnectionName {
         "shop".parse().unwrap()
+    }
+
+    fn mode(path: &Path) -> u32 {
+        fs::metadata(path).unwrap().permissions().mode() & 0o777
     }
 
     fn new_daily(roots: &Roots) -> Query {
@@ -203,6 +218,24 @@ mod tests {
         let roots = found_from(repository.path(), Some(data.path()));
         roots.write(&new_daily(&roots), "SELECT 1", Write::Create).unwrap();
         assert!(!repository.path().join(".pgbg").exists());
+    }
+
+    #[test]
+    fn only_the_user_can_open_the_folders_of_their_own_queries() {
+        let (project, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let roots = found_from(project.path(), Some(&data.path().join("pgbg")));
+        roots.write(&new_daily(&roots), "SELECT 1", Write::Create).unwrap();
+        for folder in ["pgbg", "pgbg/queries", "pgbg/queries/shop", "pgbg/queries/shop/orders"] {
+            assert_eq!(mode(&data.path().join(folder)), 0o700, "{folder}");
+        }
+    }
+
+    #[test]
+    fn a_projects_folders_follow_its_umask() {
+        let root = tempfile::tempdir().unwrap();
+        project(root.path()).write(&query("orders/daily.sql"), "SELECT 1", Write::Create).unwrap();
+        fs::create_dir(root.path().join("plain")).unwrap();
+        assert_eq!(mode(&root.path().join("orders")), mode(&root.path().join("plain")));
     }
 
     #[cfg(unix)]
