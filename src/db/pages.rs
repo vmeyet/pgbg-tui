@@ -1,8 +1,8 @@
 //! A result shown a page at a time: its portal stays open between pages, in its `BEGIN READ ONLY` transaction.
 use super::guard::{Admitted, Mode};
 use super::model::{Column, Extent, Page, ResultSet};
-use super::run::{FetchSize, begin_read_only, bind_portal, columns, fetch_page};
-use super::{Isolation, Marks, Session, roll_back, why_ended};
+use super::run::{FetchSize, begin_read_only, bind_portal, columns, fetch_page, read_in};
+use super::{Isolation, Marks, Session, roll_back, server_error, why_ended};
 use crate::failure::Lost;
 use anyhow::Result;
 use std::time::Duration;
@@ -11,6 +11,7 @@ use tokio_postgres::{Portal, Transaction};
 
 /// The rows of one page: the grid asks for the next page as it nears the end of the rows it has.
 const PAGE_ROWS: FetchSize = FetchSize::new(500);
+const BESIDE_SAVEPOINT: &str = "pgbg_beside";
 
 /// A statement's first page, and its portal when more rows wait in it.
 pub(crate) struct Started<'s> {
@@ -76,6 +77,22 @@ impl<'s> Pages<'s> {
                 Err(err)
             }
         }
+    }
+
+    /// Reads `admitted`, a read the guard admitted read only, in the portal's transaction behind a savepoint, so the
+    /// result's next pages still wait whether the read fails or not.
+    pub(crate) async fn read_beside(&mut self, admitted: &Admitted) -> Result<ResultSet> {
+        anyhow::ensure!(admitted.mode == Mode::ReadOnly, "only a read-only statement runs beside a result's pages");
+        let Self { transaction, marks, .. } = self;
+        marks
+            .during(async {
+                let savepoint = transaction.savepoint(BESIDE_SAVEPOINT).await.map_err(server_error)?;
+                match read_in(&savepoint, admitted).await {
+                    Ok(rows) => savepoint.commit().await.map_err(server_error).map(|()| rows),
+                    Err(err) => savepoint.rollback().await.map_err(server_error).and(Err(err)),
+                }
+            })
+            .await
     }
 
     /// Ends the portal's transaction; the rows it did not send stay on the server.

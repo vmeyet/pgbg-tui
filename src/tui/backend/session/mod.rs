@@ -20,8 +20,7 @@ mod record;
 mod run;
 
 pub(super) use link::{Job, Queued, SessionAnswers, SessionLink};
-pub(super) use look_up::QueuedLookup;
-use look_up::look_up;
+pub(super) use look_up::{OnSession, QueuedLookup, look_up};
 pub(super) use open::ended;
 pub(super) use run::{Cancels, OnServer, warn_if_still_running};
 
@@ -153,7 +152,9 @@ impl SessionTask {
                 return Next::Wait;
             }
         };
-        let answer = look_up(&mut session, queued, &mut self.mailbox.cancelled, &self.mailbox.on_server).await;
+        let token = session.cancel_token();
+        let on = OnSession { token: &token, cancelled: &mut self.mailbox.cancelled, on_server: &self.mailbox.on_server };
+        let answer = look_up(queued, async |admitted| session.run(admitted).await, on).await;
         self.send(answer);
         self.keep_unless_lost(session, Next::Wait)
     }
