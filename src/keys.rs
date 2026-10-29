@@ -2,7 +2,9 @@
 //! and the read of the row a foreign key points to.
 //! Pure, and only sure when the statement reads one table: a result column is that table's column of the same name.
 use crate::complete;
-use crate::db::model::{Catalog, Column, ForeignKey, Params, Statement, Table, Value, qualified, sql_name};
+use crate::db::model::{Catalog, Column, ForeignKey, ParamValue, Params, SchemaNode, Statement, Table, Value, qualified, sql_name};
+use crate::query::params::ParamName;
+use std::collections::BTreeMap;
 
 /// The row a foreign key points to: its table, and the column there that each column of the key equals.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -28,6 +30,41 @@ pub(crate) struct ColumnKey {
     pub(crate) points_to: Option<Target>,
 }
 
+/// The most tables a row's detail lists as pointing to it, each counted with one read.
+const REFERRERS_SHOWN: usize = 12;
+/// How far a count of the rows pointing to a row goes before it says only that there are more.
+pub(crate) const COUNTED_ROWS: u64 = 1000;
+
+/// A table of the catalog, with the schema that holds it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TableIn<'a> {
+    pub(crate) schema: &'a str,
+    pub(crate) table: &'a Table,
+}
+
+/// A foreign key of another table that points to a row: that table, and each column of the key with the row's value
+/// it equals.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Referrer {
+    pub(crate) schema: String,
+    pub(crate) table: String,
+    pub(crate) pairs: Vec<Pointing>,
+}
+
+/// A column of a key that points to a row, and the value of that row it equals.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Pointing {
+    pub(crate) column: String,
+    pub(crate) value: ParamValue,
+}
+
+/// A statement with `{{name}}` parameters, and the value each of them takes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Prefilled {
+    pub(crate) text: String,
+    pub(crate) values: BTreeMap<ParamName, ParamValue>,
+}
+
 /// A read-only statement and the values bound to its `$n`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Lookup {
@@ -38,7 +75,7 @@ pub(crate) struct Lookup {
 /// The key of each of `columns`, the result of `statement` read with `catalog`; none when the statement reads more than
 /// one table, or one the catalog does not hold.
 pub(crate) fn column_keys(catalog: &Catalog, statement: &Statement, columns: &[Column]) -> Vec<ColumnKey> {
-    let Some(table) = one_table_read(catalog, statement) else { return vec![ColumnKey::default(); columns.len()] };
+    let Some(TableIn { table, .. }) = one_table_read(catalog, statement) else { return vec![ColumnKey::default(); columns.len()] };
     columns.iter().map(|column| key_of(table, column.name.as_str(), columns)).collect()
 }
 
@@ -81,7 +118,7 @@ impl Target {
 
 /// The table `statement` reads, when it names exactly one, found as PostgreSQL resolves its name: with its schema, or
 /// bare in the first schema of the search path that holds it.
-pub(crate) fn one_table_read<'a>(catalog: &'a Catalog, statement: &Statement) -> Option<&'a Table> {
+pub(crate) fn one_table_read<'a>(catalog: &'a Catalog, statement: &Statement) -> Option<TableIn<'a>> {
     let [name] = complete::tables_named(statement.as_str()).try_into().ok()?;
     match name.split_once('.') {
         Some((schema, table)) => table_in(catalog, schema, table),
@@ -89,16 +126,73 @@ pub(crate) fn one_table_read<'a>(catalog: &'a Catalog, statement: &Statement) ->
     }
 }
 
-fn table_in<'a>(catalog: &'a Catalog, schema: &str, name: &str) -> Option<&'a Table> {
-    let schema = catalog.schema.schemas.iter().find(|node| node.name == schema)?;
-    schema.tables.iter().find(|table| table.name == name)
+/// The table `name` of the schema `schema`, as the catalog spells them.
+pub(crate) fn table_in<'a>(catalog: &'a Catalog, schema: &str, name: &str) -> Option<TableIn<'a>> {
+    let node = catalog.schema.schemas.iter().find(|node| node.name == schema)?;
+    node.tables.iter().find(|table| table.name == name).map(|table| TableIn { schema: &node.name, table })
+}
+
+/// The keys of other tables that point to a row of the table `pointed`, whose `columns` hold `row`: each key whose
+/// target columns the row holds, its values not NULL, the first `REFERRERS_SHOWN` in the catalog's order.
+pub(crate) fn referrers(catalog: &Catalog, pointed: TableIn<'_>, columns: &[Column], row: &[Value]) -> Vec<Referrer> {
+    let is_pointed = |key: &&ForeignKey| key.target_schema == pointed.schema && key.target_table == pointed.table.name;
+    let tables = catalog.schema.schemas.iter().flat_map(|node| node.tables.iter().map(move |table| (node, table)));
+    let keys = tables.flat_map(|(node, table)| table.foreign_keys.iter().filter(is_pointed).map(move |key| (node, table, key)));
+    let referrer = |(node, table, key): (&SchemaNode, &Table, &ForeignKey)| {
+        let value = |target: &String| row.get(only_column(columns, target)?)?.as_param();
+        let values: Option<Vec<ParamValue>> = key.target_columns.iter().map(value).collect();
+        let pairs = key.columns.iter().cloned().zip(values?).map(|(column, value)| Pointing { column, value }).collect();
+        Some(Referrer { schema: node.name.clone(), table: table.name.clone(), pairs })
+    };
+    keys.filter_map(referrer).take(REFERRERS_SHOWN).collect()
+}
+
+impl Referrer {
+    /// How many of its rows point to the row, counted up to `COUNTED_ROWS` and one more, so a big table costs no more
+    /// than a small one.
+    pub(crate) fn count(&self) -> Lookup {
+        let statement = format!(
+            "SELECT count(*) FROM (SELECT FROM {} WHERE {} LIMIT {}) AS pointing",
+            self.sql_name(),
+            self.condition(),
+            COUNTED_ROWS + 1
+        );
+        let values = self.pairs.iter().map(|pair| Some(pair.value.clone())).collect();
+        Lookup { statement: Statement::new(statement), params: Params::new(values, vec![]) }
+    }
+
+    /// Its rows that point to the row, as a statement whose `{{name}}` parameters hold the row's values.
+    pub(crate) fn rows(&self) -> Option<Prefilled> {
+        let names: Option<Vec<ParamName>> = self.pairs.iter().enumerate().map(|(at, pair)| param_name(&pair.column, at)).collect();
+        let names = names?;
+        let equal = self.pairs.iter().zip(&names).map(|(pair, name)| format!("{} = {{{{{name}}}}}", sql_name(&pair.column)));
+        let text = format!("SELECT * FROM {} WHERE {}", self.sql_name(), equal.collect::<Vec<_>>().join(" AND "));
+        Some(Prefilled { text, values: names.into_iter().zip(self.pairs.iter().map(|pair| pair.value.clone())).collect() })
+    }
+
+    fn sql_name(&self) -> String {
+        qualified(&self.schema, &self.table)
+    }
+
+    fn condition(&self) -> String {
+        let equal = self.pairs.iter().enumerate().map(|(at, pair)| format!("{} = ${}", sql_name(&pair.column), at + 1));
+        equal.collect::<Vec<_>>().join(" AND ")
+    }
+}
+
+/// The parameter a key column's value goes in: the column's name, or `key_<n>` when that is no parameter name.
+fn param_name(column: &str, at: usize) -> Option<ParamName> {
+    column.parse().or_else(|_| format!("key_{}", at + 1).parse()).ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::model::{ColumnKind, ParamValue};
-    use crate::fixtures::{column, shop_catalog};
+    use crate::connection::WritePolicy;
+    use crate::db::guard;
+    use crate::db::model::ColumnKind;
+    use crate::fixtures::{self, column, shop_catalog};
+    use crate::query::params::{self, Given};
 
     fn keys(statement: &str, names: &[&str]) -> Vec<ColumnKey> {
         let columns: Vec<Column> = names.iter().map(|name| column(name, ColumnKind::Int)).collect();
@@ -170,5 +264,73 @@ mod tests {
     #[test]
     fn a_column_the_table_does_not_hold_has_no_key() {
         assert_eq!(keys("SELECT count(*) AS total FROM orders", &["total"]), [ColumnKey::default()]);
+    }
+
+    fn orders_referrers(row: &[Value]) -> Vec<Referrer> {
+        let catalog = shop_catalog();
+        let columns = ["id", "customer_id"].map(|name| column(name, ColumnKind::Int));
+        referrers(&catalog, table_in(&catalog, "public", "orders").unwrap(), &columns, row)
+    }
+
+    fn invoices_of_order_7() -> Referrer {
+        let pairs = vec![Pointing { column: "order_id".to_owned(), value: ParamValue::new("7") }];
+        Referrer { schema: "billing".to_owned(), table: "invoices".to_owned(), pairs }
+    }
+
+    #[test]
+    fn a_table_whose_key_points_to_the_row_refers_to_it_by_the_rows_values() {
+        assert_eq!(orders_referrers(&[Value::Int(7), Value::Int(3)]), [invoices_of_order_7()]);
+    }
+
+    #[test]
+    fn a_row_whose_pointed_value_is_null_has_no_referrer() {
+        assert_eq!(orders_referrers(&[Value::Null, Value::Int(3)]), []);
+    }
+
+    #[test]
+    fn a_count_stops_one_row_past_the_cap_and_binds_the_value() {
+        let count = invoices_of_order_7().count();
+        let statement = "SELECT count(*) FROM (SELECT FROM billing.invoices WHERE order_id = $1 LIMIT 1001) AS pointing";
+        assert_eq!((count.statement, count.params), (Statement::new(statement), Params::new(vec![Some(ParamValue::new("7"))], vec![])));
+    }
+
+    #[test]
+    fn the_rows_pointing_to_a_row_take_its_values_as_parameters() {
+        let rows = invoices_of_order_7().rows().unwrap();
+        assert_eq!(rows.text, "SELECT * FROM billing.invoices WHERE order_id = {{order_id}}");
+        assert_eq!(rows.values, [("order_id".parse().unwrap(), ParamValue::new("7"))].into());
+    }
+
+    #[test]
+    fn a_column_that_is_no_parameter_name_takes_one_by_its_place() {
+        let referrer =
+            Referrer { pairs: vec![Pointing { column: "Order Id".to_owned(), value: ParamValue::new("7") }], ..invoices_of_order_7() };
+        assert_eq!(referrer.rows().unwrap().text, "SELECT * FROM billing.invoices WHERE \"Order Id\" = {{key_1}}");
+    }
+
+    /// A fresh `table` holding three rows that point to 7 and one that points to 8.
+    async fn pointing_rows(table: &str) -> Referrer {
+        fixtures::run(WritePolicy::Allowed, &format!("DROP TABLE IF EXISTS {table}")).await.unwrap();
+        fixtures::run(WritePolicy::Allowed, &format!("CREATE TABLE {table} (order_id int)")).await.unwrap();
+        fixtures::run(WritePolicy::Allowed, &format!("INSERT INTO {table} VALUES (7), (7), (7), (8)")).await.unwrap();
+        Referrer { schema: "public".to_owned(), table: table.to_owned(), ..invoices_of_order_7() }
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn the_count_reads_how_many_rows_point_to_the_row() {
+        let count = pointing_rows("pgbg_referrers_counted").await.count();
+        let admitted = guard::admit(count.statement, count.params, WritePolicy::ReadOnly).unwrap();
+        let read = fixtures::session(WritePolicy::ReadOnly).await.run(&admitted).await.unwrap();
+        assert_eq!(read.rows(), [[Value::Int(3)]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn the_rows_pointing_to_the_row_run_with_their_parameters_bound() {
+        let rows = pointing_rows("pgbg_referrers_run").await.rows().unwrap();
+        let admitted = params::admit(&Statement::new(rows.text), &Given::typed(rows.values), &[], WritePolicy::ReadOnly).unwrap();
+        let read = fixtures::session(WritePolicy::ReadOnly).await.run(&admitted).await.unwrap();
+        assert_eq!(read.rows().len(), 3);
     }
 }

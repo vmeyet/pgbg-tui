@@ -26,6 +26,9 @@ Each entry says what changed, then where, then how to use it.
   In it, `tab` steps through its keys, `⏎` goes one row deeper along a trail the title shows, as `orders › customers › users`, `⌫` goes back and `esc` closes them all.
   A key of several columns works too; a NULL key, or one that points to no row, says so.
   The row is read with the key's values bound, read only whatever the connection allows, and kept out of the history.
+- **The row's detail lists the tables that point to it**, in the TUI: under its columns, each table whose foreign key points to the row, with how many of its rows do, counted up to 1000.
+  Press `tab` to reach one and `⏎` to run its rows as a new result: the statement goes at the end of the editor, the row's values in the parameter bar, as `WHERE order_id = {{order_id}}`.
+  The first 12 such tables are counted, each with one read-only read under the connection's statement timeout.
 - **Usage counts, opt-in**, for the TUI: with `[usage] enabled = true` in `config.toml`, pgbg counts the keys you use and the time on each pane, on this machine only, never a statement or a name.
   Run `pgbg usage` to see the keys never or rarely used, the most used and the time per pane; `--since 4w`, `7d` or `all` changes the window, `--json` gives it to a script.
 - **Your own saved queries belong to a connection**, in the TUI and `pgbg run --query`: they live in `queries/<connection>/` in pgbg's data folder, as `~/.local/share/pgbg/queries/prod/`.

@@ -424,9 +424,11 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Quit, Pane::Confirm, &[control('c')]).help("^c", "quit, sending nothing"),
     row(Act::Down, Pane::Detail, &[key(KeyCode::Char('j')), key(KeyCode::Down)]).help("j k", "scroll down, up").footer("j/k", "scroll"),
     row(Act::Up, Pane::Detail, &[key(KeyCode::Char('k')), key(KeyCode::Up)]),
-    row(Act::Right, Pane::Detail, &[key(KeyCode::Tab)]).help("⇥ ⇧⇥", "next, previous foreign key").footer("⇥", "keys"),
+    row(Act::Right, Pane::Detail, &[key(KeyCode::Tab)]).help("⇥ ⇧⇥", "next, previous key or table pointing here").footer("⇥", "keys"),
     row(Act::Left, Pane::Detail, &[key(KeyCode::BackTab)]),
-    row(Act::Open, Pane::Detail, &[key(KeyCode::Enter)]).help("⏎", "the row the foreign key points to").footer("⏎", "follow"),
+    row(Act::Open, Pane::Detail, &[key(KeyCode::Enter)])
+        .help("⏎", "the row the key points to, or the rows pointing here")
+        .footer("⏎", "follow"),
     row(Act::Back, Pane::Detail, &[key(KeyCode::Backspace)]).help("⌫", "back to the row before").footer("⌫", "back"),
     row(Act::Close, Pane::Detail, &[key(KeyCode::Esc)]).help("esc", "back to the grid").footer("esc", "closes"),
     row(Act::Quit, Pane::Detail, &[control('c')]).help("^c", "quit"),

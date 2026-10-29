@@ -14,7 +14,7 @@ pub(super) use ask::{AskStep, Suggestion};
 pub(super) use colouring::Colouring;
 pub(super) use completion::Completions;
 pub(super) use confirm::{Confirmed, WriteToSend};
-pub(super) use detail::{Detail, DetailFit, DetailScroll, DrawnDetail, DrawnRow, RowOf, ShownRow};
+pub(super) use detail::{Count, Counted, Detail, DetailFit, DetailScroll, DrawnDetail, DrawnRow, RowOf, ShownRow};
 pub(super) use diff::Change;
 pub(super) use form::{Form, PasswordFrom, Slot};
 pub(super) use grid::{Clock, GAP, Grid, Reading, Room};
@@ -346,7 +346,7 @@ impl App {
 
     fn take_answer(&mut self, answer: Answer) -> Vec<Action> {
         match answer {
-            Answer::Session { incoming: Incoming::LookedUp { look, rows }, .. } => self.looked_up(look, rows),
+            Answer::Session { incoming: Incoming::LookedUp { look, rows }, .. } => return self.looked_up(look, rows),
             Answer::Session { connection, session, incoming } => {
                 let reading = self.reading;
                 if let Some(sheet) = self.sheet_of_mut(&connection).filter(|sheet| sheet.session_id == session) {

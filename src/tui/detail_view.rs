@@ -1,9 +1,10 @@
 //! The row's detail over the screen: each column's name and type, with its whole value below, wrapped, and JSON
 //! indented and coloured.
 //! Every piece of text is drawn through `render::printable`.
-use super::app::{App, DetailFit, DetailScroll, DrawnDetail, DrawnRow, Overlay, RowOf, Run, ShownRow};
+use super::app::{App, Count, Counted, DetailFit, DetailScroll, DrawnDetail, DrawnRow, Overlay, RowOf, Run, ShownRow};
 use crate::act::{self, Hint, Pane};
 use crate::db::model::{Column, Value};
+use crate::keys::COUNTED_ROWS;
 use crate::render;
 use crate::syntax::{self, Painted};
 use ratatui::Frame;
@@ -32,22 +33,51 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> DetailFit {
     let kept = app.drawn_detail().filter(|drawn| drawn.of == of);
     let built = kept.is_none().then(|| drawn(app.theme(), &shown, of));
     let Some(DrawnDetail { lines, column_starts, .. }) = kept.or(built.as_ref()) else { return DetailFit::default() };
-    let last_scroll = lines.len().saturating_sub(usize::from(body.height));
+    let pointing = pointing_lines(app.theme(), &detail.referrers);
+    let last_scroll = (lines.len() + pointing.len()).saturating_sub(usize::from(body.height));
     let wanted = match detail.scroll {
-        DetailScroll::ToColumn(column) => column_starts.get(column).copied().unwrap_or_default(),
+        DetailScroll::ToColumn(column) => column_starts.get(column).copied().unwrap_or(lines.len()),
         DetailScroll::Lines(line) => line,
     };
     let first_line = wanted.min(last_scroll);
-    let on_key = shown.targets().get(detail.key).and_then(|target| column_starts.get(target.first_column())).copied();
+    let targets = shown.targets();
+    let on_key = match targets.get(detail.key) {
+        Some(target) => column_starts.get(target.first_column()).copied(),
+        None => Some(lines.len() + 1 + detail.key - targets.len()),
+    };
     let lit = |(at, line): (usize, &Line<'static>)| {
         if Some(at) == on_key { line.clone().patch_style(Style::default().add_modifier(Modifier::REVERSED)) } else { line.clone() }
     };
-    let visible: Vec<Line<'static>> = lines.iter().enumerate().skip(first_line).take(usize::from(body.height)).map(lit).collect();
+    let every_line = lines.iter().chain(&pointing).enumerate();
+    let visible: Vec<Line<'static>> = every_line.skip(first_line).take(usize::from(body.height)).map(lit).collect();
     f.render_widget(Clear, area);
     f.render_widget(block.style(Style::default().bg(app.theme().surface)), area);
     f.render_widget(Paragraph::new(visible), body);
     f.render_widget(Paragraph::new(footer_line(app.theme(), detail.note.as_deref(), footer.width)), footer);
     DetailFit { first_line, last_scroll, drawn: built }
+}
+
+/// The tables whose keys point to the row, each with how many of its rows do, under a heading; none when no table does.
+fn pointing_lines(theme: &Theme, referrers: &[Counted]) -> Vec<Line<'static>> {
+    if referrers.is_empty() {
+        return vec![];
+    }
+    let heading = Line::styled("Pointing to it", Style::default().fg(theme.muted).add_modifier(Modifier::BOLD));
+    let line = |counted: &Counted| {
+        let columns: Vec<&str> = counted.referrer.pairs.iter().map(|pair| pair.column.as_str()).collect();
+        let key = render::printable(&format!("{}.{}", counted.referrer.table, columns.join(", "))).into_owned();
+        Line::from(vec![Span::raw(format!("{INDENT}{key}  ")), Span::styled(count_text(counted.count), Style::default().fg(theme.muted))])
+    };
+    std::iter::once(heading).chain(referrers.iter().map(line)).collect()
+}
+
+fn count_text(count: Count) -> String {
+    match count {
+        Count::Counting(_) => "…".to_owned(),
+        Count::Rows(rows) if rows > COUNTED_ROWS => format!("{COUNTED_ROWS}+"),
+        Count::Rows(rows) => rows.to_string(),
+        Count::Failed => "?".to_owned(),
+    }
 }
 
 /// `Row 2 of 4` on the grid's row, else the tables of the trail that led to the row shown.
@@ -244,6 +274,16 @@ mod tests {
         let mut app = on_a_key();
         app.apply(to_shop(Incoming::LookedUp { look: LookId::FIRST, rows: Ok(keyed_customer()) }));
         insta::assert_snapshot!("detail_followed", render(&app, 60, 14).0.backend());
+    }
+
+    #[test]
+    fn the_tables_pointing_to_the_row_show_with_their_counts() {
+        let mut app = on_the_keyed_orders();
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        let count = ResultSet::whole(vec![column("count", ColumnKind::Int)], vec![vec![Value::Int(1001)]]);
+        app.apply(to_shop(Incoming::LookedUp { look: LookId::FIRST, rows: Ok(count) }));
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        insta::assert_snapshot!("detail_pointing", render(&app, 60, 16).0.backend());
     }
 
     #[test]
