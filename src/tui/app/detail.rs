@@ -2,13 +2,12 @@
 //! `⏎` on a foreign key's cell opens the row it points to instead, read on the session; in a row, `⇥` steps through
 //! its keys and the tables pointing to it, `⏎` goes one row deeper or runs the rows that point to it, and `⌫` walks
 //! the trail back.
-use super::schema_tab::PickedTable;
 use super::{Action, App, LookId, Overlay, Run, RunId};
 use crate::act::{self, Act, Pane};
 use crate::connection::ConnectionName;
 use crate::db::model::{Column, ResultSet, Value};
 use crate::failure::Failure;
-use crate::keys::{self, ColumnKey, Lookup, Prefilled, Referrer, Target};
+use crate::keys::{self, ColumnKey, Hop, Joined, Lookup, Pointing, Prefilled, Referrer, Target};
 use crossterm::event::KeyEvent;
 use ratatui::text::Line;
 
@@ -42,7 +41,7 @@ pub(in crate::tui) enum DetailScroll {
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::tui) struct Followed {
     pub(in crate::tui) look: LookId,
-    pub(in crate::tui) table: PickedTable,
+    pub(in crate::tui) hop: Hop,
     pub(in crate::tui) result: ResultSet,
     keys: Vec<ColumnKey>,
     back_to: Spot,
@@ -59,7 +58,7 @@ struct Spot {
 struct Waiting {
     look: LookId,
     lookup: Lookup,
-    table: PickedTable,
+    hop: Hop,
 }
 
 /// A table whose key points to the row shown, and how many of its rows do.
@@ -166,7 +165,7 @@ impl App {
         };
         let statement = self.sheet().shown_statement();
         let read = self.sheet().catalog().zip(statement).and_then(|(catalog, statement)| keys::one_table_read(catalog, statement));
-        let followed = detail.trail.iter().map(|followed| followed.table.name.as_str());
+        let followed = detail.trail.iter().map(|followed| followed.hop.table.as_str());
         let trail = std::iter::once(read.map_or("row", |read| read.table.name.as_str())).chain(followed).collect();
         let (row, of) = (last.result.rows().first()?, RowOf::Followed(last.look));
         Some(ShownRow { columns: last.result.columns(), row, keys: &last.keys, trail, of })
@@ -198,6 +197,7 @@ impl App {
             Some(Act::Right) => self.on_key(detail, 1),
             Some(Act::Left) => self.on_key(detail, -1),
             Some(Act::Open) => return self.follow(detail),
+            Some(Act::Edit) => return self.write_join(detail),
             Some(Act::Back) => return back(detail).map(|before| self.show_detail(before)).unwrap_or_default(),
             Some(Act::Quit) => return self.quit(),
             Some(Act::Close) => return vec![],
@@ -225,10 +225,8 @@ impl App {
     fn follow(&mut self, detail: Detail) -> Vec<Action> {
         let shown = self.shown_row(&detail);
         let targets = shown.as_ref().map(ShownRow::targets).unwrap_or_default();
-        let lookup = targets
-            .get(detail.key)
-            .zip(shown.as_ref())
-            .map(|(target, shown)| (PickedTable { schema: target.schema.clone(), name: target.table.clone() }, target.lookup(shown.row)));
+        let lookup =
+            targets.get(detail.key).zip(shown.as_ref()).map(|(target, shown)| (target.hop(shown.columns), target.lookup(shown.row)));
         let referrer = detail.key.checked_sub(targets.len()).and_then(|at| detail.referrers.get(at));
         if let Some(prefilled) = referrer.and_then(|counted| counted.referrer.rows()) {
             return self.run_prefilled(prefilled);
@@ -269,17 +267,17 @@ impl App {
     fn referrers_of(&self, detail: &Detail) -> Vec<Referrer> {
         let (Some(shown), Some(catalog)) = (self.shown_row(detail), self.sheet().catalog()) else { return vec![] };
         let pointed = match detail.trail.last() {
-            Some(last) => keys::table_in(catalog, &last.table.schema, &last.table.name),
+            Some(last) => keys::table_in(catalog, &last.hop.schema, &last.hop.table),
             None => self.sheet().shown_statement().and_then(|statement| keys::one_table_read(catalog, statement)),
         };
         pointed.map(|pointed| keys::referrers(catalog, pointed, shown.columns, shown.row)).unwrap_or_default()
     }
 
-    /// `detail` waiting on `lookup`, the read of a row of `table`, and the action that reads it.
-    fn look_up(&mut self, detail: Detail, table: PickedTable, lookup: Lookup) -> (Detail, Vec<Action>) {
+    /// `detail` waiting on `lookup`, the read of the row `hop` leads to, and the action that reads it.
+    fn look_up(&mut self, detail: Detail, hop: Hop, lookup: Lookup) -> (Detail, Vec<Action>) {
         let look = self.new_look();
         let action = Action::LookUp { connection: self.sheet().name().clone(), look, lookup: lookup.clone() };
-        (Detail { waiting: Some(Waiting { look, lookup, table }), ..detail }, vec![action])
+        (Detail { waiting: Some(Waiting { look, lookup, hop }), ..detail }, vec![action])
     }
 
     fn new_look(&mut self) -> LookId {
@@ -300,14 +298,14 @@ impl App {
             }
         };
         let Some(Overlay::Detail(mut detail)) = self.overlay.take() else { return vec![] };
-        let Some(Waiting { table, .. }) = detail.waiting.take() else { return vec![] };
+        let Some(Waiting { hop, .. }) = detail.waiting.take() else { return vec![] };
         match rows {
             Ok(result) if !result.rows().is_empty() => {
                 let back_to = Spot { scroll: detail.scroll, key: detail.key };
-                detail.trail.push(Followed { look, table, result, keys, back_to });
+                detail.trail.push(Followed { look, hop, result, keys, back_to });
                 return self.show_detail(Detail { scroll: DetailScroll::ToColumn(0), key: 0, ..detail });
             }
-            Ok(_) => detail.note = Some(format!("no row of {} has this key", table.name)),
+            Ok(_) => detail.note = Some(format!("no row of {} has this key", hop.table)),
             Err(failure) => detail.note = Some(failure.to_string()),
         }
         self.overlay = Some(Overlay::Detail(detail));
@@ -329,6 +327,32 @@ impl App {
             _ => None,
         });
         counted.count = rows.map_or(Count::Failed, Count::Rows);
+    }
+
+    /// Puts at the end of the editor, unsaved, the statement joining the tables of `detail`'s trail from the grid's
+    /// table, its row picked by its primary key, else by the key it was left by, the values in the parameter bar.
+    fn write_join(&mut self, detail: Detail) -> Vec<Action> {
+        let Some(prefilled) = self.trail_join(&detail) else {
+            self.overlay = Some(Overlay::Detail(detail));
+            return vec![];
+        };
+        self.put_in_editor(&prefilled.text);
+        self.sheet_mut().bar.fill(prefilled.values);
+        vec![]
+    }
+
+    fn trail_join(&self, detail: &Detail) -> Option<Prefilled> {
+        let Run::Done { result, grid, .. } = &self.sheet().run else { return None };
+        let start = keys::one_table_read(self.sheet().catalog()?, self.sheet().shown_statement()?)?;
+        let (columns, row) = (result.columns(), result.rows().get(grid.row)?);
+        let first = Hop { schema: start.schema.to_owned(), table: start.table.name.clone(), on: vec![] };
+        let tables: Vec<Hop> = std::iter::once(first).chain(detail.trail.iter().map(|followed| followed.hop.clone())).collect();
+        let primary: Vec<usize> = (0..columns.len()).filter(|&at| grid.is_primary(at)).collect();
+        let left_by = |on: &Joined| columns.iter().position(|column| column.name.as_str() == on.from);
+        let picked = if primary.is_empty() { tables.get(1)?.on.iter().filter_map(left_by).collect() } else { primary };
+        let pointing = |at: usize| Some(Pointing { column: columns.get(at)?.name.as_str().to_owned(), value: row.get(at)?.as_param()? });
+        let key: Vec<Pointing> = picked.into_iter().map(pointing).collect::<Option<_>>()?;
+        keys::trail_join(&tables, &key)
     }
 }
 
@@ -451,6 +475,25 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         press(&mut app, KeyCode::Backspace);
         assert_eq!(app.overlay, None);
+    }
+
+    const ORDER_7_WITH_ITS_CUSTOMER: &str =
+        "SELECT * FROM orders;\n\nSELECT *\nFROM public.orders o\nJOIN public.customers c ON c.id = o.customer_id\nWHERE o.id = {{id}}";
+
+    #[test]
+    fn e_writes_the_join_of_the_trail_picking_the_grids_row_by_its_primary_key() {
+        let mut app = on_the_customer();
+        press(&mut app, KeyCode::Char('e'));
+        assert_eq!((app.sheet().editor.text(), app.overlay.is_none()), (ORDER_7_WITH_ITS_CUSTOMER, true));
+        assert_eq!(app.sheet().bar.given(&["id".parse().unwrap()]), Given::typed([("id".parse().unwrap(), ParamValue::new("7"))].into()));
+    }
+
+    #[test]
+    fn the_join_written_is_one_step_undo_takes_back() {
+        let mut app = on_the_customer();
+        press(&mut app, KeyCode::Char('e'));
+        app.handle_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL));
+        assert_eq!(app.sheet().editor.text(), "SELECT * FROM orders");
     }
 
     #[test]

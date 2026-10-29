@@ -257,6 +257,7 @@ When a statement reads one table, the header names its primary key in bold and e
 In it, `tab` steps through its keys, `⏎` goes one row deeper and the title shows the trail, as `orders › customers › users`; `⌫` goes back one row, `esc` closes them all.
 Each row is read with the key's values bound, in a read-only transaction whatever the connection allows, and never goes to the history.
 Under its columns, a row lists the tables that point to it, each with how many of its rows do; `⏎` on one runs those rows, its statement at the end of the editor and the row's values in the parameter bar.
+`e` writes the join of the trail at the end of the editor, unsaved, the grid's row picked by its primary key as a `{{name}}` parameter.
 
 ## Asking AI
 

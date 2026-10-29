@@ -190,7 +190,7 @@ Each step is one MR, in this order.
 - [x] The grid colours a value by its kind: `NULL` dimmed, one colour per repeated text value, booleans, negative numbers, keys, uuids, json and times
 - [x] An FK column says so; `⏎` on its cell opens the row it points to, deeper with a trail and `⌫` back
 - [x] The row's detail lists the tables that point to it; `⏎` runs that query as a new result
-- [ ] `e` in that detail writes the join into the editor
+- [x] `e` in that detail writes the join into the editor
 - [ ] `/` filters the rows on screen and `s` sorts them by the column under the cursor, without a new query
 - [ ] `=` and `!` on a cell add `WHERE column = value` or `<>` to the statement
 - [ ] `i` on a column shows its distinct count, NULLs, min, max and five most common values
