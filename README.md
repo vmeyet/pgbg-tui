@@ -39,6 +39,9 @@ cd pgbg-tui
 cargo install --path .
 ```
 
+`pgbg update` installs the latest pgbg later: with `brew upgrade` when brew installed it, else built again with cargo.
+`pgbg --version` shows the version and the commit it was built from.
+
 ## Quick start
 
 ```sh
@@ -320,6 +323,7 @@ pgbg run scratch "DELETE FROM orders WHERE id = 7" --yes
 | `pgbg connections` | List the connections. |
 | `pgbg connection add\|edit\|remove` | Change `config.toml`. |
 | `pgbg password set <connection>` | Save a password in the keychain. |
+| `pgbg update` | Install the latest pgbg, with brew when brew installed it; `-f` installs even when it is already the latest. |
 | `pgbg usage` | What you use the TUI for: the keys never or rarely used, the most used, the time per pane; `--since 4w`, `7d` or `all`. |
 
 `--param name=value` and `--params-file <file>` (one `name=value` per line, `-` for stdin) give parameter values.

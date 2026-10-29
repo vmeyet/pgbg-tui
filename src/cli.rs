@@ -12,7 +12,7 @@ use vtui::usage::Window;
 #[derive(Parser, Debug)]
 #[command(
     name = "pgbg",
-    version,
+    version = crate::release::label(),
     about = "Read your PostgreSQL databases from the terminal: local, staging, and production behind a tunnel.",
     propagate_version = true
 )]
@@ -89,6 +89,12 @@ pub enum Command {
         /// What to do with it.
         #[command(subcommand)]
         command: PasswordCommand,
+    },
+    /// Installs the latest pgbg: with brew when brew installed it, else built with cargo from GitHub.
+    Update {
+        /// Installs even when the running pgbg is the latest (`brew reinstall` under brew).
+        #[arg(short, long)]
+        force: bool,
     },
 }
 
@@ -312,6 +318,12 @@ mod tests {
         assert!(matches!(parse(&["usage"]).unwrap().command, Some(Command::Usage { since: Window::Days(30) })));
         assert!(matches!(parse(&["usage", "--since", "all"]).unwrap().command, Some(Command::Usage { since: Window::All })));
         assert!(parse(&["usage", "--since", "30"]).is_err());
+    }
+
+    #[test]
+    fn update_installs_over_the_latest_only_with_force() {
+        assert!(matches!(parse(&["update"]).unwrap().command, Some(Command::Update { force: false })));
+        assert!(matches!(parse(&["update", "-f"]).unwrap().command, Some(Command::Update { force: true })));
     }
 
     #[test]

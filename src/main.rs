@@ -39,6 +39,7 @@ async fn run(cli: &Cli) -> Result<()> {
         Some(Command::Schema { connection, filter }) => until_stopped(commands::schema::run(connection, filter.as_deref(), cli.json)).await,
         Some(Command::Connection { command }) => connection(command),
         Some(Command::Password { command: PasswordCommand::Set { connection } }) => commands::password::set(connection).await,
+        Some(Command::Update { force }) => commands::update::run(*force),
     }
 }
 

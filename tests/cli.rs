@@ -54,10 +54,12 @@ fn stderr(output: &Output) -> String {
 }
 
 #[test]
-fn version_prints_the_name_and_the_crate_version() {
+fn version_prints_the_name_the_crate_version_and_the_commit() {
     let output = pgbg("", &["--version"]);
     assert!(output.status.success());
-    assert_eq!(stdout(&output), format!("pgbg {}\n", env!("CARGO_PKG_VERSION")));
+    let text = stdout(&output);
+    let commit = text.strip_prefix(&format!("pgbg {} (", env!("CARGO_PKG_VERSION"))).and_then(|rest| rest.strip_suffix(")\n"));
+    assert!(commit.is_some_and(|c| c.len() == 7 && c.bytes().all(|b| b.is_ascii_hexdigit())), "{text}");
 }
 
 #[test]

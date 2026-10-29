@@ -15,6 +15,8 @@ pub mod run;
 pub mod schema;
 /// `pgbg`, or `pgbg tui`.
 pub mod tui;
+/// `pgbg update`.
+pub mod update;
 /// `pgbg usage`.
 pub mod usage;
 

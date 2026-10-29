@@ -8,6 +8,8 @@ Each entry says what changed, then where, then how to use it.
 
 ### New
 
+- **`pgbg update` installs the latest pgbg**, from the command line: with `brew upgrade` when brew installed it, else built again with cargo from GitHub, only when a newer commit is there.
+  `pgbg update -f` installs even when it is already the latest, and `pgbg --version` shows the commit pgbg was built from.
 - **The row's detail reads as two columns**, in the TUI's row detail opened with `⏎` on the grid: each column's name on the left, bold for a primary key, and its whole value beside it in the grid's format and colours.
   A value in another format than raw shows its raw text faded after it, and the tables pointing to the row follow a faint rule with their counts on the right.
 - **`i` on a column shows its figures**, in the TUI's result grid: how many distinct values and NULLs it holds, its least and greatest value, and its five most common values with how many rows hold each.
