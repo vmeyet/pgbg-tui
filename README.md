@@ -253,6 +253,10 @@ timeout = 60                                    # seconds; 60 by default
 
 `ai = "off"` on a connection keeps both from asking there.
 
+The statement under the cursor goes along with the tables it needs: those it or your words name, then those one foreign key away, each with its columns, types, foreign keys and comments, within 16 KiB.
+A comment holding a password is left out.
+When nothing names a table, as in `SELECT * FROM `, the names of the tables go alone.
+
 The `--` lines right above the statement tell the idle ghost what you want; header lines such as `-- name:` are left out.
 Their values are masked as the statement's are: strings, numbers and any word holding an `@`, such as an email.
 A comment that opens a quote it never closes, as `don't`, cannot be masked: the idle ghost then only asks to complete the statement, and `pgbg.log` says so.

@@ -129,13 +129,13 @@ fn head(input: &PromptInput<'_>, instruction: &str, statement: &str) -> String {
          The database is a {} one.\n\n\
          Instruction:\n{instruction}\n\n\
          Statement under the cursor:\n{statement}\n\n\
-         Schema, names and types:\n",
+         Schema:\n",
         input.tier
     )
 }
 
 /// The first `lines` that fit in `room` bytes, one a line, and a note when some were left out.
-fn fitted(lines: Vec<String>, room: usize) -> String {
+fn fitted(lines: impl Iterator<Item = String>, room: usize) -> String {
     let mut text = String::new();
     for line in lines {
         if text.len() + line.len() + 1 > room {
@@ -206,7 +206,7 @@ mod tests {
         let text = text("SELECT * FROM orders WHERE total > 10 -- big ones", "only the ids");
         assert!(text.contains("Instruction:\nonly the ids\n"));
         assert!(text.contains("Statement under the cursor:\nSELECT * FROM orders WHERE total > <number 1>\n"));
-        assert!(text.contains("public.orders(id integer, customer_id integer, total numeric(10,2))\n"));
+        assert!(text.contains("public.orders(id integer, customer_id integer references public.customers(id), total numeric(10,2))\n"));
         assert!(text.contains("a production one"));
     }
 
@@ -287,6 +287,7 @@ mod tests {
             columns: columns.clone(),
             indexes: vec![],
             foreign_keys: vec![],
+            comment: None,
         };
         catalog.schema.schemas.push(SchemaNode { name: "archive".into(), tables: (0..400).map(table).collect() });
         catalog
@@ -296,7 +297,7 @@ mod tests {
     fn a_slice_past_the_cap_is_cut_table_by_table_and_says_so() {
         let text = prompt_for("SELECT * FROM orders", "orders", &wide_catalog()).unwrap().text().to_owned();
         assert!(text.len() <= MAX_BYTES && text.ends_with(CUT_NOTE));
-        assert!(text.contains("public.orders(id integer, customer_id integer, total numeric(10,2))\n"));
+        assert!(text.contains("public.orders(id integer, customer_id integer references public.customers(id), total numeric(10,2))\n"));
     }
 
     #[test]

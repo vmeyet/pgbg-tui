@@ -202,21 +202,30 @@ pub(crate) fn orders() -> ResultSet {
     )
 }
 
-fn schema_column(name: &str, type_name: &str, default: Option<&str>) -> SchemaColumn {
+pub(crate) fn schema_column(name: &str, type_name: &str, default: Option<&str>) -> SchemaColumn {
     SchemaColumn {
         name: name.to_owned(),
         type_name: TypeName::new(type_name),
         is_nullable: default.is_some(),
         default: default.map(str::to_owned),
+        comment: None,
     }
 }
 
-fn schema_table(name: &str, columns: Vec<SchemaColumn>) -> Table {
-    Table { name: name.to_owned(), kind: TableKind::Table, estimated_rows: None, columns, indexes: vec![], foreign_keys: vec![] }
+pub(crate) fn schema_table(name: &str, columns: Vec<SchemaColumn>) -> Table {
+    Table {
+        name: name.to_owned(),
+        kind: TableKind::Table,
+        estimated_rows: None,
+        columns,
+        indexes: vec![],
+        foreign_keys: vec![],
+        comment: None,
+    }
 }
 
 /// A one-column foreign key, `column` pointing to `id` of `target_schema.target_table`.
-fn key_to_id(column: &str, target_schema: &str, target_table: &str) -> ForeignKey {
+pub(crate) fn key_to_id(column: &str, target_schema: &str, target_table: &str) -> ForeignKey {
     ForeignKey {
         columns: vec![column.to_owned()],
         target_schema: target_schema.to_owned(),

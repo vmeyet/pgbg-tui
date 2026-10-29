@@ -47,6 +47,9 @@ pub(crate) struct Table {
     pub(crate) columns: Vec<SchemaColumn>,
     pub(crate) indexes: Vec<Index>,
     pub(crate) foreign_keys: Vec<ForeignKey>,
+    /// What `COMMENT ON TABLE` says of it, when anything.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) comment: Option<String>,
 }
 
 /// A column of a table, as the catalog declares it.
@@ -58,6 +61,9 @@ pub(crate) struct SchemaColumn {
     pub(crate) type_name: TypeName,
     pub(crate) is_nullable: bool,
     pub(crate) default: Option<String>,
+    /// What `COMMENT ON COLUMN` says of it, when anything.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) comment: Option<String>,
 }
 
 /// An index of a table: its key columns, or the expression a key is built from.

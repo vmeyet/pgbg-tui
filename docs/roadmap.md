@@ -160,7 +160,7 @@ What a first real session asked for, one MR per step.
 
 ## 20. Review of the first-use batch
 
-The review of #194 to #208 found these, most severe first.
+The review of #194 to #208 found these, most severe first; real use of the AI ask found the last ones.
 
 - [x] The idle ask sends a comment as its instruction only with `[ai] literals = "sent"`, and masks it otherwise
 - [x] A version whose text holds a secret is kept as a note, as the history keeps it
@@ -172,6 +172,10 @@ The review of #194 to #208 found these, most severe first.
 - [ ] pgbg warns once when a config or history sits in the old macOS folder, and says where to move it
 - [ ] One private-folder helper and one atomic-write helper serve the history, the log, usage, versions and saved queries
 - [ ] Showing another sheet re-lists its queries in one place, and the idle ask builds its question once
+- [x] The AI's schema slice shows each table's foreign keys
+- [x] The slice brings the tables one foreign key away from those it keeps, the closest first within the cap
+- [x] The slice shows table and column comments, one holding a secret left out
+- [x] With no table named, the slice sends the table names alone
 
 ## 21. A pleasure to use
 
