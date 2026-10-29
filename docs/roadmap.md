@@ -185,7 +185,7 @@ Each step is one MR, in this order.
 
 - [x] Editor moves as in a shell: `⌥b` `⌥f` by word as `⌥←` `⌥→`, `^a` `^e` to the line's ends, `^k` `^u` delete to them; in vtui's field, so every app has them
 - [x] A mouse drag selects in the editor and copies on release; a double click takes a word, a triple click a line
-- [ ] `⌥c` copies the statement under the cursor
+- [x] `⌥c` copies the statement under the cursor
 - [ ] `⌘c` and `⌘v` copy and paste where the terminal sends them
 - [x] The grid colours a value by its kind: `NULL` dimmed, one colour per repeated text value, booleans, negative numbers, keys, uuids, json and times
 - [ ] An FK column says so; `⏎` on its cell opens the row it points to, deeper with a trail and `⌫` back

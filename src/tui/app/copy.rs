@@ -1,4 +1,5 @@
-//! `y`, `Y` and `c` on the grid: copy the cell, the row or the whole result to the clipboard, with raw values.
+//! `y`, `Y` and `c` on the grid: copy the cell, the row or the whole result to the clipboard, with raw values; `⌥c` in
+//! the editor: copy the statement under the cursor.
 use super::{Action, App, Overlay, Run};
 use crate::act::{self, Act, Pane};
 use crate::db::model::{ResultSet, Value};
@@ -40,6 +41,16 @@ impl App {
     pub(super) fn copy_row(&self) -> Vec<Action> {
         let Some((number, values)) = self.current_row() else { return vec![] };
         vec![Action::Copy { text: export::row(values), done: format!("copied row {number} as CSV{}", undecodable(values)) }]
+    }
+
+    /// Copies the statement under the editor's cursor, or notes that there is none.
+    pub(super) fn copy_statement(&mut self) -> Vec<Action> {
+        let sheet = self.sheet();
+        let Some(range) = sheet.range_under_cursor() else {
+            self.note = Some("no statement under the cursor to copy".to_owned());
+            return vec![];
+        };
+        vec![Action::Copy { text: sheet.editor.text()[range].to_owned(), done: "copied the statement".to_owned() }]
     }
 
     /// Asks on the footer line which format the whole result is copied as.
@@ -181,6 +192,23 @@ mod tests {
         let mut app = typed("SELECT ");
         assert_eq!(press(&mut app, 'y'), []);
         assert_eq!(app.sheet().editor.text(), "SELECT y");
+    }
+
+    fn alt(app: &mut App, c: char) -> Vec<Action> {
+        app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT))
+    }
+
+    #[test]
+    fn alt_c_in_the_editor_copies_the_statement_under_the_cursor() {
+        let mut app = typed("SELECT 1;\nSELECT id FROM orders");
+        assert_eq!(alt(&mut app, 'c'), copied("SELECT id FROM orders", "copied the statement"));
+    }
+
+    #[test]
+    fn alt_c_on_no_statement_says_so() {
+        let mut app = typed("");
+        assert_eq!(alt(&mut app, 'c'), []);
+        assert_eq!(app.note.as_deref(), Some("no statement under the cursor to copy"));
     }
 
     #[test]

@@ -8,6 +8,8 @@ Each entry says what changed, then where, then how to use it.
 
 ### New
 
+- **`⌥c` copies the statement under the cursor**, in the TUI's editor; the status line says so, or that there is none.
+  A macOS terminal sends `⌥c` only with its option key set as meta.
 - **The grid colours a value by its kind**, in the TUI's result grid: `NULL` dimmed and slanted, `true` green and `false` dimmed, a negative number red, a UUID dimmed past its first eight digits, a timestamp's time dimmed after its date, and JSON keys, strings and numbers each in their colour.
   A text column of a few values that repeat, as a status, gives each value its own colour, the same in every result.
   Press `f` on a boolean column, or `F`, to read it as `✓` and `✗`, or name it in a saved query's header as `-- format: paid=check`.

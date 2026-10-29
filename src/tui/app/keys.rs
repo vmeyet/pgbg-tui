@@ -179,6 +179,7 @@ impl App {
             Act::Detail => self.open_detail(),
             Act::CopyCell => return self.copy_cell(),
             Act::CopyRow => return self.copy_row(),
+            Act::CopyStatement => return self.copy_statement(),
             Act::CopyResult => self.ask_copy_format(),
             Act::SwitchTab => return self.switch_tab(),
             Act::Close | Act::Delete | Act::CloseSession | Act::Add | Act::Edit | Act::CopyCsv | Act::CopyJson | Act::CopyMarkdown => {}
