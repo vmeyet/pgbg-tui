@@ -63,6 +63,11 @@ fn only_column(columns: &[Column], name: &str) -> Option<usize> {
 }
 
 impl Target {
+    /// The place in the result of the key's first column.
+    pub(crate) fn first_column(&self) -> usize {
+        self.pairs.iter().map(|pair| pair.at).min().unwrap_or_default()
+    }
+
     /// The read of the row the key of `row` points to, its values bound, never put in its text; none when one of them
     /// is NULL, which points nowhere.
     pub(crate) fn lookup(&self, row: &[Value]) -> Option<Lookup> {
@@ -76,7 +81,7 @@ impl Target {
 
 /// The table `statement` reads, when it names exactly one, found as PostgreSQL resolves its name: with its schema, or
 /// bare in the first schema of the search path that holds it.
-fn one_table_read<'a>(catalog: &'a Catalog, statement: &Statement) -> Option<&'a Table> {
+pub(crate) fn one_table_read<'a>(catalog: &'a Catalog, statement: &Statement) -> Option<&'a Table> {
     let [name] = complete::tables_named(statement.as_str()).try_into().ok()?;
     match name.split_once('.') {
         Some((schema, table)) => table_in(catalog, schema, table),

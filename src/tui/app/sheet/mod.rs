@@ -427,6 +427,12 @@ impl Sheet {
         keys::column_keys(catalog, &sent.statement, result.columns())
     }
 
+    /// The statement whose result the pane shows; none while it shows a table's columns.
+    pub(in crate::tui) fn shown_statement(&self) -> Option<&Statement> {
+        let is_run = matches!(self.run, Run::Done { .. }) && self.shown.is_none();
+        self.sent.as_ref().filter(|_| is_run).map(|sent| &sent.statement)
+    }
+
     /// The statement that tried to write and waits to be asked about, once.
     pub(super) fn take_tried_to_write(&mut self) -> Option<ToRun> {
         self.tried_to_write.take()
