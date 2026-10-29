@@ -86,6 +86,7 @@ fn footer(f: &mut Frame<'_>, app: &App, area: Rect) {
     match app.overlay() {
         Some(Overlay::Prompt(prompt)) => return prompt_view::draw(f, app, prompt, area),
         Some(Overlay::Ask(step)) => return ask_view::footer(f, app, step, area),
+        Some(Overlay::RowFilter(filter)) => return prompt_view::draw_row_filter(f, app, filter, area),
         _ => {}
     }
     let status = status(app, usize::from(area.width / STATUS_SHARE_OF_ROW));

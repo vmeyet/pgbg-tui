@@ -408,10 +408,10 @@ impl Sheet {
                 self.run = Run::Done { run, grid, result, took, view, is_page_asked: false };
             }
             Incoming::Page { run, .. } | Incoming::PageFailed { run, .. } if !self.is_waiting_on_page(run) => {}
-            Incoming::Page { page, .. } => self.push_page(page),
+            Incoming::Page { page, .. } => self.push_page(page, &reading.clock),
             Incoming::LookedUp { .. } => {}
             Incoming::PageFailed { failure, .. } => {
-                self.push_page(Page { rows: vec![], extent: Extent::Cut });
+                self.push_page(Page { rows: vec![], extent: Extent::Cut }, &reading.clock);
                 self.page_failure = Some(format!("the next page failed: {failure}"));
             }
             Incoming::Failed { failure, .. } => {
@@ -450,7 +450,7 @@ impl Sheet {
     }
 
     /// Moves the grid's cursor by `step` in the `room` it has, and asks for the next page once it nears the last row,
-    /// unless a sort works on the rows loaded.
+    /// unless a filter or a sort works on the rows loaded.
     pub(super) fn step_grid(&mut self, step: Move, room: Room) -> Vec<Action> {
         let Run::Done { run, result, grid, is_page_asked, .. } = &mut self.run else { return vec![] };
         grid.step(step, result, room);
@@ -469,11 +469,23 @@ impl Sheet {
         grid.step_format(result, clock)
     }
 
+    /// Shows only the grid's rows holding `filter` in one of their cells.
+    pub(super) fn filter_rows(&mut self, filter: String, clock: &Clock) {
+        if let Run::Done { result, grid, .. } = &mut self.run {
+            grid.filter_rows(filter, result, clock);
+        }
+    }
+
     /// Sorts the grid's rows by the column under its cursor, the next way.
     pub(super) fn step_sort(&mut self, clock: &Clock) {
         if let Run::Done { result, grid, .. } = &mut self.run {
             grid.step_sort(result, clock);
         }
+    }
+
+    /// Whether the grid shows a row under its cursor, which a filter can hide.
+    pub(super) fn shows_cursor_row(&self) -> bool {
+        matches!(&self.run, Run::Done { result, grid, .. } if grid.shows_cursor_row(result))
     }
 
     /// Puts every column of the grid raw, or readable when all are raw.
@@ -493,11 +505,11 @@ impl Sheet {
         matches!(&self.run, Run::Done { run, result, .. } if *run == of && result.extent() == Extent::More)
     }
 
-    /// Adds `page` to the result, keeping the grid's widths from the first page, in its sort.
-    fn push_page(&mut self, page: Page) {
+    /// Adds `page` to the result, keeping the grid's widths from the first page, through its filter and sort.
+    fn push_page(&mut self, page: Page, clock: &Clock) {
         if let Run::Done { result, grid, is_page_asked, .. } = &mut self.run {
             result.push(page);
-            grid.take_rows(result);
+            grid.take_rows(result, clock);
             *is_page_asked = false;
         }
     }

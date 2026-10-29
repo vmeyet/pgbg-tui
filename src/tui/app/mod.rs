@@ -8,6 +8,7 @@ use crate::format::Mode;
 use ask::Asks;
 use ratatui::layout::Rect;
 use vtui::click::Clicks;
+use vtui::field::Field;
 use vtui::help::Help;
 
 pub(super) use ask::{AskStep, Suggestion};
@@ -30,6 +31,7 @@ pub(super) use save::{Opening, Prompt};
 pub(super) use schema_tab::{SchemaRow, SchemaTab, SidebarTab};
 pub(super) use search::Search;
 pub(super) use sheet::{Run, SchemaState, SessionState, Sheet, View};
+pub(super) use shown_rows::ShownRows;
 pub(super) use table_finder::TableFinder;
 pub(super) use versions::{Listed, VersionList};
 
@@ -127,6 +129,8 @@ pub(super) enum Overlay {
     CopyAs,
     /// The schema tab's filter line, typed into from `/` until `⏎` or `esc`.
     SchemaFilter,
+    /// The grid's filter on the footer line, typed into from `/`: each key filters the rows again.
+    RowFilter(Field),
     /// The `ctrl-space` list of names that complete the word before the cursor.
     Completion(Completions),
     /// The `ctrl-t` finder of the schema's tables.

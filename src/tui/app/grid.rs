@@ -2,7 +2,7 @@
 //! colouring.
 use super::colouring::{Colouring, colourings};
 use super::shown_rows::{Order, ShownRows, Sort};
-use crate::db::model::{ColumnName, ResultSet};
+use crate::db::model::{ColumnName, ResultSet, Value};
 use crate::format::{self, Format, Mode};
 use crate::keys::{ColumnKey, Target};
 use crate::render;
@@ -14,6 +14,8 @@ const MAX_COLUMN_WIDTH: usize = 40;
 const SAMPLE_ROWS: usize = 500;
 /// What follows the name of a column that points to another table's.
 const POINTS_TO_MARK: &str = " →";
+/// How much of each cell `/` searches: more than the grid shows, without reading a long JSON value whole.
+const FILTER_CHARS: usize = 200;
 /// The space drawn before each column.
 pub(in crate::tui) const GAP: &str = "  ";
 
@@ -134,23 +136,48 @@ impl Grid {
         &self.shown
     }
 
+    /// Whether the cursor's row shows: a filter can hide every row.
+    pub(super) fn shows_cursor_row(&self, result: &ResultSet) -> bool {
+        self.row < result.rows().len() && self.shown.place_of(self.row).is_some()
+    }
+
+    /// Shows only the rows holding `filter` in one of their cells as the grid reads them; the cursor goes to the first.
+    pub(super) fn filter_rows(&mut self, filter: String, result: &ResultSet, clock: &Clock) {
+        self.shown = self.shown.filtered(filter, result, searched_text(&self.formats, clock));
+        self.go_to_first_row(result);
+    }
+
     /// Sorts the rows shown by the cursor's column: ascending, then descending, then in the result's order; the cursor
     /// goes to the first row.
     pub(super) fn step_sort(&mut self, result: &ResultSet, clock: &Clock) {
-        self.shown = ShownRows::new(Sort::after(self.shown.sort(), self.column), result);
-        self.row = self.shown.row_at(0, result.rows().len()).unwrap_or(0);
-        self.top = 0;
+        let sort = Sort::after(self.shown.sort(), self.column);
+        self.arrange(self.shown.filter().to_owned(), sort, result, clock);
+        self.go_to_first_row(result);
         self.widths = self.column_widths(result, &self.formats, clock);
     }
 
-    /// Sorts the rows of `result` again, once a page added rows to it; the cursor stays on its row.
-    pub(super) fn take_rows(&mut self, result: &ResultSet) {
-        if !self.shown.is_whole() {
-            self.shown = ShownRows::new(self.shown.sort(), result);
+    /// Filters and sorts the rows of `result` again, once a page added rows or a format changed how they read; the
+    /// cursor stays on its row while it shows.
+    pub(super) fn take_rows(&mut self, result: &ResultSet, clock: &Clock) {
+        if self.shown.is_whole() {
+            return;
+        }
+        self.arrange(self.shown.filter().to_owned(), self.shown.sort(), result, clock);
+        if self.shown.place_of(self.row).is_none() {
+            self.go_to_first_row(result);
         }
     }
 
-    /// The cursor's place among the rows shown.
+    fn arrange(&mut self, filter: String, sort: Option<Sort>, result: &ResultSet, clock: &Clock) {
+        self.shown = ShownRows::new(filter, sort, result, searched_text(&self.formats, clock));
+    }
+
+    fn go_to_first_row(&mut self, result: &ResultSet) {
+        self.row = self.shown.row_at(0, result.rows().len()).unwrap_or(0);
+        self.top = 0;
+    }
+
+    /// The cursor's place among the rows shown; the first when a filter hides its row.
     fn cursor_place(&self) -> usize {
         self.shown.place_of(self.row).unwrap_or(0)
     }
@@ -178,6 +205,7 @@ impl Grid {
         self.widths = self.column_widths(result, &formats, clock);
         self.colourings = colourings(result, &formats, SAMPLE_ROWS);
         self.formats = formats;
+        self.take_rows(result, clock);
     }
 
     /// Moves the cursor by `step` among the rows shown of `result`, keeping its cell in the `room` the grid has.
@@ -240,6 +268,11 @@ impl Grid {
         let header = |column| render::width(&self.header(result, column));
         formats.iter().enumerate().map(|(column, &format)| column_width(result, column, header(column), format, clock)).collect()
     }
+}
+
+/// The text `/` searches in a cell of the column at `column`: what the grid shows, in its column's format of `formats`.
+fn searched_text<'a>(formats: &'a [Format], clock: &'a Clock) -> impl Fn(usize, &Value) -> String + 'a {
+    |column, value| format::cell(value, formats[column], clock, FILTER_CHARS)
 }
 
 fn column_width(result: &ResultSet, column: usize, header: usize, format: Format, clock: &Clock) -> usize {
