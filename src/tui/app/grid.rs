@@ -4,7 +4,7 @@ use super::colouring::{Colouring, colourings};
 use super::shown_rows::{Order, ShownRows, Sort};
 use crate::db::model::{ColumnName, ResultSet, Value};
 use crate::format::{self, Format, Mode};
-use crate::keys::{ColumnKey, Target};
+use crate::keys::{Keys, Target};
 use crate::render;
 use chrono::Local;
 
@@ -64,8 +64,8 @@ pub(in crate::tui) struct Grid {
     pub(in crate::tui) widths: Vec<usize>,
     /// How each column's cells are coloured, by index.
     pub(in crate::tui) colourings: Vec<Colouring>,
-    /// Each column's key in the table the result was read from, by index; none when that table is unknown.
-    keys: Vec<ColumnKey>,
+    /// Each column's key in the table the result was read from, and those tables.
+    keys: Keys,
     /// The rows shown and their order, after `/` and `s`.
     shown: ShownRows,
     /// The cursor's row, by its index in the result.
@@ -81,7 +81,7 @@ pub(in crate::tui) struct Grid {
 impl Grid {
     /// The grid on `result` with each column in its format from `formats` and its key from `keys`, the cursor on the
     /// first row; `keys` is empty when the table the result was read from is unknown.
-    pub(in crate::tui) fn new(result: &ResultSet, formats: Vec<Format>, keys: Vec<ColumnKey>, clock: &Clock) -> Self {
+    pub(in crate::tui) fn new(result: &ResultSet, formats: Vec<Format>, keys: Keys, clock: &Clock) -> Self {
         let mut grid = Self {
             formats: vec![],
             widths: vec![],
@@ -100,21 +100,21 @@ impl Grid {
     /// The grid on `result`, every column raw.
     #[cfg(test)]
     pub(in crate::tui) fn raw(result: &ResultSet) -> Self {
-        Self::new(result, vec![Format::Raw; result.columns().len()], vec![], &clock_at_epoch())
+        Self::new(result, vec![Format::Raw; result.columns().len()], Keys::default(), &clock_at_epoch())
     }
 
     /// Whether the column at `column` is part of the primary key of the table the result was read from.
     pub(in crate::tui) fn is_primary(&self, column: usize) -> bool {
-        self.keys.get(column).is_some_and(|key| key.is_primary)
+        self.keys.columns().get(column).is_some_and(|key| key.is_primary)
     }
 
     /// Where the column at `column` points through a foreign key of the table the result was read from.
     pub(in crate::tui) fn points_to(&self, column: usize) -> Option<&Target> {
-        self.keys.get(column)?.points_to.as_ref()
+        self.keys.columns().get(column)?.points_to.as_ref()
     }
 
-    /// Each column's key in the table the result was read from, by index; empty when that table is unknown.
-    pub(in crate::tui) fn keys(&self) -> &[ColumnKey] {
+    /// Each column's key in the table the result was read from, and those tables.
+    pub(in crate::tui) fn keys(&self) -> &Keys {
         &self.keys
     }
 
@@ -361,7 +361,7 @@ mod tests {
             vec![column("at", ColumnKind::TimestampTz)],
             vec![vec![Value::TimestampTz(clock.now - chrono::Duration::minutes(1))]],
         );
-        assert_eq!(Grid::new(&result, vec![Format::Relative], vec![], &clock).widths, ["59 min ago".len()]);
+        assert_eq!(Grid::new(&result, vec![Format::Relative], Keys::default(), &clock).widths, ["59 min ago".len()]);
     }
 
     #[test]
@@ -422,7 +422,7 @@ mod tests {
             vec![shop_column("orders", "id", ColumnKind::Int), shop_column("orders", "customer_id", ColumnKind::Int)],
             vec![],
         );
-        let keys = crate::keys::column_keys(&crate::fixtures::shop_catalog(), result.columns());
+        let keys = crate::keys::keys(&crate::fixtures::shop_catalog(), result.columns());
         Grid::new(&result, vec![Format::Raw; 2], keys, &clock_at_epoch())
     }
 

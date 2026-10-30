@@ -35,6 +35,32 @@ pub(crate) struct ColumnKey {
     pub(crate) points_to: Option<Target>,
 }
 
+/// The keys of a result's columns, and the tables they were read from, each found in the catalog once.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Keys {
+    /// Each column's key, by index; empty when the schema was not read.
+    columns: Vec<ColumnKey>,
+    tables: Vec<TableRead>,
+}
+
+/// A table a result's columns were read from, and where the result holds its primary key.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TableRead {
+    oid: TableOid,
+    pub(crate) schema: String,
+    pub(crate) table: String,
+    /// Each column of its primary key, in the key's order; none when it has none or the result does not hold each of its
+    /// columns once.
+    primary_key: Option<Vec<Held>>,
+}
+
+/// A column of a table and its place in the result holding it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Held {
+    at: usize,
+    column: String,
+}
+
 /// The most tables a row's detail lists as pointing to it, each counted with one read.
 const REFERRERS_SHOWN: usize = 12;
 /// How far a count of the rows pointing to a row goes before it says only that there are more.
@@ -44,9 +70,9 @@ const COUNT_TIMEOUT: StatementTimeout = StatementTimeout::from_millis(2_000);
 
 /// A table of the catalog, with the schema that holds it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct TableIn<'a> {
-    pub(crate) schema: &'a str,
-    pub(crate) table: &'a Table,
+struct TableIn<'a> {
+    schema: &'a str,
+    table: &'a Table,
 }
 
 /// A foreign key of another table that points to a row: that table, and each column of the key with the row's value
@@ -98,11 +124,47 @@ pub(crate) struct Lookup {
     pub(crate) own_timeout: Option<StatementTimeout>,
 }
 
-/// The key of each of `columns`, a result read with `catalog`: none for a column read from no table, or from one the
-/// catalog does not hold.
-pub(crate) fn column_keys(catalog: &Catalog, columns: &[Column]) -> Vec<ColumnKey> {
+/// The keys of `columns`, a result read with `catalog`, and the tables they were read from: no key for a column read from
+/// no table, or from one the catalog does not hold.
+pub(crate) fn keys(catalog: &Catalog, columns: &[Column]) -> Keys {
     let read = tables_read(catalog, columns);
-    columns.iter().map(|column| key_of(&read, column, columns).unwrap_or_default()).collect()
+    let keys = columns.iter().map(|column| key_of(&read, column, columns).unwrap_or_default()).collect();
+    Keys { columns: keys, tables: read.iter().map(|table| table_read(table, columns)).collect() }
+}
+
+/// `table` as the result of `columns` read it.
+fn table_read(table: &TableIn<'_>, columns: &[Column]) -> TableRead {
+    let key = table.table.indexes.iter().find(|index| index.is_primary);
+    let held = |name: &String| Some(Held { at: held_once(columns, table.table, name)?, column: name.clone() });
+    let primary_key = key.and_then(|key| key.columns.iter().map(held).collect());
+    TableRead { oid: table.table.oid, schema: table.schema.to_owned(), table: table.table.name.clone(), primary_key }
+}
+
+impl Keys {
+    /// Each column's key, by index; empty when the schema was not read.
+    pub(crate) fn columns(&self) -> &[ColumnKey] {
+        &self.columns
+    }
+
+    /// The table `column` was read from, as the catalog held it.
+    pub(crate) fn table_of(&self, column: &Column) -> Option<&TableRead> {
+        let oid = column.origin?.table;
+        self.tables.iter().find(|table| table.oid == oid)
+    }
+}
+
+impl TableRead {
+    /// The first hop of a trail, from this table.
+    pub(crate) fn hop(&self) -> Hop {
+        Hop { schema: self.schema.clone(), table: self.table.clone(), on: vec![] }
+    }
+
+    /// Its primary key and its values in `row`; none when it has none, the result does not hold each of its columns
+    /// once, or one of its values is NULL.
+    pub(crate) fn primary_key(&self, row: &[Value]) -> Option<Vec<Pointing>> {
+        let pointing = |held: &Held| Some(Pointing { column: held.column.clone(), value: row.get(held.at)?.as_param()? });
+        self.primary_key.as_ref()?.iter().map(pointing).collect()
+    }
 }
 
 /// The key of `column`, of `columns`, read from one of the tables `read`.
@@ -137,11 +199,6 @@ fn table_of(catalog: &Catalog, oid: TableOid) -> Option<TableIn<'_>> {
     tables.find(|found| found.table.oid == oid)
 }
 
-/// The table `column` was read from, as the catalog holds it.
-pub(crate) fn table_read<'a>(catalog: &'a Catalog, column: &Column) -> Option<TableIn<'a>> {
-    table_of(catalog, column.origin?.table)
-}
-
 /// The tables `columns` were read from, each once, in the order of their first column: each found in the catalog once,
 /// however many columns it gave.
 fn tables_read<'a>(catalog: &'a Catalog, columns: &[Column]) -> Vec<TableIn<'a>> {
@@ -152,14 +209,6 @@ fn tables_read<'a>(catalog: &'a Catalog, columns: &[Column]) -> Vec<TableIn<'a>>
         }
     }
     oids.into_iter().filter_map(|oid| table_of(catalog, oid)).collect()
-}
-
-/// The primary key of `table` and its values in `row`, of `columns`; none when the table has none, `columns` do not hold
-/// each of its columns once, or one of its values is NULL.
-pub(crate) fn primary_key(table: &Table, columns: &[Column], row: &[Value]) -> Option<Vec<Pointing>> {
-    let key = table.indexes.iter().find(|index| index.is_primary)?;
-    let value = |name: &String| row.get(held_once(columns, table, name)?)?.as_param();
-    key.columns.iter().map(|name| Some(Pointing { column: name.clone(), value: value(name)? })).collect()
 }
 
 /// `a = $1 AND b = $2`: each of `columns` equal to the value bound at its place.
@@ -284,6 +333,10 @@ mod tests {
     use crate::fixtures::{self, column, keyed_catalog, shop_catalog, shop_column};
     use crate::query::params::{self, Given};
 
+    fn column_keys(catalog: &Catalog, columns: &[Column]) -> Vec<ColumnKey> {
+        super::keys(catalog, columns).columns
+    }
+
     fn keys(columns: &[Column]) -> Vec<ColumnKey> {
         column_keys(&keyed_catalog(), columns)
     }
@@ -376,10 +429,25 @@ mod tests {
 
     #[test]
     fn the_primary_key_of_a_table_is_read_from_the_columns_holding_it() {
-        let catalog = shop_catalog();
-        let orders = &catalog.schema.schemas[1].tables[0];
-        let key = primary_key(orders, &[read("orders", "customer_id"), read("orders", "id")], &[Value::Int(3), Value::Int(7)]);
+        let columns = [read("orders", "customer_id"), read("orders", "id")];
+        let keys = super::keys(&shop_catalog(), &columns);
+        let key = keys.table_of(&columns[1]).and_then(|orders| orders.primary_key(&[Value::Int(3), Value::Int(7)]));
         assert_eq!(key, Some(vec![Pointing { column: "id".to_owned(), value: ParamValue::new("7") }]));
+    }
+
+    #[test]
+    fn each_table_a_join_read_is_kept_once_by_its_name() {
+        let columns = [read("orders", "id"), read("orders", "customer_id"), read("customers", "id")];
+        let keys = super::keys(&shop_catalog(), &columns);
+        let tables: Vec<&str> = columns.iter().filter_map(|column| keys.table_of(column)).map(|read| read.table.as_str()).collect();
+        assert_eq!((tables, keys.tables.len()), (vec!["orders", "orders", "customers"], 2));
+    }
+
+    #[test]
+    fn a_table_whose_key_the_result_does_not_hold_whole_has_no_primary_key() {
+        let columns = [read("orders", "customer_id")];
+        let keys = super::keys(&shop_catalog(), &columns);
+        assert_eq!(keys.table_of(&columns[0]).and_then(|orders| orders.primary_key(&[Value::Int(3)])), None);
     }
 
     fn orders_referrers(row: &[Value]) -> Vec<Referrer> {

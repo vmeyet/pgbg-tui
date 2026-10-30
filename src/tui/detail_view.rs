@@ -9,7 +9,7 @@ use super::palette_footer;
 use crate::act::Pane;
 use crate::db::model::{Column, Value};
 use crate::format::{self, Format};
-use crate::keys::COUNTED_ROWS;
+use crate::keys::{COUNTED_ROWS, Keys};
 use crate::render;
 use crate::syntax::{self, Painted};
 use ratatui::Frame;
@@ -134,7 +134,7 @@ fn looks(app: &App, detail: &Detail) -> Vec<Look> {
     let grid = match (detail.trail.last(), &app.sheet().run) {
         (Some(followed), _) => {
             let formats = format::opening(followed.result.columns(), &[], app.format_mode());
-            opened = Grid::new(&followed.result, formats, vec![], app.clock());
+            opened = Grid::new(&followed.result, formats, Keys::default(), app.clock());
             &opened
         }
         (None, Run::Done { grid, .. }) => grid,
