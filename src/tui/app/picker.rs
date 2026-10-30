@@ -52,11 +52,7 @@ impl App {
         match self.picked(picker, key) {
             Picked::Stay(picker) => self.overlay = Some(Overlay::Picker(picker)),
             Picked::Close => {}
-            Picked::Show(connection) => {
-                let listed = self.queries_folder().clone();
-                let shown = self.show(connection);
-                return shown.into_iter().chain(self.follow_queries_folder(&listed)).collect();
-            }
+            Picked::Show(connection) => return self.show(connection),
             Picked::Quit => return self.quit(),
             Picked::Form(form) => self.overlay = Some(Overlay::Form(form)),
             Picked::Remove(name) => {
@@ -123,9 +119,16 @@ impl App {
         if name == *self.sheet().name() { on_screen(&name) } else { Note::ConfirmRemove(name) }
     }
 
-    /// Shows the sheet of `connection`, creating it if needed.
-    /// Its session opens when it has none, or when the last one failed or was closed.
+    /// Shows the sheet of `connection`, and lists its queries when it uses another folder than the sheet it replaces.
     fn show(&mut self, connection: Connection) -> Vec<Action> {
+        let listed = self.queries_folder().clone();
+        let opened = self.bring_up(connection);
+        opened.into_iter().chain(self.follow_queries_folder(&listed)).collect()
+    }
+
+    /// Puts the sheet of `connection` on screen, creating it if needed.
+    /// Its session opens when it has none, or when the last one failed or was closed.
+    fn bring_up(&mut self, connection: Connection) -> Vec<Action> {
         let Some(open) = self.sheets.iter().position(|sheet| sheet.name() == connection.name()) else {
             let session = self.new_session();
             self.sheets.push(Sheet::new(&connection, session));

@@ -56,7 +56,7 @@ The review of #194 to #208 found these, most severe first; real use of the AI as
 - [x] The usage counts live in pgbg's data folder, and the cache folder follows XDG as the others do
 - [x] pgbg warns once when a config or history sits in the old macOS folder, and says where to move it
 - [x] One private-folder helper and one atomic-write helper serve the history, the log, usage, versions and saved queries
-- [ ] Showing another sheet re-lists its queries in one place, and the idle ask builds its question once
+- [x] Showing another sheet re-lists its queries in one place, and the idle ask builds its question once
 - [x] The AI's schema slice shows each table's foreign keys
 - [x] The slice brings the tables one foreign key away from those it keeps, the closest first within the cap
 - [x] The slice shows table and column comments, one holding a secret left out

@@ -90,18 +90,21 @@ impl App {
     /// Whether the editor sitting idle now would ask for the rest of the statement under the cursor: `[ai] ghost` is on,
     /// the editor has the keys with no overlay over it, no completion ghost shows, and this text was not asked about.
     pub(in crate::tui) fn wants_idle_ghost(&self) -> bool {
-        self.idle_settings().is_some()
-            && self.shows_the_bare_editor()
-            && !self.asks.idle.covers(&self.editor_on_screen())
-            && self.sheet().question().is_some()
+        self.may_ask_idle() && self.sheet().question().is_some()
     }
 
     /// Asks for the rest of the statement under the cursor, once the editor sat idle; nothing when it would not ask.
     pub(in crate::tui) fn ask_idle_ghost(&mut self) -> Vec<Action> {
-        let Some(settings) = self.idle_settings().filter(|_| self.wants_idle_ghost()) else { return vec![] };
+        self.ask_idle_when(|_| true)
+    }
+
+    /// Asks for the rest of the statement under the cursor when the question it builds once is `wanted`.
+    fn ask_idle_when(&mut self, wanted: impl Fn(&Question<'_>) -> bool) -> Vec<Action> {
+        let Some(settings) = self.idle_settings().filter(|_| self.may_ask_idle()) else { return vec![] };
+        let Some(question) = self.sheet().question().filter(|question| wanted(question)) else { return vec![] };
         let settings = settings.without_passwords_of(&self.connections);
         let editor = self.editor_on_screen();
-        let Some(IdlePrompt { prompt, left_out }) = self.sheet().idle_prompt(settings.literals) else {
+        let Some(IdlePrompt { prompt, left_out }) = self.sheet().idle_prompt(&question, settings.literals) else {
             self.asks.idle = IdleAsk::Asked(editor);
             return vec![];
         };
@@ -118,7 +121,11 @@ impl App {
     /// Asks at once when the key just ended a `--` line and left the cursor on the blank line under it, since that
     /// comment is the instruction; any other text waits for the editor to sit idle.
     pub(super) fn ask_under_an_ended_comment(&mut self) -> Vec<Action> {
-        if self.sheet().is_under_an_ended_comment() { self.ask_idle_ghost() } else { vec![] }
+        let (before, _, _) = self.sheet().editor.split();
+        if !before.ends_with('\n') {
+            return vec![];
+        }
+        self.ask_idle_when(|question| question.typed.is_empty())
     }
 
     /// Kills the idle ask still running, since a key or a paste makes its answer stale.
@@ -143,6 +150,12 @@ impl App {
             Err(failure) => NoIdleGhost::Failed(failure),
         };
         Some(Action::LogNoIdleGhost(why))
+    }
+
+    /// Whether `[ai] ghost` is on, the editor has the keys with no overlay over it, no completion ghost shows, and this
+    /// text was not asked about; the question under the cursor decides the rest.
+    fn may_ask_idle(&self) -> bool {
+        self.idle_settings().is_some() && self.shows_the_bare_editor() && !self.asks.idle.covers(&self.editor_on_screen())
     }
 
     fn editor_on_screen(&self) -> EditorAt {
@@ -179,17 +192,10 @@ impl Sheet {
         }
     }
 
-    /// Whether the cursor starts a blank line right under a `--` line, past any statement.
-    fn is_under_an_ended_comment(&self) -> bool {
-        let (before, _, _) = self.editor.split();
-        before.ends_with('\n') && self.question().is_some_and(|question| question.typed.is_empty())
-    }
-
-    /// The prompt asking for the rest of the statement under the cursor, with the comment above it as the instruction;
-    /// with the default instruction when `literals` masks it and it cannot be masked; none when nothing is asked or it
-    /// cannot be sent, as when the comment holds a secret.
-    fn idle_prompt(&self, literals: LiteralPolicy) -> Option<IdlePrompt> {
-        let question = self.question()?;
+    /// The prompt asking for the rest of `question`'s statement, with the comment above it as the instruction; with the
+    /// default instruction when `literals` masks it and it cannot be masked; none when it cannot be sent, as when the
+    /// comment holds a secret.
+    fn idle_prompt(&self, question: &Question<'_>, literals: LiteralPolicy) -> Option<IdlePrompt> {
         let statement = Statement::new(question.typed);
         let ask = |instruction: &Instruction| self.prompt_about(instruction, Some(&statement), literals);
         match ask(&question.instruction()) {
