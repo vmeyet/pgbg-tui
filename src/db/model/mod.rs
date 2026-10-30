@@ -1,6 +1,7 @@
 //! The neutral model of what a statement returns: code outside `db/` never sees a driver type.
 pub(crate) use cancel::CancelToken;
 pub(crate) use error::{InsideUserTransaction, ServerError, TriedToWrite, UnknownType};
+pub(crate) use interval::Interval;
 pub(crate) use json::{JsonText, string_end as json_string_end};
 pub(crate) use name::{needs_quotes, qualified, sql_name};
 pub(crate) use origin::{ColumnNumber, Origin, TableOid};
@@ -14,6 +15,7 @@ pub(crate) use value::Value;
 
 mod cancel;
 mod error;
+mod interval;
 mod json;
 mod name;
 mod origin;
@@ -117,6 +119,7 @@ pub(crate) enum ColumnKind {
     Time,
     Timestamp,
     TimestampTz,
+    Interval,
     Bytes,
     /// A type pgbg does not decode yet; its values show as `Value::Unsupported`, a `void` one as `Value::Null`.
     Other,
@@ -126,6 +129,11 @@ impl ColumnKind {
     /// Whether its values are numbers: drawn on the right, charted on a scale.
     pub(crate) const fn is_number(&self) -> bool {
         matches!(self, Self::Int | Self::Float | Self::Numeric)
+    }
+
+    /// Whether its values are amounts, drawn on the right so they line up: numbers and intervals.
+    pub(crate) const fn is_amount(&self) -> bool {
+        self.is_number() || matches!(self, Self::Interval)
     }
 
     /// Whether pgbg decodes its values, so they compare one with another.

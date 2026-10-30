@@ -1,5 +1,5 @@
 //! Wire values to `Value`, by column type; a type pgbg does not know decodes as `Value::Unsupported`.
-use super::model::{Column, ColumnKind, ColumnName, JsonText, Origin, TypeName, Value};
+use super::model::{Column, ColumnKind, ColumnName, Interval, JsonText, Origin, TypeName, Value};
 use chrono::{DateTime, Utc};
 use tokio_postgres::Row;
 use tokio_postgres::types::{FromSql, Kind, Type};
@@ -52,6 +52,7 @@ fn kind(ty: &Type) -> ColumnKind {
         Type::TIME => ColumnKind::Time,
         Type::TIMESTAMP => ColumnKind::Timestamp,
         Type::TIMESTAMPTZ => ColumnKind::TimestampTz,
+        Type::INTERVAL => ColumnKind::Interval,
         Type::BYTEA => ColumnKind::Bytes,
         _ if matches!(ty.kind(), Kind::Enum(_)) || ty.name() == "citext" => ColumnKind::Text,
         _ => ColumnKind::Other,
@@ -82,6 +83,7 @@ fn cell(ty: &Type, raw: &[u8]) -> Value {
         ColumnKind::Time => typed(ty, raw, Value::Time),
         ColumnKind::Timestamp => timestamp(ty, raw, Value::Timestamp),
         ColumnKind::TimestampTz => timestamp(ty, raw, |at: DateTime<Utc>| Value::TimestampTz(at)),
+        ColumnKind::Interval => interval(raw),
         ColumnKind::Bytes => typed(ty, raw, |bytes: &[u8]| Value::Bytes(bytes.into())),
         ColumnKind::Other if *ty == Type::VOID => Value::Null,
         ColumnKind::Other => Value::Unsupported,
@@ -122,6 +124,21 @@ fn timestamp<'a, T: FromSql<'a>>(ty: &Type, raw: &'a [u8], wrap: fn(T) -> Value)
         Ok(i64::MAX) => Value::Infinity,
         Ok(i64::MIN) => Value::NegativeInfinity,
         _ => typed(ty, raw, wrap),
+    }
+}
+
+/// A binary `interval`: microseconds, days, then months; the server sends `infinity` and `-infinity` with every part
+/// at its largest or smallest.
+fn interval(raw: &[u8]) -> Value {
+    let Some((microseconds, rest)) = raw.split_first_chunk::<8>() else { return Value::Unsupported };
+    let Some((days, months)) = rest.split_first_chunk::<4>() else { return Value::Unsupported };
+    let Ok(months) = <[u8; 4]>::try_from(months) else { return Value::Unsupported };
+    let interval =
+        Interval { months: i32::from_be_bytes(months), days: i32::from_be_bytes(*days), microseconds: i64::from_be_bytes(*microseconds) };
+    match interval {
+        Interval { months: i32::MAX, days: i32::MAX, microseconds: i64::MAX } => Value::Infinity,
+        Interval { months: i32::MIN, days: i32::MIN, microseconds: i64::MIN } => Value::NegativeInfinity,
+        interval => Value::Interval(interval),
     }
 }
 
@@ -255,6 +272,38 @@ mod tests {
     fn json_that_is_not_json_or_not_utf8_is_unsupported() {
         assert_eq!(cell(&Type::JSON, b"{\"a\": "), Value::Unsupported);
         assert_eq!(cell(&Type::JSON, b"\"\xff\""), Value::Unsupported);
+    }
+
+    fn interval_bytes(microseconds: i64, days: i32, months: i32) -> Vec<u8> {
+        [&microseconds.to_be_bytes()[..], &days.to_be_bytes(), &months.to_be_bytes()].concat()
+    }
+
+    #[test]
+    fn an_interval_decodes_its_three_parts_apart() {
+        let decoded = cell(&Type::INTERVAL, &interval_bytes(14_706_789_000, 3, 14));
+        assert_eq!(decoded, Value::Interval(Interval { months: 14, days: 3, microseconds: 14_706_789_000 }));
+        assert_eq!(
+            (column_kind(&Type::INTERVAL), decoded.to_string()),
+            (ColumnKind::Interval, "1 year 2 mons 3 days 04:05:06.789".to_owned())
+        );
+    }
+
+    #[test]
+    fn infinite_intervals_decode_as_infinity() {
+        assert_eq!(cell(&Type::INTERVAL, &interval_bytes(i64::MAX, i32::MAX, i32::MAX)), Value::Infinity);
+        assert_eq!(cell(&Type::INTERVAL, &interval_bytes(i64::MIN, i32::MIN, i32::MIN)), Value::NegativeInfinity);
+    }
+
+    #[test]
+    fn a_truncated_interval_is_unsupported() {
+        assert_eq!(cell(&Type::INTERVAL, &[0; 12]), Value::Unsupported);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn an_interval_reads_as_the_server_prints_it() {
+        let read = crate::fixtures::run(crate::connection::WritePolicy::ReadOnly, "SELECT interval '1 year 2 mons 3 days 04:05:06.789'");
+        assert_eq!(read.await.unwrap().rows()[0][0].to_string(), "1 year 2 mons 3 days 04:05:06.789");
     }
 
     #[test]

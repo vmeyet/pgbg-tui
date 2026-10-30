@@ -110,11 +110,11 @@ fn cell(value: &Value, format: Format, clock: &Clock, width: usize) -> String {
     if render::width(&text) <= width { text } else { truncate(&text, width) }
 }
 
-/// `text`, which fits `width`, in `ink` at `at`: numbers on the right, so their digits line up, and other values on the
+/// `text`, which fits `width`, in `ink` at `at`: amounts on the right, so their digits line up, and other values on the
 /// left.
 fn draw_aligned(buffer: &mut Buffer, at: Position, width: u16, column: &Column, text: &str, ink: Ink, theme: &Theme) {
     let padding = usize::from(width).saturating_sub(render::width(text));
-    let x = if column.kind.is_number() { at.x + u16::try_from(padding).unwrap_or(0) } else { at.x };
+    let x = if column.kind.is_amount() { at.x + u16::try_from(padding).unwrap_or(0) } else { at.x };
     draw_inked(buffer, Position { x, y: at.y }, text, ink, theme);
 }
 
@@ -152,7 +152,7 @@ mod tests {
     use super::super::app::Grid;
     use super::super::styled;
     use super::*;
-    use crate::db::model::{ColumnKind, JsonText};
+    use crate::db::model::{ColumnKind, Interval, JsonText};
     use crate::fixtures::{column, orders, shop_column};
     use crate::keys::Keys;
     use ratatui::Terminal;
@@ -296,6 +296,30 @@ mod tests {
     #[test]
     fn a_timestamp_dims_its_time_after_its_date() {
         insta::assert_snapshot!("timestamp", coloured(ColumnKind::TimestampTz, vec![Value::TimestampTz(at("2026-07-14T09:30:00Z"))], 30));
+    }
+
+    fn intervals() -> ResultSet {
+        let waited = |months, days, microseconds| vec![Value::Interval(Interval { months, days, microseconds })];
+        let rows =
+            vec![waited(14, 3, 14_706_789_000), waited(0, 0, 9_000_000_000), waited(1, -2, 0), waited(0, 0, -1_000_000), waited(0, 0, 0)];
+        ResultSet::whole(vec![column("waited", ColumnKind::Interval)], rows)
+    }
+
+    #[test]
+    fn an_interval_aligns_right_dims_its_time_after_its_days_and_is_red_below_zero() {
+        let result = intervals();
+        let mut grid = Grid::raw(&result);
+        grid.row = usize::MAX;
+        insta::assert_snapshot!("interval_raw", styled::runs(render(&result, &grid, 40, 6).backend().buffer()));
+    }
+
+    #[test]
+    fn an_interval_reads_as_a_duration_when_readable() {
+        let result = intervals();
+        let clock = Clock { now: at("2026-07-14T12:00:00Z"), zone: chrono::Local };
+        let mut grid = Grid::new(&result, vec![Format::Duration], vec![], &clock);
+        grid.row = usize::MAX;
+        insta::assert_snapshot!("interval_duration", styled::runs(render(&result, &grid, 40, 6).backend().buffer()));
     }
 
     #[test]

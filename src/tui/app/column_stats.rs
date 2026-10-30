@@ -4,6 +4,7 @@
 use super::{Action, App, Overlay, Run};
 use crate::act::{self, Act, Pane};
 use crate::db::model::{ColumnName, ResultSet, Value};
+use crate::format::Format;
 use crossterm::event::KeyEvent;
 use std::cmp::Ordering;
 
@@ -21,6 +22,8 @@ pub(in crate::tui) struct Counted {
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::tui) struct ColumnStats {
     pub(in crate::tui) column: ColumnName,
+    /// The format the column read in on the grid, which its values show in.
+    pub(in crate::tui) format: Format,
     /// The rows loaded, which the figures are counted over.
     pub(in crate::tui) rows: usize,
     pub(in crate::tui) distinct: usize,
@@ -33,8 +36,8 @@ pub(in crate::tui) struct ColumnStats {
 
 impl ColumnStats {
     /// The figures of the column at `column` of `result`, its values compared as their type does: numbers as numbers,
-    /// times as times.
-    pub(in crate::tui) fn of(result: &ResultSet, column: usize) -> Self {
+    /// times as times; they show in `format`.
+    pub(in crate::tui) fn of(result: &ResultSet, column: usize, format: Format) -> Self {
         let value_of = |row: usize| &result.rows()[row][column];
         let mut sorted: Vec<usize> = (0..result.rows().len()).filter(|&row| *value_of(row) != Value::Null).collect();
         sorted.sort_by(|&a, &b| value_of(a).compare(value_of(b)));
@@ -43,6 +46,7 @@ impl ColumnStats {
         by_rows.sort_by_key(|run| std::cmp::Reverse(run.len()));
         Self {
             column: result.columns()[column].name.clone(),
+            format,
             rows: result.rows().len(),
             distinct: runs.len(),
             nulls: result.rows().len() - sorted.len(),
@@ -62,7 +66,7 @@ impl App {
         }
         let Run::Done { result, grid, .. } = &self.sheet().run else { return };
         if grid.column < result.columns().len() {
-            self.overlay = Some(Overlay::ColumnStats(Box::new(ColumnStats::of(result, grid.column))));
+            self.overlay = Some(Overlay::ColumnStats(Box::new(ColumnStats::of(result, grid.column, grid.formats[grid.column]))));
         }
     }
 
@@ -86,7 +90,11 @@ mod tests {
     use crossterm::event::KeyCode;
 
     fn stats(kind: ColumnKind, values: Vec<Value>) -> ColumnStats {
-        ColumnStats::of(&ResultSet::whole(vec![column("status", kind)], values.into_iter().map(|value| vec![value]).collect()), 0)
+        ColumnStats::of(
+            &ResultSet::whole(vec![column("status", kind)], values.into_iter().map(|value| vec![value]).collect()),
+            0,
+            Format::Raw,
+        )
     }
 
     fn texts(texts: &[&str]) -> Vec<Value> {
@@ -160,7 +168,7 @@ mod tests {
         fn the_figures_of_ten_thousand_rows_stay_within_the_budget() {
             let rows = (0..10_000).map(|n| vec![Value::Text(format!("customer {}", n % 1_000).into())]).collect();
             let result = ResultSet::whole(vec![column("customer", ColumnKind::Text)], rows);
-            let took = best_of(|| ColumnStats::of(&result, 0));
+            let took = best_of(|| ColumnStats::of(&result, 0, Format::Raw));
             assert!(took < BUDGET, "took {took:?}");
         }
     }

@@ -24,9 +24,15 @@ pub(super) fn ink(text: &str, value: &Value, colouring: Colouring, theme: &Theme
         Value::Text(value) if colouring == Colouring::PerText => Ink::Whole(fg(theme.user(value))),
         Value::Uuid(_) => split(text, text.char_indices().nth(SHORT_UUID_DIGITS).map(|(at, _)| at), theme),
         Value::Timestamp(_) | Value::TimestampTz(_) if colouring == Colouring::DateTime => split(text, text.find(' '), theme),
+        Value::Interval(_) if colouring == Colouring::DateTime => split(text, time_of_day_at(text), theme),
         Value::Json(_) => Ink::Json,
         _ => Ink::Whole(Style::default()),
     }
+}
+
+/// Where the time of a raw interval's text starts after its days, `1 day 04:05:06`; none when it has no days or no time.
+fn time_of_day_at(text: &str) -> Option<usize> {
+    text.rfind(' ').filter(|&at| text[at..].contains(':'))
 }
 
 /// `text` as it is up to byte `at`, dimmed from there; whole when there is no `at`.
@@ -42,6 +48,7 @@ fn is_negative(value: &Value) -> bool {
         Value::Int(int) => *int < 0,
         Value::Float(float) => *float < 0.0,
         Value::Numeric(text) => text.starts_with('-'),
+        Value::Interval(interval) => interval.is_negative(),
         _ => false,
     }
 }
@@ -79,6 +86,20 @@ mod tests {
     fn a_negative_number_takes_the_failure_colour() {
         let negatives = [Value::Int(-3), Value::Float(-0.5), Value::Numeric("-12.50".into())];
         assert!(negatives.iter().all(|value| ink("-", value, Colouring::Plain, &theme()) == whole(theme().danger)));
+    }
+
+    #[test]
+    fn an_interval_shorter_than_nothing_takes_the_failure_colour() {
+        let interval = Value::Interval(crate::db::model::Interval { months: 0, days: 1, microseconds: -90_000_000_000 });
+        assert_eq!(ink("1 day -25:00:00", &interval, Colouring::DateTime, &theme()), whole(theme().danger));
+    }
+
+    #[test]
+    fn an_interval_dims_its_time_after_its_days_and_a_time_alone_stays_plain() {
+        let interval = Value::Interval(crate::db::model::Interval { months: 0, days: 3, microseconds: 1 });
+        let expected = Ink::Split { at: 6, head: Style::default(), tail: Style::default().fg(theme().muted) };
+        assert_eq!(ink("3 days 00:00:00.000001", &interval, Colouring::DateTime, &theme()), expected);
+        assert_eq!(ink("00:00:01", &interval, Colouring::DateTime, &theme()), Ink::Whole(Style::default()));
     }
 
     #[test]
