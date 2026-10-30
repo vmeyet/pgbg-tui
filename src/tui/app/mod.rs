@@ -375,10 +375,16 @@ impl App {
         self.and_the_schema_shown(actions)
     }
 
-    /// Takes what the session `session` of `connection` said: the rest to that sheet while the session is still its
-    /// own, dropped after; a lookup's rows to the detail its `LookId` names, as a failure once the sheet left the
-    /// session, so a lookup always ends.
+    /// Takes what the session `session` of `connection` said: the count of the write waiting for its `y` to that
+    /// question, whatever the session; a lookup's rows to the detail its `LookId` names, as a failure once the sheet
+    /// left the session, so a lookup always ends; the rest to that sheet while the session is still its own.
     fn take_session_answer(&mut self, connection: &ConnectionName, session: SessionId, incoming: Incoming) -> Vec<Action> {
+        if let Incoming::LookedUp { look, rows } = &incoming
+            && self.is_counting(*look)
+        {
+            self.rows_counted(rows);
+            return vec![];
+        }
         let is_its_session = self.sheet_of(connection).is_some_and(|sheet| sheet.session_id == session);
         if let Incoming::LookedUp { look, rows } = incoming {
             let rows = if is_its_session { rows } else { Err(Failure::StoppedWithItsSession) };

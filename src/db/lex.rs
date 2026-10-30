@@ -121,6 +121,15 @@ pub(crate) fn tokens(sql: &str) -> Vec<Placed> {
     Lexed::of(sql).tokens
 }
 
+/// `sql` with each comment turned into as many spaces as it has bytes, so a slice of it never ends inside one.
+pub(crate) fn blank_comments(sql: &str) -> String {
+    let mut blanked = sql.to_owned();
+    for lexeme in lexemes(sql).into_iter().filter(|lexeme| matches!(lexeme.kind, Kind::Comment | Kind::LineComment)) {
+        blanked.replace_range(lexeme.range.clone(), &" ".repeat(lexeme.range.len()));
+    }
+    blanked
+}
+
 /// The lexemes of `sql`; a helper returns `None` when its literal or comment is never closed.
 fn lexemes(sql: &str) -> Vec<Lexeme> {
     let mut lexemes = vec![];
@@ -301,6 +310,12 @@ fn after_dollar(rest: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blanking_comments_keeps_every_other_byte_in_place() {
+        let sql = "SELECT 'a -- b' -- é\n/* c */ FROM orders";
+        assert_eq!(blank_comments(sql), "SELECT 'a -- b'      \n        FROM orders");
+    }
 
     #[test]
     fn each_token_spans_its_bytes() {

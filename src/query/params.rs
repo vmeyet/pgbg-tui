@@ -111,6 +111,11 @@ impl Given {
         }
         Ok(Self { values, from_file })
     }
+
+    fn only(&self, names: &[ParamName]) -> Self {
+        let values = self.values.iter().filter(|(name, _)| names.contains(name)).map(|(name, value)| (name.clone(), value.clone()));
+        Self { values: values.collect(), from_file: self.from_file.clone() }
+    }
 }
 
 /// The `name=value` of each line of `text`, blank lines left out; a line that is none fails with its number only.
@@ -135,6 +140,13 @@ pub(crate) fn fill(template: &Statement, given: &Given, specs: &[ParamSpec]) -> 
     let values = names.iter().zip(&specs).map(|(name, spec)| value_of(given, name, *spec)).collect::<Result<_, _>>()?;
     let types = specs.iter().map(|spec| spec.and_then(|spec| spec.type_name.clone())).collect();
     Ok(Filled { statement: Statement::new(Numbering::of(&placed, &names).apply(text)), params: Params::new(values, types) })
+}
+
+/// `fill` for a statement cut out of the template the values were given for: a value whose name the cut left out is
+/// dropped, not refused as unknown.
+pub(crate) fn fill_cut(cut: &Statement, given: &Given, specs: &[ParamSpec]) -> Result<Filled, ParamError> {
+    let kept = distinct(&named_params(cut.as_str())?);
+    fill(cut, &given.only(&kept), specs)
 }
 
 /// How `fill` numbers `template`'s `{{name}}`; an empty numbering when it cannot read them.
@@ -362,6 +374,13 @@ mod tests {
 
     fn name(name: &str) -> ParamName {
         name.parse().unwrap()
+    }
+
+    #[test]
+    fn a_cut_of_a_statement_takes_only_the_values_of_the_names_it_kept() {
+        let cut = fill_cut(&Statement::new("SELECT FROM orders WHERE id = {{id}}"), &given(&["status=void", "id=7"]), &[]).unwrap();
+        assert_eq!(cut.statement.as_str(), "SELECT FROM orders WHERE id = $1");
+        assert_eq!(cut.params.len(), 1);
     }
 
     #[test]

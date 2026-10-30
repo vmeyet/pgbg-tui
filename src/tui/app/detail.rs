@@ -344,7 +344,7 @@ impl App {
         (Detail { waiting: Some(Waiting { look, lookup, hop }), ..detail }, vec![action])
     }
 
-    fn new_look(&mut self) -> LookId {
+    pub(super) fn new_look(&mut self) -> LookId {
         let look = self.next_look;
         self.next_look = look.next();
         look

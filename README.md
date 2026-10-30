@@ -154,6 +154,7 @@ Four layers stand between you and a write, outermost first:
 
 On a connection that allows writes, each write asks first; `BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT` and cursor statements do not, but `COMMIT PREPARED` and `ROLLBACK PREPARED` do.
 The TUI's footer names it, such as `DELETE from orders?`: `y` sends it, any other key drops it.
+In the TUI, an `UPDATE` or `DELETE` also says how many rows it would touch, such as `DELETE from orders? 42 rows`: a read of its `WHERE` counts them, read only and within 2 s, so the write never runs before your `y`.
 A write hidden in a read, as a function that writes or `setval`, keeps nothing at first, then asks `this statement tried to write, and may run twice: run it?`.
 What a read-only transaction does not stop, as `dblink_exec` or `pg_advisory_lock`, has already run once, so a `y` runs it a second time.
 `pgbg run` asks `y/N` on the terminal; with no terminal, it refuses the write unless you pass `--yes`.
