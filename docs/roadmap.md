@@ -51,8 +51,8 @@ The review of #194 to #208 found these, most severe first; real use of the AI as
 - [x] A version whose text holds a secret is kept as a note, as the history keeps it
 - [x] The user's own queries folders are made `0700`, as the versions folder is
 - [x] The usage file is merged under the same lock the history takes
-- [ ] Editing in `$EDITOR` keeps the replaced text whatever the editor's exit status
-- [ ] Undo copies the editor's text only when a key changes it, and its doc states the 1 MiB worst case
+- [x] Editing in `$EDITOR` keeps the replaced text whatever the editor's exit status
+- [x] Undo copies the editor's text only when a key changes it, and its doc states the 1 MiB worst case
 - [ ] The usage counts live in pgbg's data folder, and the cache folder follows XDG as the others do
 - [ ] pgbg warns once when a config or history sits in the old macOS folder, and says where to move it
 - [ ] One private-folder helper and one atomic-write helper serve the history, the log, usage, versions and saved queries

@@ -4,7 +4,8 @@
 use std::collections::VecDeque;
 use vtui::field::Field;
 
-/// How many steps undo goes back: each keeps a whole copy of the text, so a 100 kB query costs at most about 10 MB.
+/// How many steps undo goes back: each keeps a whole copy of the text, so a query of the 1 MiB pgbg opens at most holds
+/// about 100 MiB at worst, and a 10 kB one about 1 MB.
 const STEPS_KEPT: usize = 100;
 
 /// What a change to the editor's text was, which says whether it joins the step before.

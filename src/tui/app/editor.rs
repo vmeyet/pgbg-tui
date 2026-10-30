@@ -146,8 +146,13 @@ impl Editor {
         }
     }
 
+    /// Applies `key`; the text is copied for undo only when the key may change it, never for a move.
     pub(super) fn edit(&mut self, key: KeyEvent) -> Edited {
-        self.change(change_of(key), |field| apply(field, key))
+        if move_cursor(&mut self.field, key) {
+            self.undo.end_typing();
+            return Edited::Cursor;
+        }
+        self.change(change_of(key), |field| edit_text(field, key))
     }
 
     /// Inserts `text` at the cursor, cleaned as vtui cleans a paste: line ends become `\n`, tabs become spaces, and other
@@ -250,21 +255,20 @@ fn change_of(key: KeyEvent) -> Change {
 /// Applies `key` to `field` as the editor does: keys that type, delete or move the cursor, those of a shell line
 /// included; `⌥b` `⌥f` are what a macOS terminal sends for `⌥←` `⌥→` unless its option key is set as meta.
 pub(super) fn apply(field: &mut Field, key: KeyEvent) {
+    if !move_cursor(field, key) {
+        edit_text(field, key);
+    }
+}
+
+/// Moves the cursor of `field` as `key` says; false when `key` is not a move, and then `field` is as it was.
+fn move_cursor(field: &mut Field, key: KeyEvent) -> bool {
     let alt = key.modifiers.contains(KeyModifiers::ALT);
     let control = key.modifiers.contains(KeyModifiers::CONTROL);
     match key.code {
-        KeyCode::Enter => field.insert('\n'),
-        KeyCode::Char('w') if control => field.delete_word(),
         KeyCode::Char('a') if control => field.line_start(),
         KeyCode::Char('e') if control => field.line_end(),
-        KeyCode::Char('k') if control => field.delete_to_line_end(),
-        KeyCode::Char('u') if control => field.delete_to_line_start(),
         KeyCode::Char('b') if alt => field.word_left(),
         KeyCode::Char('f') if alt => field.word_right(),
-        KeyCode::Char(c) if !control => field.insert(c),
-        KeyCode::Backspace if alt => field.delete_word(),
-        KeyCode::Backspace => field.backspace(),
-        KeyCode::Delete => field.delete(),
         KeyCode::Left if alt => field.word_left(),
         KeyCode::Right if alt => field.word_right(),
         KeyCode::Left => field.left(),
@@ -273,6 +277,24 @@ pub(super) fn apply(field: &mut Field, key: KeyEvent) {
         KeyCode::Down => field.down(),
         KeyCode::Home => field.start(),
         KeyCode::End => field.end(),
+        _ => return false,
+    }
+    true
+}
+
+/// Applies a `key` that is not a move: it types or deletes, or does nothing.
+fn edit_text(field: &mut Field, key: KeyEvent) {
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    let control = key.modifiers.contains(KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Enter => field.insert('\n'),
+        KeyCode::Char('w') if control => field.delete_word(),
+        KeyCode::Char('k') if control => field.delete_to_line_end(),
+        KeyCode::Char('u') if control => field.delete_to_line_start(),
+        KeyCode::Char(c) if !control => field.insert(c),
+        KeyCode::Backspace if alt => field.delete_word(),
+        KeyCode::Backspace => field.backspace(),
+        KeyCode::Delete => field.delete(),
         _ => {}
     }
 }
@@ -430,6 +452,48 @@ mod tests {
         assert_eq!(shown(&app.sheet().editor), "SELECT id\n|FROM orders");
         control(&mut app, 'e');
         assert_eq!(shown(&app.sheet().editor), "SELECT id\nFROM orders|");
+    }
+
+    #[test]
+    fn each_key_that_only_moves_the_cursor_is_a_move() {
+        let (alt, control) = (KeyModifiers::ALT, KeyModifiers::CONTROL);
+        let moves = [
+            KeyEvent::from(KeyCode::Left),
+            KeyEvent::from(KeyCode::Right),
+            KeyEvent::from(KeyCode::Up),
+            KeyEvent::from(KeyCode::Down),
+            KeyEvent::from(KeyCode::Home),
+            KeyEvent::from(KeyCode::End),
+            with(KeyCode::Left, alt),
+            with(KeyCode::Right, alt),
+            with(KeyCode::Char('b'), alt),
+            with(KeyCode::Char('f'), alt),
+            with(KeyCode::Char('a'), control),
+            with(KeyCode::Char('e'), control),
+        ];
+        for key in moves {
+            let mut field = Field::new("SELECT id\nFROM orders");
+            assert!(move_cursor(&mut field, key), "{key:?}");
+            assert_eq!(field.text(), "SELECT id\nFROM orders", "{key:?}");
+        }
+    }
+
+    #[test]
+    fn a_key_that_types_or_deletes_is_not_a_move() {
+        let (alt, control) = (KeyModifiers::ALT, KeyModifiers::CONTROL);
+        let edits = [
+            KeyEvent::from(KeyCode::Char('x')),
+            KeyEvent::from(KeyCode::Enter),
+            KeyEvent::from(KeyCode::Backspace),
+            KeyEvent::from(KeyCode::Delete),
+            with(KeyCode::Backspace, alt),
+            with(KeyCode::Char('w'), control),
+            with(KeyCode::Char('k'), control),
+            with(KeyCode::Char('u'), control),
+        ];
+        for key in edits {
+            assert!(!move_cursor(&mut Field::new("SELECT id"), key), "{key:?}");
+        }
     }
 
     #[test]
