@@ -38,11 +38,11 @@ struct Parts {
 /// The read that counts the rows `write` would touch, its `{{name}}` kept as they are; none for a write it cannot read
 /// that way.
 pub(crate) fn count_of(write: &Statement) -> Option<Statement> {
-    let sql = write.as_str();
+    let sql = &lex::blank_comments(write.as_str());
     let tokens = lex::tokens(sql);
     let end = tokens.iter().find(|placed| placed.token == Token::End).map_or(sql.len(), |placed| placed.range.start);
     let parts = parts(&top_words(sql, &tokens), end)?;
-    Some(Statement::new(count_text(sql, &parts)))
+    Some(Statement::new(count_text(sql, &tokens, &parts)))
 }
 
 fn top_words(sql: &str, tokens: &[Placed]) -> Vec<TopWord> {
@@ -109,18 +109,29 @@ fn opens_current_of(words: &[TopWord]) -> bool {
     matches!(words, [current, of, ..] if current.word == "CURRENT" && of.word == "OF")
 }
 
-/// `SELECT count(*)` of the rows of the target that the condition picks, among the joined tables when there are some,
-/// each row once, as a write touches it once.
-fn count_text(sql: &str, parts: &Parts) -> String {
+/// `SELECT count(*)` of the rows of the target that the condition picks, each row once, as a write touches it once.
+/// Joined to other tables, the rows come out by their place (`tableoid`, `ctid`) from the same `FROM` and `WHERE` the
+/// write reads, so each name binds as it does in the write, and fails as it does.
+fn count_text(sql: &str, tokens: &[Placed], parts: &Parts) -> String {
     let text = |range: &Range<usize>| sql[range.clone()].trim();
-    let condition = parts.condition.as_ref().map(text);
-    let picked = match (&parts.joined, condition) {
-        (Some(joined), Some(condition)) => Some(format!("EXISTS (SELECT FROM {} WHERE {condition})", text(joined))),
-        (Some(joined), None) => Some(format!("EXISTS (SELECT FROM {})", text(joined))),
-        (None, condition) => condition.map(str::to_owned),
+    let target = text(&parts.target);
+    let rows = match &parts.joined {
+        Some(joined) => {
+            let named = row_name(sql, tokens, &parts.target);
+            format!("DISTINCT {named}.tableoid, {named}.ctid FROM {target}, {}", text(joined))
+        }
+        None => format!("FROM {target}"),
     };
-    let filter = picked.map_or_else(String::new, |picked| format!(" WHERE {picked}"));
-    format!("SELECT count(*) FROM (SELECT FROM {}{filter} LIMIT {}) AS touched", text(&parts.target), COUNTED_ROWS + 1)
+    let filter = parts.condition.as_ref().map_or_else(String::new, |condition| format!(" WHERE {}", text(condition)));
+    format!("SELECT count(*) FROM (SELECT {rows}{filter} LIMIT {}) AS touched", COUNTED_ROWS + 1)
+}
+
+/// The name a column of the target is qualified with: its alias, else its table's name without its schema; the last
+/// name among its tokens either way, past an inheritance `*`.
+fn row_name<'a>(sql: &'a str, tokens: &[Placed], target: &Range<usize>) -> &'a str {
+    let is_name = |placed: &Placed| placed.token == Token::Word || sql[placed.range.clone()].starts_with('"');
+    let last = tokens.iter().rfind(|placed| target.contains(&placed.range.start) && is_name(placed));
+    last.map_or("", |placed| &sql[placed.range.clone()])
 }
 
 impl Touched {
@@ -156,10 +167,10 @@ mod tests {
         count_of(&Statement::new(write)).map(|read| read.as_str().to_owned())
     }
 
-    /// What the count of `write` reads its rows from: the text between `SELECT FROM` and its cap.
+    /// What the count of `write` reads its rows from: the text between `SELECT` and its cap.
     fn picked(write: &str) -> Option<String> {
         let read = count(write)?;
-        Some(read.strip_prefix("SELECT count(*) FROM (SELECT FROM ")?.strip_suffix(" LIMIT 10001) AS touched")?.to_owned())
+        Some(read.strip_prefix("SELECT count(*) FROM (SELECT ")?.strip_suffix(" LIMIT 10001) AS touched")?.to_owned())
     }
 
     fn counted(rows: i64) -> ResultSet {
@@ -174,32 +185,41 @@ mod tests {
 
     #[test]
     fn a_delete_without_where_counts_every_row() {
-        assert_eq!(picked("delete from only shop.orders o").as_deref(), Some("only shop.orders o"));
+        assert_eq!(picked("delete from only shop.orders o").as_deref(), Some("FROM only shop.orders o"));
     }
 
     #[test]
     fn an_update_leaves_its_set_and_its_returning_out() {
         let write = "UPDATE orders AS o SET total = (SELECT max(total) FROM orders) WHERE id = {{id}} RETURNING *";
-        assert_eq!(picked(write).as_deref(), Some("orders AS o WHERE id = {{id}}"));
+        assert_eq!(picked(write).as_deref(), Some("FROM orders AS o WHERE id = {{id}}"));
     }
 
     #[test]
     fn a_write_joining_other_tables_counts_each_row_of_its_own_once() {
         let write = "UPDATE orders o SET status = 'void' FROM customers c WHERE c.id = o.customer_id";
-        assert_eq!(picked(write).as_deref(), Some("orders o WHERE EXISTS (SELECT FROM customers c WHERE c.id = o.customer_id)"));
-        let write = "DELETE FROM orders USING customers;";
-        assert_eq!(picked(write).as_deref(), Some("orders WHERE EXISTS (SELECT FROM customers)"));
+        assert_eq!(picked(write).as_deref(), Some("DISTINCT o.tableoid, o.ctid FROM orders o, customers c WHERE c.id = o.customer_id"));
+    }
+
+    #[test]
+    fn a_joining_write_without_alias_names_its_rows_by_its_table() {
+        let write = "DELETE FROM only shop.\"Orders\" USING customers;";
+        assert_eq!(picked(write).as_deref(), Some("DISTINCT \"Orders\".tableoid, \"Orders\".ctid FROM only shop.\"Orders\", customers"));
+    }
+
+    #[test]
+    fn a_line_comment_at_the_end_of_a_part_leaves_the_rest_of_the_count_alone() {
+        assert_eq!(picked("DELETE FROM orders -- all of them\nWHERE id = 7 -- the bad one").as_deref(), Some("FROM orders WHERE id = 7"));
     }
 
     #[test]
     fn a_distinct_from_in_a_set_is_no_join() {
         let write = "UPDATE orders SET is_changed = total IS DISTINCT FROM paid WHERE id = 7";
-        assert_eq!(picked(write).as_deref(), Some("orders WHERE id = 7"));
+        assert_eq!(picked(write).as_deref(), Some("FROM orders WHERE id = 7"));
     }
 
     #[test]
     fn a_column_named_current_is_no_cursor() {
-        assert_eq!(picked("DELETE FROM orders WHERE current = 1").as_deref(), Some("orders WHERE current = 1"));
+        assert_eq!(picked("DELETE FROM orders WHERE current = 1").as_deref(), Some("FROM orders WHERE current = 1"));
     }
 
     #[test]
@@ -257,6 +277,17 @@ mod tests {
             .unwrap();
         let write = "UPDATE pgbg_preview_orders o SET id = id FROM pgbg_preview_items i WHERE i.order_id = o.id";
         assert_eq!(counted_on_the_server(write).await.unwrap(), Some(Touched::Rows(2)));
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_count_fails_on_a_column_the_write_finds_ambiguous() {
+        run(WritePolicy::Allowed, "DROP TABLE IF EXISTS pgbg_preview_lines, pgbg_preview_carts").await.unwrap();
+        run(WritePolicy::Allowed, "CREATE TABLE pgbg_preview_carts AS SELECT 7 AS id").await.unwrap();
+        run(WritePolicy::Allowed, "CREATE TABLE pgbg_preview_lines AS SELECT 7 AS id, 7 AS cart_id").await.unwrap();
+        let write = "UPDATE pgbg_preview_carts c SET id = 8 FROM pgbg_preview_lines l WHERE id = 7 AND l.cart_id = c.id";
+        let err = counted_on_the_server(write).await.unwrap_err();
+        assert!(err.to_string().contains("ambiguous"), "{err}");
     }
 
     #[tokio::test]
