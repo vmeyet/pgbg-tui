@@ -6,5 +6,5 @@ expression: terminal.backend()
 "│╭ [Queries] Schema ──────────╮╭ Editor · orders/purge.sql ─ WRITES ──────────╮│"
 "││ no saved query yet: ctrl-s │╭ Result ──────────────────────────────────────╮│"
 "│╰────────────────────────────╯╰──────────────────────────────────────────────╯│"
-"│ DELETE from "orders\u{1b}[2K\u{202e}sredro"?  y sends  any other key cancels │"
+"│ DELETE from "orders\u{1b}[2K\u{202e}sredro"? counting rows…  y sends  any oth│"
 "╰──────────────────────────────────────────────────────────────────────────────╯"

@@ -9,10 +9,11 @@ use crate::complete::Index;
 use crate::connection::{Connection, ConnectionName, WritePolicy};
 use crate::db::guard::{self, Write};
 use crate::db::model::{ColumnName, Extent, Page, ResultSet, Statement};
+use crate::db::preview;
 use crate::failure::Failure;
 use crate::format::{self, Format};
-use crate::keys::{self, Keys};
-use crate::query::params::{self, Numbering, ParamInput, ParamName};
+use crate::keys::{self, Keys, Lookup};
+use crate::query::params::{self, Filled, Numbering, ParamInput, ParamName};
 use crate::query::{Header, Query};
 use crossterm::event::KeyEvent;
 use std::ops::Range;
@@ -46,6 +47,16 @@ pub(in crate::tui) struct ToRun {
     statement: Statement,
     start: Option<usize>,
     input: ParamInput,
+}
+
+impl ToRun {
+    /// The read that counts the rows this statement would touch as a write, its parameters bound as the write's would be;
+    /// none when no read can count them.
+    pub(in crate::tui::app) fn count(&self) -> Option<Lookup> {
+        let read = preview::count_of(&self.statement)?;
+        let Filled { statement, params } = params::fill_cut(&read, &self.input.given, &self.input.specs).ok()?;
+        Some(Lookup { statement, params, own_timeout: Some(preview::COUNT_TIMEOUT) })
+    }
 }
 
 /// The state of the session, as the status line shows it.

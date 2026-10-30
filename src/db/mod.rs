@@ -20,6 +20,7 @@ mod limits;
 pub(crate) mod model;
 mod open;
 mod pages;
+pub(crate) mod preview;
 mod read_first;
 mod run;
 mod schema;

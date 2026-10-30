@@ -422,7 +422,8 @@ pub(in crate::tui) mod tests {
         press(&mut app, KeyCode::Enter);
         app.apply(Answer::Asked { ask: AskId::FIRST, answer: Ok(vec![Statement::new("DELETE FROM orders")]) });
         press(&mut app, KeyCode::Tab);
-        assert_eq!(press(&mut app, KeyCode::Enter), []);
+        let asked = press(&mut app, KeyCode::Enter);
+        assert!(!asked.iter().any(|action| matches!(action, Action::Run { .. })), "{asked:?}");
         assert!(matches!(app.overlay(), Some(Overlay::Prompt(_))), "{:?}", app.overlay());
     }
 

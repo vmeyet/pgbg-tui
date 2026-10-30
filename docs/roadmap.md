@@ -101,8 +101,12 @@ The review of #214 to #231 found these, most severe first.
 - [x] A failed referrer count keeps its failure, shown in the detail or logged
 - [x] A double click selects an SQL word (letters, digits, `_`), not everything between two spaces
 
+## 23. Preview a write
+
+- [x] The question before a write says how many rows an `UPDATE` or `DELETE` would touch, counted by a read of its `WHERE`, in the TUI
+- [ ] `pgbg run` says the same count in its `y/N` question
+
 ## Later
 
-- A preview of what a write would change, before its confirmation
 - `update` and the brew check move to vtui, shared by revu, slack and pgbg
 - More chart kinds: a new `ChartKind` variant and one file in `chart/` and `tui/chart_view/`

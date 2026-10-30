@@ -1,5 +1,5 @@
 //! The prompt on the footer line: the path of a new query as it is typed, whether to open a query over unsaved text,
-//! whether to send a write, or the grid's filter.
+//! whether to send a write and how many rows it would touch, or the grid's filter.
 use super::app::{App, Opening, Prompt};
 use crate::act::{self, Pane};
 use crate::render;
@@ -32,10 +32,11 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, prompt: &Prompt, area: Rect) {
             vec![Span::styled(format!(" the editor's text is not saved: {what} over it? "), Style::default().fg(theme.warn))]
         }
         Prompt::SendWrite(waiting) => {
-            vec![Span::styled(
-                format!(" {}? ", render::printable(&waiting.write.to_string())),
-                Style::default().fg(theme.danger).add_modifier(Modifier::BOLD),
-            )]
+            let question = format!(" {}? ", render::printable(&waiting.write.to_string()));
+            let rows = waiting.rows.to_string();
+            let mut spans = vec![Span::styled(question, Style::default().fg(theme.danger).add_modifier(Modifier::BOLD))];
+            spans.extend((!rows.is_empty()).then(|| Span::raw(format!("{} ", render::printable(&rows)))));
+            spans
         }
     };
     draw_with_hints(f, app, spans, prompt.pane(), area);
@@ -60,10 +61,12 @@ fn draw_with_hints(f: &mut Frame<'_>, app: &App, mut spans: Vec<Span<'static>>, 
 
 #[cfg(test)]
 mod tests {
-    use super::super::app::fixtures::{app_on, connection, shop};
+    use super::super::app::fixtures::{app_on, connection, shop, to_shop};
     use super::super::app::queries::tests::query;
-    use super::super::app::{Answer, QueryAnswer};
+    use super::super::app::{Answer, Incoming, LookId, QueryAnswer};
     use super::super::ui;
+    use crate::db::model::{ColumnKind, ResultSet, Value};
+    use crate::fixtures::column;
     use crossterm::event::{KeyCode, KeyEvent};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -77,5 +80,17 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 6)).unwrap();
         terminal.draw(|f| _ = ui::draw(f, &app)).unwrap();
         insta::assert_snapshot!("send_write_escaped", terminal.backend());
+    }
+
+    #[test]
+    fn the_question_says_how_many_rows_the_write_would_touch() {
+        let mut app = app_on(&connection("production", "allowed"));
+        "DELETE FROM orders".chars().for_each(|c| _ = app.handle_key(KeyEvent::from(KeyCode::Char(c))));
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        let counted = ResultSet::whole(vec![column("count", ColumnKind::Int)], vec![vec![Value::Int(1_732)]]);
+        app.apply(to_shop(Incoming::LookedUp { look: LookId::FIRST, rows: Ok(counted) }));
+        let mut terminal = Terminal::new(TestBackend::new(80, 6)).unwrap();
+        terminal.draw(|f| _ = ui::draw(f, &app)).unwrap();
+        insta::assert_snapshot!("send_write_counted", terminal.backend());
     }
 }

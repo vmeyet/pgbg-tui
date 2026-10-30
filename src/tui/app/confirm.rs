@@ -1,13 +1,29 @@
-//! Before a write is sent, the footer line asks for it: `y` sends it, any other key drops it.
+//! Before a write is sent, the footer line asks for it with the count of the rows it would touch: `y` sends it, any
+//! other key drops it.
 use super::sheet::ToRun;
-use super::{Action, App, Overlay, Prompt};
+use super::{Action, App, LookId, Overlay, Prompt};
 use crate::db::guard::Write;
+use crate::db::model::ResultSet;
+use crate::db::preview::Touched;
+use crate::failure::Failure;
+use std::fmt;
 
 /// A statement the guard read as a write, waiting for a `y`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::tui) struct WriteToSend {
     pub(in crate::tui) write: Write,
+    pub(in crate::tui) rows: RowCount,
     to_run: ToRun,
+}
+
+/// The rows a write waiting for a `y` would touch, as far as its count read them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::tui) enum RowCount {
+    /// A write no read can count, or a read that tried to write.
+    NotCounted,
+    Counting(LookId),
+    Counted(Touched),
+    Failed(String),
 }
 
 /// Proof that the user answered `y` to a write: only this module builds one, and the backend runs no write without it.
@@ -26,8 +42,31 @@ impl App {
         let sheet = self.sheet_mut();
         let Some(to_run) = sheet.editor_run().filter(|_| !sheet.is_running()) else { return vec![] };
         let Some(write) = sheet.write_under_cursor() else { return sheet.run(to_run, None) };
-        self.overlay = Some(Overlay::Prompt(Prompt::SendWrite(Box::new(WriteToSend { write, to_run }))));
-        vec![]
+        let (rows, counting) = self.count_rows(&to_run);
+        self.overlay = Some(Overlay::Prompt(Prompt::SendWrite(Box::new(WriteToSend { write, rows, to_run }))));
+        counting
+    }
+
+    /// The count of the rows `to_run` would touch as a write, and the lookup that reads it; none for a write no read
+    /// counts.
+    fn count_rows(&mut self, to_run: &ToRun) -> (RowCount, Vec<Action>) {
+        let Some(lookup) = to_run.count() else { return (RowCount::NotCounted, vec![]) };
+        let look = self.new_look();
+        (RowCount::Counting(look), vec![Action::LookUp { connection: self.sheet().name().clone(), look, lookup }])
+    }
+
+    /// Whether the write waiting for a `y` waits on the count `look` too.
+    pub(super) fn is_counting(&self, look: LookId) -> bool {
+        matches!(&self.overlay, Some(Overlay::Prompt(Prompt::SendWrite(waiting))) if waiting.rows == RowCount::Counting(look))
+    }
+
+    /// Takes the count of the rows the write waiting for a `y` would touch.
+    pub(super) fn rows_counted(&mut self, read: &Result<ResultSet, Failure>) {
+        let Some(Overlay::Prompt(Prompt::SendWrite(waiting))) = &mut self.overlay else { return };
+        waiting.rows = match read {
+            Ok(read) => Touched::read(read).map_or_else(|| RowCount::Failed("it read no number".to_owned()), RowCount::Counted),
+            Err(failure) => RowCount::Failed(failure.to_string()),
+        };
     }
 
     /// Asks for the statement of the sheet on screen that tried to write, once no overlay takes the keys; a sheet off
@@ -37,7 +76,8 @@ impl App {
             return;
         }
         let Some(to_run) = self.sheet_mut().take_tried_to_write() else { return };
-        self.overlay = Some(Overlay::Prompt(Prompt::SendWrite(Box::new(WriteToSend { write: Write::Hidden, to_run }))));
+        self.overlay =
+            Some(Overlay::Prompt(Prompt::SendWrite(Box::new(WriteToSend { write: Write::Hidden, rows: RowCount::NotCounted, to_run }))));
     }
 
     pub(super) fn send_write(&mut self, waiting: WriteToSend) -> Vec<Action> {
@@ -45,14 +85,27 @@ impl App {
     }
 }
 
+impl fmt::Display for RowCount {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotCounted => Ok(()),
+            Self::Counting(_) => f.write_str("counting rows…"),
+            Self::Counted(touched) => touched.fmt(f),
+            Self::Failed(why) => write!(f, "rows not counted: {why}"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::fixtures::{app_on, connection, first_run, shop, to_shop, with_focus};
     use super::super::picker::tests::{on_local, press as picker_press, switch_to};
-    use super::super::{Answer, Focus, Incoming, Run, RunId};
+    use super::super::{Answer, Focus, Incoming, LookId, Run, RunId, SessionId};
     use super::*;
-    use crate::db::model::Statement;
+    use crate::db::model::{ColumnKind, ResultSet, Statement, Value};
+    use crate::db::preview::COUNT_TIMEOUT;
     use crate::failure::Failure;
+    use crate::fixtures::column;
     use crate::query::params::Given;
     use crossterm::event::{KeyCode, KeyEvent};
 
@@ -73,10 +126,79 @@ mod tests {
         }
     }
 
+    fn rows_said(app: &App) -> Option<String> {
+        match &app.overlay {
+            Some(Overlay::Prompt(Prompt::SendWrite(waiting))) => Some(waiting.rows.to_string()),
+            _ => None,
+        }
+    }
+
+    fn count_read(rows: Result<ResultSet, Failure>) -> Answer {
+        to_shop(Incoming::LookedUp { look: LookId::FIRST, rows })
+    }
+
+    fn counted(rows: i64) -> ResultSet {
+        ResultSet::whole(vec![column("count", ColumnKind::Int)], vec![vec![Value::Int(rows)]])
+    }
+
+    #[test]
+    fn a_write_counts_the_rows_it_would_touch_while_it_waits_for_y() {
+        let mut app = with_focus(typed_on("allowed", "DELETE FROM orders WHERE id = {{id}}"), Focus::Params);
+        press(&mut app, KeyCode::Char('7'));
+        let asked = press(&mut app, KeyCode::Enter);
+        let [Action::LookUp { look: LookId::FIRST, lookup, .. }] = &*asked else { panic!("no count: {asked:?}") };
+        assert_eq!(lookup.statement.as_str(), "SELECT count(*) FROM (SELECT FROM orders WHERE id = $1 LIMIT 10001) AS touched");
+        assert_eq!((lookup.params.len(), lookup.own_timeout), (1, Some(COUNT_TIMEOUT)));
+        assert_eq!(rows_said(&app).as_deref(), Some("counting rows…"));
+    }
+
+    #[test]
+    fn the_question_says_how_many_rows_the_write_would_touch() {
+        let mut app = typed_on("allowed", "DELETE FROM orders");
+        press(&mut app, KeyCode::Enter);
+        app.apply(count_read(Ok(counted(42))));
+        assert_eq!(rows_said(&app).as_deref(), Some("42 rows"));
+    }
+
+    #[test]
+    fn a_count_answered_on_a_session_the_sheet_left_still_reaches_the_question() {
+        let mut app = typed_on("allowed", "DELETE FROM orders");
+        press(&mut app, KeyCode::Enter);
+        let incoming = Incoming::LookedUp { look: LookId::FIRST, rows: Ok(counted(42)) };
+        app.apply(Answer::Session { connection: shop(), session: SessionId::FIRST.next(), incoming });
+        assert_eq!(rows_said(&app).as_deref(), Some("42 rows"));
+    }
+
+    #[test]
+    fn a_count_that_failed_says_why_and_still_lets_y_send_the_write() {
+        let mut app = typed_on("allowed", "DELETE FROM orders");
+        press(&mut app, KeyCode::Enter);
+        app.apply(count_read(Err(Failure::Refused("too slow".to_owned()))));
+        assert!(rows_said(&app).is_some_and(|said| said.starts_with("rows not counted: ")), "{:?}", rows_said(&app));
+        assert!(matches!(&*press(&mut app, KeyCode::Char('y')), [Action::Run { confirmed: Some(_), .. }]));
+    }
+
+    #[test]
+    fn a_write_the_count_cannot_read_asks_without_counting() {
+        let mut app = typed_on("allowed", "TRUNCATE orders");
+        assert_eq!(press(&mut app, KeyCode::Enter), []);
+        assert_eq!(rows_said(&app).as_deref(), Some(""));
+    }
+
+    #[test]
+    fn a_count_read_once_the_question_closed_changes_nothing() {
+        let mut app = typed_on("allowed", "DELETE FROM orders");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('n'));
+        assert_eq!(app.apply(count_read(Ok(counted(42)))), []);
+        assert_eq!(app.overlay, None);
+    }
+
     #[test]
     fn a_write_waits_for_y_before_it_is_sent() {
         let mut app = typed_on("allowed", "DELETE FROM orders");
-        assert_eq!(press(&mut app, KeyCode::Enter), []);
+        let asked = press(&mut app, KeyCode::Enter);
+        assert!(!asked.iter().any(|action| matches!(action, Action::Run { .. })), "{asked:?}");
         assert_eq!(app.sheet().run, Run::Idle);
         let sent = press(&mut app, KeyCode::Char('y'));
         assert!(matches!(&*sent, [Action::Run { confirmed: Some(Confirmed(())), .. }]), "{sent:?}");
@@ -190,7 +312,7 @@ mod tests {
     fn enter_in_the_parameter_bar_asks_too() {
         let mut app = with_focus(typed_on("allowed", "DELETE FROM orders WHERE id = {{id}}"), Focus::Params);
         press(&mut app, KeyCode::Char('7'));
-        assert_eq!(press(&mut app, KeyCode::Enter), []);
+        press(&mut app, KeyCode::Enter);
         assert_eq!(asked(&app).as_deref(), Some("DELETE from orders"));
         let sent = press(&mut app, KeyCode::Char('y'));
         assert!(matches!(&*sent, [Action::Run { input, .. }] if input.given != Given::default()), "{sent:?}");

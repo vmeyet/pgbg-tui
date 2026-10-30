@@ -6,6 +6,11 @@ Each entry says what changed, then where, then how to use it.
 
 ## Unreleased
 
+### New
+
+- **The question before a write says how many rows it would touch**, in the TUI, for an `UPDATE` or a `DELETE` on a connection that allows writes: the footer reads `DELETE from orders? 42 rows` while it waits for `y`.
+  The count is a read of the same `WHERE`, run read only and rolled back within 2 s, so the write itself never runs before `y`; past 10 000 rows it says `more than 10 000 rows`.
+
 ### Fixed
 
 - **`s` and `i` refuse a column pgbg cannot decode**, in the TUI's result grid: the status line says so, where `i` counted all its values as one.
