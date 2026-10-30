@@ -1,4 +1,4 @@
-//! The keys under a vtui palette popup, cut to whole hints that fit its width.
+//! The keys under a popup, `⏎ opens · esc closes`, cut to whole hints that fit its width.
 use crate::act::{self, Hint, Pane};
 use ratatui::layout::Rect;
 
@@ -7,10 +7,14 @@ const SEPARATOR: &str = " · ";
 
 /// The footer of a palette over `screen` while `pane` has the keys: `  ↑↓ pick · ⏎ opens · esc closes`.
 pub(super) fn text(pane: Pane, screen: Rect) -> String {
-    let room = popup_inner_width(screen).saturating_sub(INDENT.len()) + SEPARATOR.chars().count();
+    format!("{INDENT}{}", fitted(pane, popup_inner_width(screen).saturating_sub(INDENT.len())))
+}
+
+/// The hints of `pane` that fit in `columns`, joined by ` · `, the way out kept longest.
+pub(super) fn fitted(pane: Pane, columns: usize) -> String {
+    let room = columns + SEPARATOR.chars().count();
     let width = |hint: Hint| written(hint).chars().count() + SEPARATOR.chars().count();
-    let hints: Vec<String> = act::footer_within(pane, room, width).into_iter().map(written).collect();
-    format!("{INDENT}{}", hints.join(SEPARATOR))
+    act::footer_within(pane, room, width).into_iter().map(written).collect::<Vec<_>>().join(SEPARATOR)
 }
 
 fn written(hint: Hint) -> String {
