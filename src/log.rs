@@ -1,8 +1,9 @@
 //! The log file, `pgbg.log` in pgbg's cache folder; never the terminal, which the TUI owns.
 //! `PGBG_LOG` sets the level. A line never holds a secret or a row.
-use std::fs::{DirBuilder, File, OpenOptions};
+use crate::files;
+use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 use tracing::level_filters::LevelFilter;
 
@@ -11,7 +12,6 @@ const ROLLED_FILE: &str = "pgbg.log.1";
 const LEVEL: &str = "PGBG_LOG";
 const DEFAULT_LEVEL: LevelFilter = LevelFilter::WARN;
 const MAX_BYTES: u64 = 2 * 1024 * 1024;
-const DIR_MODE: u32 = 0o700;
 const FILE_MODE: u32 = 0o600;
 
 /// Logs to the file for the rest of the process; a file that cannot open leaves pgbg unlogged, not stopped.
@@ -36,7 +36,7 @@ struct Rolling {
 
 impl Rolling {
     fn open(dir: PathBuf, max: u64) -> std::io::Result<Self> {
-        DirBuilder::new().recursive(true).mode(DIR_MODE).create(&dir)?;
+        files::make_private_dir(&dir)?;
         let path = dir.join(FILE);
         if std::fs::metadata(&path).is_ok_and(|m| m.len() > max) {
             std::fs::rename(&path, dir.join(ROLLED_FILE))?;
@@ -114,7 +114,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         Rolling::open(dir.path().join("pgbg"), 8).unwrap();
         let mode = |path: PathBuf| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode(dir.path().join("pgbg")), DIR_MODE);
+        assert_eq!(mode(dir.path().join("pgbg")), 0o700);
         assert_eq!(mode(dir.path().join("pgbg").join(FILE)), FILE_MODE);
     }
 }

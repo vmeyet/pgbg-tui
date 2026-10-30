@@ -3,16 +3,14 @@
 //! vtui counts, keeps the file's format and sums the report; pgbg names what it counts and keeps the file.
 use crate::act;
 use crate::config;
+use crate::files::{self, Readers};
 use crate::lock;
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
-use std::fs::DirBuilder;
-use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 pub(crate) use vtui::usage::{Counts, Day, Rules};
 
 const FILE: &str = "usage.jsonl";
-const DIR_MODE: u32 = 0o700;
 /// How pgbg counts time: a minute after the last input at most, never while the terminal is in the background.
 const COUNTING: u32 = 1;
 
@@ -49,7 +47,7 @@ impl UsageFile {
     /// file only its owner reads, so the file is the old one or the new.
     pub(crate) fn add(&self, date: NaiveDate, counts: &Counts) -> Result<()> {
         let dir = self.path.parent().context("the usage file has no folder")?;
-        DirBuilder::new().recursive(true).mode(DIR_MODE).create(dir).with_context(|| format!("creating {}", dir.display()))?;
+        files::make_private_dir(dir).with_context(|| format!("creating {}", dir.display()))?;
         let _held = lock::open(&self.path).with_context(|| format!("locking {}", self.path.display()))?;
         self.merge(date, counts)
     }
@@ -57,7 +55,7 @@ impl UsageFile {
     /// Adds `counts` to `date`'s line; only the holder of the file's lock may call it.
     fn merge(&self, date: NaiveDate, counts: &Counts) -> Result<()> {
         let text = rules().merge(&config::read_kept(&self.path)?, date, counts)?;
-        config::write_whole(&self.path, &text)
+        files::write_whole(&self.path, &text, Readers::Owner).with_context(|| format!("writing {}", self.path.display()))
     }
 }
 

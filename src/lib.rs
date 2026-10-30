@@ -10,6 +10,7 @@ mod connection;
 mod db;
 mod export;
 mod failure;
+mod files;
 #[cfg(test)]
 mod fixtures;
 mod format;
