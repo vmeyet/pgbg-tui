@@ -397,9 +397,10 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Down, Pane::Schema, &[key(KeyCode::Char('j')), key(KeyCode::Down)]).help("j k", "next, previous table").footer("j/k", "move"),
     row(Act::Up, Pane::Schema, &[key(KeyCode::Char('k')), key(KeyCode::Up)]),
     row(Act::Open, Pane::Schema, &[key(KeyCode::Enter)])
-        .help("⏎", "fold the schema, or the table's columns and indexes")
-        .footer("⏎", "columns"),
-    row(Act::Preview, Pane::Schema, &[key(KeyCode::Char('p'))]).help("p", "run SELECT * FROM the table LIMIT 100").footer("p", "preview"),
+        .help("⏎", "fold the schema, or write SELECT * FROM the table LIMIT 100 in the editor and run it")
+        .footer("⏎", "rows"),
+    row(Act::Preview, Pane::Schema, &[key(KeyCode::Char('p'))]).help("p", "the table's rows, as ⏎"),
+    row(Act::Detail, Pane::Schema, &[key(KeyCode::Char('d'))]).help("d", "the table's columns and indexes").footer("d", "columns"),
     row(Act::Insert, Pane::Schema, &[key(KeyCode::Char('i'))]).help("i", "put the table's name in the editor").footer("i", "insert"),
     row(Act::Filter, Pane::Schema, &[key(KeyCode::Char('/'))])
         .help("/", "keep the tables whose name holds what you type")
@@ -420,8 +421,11 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Close, Pane::Finder, &[key(KeyCode::Esc)]).help("esc", "close the finder").footer("esc", "closes"),
     row(Act::Find, Pane::Anywhere, &[control('p'), command('k')]).help("^p ⌘k", "find a saved query").footer("^p", "find"),
     row(Act::FindTable, Pane::Anywhere, &[control('t')]).help("^t", "find a table of the schema"),
-    row(Act::Open, Pane::TableFinder, &[key(KeyCode::Enter)]).help("⏎", "its columns and indexes").footer("⏎", "opens"),
-    row(Act::Preview, Pane::TableFinder, &[control('r')]).help("^r", "run SELECT * FROM it LIMIT 100").footer("^r", "preview"),
+    row(Act::Open, Pane::TableFinder, &[key(KeyCode::Enter)])
+        .help("⏎", "write SELECT * FROM it LIMIT 100 in the editor and run it")
+        .footer("⏎", "rows"),
+    row(Act::Preview, Pane::TableFinder, &[control('r')]).help("^r", "its rows, as ⏎"),
+    row(Act::Detail, Pane::TableFinder, &[control('d')]).help("^d", "its columns and indexes").footer("^d", "columns"),
     row(Act::Insert, Pane::TableFinder, &[key(KeyCode::Tab)]).help("⇥", "put its name in the editor").footer("⇥", "insert"),
     row(Act::Down, Pane::TableFinder, &[key(KeyCode::Down), control('n')]).help("↓ ^n", "next, previous table").footer("↑↓", "pick"),
     row(Act::Up, Pane::TableFinder, &[key(KeyCode::Up), control('p')]),

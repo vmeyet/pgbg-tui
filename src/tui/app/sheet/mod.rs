@@ -333,7 +333,7 @@ impl Sheet {
     /// Runs `statement` with `input` for its parameters; `start` is its first editor byte when it was cut from the
     /// editor.
     /// Does nothing while another statement runs.
-    pub(super) fn run_statement(
+    fn run_statement(
         &mut self,
         statement: Statement,
         start: Option<usize>,

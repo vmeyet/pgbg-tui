@@ -3,7 +3,7 @@ use super::search::{Search, Searching};
 use super::{Action, App, Focus, Overlay};
 use crate::act::Pane;
 use crate::connection::ConnectionName;
-use crate::db::lex::Token;
+use crate::db::lex::{Lexed, Token};
 use crate::history::Entry;
 use crossterm::event::KeyEvent;
 
@@ -13,6 +13,17 @@ pub(in crate::tui) struct Recall {
     pub(in crate::tui) connection: ConnectionName,
     pub(in crate::tui) all: Vec<Entry>,
     pub(in crate::tui) search: Search<Entry>,
+}
+
+/// `held` then `statement` after a blank line; the last statement of `held` gets a `;` right after its last token,
+/// before any comment, so `⏎` on `statement` runs it alone.
+pub(super) fn below(held: &str, statement: &str) -> String {
+    let held = held.trim_end();
+    match Lexed::of(held).tokens().last() {
+        None if held.is_empty() => statement.to_owned(),
+        Some(last) if last.token != Token::End => format!("{};{}\n\n{statement}", &held[..last.range.end], &held[last.range.end..]),
+        _ => format!("{held}\n\n{statement}"),
+    }
 }
 
 impl App {
@@ -47,15 +58,9 @@ impl App {
         vec![]
     }
 
-    /// Adds `statement` at the end of the editor after a blank line, with the cursor on it; the last statement before
-    /// it gets a `;` right after its last token, before any comment, so `⏎` runs `statement` alone.
+    /// Adds `statement` at the end of the editor after a blank line, with the cursor on it, as [`below`] writes it.
     pub(super) fn put_in_editor(&mut self, statement: &str) {
-        let held = self.sheet().editor.text().trim_end();
-        let text = match self.sheet().editor.lexed().tokens().last() {
-            None if held.is_empty() => statement.to_owned(),
-            Some(last) if last.token != Token::End => format!("{};{}\n\n{statement}", &held[..last.range.end], &held[last.range.end..]),
-            _ => format!("{held}\n\n{statement}"),
-        };
+        let text = below(self.sheet().editor.text(), statement);
         self.replace_editor_text(&text);
     }
 

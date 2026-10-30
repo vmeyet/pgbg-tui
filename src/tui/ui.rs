@@ -32,9 +32,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> Fit {
     let has_sidebar = f.area().width >= SIDEBAR_MIN_SCREEN_COLUMNS;
     let has_params = !app.sheet().param_names().is_empty();
     let Areas { panes, footer: footer_area } = layout(framed(f, app), has_sidebar, has_params);
-    if let Some(sidebar) = panes.sidebar {
-        sidebar_view::draw(f, app, sidebar);
-    }
+    let schema_rows = panes.sidebar.map(|sidebar| sidebar_view::draw(f, app, sidebar)).unwrap_or_default();
     if let Some(params) = panes.params {
         param_bar_view::draw(f, app, params);
     }
@@ -52,7 +50,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> Fit {
     let detail = detail_view::draw(f, app);
     column_stats_view::draw(f, app);
     help_view::draw(f, app);
-    Fit { grid, panes, editor_text, detail }
+    Fit { grid, panes, editor_text, detail, schema_rows }
 }
 
 /// The outer frame and its `● name · tier` label in the tier's colour, so the tier is clear even without colour; returns
@@ -364,12 +362,12 @@ mod tests {
     }
 
     #[test]
-    fn enter_on_a_table_shows_its_columns_and_indexes_in_the_result_pane() {
+    fn d_on_a_table_shows_its_columns_and_indexes_in_the_result_pane() {
         let mut app = on_the_schema_tab(false);
         for _ in 0..3 {
             app.handle_key(KeyEvent::from(KeyCode::Char('j')));
         }
-        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
         insta::assert_snapshot!("schema_table", render(&app, 100, 14).backend());
     }
 
@@ -388,7 +386,7 @@ mod tests {
         let mut app = app();
         app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
         let screen = format!("{}", render(&app, 60, 16).backend());
-        assert!(screen.contains("   ⏎ opens · ^r preview · esc closes  │"), "{screen}");
+        assert!(screen.contains("   ⏎ rows · ^d columns · esc closes   │"), "{screen}");
     }
 
     #[test]

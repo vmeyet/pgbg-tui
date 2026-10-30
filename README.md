@@ -221,6 +221,7 @@ In the TUI, a bar above the editor shows one field per parameter.
 | `^o` | Pick another connection; sessions stay open. |
 | `^p` | Find a saved query. |
 | `^t` | Find a table of the schema. |
+| `⏎` `d` | In the schema tab: a table's first rows, written in the editor to refine, a click doing the same; its columns and indexes. |
 | `^r` | Search the history of this connection. |
 | `^s` | Save the query. |
 | `v` | Show the result as a chart, or as a grid again. |

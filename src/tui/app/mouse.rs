@@ -1,7 +1,8 @@
 //! The mouse: a left click on a pane gives it the keys, as `tab` would; in the editor it also places the cursor, a
 //! double click selects a word and a triple click a line, a drag selects, and letting go copies the selection, as tmux
-//! does. The wheel does nothing yet.
+//! does; in the schema tab it picks the row as `⏎` does. The wheel does nothing yet.
 use super::{Action, App, Focus};
+use crate::act::Pane;
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Position;
 use std::time::Instant;
@@ -27,7 +28,8 @@ impl App {
         }
     }
 
-    /// Gives the keys to the pane at `at`; in the editor, also places the cursor there or selects, by the click.
+    /// Gives the keys to the pane at `at`; in the editor, also places the cursor there or selects, by the click; in the
+    /// schema tab, picks the row there.
     fn press(&mut self, at: Position, now: Instant) -> Vec<Action> {
         self.sheet_mut().editor.deselect();
         let Some(focus) = self.fit.panes.under(at) else { return vec![] };
@@ -39,7 +41,8 @@ impl App {
             sheet.ghost = None;
             sheet.editor.click(place, click);
         }
-        self.drop_idle_ask().into_iter().collect()
+        let picked = if self.pane() == Pane::Schema { self.click_schema_row(at) } else { vec![] };
+        self.drop_idle_ask().into_iter().chain(picked).collect()
     }
 
     /// The place in the editor's text drawn at `at`, as the last frame drew it.

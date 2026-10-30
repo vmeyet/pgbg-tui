@@ -46,14 +46,14 @@ impl App {
         self.overlay = Some(Overlay::TableFinder(Box::new(TableFinder { all, search })));
     }
 
-    /// The finder after `key`: `⏎` shows the highlighted table's columns, `^r` previews it, `⇥` puts its name in the
-    /// editor; each closes the finder.
+    /// The finder after `key`: `⏎` and `^r` preview the highlighted table, `^d` shows its columns, `⇥` puts its name in
+    /// the editor; each closes the finder.
     pub(super) fn table_finder_key(&mut self, finder: TableFinder, key: KeyEvent) -> Vec<Action> {
         let TableFinder { all, search } = finder;
         match search.after(key, Pane::TableFinder, &all) {
             Searching::Typed(search) => self.overlay = Some(Overlay::TableFinder(Box::new(TableFinder { all, search }))),
             Searching::Unhandled(search, act) => return self.act_on_found(TableFinder { all, search }, act),
-            Searching::Picked(table) => self.describe_table(&table),
+            Searching::Picked(table) => return self.preview_table(&table),
             Searching::Closed => {}
             Searching::Quit => return self.quit(),
         }
@@ -68,6 +68,7 @@ impl App {
         match act {
             Act::Preview => return self.preview_table(&table),
             Act::Insert => self.insert_table(&table),
+            Act::Detail => self.describe_table(&table),
             _ => self.overlay = Some(Overlay::TableFinder(Box::new(finder))),
         }
         vec![]
@@ -115,10 +116,19 @@ mod tests {
     }
 
     #[test]
-    fn enter_shows_the_columns_of_the_table_a_few_letters_find() {
+    fn ctrl_d_shows_the_columns_of_the_table_a_few_letters_find() {
         let mut app = finding("cstmr");
-        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        app.handle_key(ctrl('d'));
         assert_eq!((app.sheet().shown.as_deref(), app.overlay.is_none()), (Some("public.customers · 2 columns · 0 indexes"), true));
+    }
+
+    #[test]
+    fn enter_runs_the_first_rows_of_the_table_found_and_writes_them_in_the_editor() {
+        let mut app = finding("inv");
+        let statement = Statement::new("SELECT * FROM billing.invoices LIMIT 100");
+        let run = Action::Run { connection: shop(), run: RunId::FIRST, statement, input: ParamInput::default(), confirmed: None };
+        assert_eq!(app.handle_key(KeyEvent::from(KeyCode::Enter)), [run]);
+        assert_eq!((app.sheet().editor.text(), app.overlay.is_none()), ("SELECT * FROM billing.invoices LIMIT 100", true));
     }
 
     #[test]

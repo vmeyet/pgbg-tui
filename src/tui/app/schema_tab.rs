@@ -1,12 +1,13 @@
 //! The sidebar's schema tab: the schemas and tables of the sheet on screen, which fold and filter, and its cursor.
+use super::history::below;
 use super::save::typed_into;
 use super::{Action, App, Focus, Overlay};
 use crate::act::{self, Act, Pane};
 use crate::db::model::{
     Catalog, Column, ColumnKind, ColumnName, Extent, Index, Page, ResultSet, SchemaColumn, Statement, Table, TypeName, Value, qualified,
 };
-use crate::query::params::ParamInput;
 use crossterm::event::KeyEvent;
+use ratatui::layout::{Position, Rect};
 use std::collections::BTreeSet;
 use vtui::field::Field;
 
@@ -40,12 +41,26 @@ impl PickedTable {
     }
 
     fn preview(&self) -> Statement {
-        Statement::new(format!("SELECT * FROM {} LIMIT {PREVIEW_ROWS}", self.sql_name()))
+        Statement::new(format!("{PREVIEW_START}{} LIMIT {PREVIEW_ROWS}", self.sql_name()))
     }
 
     fn in_catalog<'a>(&self, catalog: &'a Catalog) -> Option<&'a Table> {
         let node = catalog.schema.schemas.iter().find(|node| node.name == self.schema)?;
         node.tables.iter().find(|table| table.name == self.name)
+    }
+}
+
+/// Where the last frame drew the schema tab's rows, and which row it drew first; no area when the tab was not drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::tui) struct SchemaFit {
+    pub(in crate::tui) area: Rect,
+    pub(in crate::tui) first: usize,
+}
+
+impl SchemaFit {
+    /// The index of the row drawn at `at`, whether a row is there or not.
+    fn row_at(self, at: Position) -> Option<usize> {
+        self.area.contains(at).then(|| self.first + usize::from(at.y - self.area.y))
     }
 }
 
@@ -56,6 +71,7 @@ pub(in crate::tui) enum SchemaRow<'a> {
     Table { schema: &'a str, table: &'a Table },
 }
 
+const PREVIEW_START: &str = "SELECT * FROM ";
 const PREVIEW_ROWS: usize = 100;
 const DESCRIBED: [&str; 4] = ["", "name", "type", "detail"];
 
@@ -99,6 +115,19 @@ fn index_row(index: &Index) -> Vec<Value> {
 
 fn texts(cells: [&str; 4]) -> Vec<Value> {
     cells.into_iter().map(|cell| Value::Text(cell.into())).collect()
+}
+
+/// Whether `line` is a table's preview as [`PickedTable::preview`] writes it.
+fn is_preview(line: &str) -> bool {
+    line.starts_with(PREVIEW_START) && line.ends_with(&format!(" LIMIT {PREVIEW_ROWS}"))
+}
+
+/// `held` with `preview` in place of its last line when that line is a preview too, else below its statements.
+fn browsed(held: &str, preview: &Statement) -> String {
+    let held = held.trim_end();
+    let (before, last_line) = held.rsplit_once('\n').unwrap_or(("", held));
+    let kept = if is_preview(last_line) { before } else { held };
+    below(kept, preview.as_str())
 }
 
 impl SchemaTab {
@@ -157,8 +186,13 @@ impl App {
         match act {
             Act::Down => self.step_schema(1),
             Act::Up => self.step_schema(-1),
-            Act::Open => self.open_schema_row(),
+            Act::Open => return Some(self.open_schema_row()),
             Act::Preview => return Some(self.selected_table().map(|table| self.preview_table(&table)).unwrap_or_default()),
+            Act::Detail => {
+                if let Some(table) = self.selected_table() {
+                    self.describe_table(&table);
+                }
+            }
             Act::Insert => {
                 if let Some(table) = self.selected_table() {
                     self.insert_table(&table);
@@ -189,19 +223,20 @@ impl App {
         Some(PickedTable { schema: schema.to_owned(), name: table.name.clone() })
     }
 
-    /// Folds or unfolds the schema under the cursor, or shows the columns and indexes of the table there.
-    fn open_schema_row(&mut self) {
+    /// Folds or unfolds the schema under the cursor, or previews the table there.
+    fn open_schema_row(&mut self) -> Vec<Action> {
         match self.selected_row() {
             Some(SchemaRow::Schema { name, is_open }) => {
                 let name = name.to_owned();
                 let closed = &mut self.schema_tab.closed;
                 _ = if is_open { closed.insert(name) } else { closed.remove(&name) };
+                vec![]
             }
             Some(SchemaRow::Table { schema, table }) => {
                 let picked = PickedTable { schema: schema.to_owned(), name: table.name.clone() };
-                self.describe_table(&picked);
+                self.preview_table(&picked)
             }
-            None => {}
+            None => vec![],
         }
     }
 
@@ -212,16 +247,31 @@ impl App {
         self.sheet_mut().show(title, result, &reading);
     }
 
-    /// Runs `SELECT * FROM` `picked` for its first rows, as the editor runs a statement.
+    /// Writes `SELECT * FROM` `picked` for its first rows at the end of the editor, in place of the table previewed
+    /// last, and runs it as the editor runs a statement; the keys stay where they were, so the next table is a key away.
     /// It is a read whatever the table's name, so it never asks for confirmation as a write does.
     pub(super) fn preview_table(&mut self, picked: &PickedTable) -> Vec<Action> {
-        self.sheet_mut().run_statement(picked.preview(), None, ParamInput::default(), None)
+        if self.sheet().is_running() {
+            return vec![];
+        }
+        let text = browsed(self.sheet().editor.text(), &picked.preview());
+        let sheet = self.sheet_mut();
+        sheet.editor.rewrite(&text);
+        sheet.text_changed();
+        sheet.editor_run().map(|to_run| sheet.run(to_run, None)).unwrap_or_default()
     }
 
     /// Puts the name of `picked` in the editor at its cursor, and gives the editor the keys.
     pub(super) fn insert_table(&mut self, picked: &PickedTable) {
         self.sheet_mut().paste(&picked.sql_name());
         self.focus = Focus::Editor;
+    }
+
+    /// Picks the row drawn at `at` as `⏎` would, when the schema tab shows one there.
+    pub(super) fn click_schema_row(&mut self, at: Position) -> Vec<Action> {
+        let Some(row) = self.fit.schema_rows.row_at(at).filter(|&row| row < self.schema_rows_len()) else { return vec![] };
+        self.schema_tab.selected = row;
+        self.open_schema_row()
     }
 
     /// Types `key` into the schema's filter: `⏎` keeps it, `esc` drops it, and the cursor goes back to the first row.
@@ -251,8 +301,11 @@ mod tests {
     use crate::db::{guard, lex};
     use crate::failure::Failure;
     use crate::fixtures::{self, shop_catalog};
-    use crossterm::event::KeyCode;
+    use crate::query::params::ParamInput;
+    use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::layout::Rect;
     use std::sync::Arc;
+    use std::time::{Duration, Instant};
     use vtui::help::Help;
 
     fn press(app: &mut App, code: KeyCode) -> Vec<Action> {
@@ -378,13 +431,98 @@ mod tests {
         app
     }
 
+    fn run_of(sql: &str) -> Action {
+        Action::Run { connection: shop(), run: RunId::FIRST, statement: Statement::new(sql), input: ParamInput::default(), confirmed: None }
+    }
+
     #[test]
-    fn p_on_a_table_runs_its_first_rows_as_a_statement() {
-        let statement = Statement::new("SELECT * FROM public.orders LIMIT 100");
-        assert_eq!(
-            press(&mut on_orders(), KeyCode::Char('p')),
-            [Action::Run { connection: shop(), run: RunId::FIRST, statement, input: ParamInput::default(), confirmed: None }]
-        );
+    fn enter_on_a_table_runs_its_first_rows() {
+        assert_eq!(press(&mut on_orders(), KeyCode::Enter), [run_of("SELECT * FROM public.orders LIMIT 100")]);
+    }
+
+    #[test]
+    fn enter_on_a_table_writes_its_statement_in_the_editor_and_keeps_the_keys_in_the_sidebar() {
+        let mut app = on_orders();
+        press(&mut app, KeyCode::Enter);
+        assert_eq!((app.sheet().editor.text(), app.focus), ("SELECT * FROM public.orders LIMIT 100", Focus::Queries));
+    }
+
+    #[test]
+    fn p_on_a_table_does_as_enter() {
+        assert_eq!(press(&mut on_orders(), KeyCode::Char('p')), [run_of("SELECT * FROM public.orders LIMIT 100")]);
+    }
+
+    #[test]
+    fn a_table_browsed_goes_below_the_statements_already_in_the_editor() {
+        let mut app = on_orders();
+        app.sheet_mut().paste("SELECT 1");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.sheet().editor.text(), "SELECT 1;\n\nSELECT * FROM public.orders LIMIT 100");
+    }
+
+    fn answered(app: &mut App) {
+        app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result: fixtures::orders(), took: Duration::ZERO }));
+    }
+
+    #[test]
+    fn the_next_table_browsed_takes_the_place_of_the_last_one() {
+        let mut app = on_orders();
+        app.sheet_mut().paste("SELECT 1");
+        press(&mut app, KeyCode::Enter);
+        answered(&mut app);
+        press(&mut app, KeyCode::Char('/'));
+        press(&mut app, KeyCode::Esc);
+        (0..4).for_each(|_| _ = press(&mut app, KeyCode::Char('j')));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.sheet().editor.text(), "SELECT 1;\n\nSELECT * FROM public.customers LIMIT 100");
+    }
+
+    #[test]
+    fn a_table_browsed_while_a_statement_runs_leaves_the_editor_as_it_was() {
+        let mut app = on_orders();
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.sheet().editor.text(), "SELECT * FROM public.orders LIMIT 100");
+    }
+
+    fn click_at(app: &mut App, column: u16, row: u16) -> Vec<Action> {
+        let mouse = MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column, row, modifiers: KeyModifiers::NONE };
+        app.handle_mouse(mouse, Instant::now())
+    }
+
+    /// The schema tab with its rows drawn from row 1, `first` the row drawn there.
+    fn drawn_from(first: usize) -> App {
+        let mut app = on_the_schema_tab();
+        app.fit(Fit { panes: every_pane(), schema_rows: SchemaFit { area: Rect::new(1, 1, 28, 22), first }, ..Fit::default() });
+        app
+    }
+
+    #[test]
+    fn a_click_on_a_table_runs_its_first_rows() {
+        let mut app = drawn_from(0);
+        app.focus = Focus::Editor;
+        assert_eq!(click_at(&mut app, 8, 5), [run_of("SELECT * FROM public.customers LIMIT 100")]);
+        assert_eq!((app.schema_tab.selected, app.focus), (4, Focus::Queries));
+    }
+
+    #[test]
+    fn a_click_finds_the_row_drawn_under_it_when_the_tab_scrolled() {
+        assert_eq!(click_at(&mut drawn_from(2), 8, 2), [run_of("SELECT * FROM public.orders LIMIT 100")]);
+    }
+
+    #[test]
+    fn a_click_on_a_schema_folds_it() {
+        let mut app = drawn_from(0);
+        click_at(&mut app, 8, 1);
+        assert_eq!(shown(&app), ["billing/", "public/", "orders", "customers"]);
+    }
+
+    #[test]
+    fn a_click_below_the_last_row_only_gives_the_tab_the_keys() {
+        let mut app = drawn_from(0);
+        app.focus = Focus::Editor;
+        assert_eq!((click_at(&mut app, 8, 12), app.schema_tab.selected, app.focus), (vec![], 0, Focus::Queries));
     }
 
     #[test]
@@ -412,9 +550,9 @@ mod tests {
     }
 
     #[test]
-    fn enter_on_a_table_shows_its_columns_then_its_indexes() {
+    fn d_on_a_table_shows_its_columns_then_its_indexes() {
         let mut app = on_orders();
-        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('d'));
         let Run::Done { result, .. } = &app.sheet().run else { panic!("no result") };
         let names: Vec<&Value> = result.rows().iter().map(|row| &row[1]).collect();
         let text = |name: &str| Value::Text(name.into());
@@ -425,17 +563,17 @@ mod tests {
     #[test]
     fn a_table_shown_is_titled_by_its_name_and_counts_and_a_run_after_drops_that_title() {
         let mut app = on_orders();
-        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('d'));
         assert_eq!(app.sheet().shown.as_deref(), Some("public.orders · 3 columns · 1 index"));
         press(&mut app, KeyCode::Char('p'));
         assert_eq!(app.sheet().shown, None);
     }
 
     #[test]
-    fn enter_on_a_table_while_a_statement_runs_leaves_it_running() {
+    fn d_on_a_table_while_a_statement_runs_leaves_it_running() {
         let mut app = on_orders();
         press(&mut app, KeyCode::Char('p'));
-        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('d'));
         assert_eq!(app.sheet().run, Run::Running { run: RunId::FIRST });
     }
 
