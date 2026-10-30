@@ -1,10 +1,12 @@
 use crate::cli::StatementArgs;
-use crate::connection::{Connection, ConnectionName};
+use crate::connection::{Connection, ConnectionName, WritePolicy};
 use crate::db::Session;
-use crate::db::guard::{Admitted, Refusal, Write};
+use crate::db::guard::{self, Admitted, Refusal, Write};
 use crate::db::model::{ResultSet, Statement, TriedToWrite};
+use crate::db::preview::{self, Touched};
+use crate::failure::Failure;
 use crate::history::{Entry, Outcome, Store};
-use crate::query::params::{self, Assignment, Given};
+use crate::query::params::{self, Assignment, Filled, Given};
 use crate::query::{Header, Roots};
 use crate::render;
 use anyhow::{Context, Result, anyhow, bail};
@@ -19,7 +21,8 @@ const STDIN: &str = "-";
 
 /// Runs one statement on the connection named `connection`, its `{{name}}` bound to the values of `assignments` and of
 /// the `name=value` lines of `params_file`, adds it to the connection's history, and prints its result: a plain table,
-/// or JSON with `json`. A write is sent only after `yes` or a yes on the terminal.
+/// or JSON with `json`. A write is sent only after `yes`, or a yes on the terminal to a question that says how many rows
+/// it would touch.
 pub async fn run(
     connection: &ConnectionName,
     statement: &StatementArgs,
@@ -32,10 +35,15 @@ pub async fn run(
     check_one_reader_of_stdin(statement.file.as_deref(), params_file)?;
     let sql = &statement_text(statement, connection.queries()).await?;
     let given = given(assignments, params_file).await?;
-    let admitted = admit(&connection, sql, &given, yes).await;
+    let header = Header::parse(sql);
+    let admitted = admit(&connection, sql, &given, &header, yes);
     let (started_at, clock) = (Utc::now(), Instant::now());
+    let work = async |session: &mut Session, admitted| {
+        let admitted = confirmed(session, admitted, count_of(sql, &given, &header), yes).await?;
+        run_asking_for_hidden_writes(session, admitted).await
+    };
     let result = match admitted {
-        Ok(admitted) => super::on_session(&connection, async |session| run_asking_for_hidden_writes(session, admitted).await).await,
+        Ok(admitted) => super::on_session(&connection, async |session| work(session, admitted).await).await,
         Err(err) => Err(err),
     };
     let entry = Entry::of_run(Statement::new(sql), connection.name().clone(), started_at, clock.elapsed(), Outcome::of(&result));
@@ -90,19 +98,51 @@ async fn read_text(path: &Path, what: &str) -> Result<String> {
     tokio::fs::read_to_string(path).await.with_context(|| format!("reading {}", path.display()))
 }
 
-/// Clears `sql`, with `given` bound, for `connection`; a write only after `yes` or a yes on the terminal.
-async fn admit(connection: &Connection, sql: &str, given: &Given, yes: bool) -> Result<Admitted> {
-    let header = Header::parse(sql);
+/// Clears `sql`, with `given` bound, for `connection`; a write without `yes` is refused at once when no terminal can
+/// confirm it.
+fn admit(connection: &Connection, sql: &str, given: &Given, header: &Header, yes: bool) -> Result<Admitted> {
     for warning in &header.warnings {
         super::warn(warning);
     }
     let admitted = params::admit(&Statement::new(sql), given, &header.params, connection.writes())?;
+    match admitted.write() {
+        Some(write) if !yes && !std::io::stdin().is_terminal() => Err(Refusal::Unconfirmed(write.clone()).into()),
+        _ => Ok(admitted),
+    }
+}
+
+/// The read that counts the rows `sql` would touch as a write, with `given` bound, admitted read only.
+fn count_of(sql: &str, given: &Given, header: &Header) -> Option<Admitted> {
+    let read = preview::count_of(&Statement::new(sql))?;
+    let Filled { statement, params } = params::fill_cut(&read, given, &header.params).ok()?;
+    let admitted = guard::admit(statement, params, WritePolicy::ReadOnly).ok()?;
+    Some(admitted.with_own_timeout(Some(preview::COUNT_TIMEOUT)))
+}
+
+/// `admitted` confirmed by `yes`, or by a yes on the terminal to its write, told first how many rows `count` reads it
+/// would touch; a read as it is.
+async fn confirmed(session: &mut Session, admitted: Admitted, count: Option<Admitted>, yes: bool) -> Result<Admitted> {
     if yes {
         return Ok(admitted.confirmed());
     }
-    match admitted.write() {
-        Some(write) if !is_confirmed_at_the_terminal(write).await? => Err(Refusal::Unconfirmed(write.clone()).into()),
-        _ => Ok(admitted),
+    let Some(write) = admitted.write() else { return Ok(admitted) };
+    let rows = match count {
+        Some(count) => rows_touched(session, &count).await,
+        None => String::new(),
+    };
+    if !is_confirmed_at_the_terminal(write, &rows).await? {
+        return Err(Refusal::Unconfirmed(write.clone()).into());
+    }
+    Ok(admitted)
+}
+
+/// How many rows `count` reads, in words, or why it read none.
+async fn rows_touched(session: &mut Session, count: &Admitted) -> String {
+    match session.run(count).await {
+        Ok(counted) => {
+            Touched::read(&counted).map_or_else(|| "rows not counted: it read no number".to_owned(), |touched| touched.to_string())
+        }
+        Err(err) => format!("rows not counted: {}", Failure::from(&err)),
     }
 }
 
@@ -111,7 +151,7 @@ async fn admit(connection: &Connection, sql: &str, given: &Given, yes: bool) -> 
 async fn run_asking_for_hidden_writes(session: &mut Session, admitted: Admitted) -> Result<ResultSet> {
     match session.run(&admitted).await {
         Err(err) if err.is::<TriedToWrite>() => {
-            if !is_confirmed_at_the_terminal(&Write::Hidden).await? {
+            if !is_confirmed_at_the_terminal(&Write::Hidden, "").await? {
                 return Err(Refusal::Unconfirmed(Write::Hidden).into());
             }
             session.run(&admitted.confirmed()).await
@@ -120,19 +160,22 @@ async fn run_asking_for_hidden_writes(session: &mut Session, admitted: Admitted)
     }
 }
 
-/// Whether the user answers `y` to `write` on the terminal; false when stdin is not a terminal.
-async fn is_confirmed_at_the_terminal(write: &Write) -> Result<bool> {
+/// Whether the user answers `y` to `write`, told it would touch `rows`, on the terminal; false when stdin is not a
+/// terminal.
+async fn is_confirmed_at_the_terminal(write: &Write, rows: &str) -> Result<bool> {
     if !std::io::stdin().is_terminal() {
         return Ok(false);
     }
-    eprint!("{}", question(write));
+    eprint!("{}", question(write, rows));
     let answer = on_a_thread_of_its_own(|| std::io::stdin().lines().next().transpose()).await??;
     Ok(answer.is_some_and(|answer| matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")))
 }
 
-/// The question that asks for `write`, its names escaped so none can rewrite the terminal line.
-fn question(write: &Write) -> String {
-    format!("{}? [y/N] ", render::printable(&write.to_string()))
+/// The question that asks for `write`, saying the `rows` it would touch when they were counted, its names and the
+/// server's words escaped so none can rewrite the terminal line.
+fn question(write: &Write, rows: &str) -> String {
+    let rows = if rows.is_empty() { String::new() } else { format!("{} ", render::printable(rows)) };
+    format!("{}? {rows}[y/N] ", render::printable(&write.to_string()))
 }
 
 /// What `read` gives, read on a thread of its own: dropped on a signal, it leaves the thread blocked and lets pgbg exit,
@@ -185,7 +228,14 @@ mod tests {
     fn the_question_escapes_a_name_that_would_rewrite_the_terminal_line() {
         let sql = "DELETE FROM \"orders\r\x1b[2K\u{202e}SELECT from nothing\"";
         let write = guard::write_in(sql, &lex::tokens(sql)).unwrap();
-        assert_eq!(question(&write), "DELETE from \"orders\\r\\u{1b}[2K\\u{202e}SELECT from nothing\"? [y/N] ");
+        assert_eq!(question(&write, ""), "DELETE from \"orders\\r\\u{1b}[2K\\u{202e}SELECT from nothing\"? [y/N] ");
+    }
+
+    #[test]
+    fn the_question_says_how_many_rows_the_write_would_touch() {
+        let sql = "DELETE FROM orders";
+        let write = guard::write_in(sql, &lex::tokens(sql)).unwrap();
+        assert_eq!(question(&write, "42 rows"), "DELETE from orders? 42 rows [y/N] ");
     }
 
     #[test]

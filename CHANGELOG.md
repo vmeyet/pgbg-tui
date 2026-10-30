@@ -15,6 +15,8 @@ Each entry says what changed, then where, then how to use it.
   Its columns and indexes moved to `d` in the sidebar and `ctrl-d` in the finder.
 - **JSON tree**: on a `json` or `jsonb` cell of the grid, `o` opens its value as a tree, coloured as the grid colours JSON.
   `⏎` folds or unfolds an object or an array, or the one holding the value under the cursor, `y` copies the value under the cursor and `Y` its path, as `.items[0].sku`.
+- **`pgbg run` says how many rows a write would touch** in its `y/N` question, for an `UPDATE` or a `DELETE`: `DELETE from orders? 42 rows [y/N]`.
+  `--yes` sends the write at once, without counting.
 
 ### Fixed
 

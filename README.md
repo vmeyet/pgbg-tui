@@ -157,7 +157,7 @@ The TUI's footer names it, such as `DELETE from orders?`: `y` sends it, any othe
 In the TUI, an `UPDATE` or `DELETE` also says how many rows it would touch, such as `DELETE from orders? 42 rows`: a read of its `WHERE` counts them, read only and within 2 s, so the write never runs before your `y`.
 A write hidden in a read, as a function that writes or `setval`, keeps nothing at first, then asks `this statement tried to write, and may run twice: run it?`.
 What a read-only transaction does not stop, as `dblink_exec` or `pg_advisory_lock`, has already run once, so a `y` runs it a second time.
-`pgbg run` asks `y/N` on the terminal; with no terminal, it refuses the write unless you pass `--yes`.
+`pgbg run` asks `y/N` on the terminal, with the same count; with no terminal, it refuses the write unless you pass `--yes`.
 A read-only transaction does not stop `dblink` or `pg_terminate_backend`: those run without asking, and only the role stops them.
 
 `pgbg doctor prod` checks a connection, one line per check, with how to fix what fails:
