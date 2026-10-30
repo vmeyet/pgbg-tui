@@ -81,7 +81,7 @@ Each step is one MR, in this order.
 - [x] `i` on a column shows its distinct count, NULLs, min, max and five most common values
 - [x] The row's detail scans as two columns: names on the left, a primary key's bold, values beside them in the grid's format and colours, a faint rule before the tables pointing to it
 - [x] The grid keeps the table a result reads, so a followed key does not lex the statement again on every frame
-- [ ] Count lookups that went stale are dropped from the queue, and going back keeps the counts already read
+- [x] Counts pause while a key is followed, and going back keeps the counts already read
 - [x] `keys` finds a table once and gives its keys, so a lookup does not parse its own SQL again
 - [x] One builder writes `column = $n AND …` for a lookup and a referrer, and the footer hints share one fitting
 - [ ] A lookup's answer reaches the sheet as an `Answer`, not app-wide
