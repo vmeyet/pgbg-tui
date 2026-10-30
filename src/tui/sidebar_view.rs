@@ -1,6 +1,6 @@
 //! The sidebar: the saved queries with `▾` and `▸` folders and `●` on the one in the editor, or the schemas and tables
 //! of the sheet on screen.
-use super::app::{App, Focus, Overlay, SchemaRow, SchemaState, SidebarTab};
+use super::app::{App, Focus, Overlay, SchemaFit, SchemaRow, SchemaState, SidebarTab};
 use crate::connection::SchemaReading;
 use crate::query::TreeRow;
 use crate::render::printable;
@@ -12,8 +12,9 @@ use ratatui::widgets::{Paragraph, Wrap};
 use vtui::pane;
 use vtui::text::truncate;
 
-/// The tab shown in `area`, with a title naming both tabs and the shown one in brackets.
-pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
+/// The tab shown in `area`, with a title naming both tabs and the shown one in brackets; returns where the schema tab
+/// drew its rows.
+pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) -> SchemaFit {
     let focused = app.focus() == Focus::Queries;
     let title = match app.sidebar() {
         SidebarTab::Queries => "[Queries] Schema",
@@ -23,7 +24,10 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
     let inside = block.inner(area);
     f.render_widget(block, area);
     match app.sidebar() {
-        SidebarTab::Queries => draw_queries(f, app, inside, focused),
+        SidebarTab::Queries => {
+            draw_queries(f, app, inside, focused);
+            SchemaFit::default()
+        }
         SidebarTab::Schema => draw_schema(f, app, inside, focused),
     }
 }
@@ -73,10 +77,10 @@ fn line(app: &App, row: &TreeRow, is_cursor: bool, width: usize) -> Line<'static
 }
 
 /// The schema's tables below the filter line, scrolled so the cursor's row shows, or the state of the read.
-fn draw_schema(f: &mut Frame<'_>, app: &App, inside: Rect, focused: bool) {
+fn draw_schema(f: &mut Frame<'_>, app: &App, inside: Rect, focused: bool) -> SchemaFit {
     let Some(catalog) = app.sheet().catalog() else {
         f.render_widget(Paragraph::new(schema_state(app)).wrap(Wrap { trim: false }), inside);
-        return;
+        return SchemaFit::default();
     };
     let is_filtering = app.overlay() == Some(&Overlay::SchemaFilter);
     let has_filter_line = is_filtering || !app.schema_tab().filter.text().is_empty();
@@ -92,11 +96,11 @@ fn draw_schema(f: &mut Frame<'_>, app: &App, inside: Rect, focused: bool) {
     let rows = app.schema_tab().rows(catalog);
     if rows.is_empty() {
         f.render_widget(Paragraph::new(Line::styled("no table holds it", Style::default().fg(app.theme().faded))), rows_area);
-        return;
+        return SchemaFit::default();
     }
     let height = usize::from(rows_area.height);
     let selected = app.schema_tab().selected.min(rows.len() - 1);
-    let scroll = selected.saturating_sub(height.saturating_sub(1));
+    let scroll = app.schema_tab().first_shown(rows.len(), height);
     let width = usize::from(rows_area.width);
     let lines: Vec<Line<'_>> = rows
         .iter()
@@ -106,6 +110,7 @@ fn draw_schema(f: &mut Frame<'_>, app: &App, inside: Rect, focused: bool) {
         .map(|(at, row)| schema_line(app, *row, focused && at == selected, width))
         .collect();
     f.render_widget(Paragraph::new(lines), rows_area);
+    SchemaFit { area: rows_area, first: scroll }
 }
 
 /// What the tab shows before a schema is read: off, not read yet, being read, or why the read failed.

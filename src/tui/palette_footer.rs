@@ -38,11 +38,11 @@ mod tests {
 
     #[test]
     fn a_wide_palette_shows_every_hint() {
-        assert_eq!(text(Pane::TableFinder, screen(120)), "  ⏎ opens · ^r preview · ⇥ insert · ↑↓ pick · esc closes");
+        assert_eq!(text(Pane::TableFinder, screen(120)), "  ⏎ rows · ^d columns · ⇥ insert · ↑↓ pick · esc closes");
     }
 
     #[test]
     fn a_narrow_palette_keeps_esc_and_drops_the_last_hints_whole() {
-        assert_eq!(text(Pane::TableFinder, screen(60)), "  ⏎ opens · ^r preview · esc closes");
+        assert_eq!(text(Pane::TableFinder, screen(60)), "  ⏎ rows · ^d columns · esc closes");
     }
 }

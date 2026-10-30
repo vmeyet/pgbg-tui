@@ -1,8 +1,8 @@
 //! The SQL editor: its text, the editing keys and pastes that change it, their undo, and the syntax colours that follow it.
 use super::ghost::is_name_key;
 use super::undo::{Change, Undo};
-use super::{Action, Sheet};
-use crate::db::lex::Lexed;
+use super::{Action, App, Focus, Sheet};
+use crate::db::lex::{Lexed, Token};
 use crate::query::Header;
 use crate::render;
 use crate::syntax::{self, Spans};
@@ -296,6 +296,33 @@ fn edit_text(field: &mut Field, key: KeyEvent) {
         KeyCode::Backspace => field.backspace(),
         KeyCode::Delete => field.delete(),
         _ => {}
+    }
+}
+
+/// `held` then `statement` after a blank line; the last statement of `held` gets a `;` right after its last token,
+/// before any comment, so `⏎` on `statement` runs it alone.
+pub(super) fn below(held: &str, statement: &str) -> String {
+    let held = held.trim_end();
+    match Lexed::of(held).tokens().last() {
+        None if held.is_empty() => statement.to_owned(),
+        Some(last) if last.token != Token::End => format!("{};{}\n\n{statement}", &held[..last.range.end], &held[last.range.end..]),
+        _ => format!("{held}\n\n{statement}"),
+    }
+}
+
+impl App {
+    /// Adds `statement` at the end of the editor after a blank line, with the cursor on it, as [`below`] writes it.
+    pub(super) fn put_in_editor(&mut self, statement: &str) {
+        let text = below(self.sheet().editor.text(), statement);
+        self.replace_editor_text(&text);
+    }
+
+    /// Puts `text` in the editor in place of its own, unsaved and undoable, and gives it the keys.
+    pub(super) fn replace_editor_text(&mut self, text: &str) {
+        let sheet = self.sheet_mut();
+        sheet.editor.rewrite(text);
+        sheet.text_changed();
+        self.focus = Focus::Editor;
     }
 }
 

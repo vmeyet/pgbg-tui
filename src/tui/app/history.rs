@@ -1,9 +1,8 @@
 //! `ctrl-r`: the statements run on the connection on screen, narrowed as fzf does; picking one puts it in the editor.
 use super::search::{Search, Searching};
-use super::{Action, App, Focus, Overlay};
+use super::{Action, App, Overlay};
 use crate::act::Pane;
 use crate::connection::ConnectionName;
-use crate::db::lex::Token;
 use crate::history::Entry;
 use crossterm::event::KeyEvent;
 
@@ -46,32 +45,12 @@ impl App {
         }
         vec![]
     }
-
-    /// Adds `statement` at the end of the editor after a blank line, with the cursor on it; the last statement before
-    /// it gets a `;` right after its last token, before any comment, so `⏎` runs `statement` alone.
-    pub(super) fn put_in_editor(&mut self, statement: &str) {
-        let held = self.sheet().editor.text().trim_end();
-        let text = match self.sheet().editor.lexed().tokens().last() {
-            None if held.is_empty() => statement.to_owned(),
-            Some(last) if last.token != Token::End => format!("{};{}\n\n{statement}", &held[..last.range.end], &held[last.range.end..]),
-            _ => format!("{held}\n\n{statement}"),
-        };
-        self.replace_editor_text(&text);
-    }
-
-    /// Puts `text` in the editor in place of its own, unsaved and undoable, and gives it the keys.
-    pub(super) fn replace_editor_text(&mut self, text: &str) {
-        let sheet = self.sheet_mut();
-        sheet.editor.rewrite(text);
-        sheet.text_changed();
-        self.focus = Focus::Editor;
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::Answer;
     use super::super::fixtures::{app, shop, typed};
+    use super::super::{Answer, Focus};
     use super::*;
     use crate::db::model::Statement;
     use crate::history::Outcome;

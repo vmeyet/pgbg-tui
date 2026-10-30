@@ -30,7 +30,7 @@ pub(super) use protocol::{
 };
 pub(super) use queries::{Finder, Queries};
 pub(super) use save::{Opening, Prompt};
-pub(super) use schema_tab::{SchemaRow, SchemaTab, SidebarTab};
+pub(super) use schema_tab::{SchemaFit, SchemaRow, SchemaTab, SidebarTab};
 pub(super) use search::Search;
 pub(super) use sheet::{Run, SchemaState, SessionState, Sheet, View};
 pub(super) use shown_rows::ShownRows;
@@ -108,6 +108,8 @@ pub(super) struct Fit {
     pub(super) editor_text: Rect,
     /// Where the row's detail started and how far it scrolls.
     pub(super) detail: DetailFit,
+    /// Where the schema tab drew its rows, so a click finds the table it lands on.
+    pub(super) schema_rows: SchemaFit,
 }
 
 /// What lies over the panes and takes every key while it is open.
@@ -333,6 +335,7 @@ impl App {
         let built = fit.detail.drawn.take();
         let (room, editor_rows) = (fit.grid, fit.editor_text.height);
         self.fit = fit;
+        self.schema_tab.keep_first(self.fit.schema_rows.first);
         self.sheet_mut().editor.keep_in_view(editor_rows);
         if let Run::Done { grid, view: View::Grid, .. } = &mut self.sheet_mut().run {
             grid.keep_in_view(room);
