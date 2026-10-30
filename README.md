@@ -4,7 +4,7 @@ Read your PostgreSQL databases from the terminal: local, staging, and production
 
 - **Read only by default.** A connection takes writes only when you say so, and then each write asks first, even one inside a function call.
 - **Tunnels built in.** pgbg starts your `ssh` (or any other) tunnel, and stops it when you quit.
-- **Saved queries are plain `.sql` files.** Keep them in your project, next to the code, and review them like code.
+- **Saved queries are plain `.sql` files.** Your own live per connection in pgbg's data folder; a project's `.pgbg/queries/` sits next to the code, reviewed like code.
 - **Charts in the terminal.** Press `v` on a result to see it as bars or a line.
 - **Safe on production.** Its own frame colour, a short statement timeout, and `pgbg doctor` to check the role you log in with.
 
@@ -169,15 +169,20 @@ It exits 1 when a check fails, so a script can run it.
 
 ## Saved queries
 
-Put `.sql` files under `.pgbg/queries/` in your project, in folders if you like.
-pgbg finds the nearest one from the folder you start it in, the way git finds `.git`, and shows it on every connection.
-Queries of your own belong to a connection: they live in `queries/<connection>/` in pgbg's data folder, as `~/.local/share/pgbg/queries/prod/`.
-The sidebar and `ctrl-p` show the project's queries and those of the connection on screen; `queries = "prod"` on another connection shows the ones of `prod` there too.
-`ctrl-s` on a new query saves it in the project's `.pgbg/queries/` when there is one, else in the folder of the connection on screen; pgbg never makes a project's folder itself.
-Queries kept in `~/.config/pgbg/queries/` by an earlier pgbg move with `mv ~/.config/pgbg/queries ~/.local/share/pgbg/queries/prod`, naming the connection they belong to.
+Saved queries are `.sql` files, in folders if you like, in two places:
+
+- **Your own**, per connection: `queries/<connection>/` in pgbg's data folder, as `~/.local/share/pgbg/queries/prod/`.
+  The data folder is `$PGBG_DATA_DIR`, else `$XDG_DATA_HOME/pgbg`, else `~/.local/share/pgbg`, on macOS too.
+- **A project's**, shared with your team: `.pgbg/queries/` in the project.
+  pgbg finds the nearest one from the folder you start it in, up to the repository root, the way git finds `.git`, and shows it on every connection.
+
+The sidebar and `ctrl-p` show the project's queries and your own of the connection on screen.
+`queries = "prod"` on another connection, as a replica, makes it use the folder of `prod` instead of its own.
+`ctrl-s` on a new query saves it in the project's `.pgbg/queries/` when there is one, else in your own folder; pgbg never makes a project's folder itself.
+
 Each save over a query, from `ctrl-s` or `$EDITOR`, keeps the text it replaced under `versions/` in pgbg's data folder, never in your project: the newest 50 of each query.
 `ctrl-v` lists them, and `⏎` puts one back in the editor, unsaved until you press `ctrl-s`.
-A text holding a password is kept as a note instead, as the history does: the list shows the note, and it cannot be put back.
+A text holding a password is kept as a note instead, as the history does, and cannot be put back.
 
 ```sql
 -- name: Orders per day
@@ -211,37 +216,18 @@ In the TUI, a bar above the editor shows one field per parameter.
 | Key | Does |
 | --- | --- |
 | `⏎` | Run the statement under the cursor. |
-| `⌥⏎` `⇧⏎` | New line. |
-| `⌥←` `⌥→` `⌥b` `⌥f` | In the editor: a word left, right; `⌥b` `⌥f` are what a macOS terminal sends for `⌥←` `⌥→` when its option key is not meta. |
-| `^a` `^e` | In the editor: start, end of the line, as in a shell. |
-| `^k` `^u` | In the editor: delete to the end, the start of the line; at its edge, the line break. |
-| `esc` | Drop the faded rest after the cursor while one shows; else cancel the running statement. |
-| `tab` `⇧tab` | Next, previous pane: editor, parameters, result, sidebar; in the editor, `tab` takes the faded rest while one shows. |
-| `⇧←` `⇧→` `⇧↑` `⇧↓` | The pane on that side; a click on a pane does the same. |
-| Mouse | In the editor: a click places the cursor; a drag selects, a double click a word, a triple click a line, and letting go copies it, as tmux does; any key drops the selection. The view never scrolls under the mouse. |
+| `esc` | Drop the suggestion after the cursor while one shows; else cancel the running statement. |
+| `tab` `⇧tab` | Next, previous pane: editor, parameters, result, sidebar. |
+| `→` `tab` | In the editor: take the suggestion after the cursor, a completion or the AI completion. |
+| `^space` `^n` | List the names that fit at the cursor; `^n` where macOS takes `^space`. |
 | `^o` | Pick another connection; sessions stay open. |
-| `^p` `⌘k` | Find a saved query; `⌘k` needs a terminal with the kitty keyboard protocol, as Ghostty, Kitty or WezTerm. |
+| `^p` | Find a saved query. |
 | `^t` | Find a table of the schema. |
 | `^r` | Search the history of this connection. |
-| `←` `→` `[` `]` | In the sidebar: switch between queries and schema. |
-| `→` `tab` | Take the faded rest after the cursor: completion, or the idle ghost; after `JOIN`, a table with its alias and `ON` condition. |
-| `^z` | Undo: the last word typed, paste, name taken or delete. |
-| `⇧^z` `^y` | Redo; `^y` where the terminal sends `⇧^z` as `^z`. |
-| `^space` `^n` | List the names that fit at the cursor, after `JOIN` the tables a foreign key links first; `^n` where macOS takes `^space` to switch the input source. |
-| `v` | Show the result as a chart, or as a grid again. |
-| `f` `F` | Next format for this column; every column raw or readable. |
-| `=` `!` | Add `WHERE column = value`, or `<>`, to the statement under the editor's cursor, the value bound as a parameter. |
-| `i` | The column's distinct values, NULLs, least, greatest and five most common, over the rows loaded. |
-| `⌥c` | In the editor: copy the statement under the cursor; a macOS terminal sends it only with its option key set as meta. |
-| `⌘c` `⌘v` | In the editor: copy the selection, else the statement under the cursor; paste the clipboard. Only where the terminal hands `⌘` over with the kitty keyboard protocol instead of copying or pasting itself. |
-| `/` | Keep the rows loaded with a cell holding what you type; `esc` drops the filter. |
-| `s` | Sort the rows loaded by this column: up, down, then as read. |
-| `y` `Y` `c` | Copy the cell; the row as CSV; the result as CSV, JSON or Markdown. |
 | `^s` | Save the query. |
-| `^q` | A new, empty query; the first `^s` asks for its path. |
-| `^x` | Edit the saved query in `$EDITOR`. |
-| `^v` | The versions of the saved query its saves replaced; `⏎` puts one back in the editor, unsaved. |
-| `F1` `?` | Every key of the pane you are in; `?` outside the editor and the parameters, where it types. |
+| `v` | Show the result as a chart, or as a grid again. |
+| `y` `Y` `c` | Copy the cell; the row as CSV; the result as CSV, JSON or Markdown. |
+| `F1` `?` | Every key of the pane you are in: filter, sort, formats, mouse, undo and the rest. |
 | `^c` | Quit. |
 
 `pgbg tui <connection>` opens the TUI on another connection than the first.
@@ -273,14 +259,14 @@ A table is counted only when an index starts with its key, one count at a time, 
 
 ## Asking AI
 
-`ctrl-g` in the editor asks a command of your choice for SQL, and the idle ghost asks it for the rest of the statement you are typing.
+`ctrl-g` in the editor asks a command of your choice for SQL, and the AI completion asks it for the rest of the statement you are typing.
 Name the command in the `[ai]` table of `config.toml`:
 
 ```toml
 [ai]
 command = ["claude", "-p", "--model", "haiku"]  # reads the prompt on stdin, prints SQL; never run through a shell
 env = ["USER"]                                  # claude finds its login through USER
-ghost = true                                    # the idle ghost; off by default
+ghost = true                                    # the AI completion; off by default
 literals = "masked"                             # or "sent"; masked by default
 timeout = 60                                    # seconds; 60 by default
 ```
@@ -289,7 +275,7 @@ timeout = 60                                    # seconds; 60 by default
 | --- | --- |
 | `command` | The program and its arguments; it runs from an empty folder. |
 | `env` | The variables it gets besides `PATH`, `HOME`, `LANG` and `TERM`; one a password names is never passed. |
-| `ghost` | Asks for the rest of the statement after 1 s without a key, when no completion shows, and shows all of it faded; `→` takes it. |
+| `ghost` | The AI completion: asks for the rest of the statement after 1 s without a key, when no completion shows, and shows it as a suggestion; `→` takes it. |
 | `literals` | `masked` replaces the statement's values with markers, `sent` sends them as typed. |
 | `timeout` | How long the command has before it is stopped. |
 
@@ -299,14 +285,14 @@ The statement under the cursor goes along with the tables it needs: those it or 
 A comment holding a password is left out.
 When nothing names a table, as in `SELECT * FROM `, the names of the tables go alone.
 
-The `--` lines right above the statement tell the idle ghost what you want; header lines such as `-- name:` are left out.
+The `--` lines right above the statement tell the AI completion what you want; header lines such as `-- name:` are left out.
 Their values are masked as the statement's are: strings, numbers and any word holding an `@`, such as an email.
-A comment that opens a quote it never closes, as `don't`, cannot be masked: the idle ghost then only asks to complete the statement, and `pgbg.log` says so.
+A comment that opens a quote it never closes, as `don't`, cannot be masked: the AI completion then only asks to complete the statement, and `pgbg.log` says so.
 With `literals = "sent"`, the comment is sent as typed; one holding a password is never sent.
 Press `⏎` at the end of `-- the ten biggest orders`, with nothing typed under it, and it asks at once for the whole statement.
 While the command runs, the footer says `asking claude…`, named after your program.
 
-When the idle ghost shows nothing, `pgbg.log` in pgbg's cache folder says why.
+When the AI completion shows nothing, `pgbg.log` in pgbg's cache folder says why.
 
 ## On the command line
 

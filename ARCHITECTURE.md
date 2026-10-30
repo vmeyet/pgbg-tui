@@ -2,332 +2,128 @@
 
 `pgbg` is one binary: a TUI (`pgbg`) and scriptable commands (`pgbg run`, `pgbg connections`, ...).
 `src/lib.rs` holds everything and exports only what `src/main.rs` calls.
-This page says how the code is laid out; until the roadmap is done it is the target, and [`docs/roadmap.md`](docs/roadmap.md) says which parts exist.
-When a boundary or a flow changes, change this page in the same MR.
+The code is the contract; this page describes it, and changes in the MR that changes a boundary or a flow.
 
 ## Module map
 
 | Module | What it holds |
 |---|---|
 | `main.rs`, `cli.rs` | The clap command line and the dispatch to `commands/` |
-| `commands/` | One module per subcommand, each with a `run`; plain output through `render.rs`, JSON with `--json` |
-| `commands/doctor/` | `pgbg doctor`: a list of named checks in `mod.rs`, each verdict (`✓`, `!`, `✗`) and its fix a pure function in `verdicts.rs`, the lines and the JSON in `report.rs` |
-| `config/` | `config.toml`: connections, the `[ai]` table (`config/ai.rs`: the command as a list, the variables it gets, those a password names left out and those a password command or tunnel names warned of, its timeout, whether literals are sent and whether the idle ghost asks), and theme and keys (planned); load, validate, refuse secrets; rewrite key by key with `toml_edit` from a `ConnectionChange` of keys each parsed on its own (`Tier`, `Target`, `TunnelSpec`, `SecretSource`, `WritePolicy`, `Tls`, `StatementTimeout`) that serializes as the keys it sets, checked as a load would, through a temp file only its owner reads; `config/keychain.rs` says which keychain items a config names and which one a connection owns alone |
-| `connection/` | `Connection`: name, tier, target (a `Target`, the `postgres://` URL parsed from the config or `--url`, whose `Debug` shows only its place), tunnel, secret source, write policy, TLS, statement timeout, whether the TUI reads its schema, whether `ctrl-g` may ask about it; parsed once from config |
-| `secret/` | `Secret` (prints `<redacted>`, never cloned, wiped from memory on drop, as is the hex line written to `security -i`; a password typed or piped in grows in place within a buffer sized ahead) and its sources (a `KeychainItem` is one word `security -i` cannot split): keychain through `/usr/bin/security`, environment variable, command; `SecretSource::read` reads one when a session opens; `holds_secret` says whether a statement holds `PASSWORD`, a secret connection key or a URL with a password, a word split on anything but a letter, a digit or `_` (`words.rs`); `Secret::from_stdin` reads one typed hidden or piped in, and the TUI's connection form types one into a `Secret` it never shows |
-| `tunnel/` | `Tunnel`: a child process forwarding a free `127.0.0.1` port to the database; start, wait for the port, stop; its `Route` is what a session opens along |
-| `program.rs` | `Program`: the first word of a command line, which messages name without its arguments |
-| `groups.rs` | The process groups pgbg owns (a tunnel's, a `before`, password or `[ai]` command's): each one killed whole when dropped, and every live one by a panic hook; `output` runs a command to its end, `exchange` writes its stdin while it reads its stdout up to a cap, and both keep the last lines of its stderr, read its pipes at most a second past its exit, then kill what it left in its group before reaping it, and fail with a timeout when a process that left the group still holds a pipe a second later; `ExitWatch` sees a leader exit without reaping it |
-| `db/` | The only module that sees `tokio_postgres`: connect over rustls, open a session along its route, through the connection's tunnel when it has one (`open_along` for the TUI's session task, which keeps the tunnel for the next open and hears it start; `open_once` for a command, which owns the tunnel and stops it), run a statement, stream rows, cancel |
-| `db/model/` | The neutral model: `ResultSet` (its columns, and its rows a `Page` at a time, `push`ed on; its `Extent` says whether it holds them all, was cut, or has more waiting in its portal), `Column` (with its `Origin`, the table column the server says it holds as is, by the table's `TableOid` and the column's `ColumnNumber`, none for a computed one), `ColumnKind`, `Value`, `JsonText` (`json.rs`: a JSON cell as the compact text the server sent, its keys in the server's order, indented for the row's detail by a pass over that text that stops at the characters shown, never a parse), `Catalog` (a `Schema` as one read gave it, each table with its oid and each column with its number, with the session's `current_schemas(false)` and whether the table cap cut it), `Schema` (its tables, their columns, indexes, foreign keys and comments, filtered by name), `Table`, `ServerError`, the name a statement writes for a table (`name.rs`: bare when PostgreSQL reads it back the same and the guard reads no write in it, as it would in `delete`, else quoted), the words the guard reads as a write (`words.rs`), `Route` (direct, or a tunnel's `LocalPort`), `Params` (the values bound to a statement's `$n`, in order), and `CancelToken`, whose driver part only `db/` reads |
-| `db/connect.rs` | `Session::open`: the driver's config for a target along its route, the TLS it logs in with, the connect wait (10 s unless the URL's `connect_timeout` says otherwise, TLS and login included), and the task that drives the link and says why it ended |
-| `db/limits.rs` | What a session runs with: both of the server's timeouts, read from `pg_settings` in one simple query when it opens, the `statement_timeout` in effect (the connection's choice, else the stricter of its tier's and the server's), set on the link only where writes are allowed, and `ReadLimits`, which each read-only transaction sets with `SET LOCAL` |
-| `db/run.rs` | `Session::run`: one statement alone and its first `ROW_CAP` rows; a read-only one through a portal in `BEGIN READ ONLY`, always rolled back, a write that returns rows through a portal in its own committed transaction, or a cursor in the one the user began, which pgbg never ends; `Session::read_only` for the schema and the server facts |
-| `db/read_first.rs` | `Session::run_read_first`: a read on a connection that allows writes, run with writes refused, in a `READ ONLY` transaction of pgbg's, committed; a write the server refuses in it fails as `TriedToWrite`, and `Admitted::confirmed` runs it again as a write; inside the user's transaction it runs as a write does, unchecked |
-| `db/cancel.rs` | `CancelToken`: the server's cancel request, and `unless_stopped`, the one way pgbg stops a statement it leaves (a signal under a command, a session closing in the TUI): cancel within `CANCEL_WAIT`, then drop the work |
-| `db/pages.rs` | `Session::start`: a statement's first page of 500 rows, and on a read-only connection its portal kept open in `Pages`, in its `BEGIN READ ONLY` transaction, until `next` fetches the last page or `close` rolls it back; each read-only transaction has the server end it once left idle 6 minutes (`SET LOCAL idle_in_transaction_session_timeout`, unless the server's own is stricter), and the TUI closes the portal first: after 5 minutes, or a tenth before the server's stricter timeout; `Pages::read_beside` reads a lookup in that transaction behind a savepoint, so the next pages still wait whether it fails or not |
-| `db/schema.rs` | `Session::read_schema`: every schema, table, column, index, foreign key and comment the role can read, from `pg_class`, `pg_attribute`, `pg_index`, `pg_constraint` and `pg_description` in one read-only `REPEATABLE READ` transaction, so its queries see one snapshot, a partition left to its parent, the first 20 000 tables by name (`LIMIT` in the SQL, after the filter `pgbg schema` passes it), with `current_schemas(false)`; `read_schema_along` reads it on a session of its own along a route, which the TUI gives it from the session it already has open |
-| `db/server.rs` | What the server says of a session (`ServerFacts`: user, version, the `statement_timeout` in effect and the server's own, from `pg_settings`) and what its role can write (`RoleRights`: for the login role, each role it may `SET ROLE` to and `PUBLIC`, the flags, `pg_write_all_data`, database `CREATE`, and the schemas, tables and sequences each may write, read from the ACLs so each grant names its role) and what it can do that a read-only transaction does not stop (`ReadOnlyGaps`: `pg_signal_backend`, the `dblink` functions it may call, the settings granted it with `GRANT SET ON PARAMETER`), read with `Session::read_only` like the schema |
-| `db/lex.rs` | The tokenizer: words (compared ASCII case aside, as PostgreSQL reads keywords), `;`, `{{name}}` and `$n`, each with the bytes it spans, strings, comments, dollar quotes and quoted names hiding what they hold; a `{{` that opens no name, or one glued to a word, is unreadable; the guard, parameters and completion read its tokens; the editor keeps its text read once per change as a `Lexed`, which the statement under the cursor, its parameters and completion share; `span_at` says whether a byte falls in code, a string, a comment, a quoted name or a `{{name}}`, which keeps completion out of all but code |
-| `db/guard.rs` | Classifies a statement before it is sent: read, write, or more than one statement; `admit` turns a statement and its `Params` into an `Admitted`, the only kind a session runs, with the `TransactionStep` it takes on a transaction the user began, refused when the count of values is not the count of its `$n` or when it holds more than one statement, whatever the connection allows, and the `Write` it is when it is not a read; `write_in` names that `Write` (each write it holds, with its verb and the tables it lists, as `INSERT into archived_orders and DELETE from orders`, a change of the schema with its kind and the object it names by place, as `DROP TABLE role`, and `CASCADE` when it says so, or more than one statement) from tokens already read, for the confirmation, and none for transaction control or cursor statements (`BEGIN`, `COMMIT`, `SAVEPOINT`, `FETCH`, `CLOSE`), which change no data by themselves, save `COMMIT PREPARED` and `ROLLBACK PREPARED`, which end a prepared transaction, maybe another client's, and so ask; the words it takes for a write live in `db/model/words.rs`, which `name.rs` reads too; `statement_at` finds the statement under the editor's cursor with the same tokenizer |
-| `db/bind.rs` | `AsText`, the one `ToSql` a value is bound through: any parameter type, sent as text for the server to read with that type's input, `None` as NULL; `prepare` looks up each type a header names (`to_regtype`, the name bound) and leaves the others to the server (id 0) |
-| `db/decode.rs` | Wire values to `Value`, by column type, a domain by its base type; a value it cannot decode is `Unsupported`, never an error |
-| `query/` | Saved queries: the `.pgbg/queries/` tree and the user's own folder of each connection (`Roots`, which the TUI lists for the connection on screen and `pgbg run --query` reads by path), the header (`-- name:`, `-- connection:`, `-- chart:`, `-- format:` and `-- param:`), load, and save |
-| `query/versions.rs` | The texts a save replaced: `Roots::write` over a query, and `Roots::edit_kept` around the user's editor, keep the old text in `<data folder>/versions/<FNV-1a of the file's real path>/<when it was replaced>.sql` (folder `0700`) unless it is the text written or already the newest version, the newest 50 per query; a text holding a secret by `secret::holds_secret` is kept as the history's note (`secret::kept_or_note`) and read back with no text; listed newest first for `ctrl-v` |
-| `query/params.rs` | Parameters, pure: the `{{name}}` of a statement turned into `$n`, and the values `Given` by name (`--param`, a `--params-file` line, the parameter bar) into the `Params` its run binds, a name left empty taking its `-- param:` default, or NULL when `optional`, then `admit`ted by the guard; its `Numbering` reads a place in the filled text, where a server error points, back in the template |
-| `query/condition.rs` | A condition added to a statement, pure: `column = {{name}}`, `<>`, or `IS NULL`, put after the statement's `WHERE` with `AND` (the `WHERE` in parentheses when it holds an `OR`), else as a new `WHERE` before the clause that follows one, both found among its `db::lex` tokens outside parentheses; `ParamName::for_column` names the parameter |
-| `complete/` | Completion, pure: the `Index` built once from a `Catalog` (a vtui completion index per list: the tables, every column, each table's own columns and the keywords, in the catalog's order, and the names that need quotes with how they go in; a table bare in the first schema of `current_schemas(false)` that holds its name, else as `schema.table`; each column name once, and each table's own), the `Ask` at the cursor from the tokens of the statement under it, never of the whole editor, and none inside a string, a comment or a quoted name (a table after `FROM` or a `,` of a `FROM` list; after `JOIN`, a table with the tables named before it; a column of `orders` after `o.` when `FROM orders o`, each table found by its name as PostgreSQL resolves it, a bare one lowercased and a quoted one as written; a keyword at a statement's start; else a column or a keyword), and the ranked candidates: vtui ranks each list, the ghost's prefix only and the list's fuzzy too, and `complete/` merges the lists, quotes a name, cases a keyword as typed and offers a table's first column after a bare `.`; after `JOIN`, the joins (`join.rs`) come first: each table a foreign key links to one the statement names, either way, as `customers c ON c.id = o.customer_id`, its alias the initials of its name, numbered when taken or a keyword (`alias_of`, which `keys::trail_join` takes too), its condition from the key's columns joined with `AND` |
-| `ai/` | Asking a command for SQL: the `Prompt` (instruction, statement, schema slice, tier) as the text on the command's stdin (`prompt.rs`), the statement's literals masked unless `[ai] literals = "sent"` and its comments stripped, and those of the idle ghost's comment instruction (`mask.rs`), the tables shown (`slice.rs`), and its answer read back as statements (`answer.rs`), all pure; `Asking` runs the command on a prompt in a task of its own, which a drop kills, and says why it brought no reply with a `CommandError` (`command.rs`) |
-| `format/` | Formats, pure: for each `ColumnKind`, the ways a cell can read (raw first), the step to the next one, and the text of one cell in one of them, the clock and the time zone passed in as a `Clock`; `number.rs` groups digits and reads sizes, `time.rs` reads timestamps local or relative, and dates relative to today |
-| `keys.rs` | The keys of a result's columns, pure: a result column whose `Origin` names a table column of the catalog is part of that table's primary key when that column is, or points where a foreign key of that table points whose every column the result holds once, a key of several columns too, so an alias, a subquery or a join never mistakes one column for another and a computed column has none; `Grid::points_to` gives it for a column, and `Target::lookup` the read of the row it points to, `SELECT * FROM` its table `WHERE` each of its columns `= $n`, the row's values bound; `referrers` the keys of other tables that point to a row, to any table its columns were read from, whether an index of theirs starts with the key, with the count of its rows that do under a 2 s timeout of its own and the statement of those rows as `{{name}}` parameters; `trail_join` the statement joining the tables of a trail |
-| `export.rs` | A cell, a row or a whole result as text to paste: CSV (a NULL left empty), JSON (one object per row, as `--json` gives values, a JSON cell as its compact text, a later column of a name already taken suffixed `_2`, `_3`, past every real name) or a Markdown table; every value raw and whole, a CSV formula not guarded; pure |
-| `history.rs` | Every statement run, per connection: one JSON line each in `<data folder>/pgbg/history/<connection>.jsonl` (`$XDG_DATA_HOME`, else `~/.local/share`) (folder `0700`, file `0600`), rolled over to `.1` past 4 MB under the file's `lock::open`, so two pgbg never lose each other's lines; the text, when, how long and what came of it, never a row, the server's words or a statement holding `PASSWORD`, a URL with a password or a secret connection key (`sslpassword`, `oauth_client_secret`), as `secret::holds_secret` finds them; `Entry::of_run` builds one from the clock values its caller read; `History::distinct` lists each statement once for `ctrl-r`, which `Search` narrows as the finder does |
-| `chart/` | `ChartSpec` (kind, x column, y columns) and `Series` built from a `ResultSet`, both pure; one file per chart kind |
-| `syntax/` | SQL colours from tree-sitter, loaded on first use; JSON colours for the row's detail and the grid's cells, by hand in `syntax/json.rs` |
-| `act.rs`, `keymap.rs` (planned) | Every action in one table (name, default keys, help, pane, and palette verb (planned)); the user's `[keys]` on top (planned) |
-| `tui/mod.rs` | The event loop: keys, pastes, clicks, answers and the recolour, idle-ghost and relative-time timers in, frames out |
-| `tui/app/` | `App`, the pure state machine: keys and clicks in, `Action`s out, `Answer`s applied to the sheet of the connection that gave them, a saved query read to the sheet that asked for it, a config answer to the form that sent its `ConfigChangeId` (else to the status line); `protocol.rs` holds what the app and the backend say to each other, `keys.rs` which pane or overlay takes a key or a paste and the act it does, `panes.rs` where the last frame drew each pane, so `⇧` and an arrow or a click (`mouse.rs`) find the pane they mean; in the editor a click also places the cursor, a drag, a double click (a word) or a triple click (a line) selects, each on the line drawn under the mouse, since the editor keeps the first line the last frame drew and moves it only when the cursor leaves the view, and letting go copies the selection, the loop handing in the time each press was read so vtui's `Clicks` counts them, `sheet/` one connection's state (`schema.rs`: its schema read and the completion index built on it), `search.rs` the fzf-narrowed list the finder and the picker share; one `Overlay` at most (help, finder, picker, connection form, row detail (`detail.rs`: the grid's row, or the rows its foreign keys led to on a trail that `⌫` walks back, each read by an `Action::LookUp` whose `LookId` its answer carries), the footer prompts (`save.rs`; `confirm.rs`: a write waiting for `y`), the copy format question, the figures of the grid's column (`column_stats.rs`: distinct values, NULLs, the least, the greatest and the five most common over the rows loaded, counted on the loop by sorting an index of the rows with `Value::compare`, a millisecond for ten thousand), the schema filter, the grid's row filter (`shown_rows.rs`: the rows `/` keeps and `s` sorts, as an index over the result's), the completion list, the `ctrl-g` ask (`ask.rs`: the instruction on the footer line, the wait, the answer; its prompt built from the statement under the cursor and the schema read so far, with the `[ai]` settings filtered against the connections as they are when it asks; an answer is dropped once the editor's `Revision` moved past the one it was asked about; `idle_ghost.rs` the same command asked on its own once the editor sits idle, its answer shown as the ghost), the `ctrl-t` table finder (`table_finder.rs`: every table of the schema, with the schema tab's actions: `⏎` its columns, `^r` its preview, `⇥` its name in the editor) and the `ctrl-v` list of versions (`versions.rs`: each with the lines it would change in the editor's text, `⏎` putting it there unsaved; one kept as the note shows it and cannot be put back)) takes the keys; the sidebar shows the queries or the schema (`schema_tab.rs`: its schemas and their tables, folded and filtered, `←` `→` or `[` `]` to switch; on a table `p` runs `SELECT * FROM` it `LIMIT 100` as the editor's statements run, through the guard and into the history, `i` puts its name at the editor's cursor, and `⏎` shows its columns and indexes in the result pane), and the parameter bar (`param_bar.rs`: a secret vtui field per `{{name}}` of the statement under the cursor, so `Debug` never prints a value, its values kept by name on the sheet) sits above the editor |
-| `tui/backend/` | `Backend::dispatch` hands each `Action` over without waiting, to one part per concern: sessions (`session/`: one per connection opened, a task owns each one (`mod.rs`), hearing jobs and cancels and saying answers through its `Mailbox`, reached through its link (`link.rs`), opens the session and its tunnel when needed, keeps it between runs and loses it when its link or tunnel ends (`open.rs`), runs its statements in turn, takes cancels by `RunId` while a statement runs (`run.rs`), records each run in the history once answered (`record.rs`), serves the pages of a result while its portal is open (`paging.rs`), reads a lookup read only and out of the history, beside those pages when a portal is open (`look_up.rs`), reads the schema beside its statements (`schema.rs`), and says when the session is lost), queries (and their versions for `ctrl-v`, each compared with the editor's text off the loop), the config (one change at a time, answered in the order asked, through `config/` on a blocking thread, then read back; a typed password goes to the keychain only once the config took the change, and moves back to the form when it did not; once it did, the connections are read back whatever the keychain says, and a keychain step that failed is a warning in the status line), history (each run added on a blocking thread once answered, best effort and logged; read for `ctrl-r` the same way), the `[ai] command` (`ask.rs`: one ask at a time, with the settings the app sent, its reply read back against its prompt and answered as `Answer::Asked`; a new ask, `Action::DropAsk` or quitting drops the one before, which kills its command), and the clipboard (a whole result's text built on a blocking thread and handed back to the app as `Answer::Exported`; the first of `pbcopy`, or `wl-copy`, `xclip` and `xsel` off a Mac, that takes the copy in a task, while the loop sends the terminal's OSC 52 through vtui for a copy of 100 KB at most, so a copy reaches one or the other inside tmux or over ssh; `⌘v` reads it back through the first of `pbpaste`, or `wl-paste`, `xclip` and `xsel`, that prints it, answered as `Answer::Pasted` and pasted as the terminal's paste is) |
-| `tui/ui.rs`, `tui/*_view.rs` | Drawing: layout in `ui.rs`, one view module per pane or modal; `palette_footer.rs` cuts the keys under a vtui palette popup to the whole hints that fit, as `ui.rs` does for the footer line |
-| `tui/grid_view/` | The results grid: only the visible rows and columns are drawn, straight into the frame's buffer, the cursor's cell lit, each cell through its column's format and the clock the loop read for the frame, the header bold for a primary-key column, `→` after one that points to another table and `▲` or `▼` after the one the rows are sorted by, the rows shown through the index `/` and `s` keep (`tui/app/shown_rows.rs`), in the colours `tui/ink.rs` gives its value under its column's `Colouring` (`tui/app/colouring.rs`, decided once per result and format on the first 500 rows: a text column of at most 8 distinct values, each found twice on average, takes vtui's user colours by a hash of each value) |
-| `tui/chart_view/` | Draws a `Series` with ratatui's `BarChart` (bars across, so text labels stay readable) and `Chart` (braille line), one file per kind; a legend in vtui's user colours |
-| `tui/theme.rs` | pgbg's `Theme`: vtui's palette, read through `Deref`, with the tier colours and a production colour of its own (`danger` leaning to magenta), so a production frame never reads as an error drawn in `danger`; the SQL token colours are vtui's `Syntax` |
-| `vtui` (git dependency) | Shared with the sibling TUIs: the terminal in raw mode (`Screen`, with the mouse, and `⌘` where the terminal speaks the kitty keyboard protocol), the palette (`Theme`) and its code colours (`Syntax`), the input box (`Field`, its moves and deletes of a shell line, its cleaned paste, and the secret one whose `Debug` hides its text), styled lines wrapped to a width (`text::wrap_line`), the completion index (`complete::Index`), the `ctrl-k` palette and its `Pick` rows, the `?` overlay, fzf-style matching |
-| `failure.rs` | Why a session did not open or was lost (`Lost`), or why a run, a page or a schema read gave no result (`Failure`): one kind per reason, from the session task to the app, drawn or logged only there; the history's `Outcome` is derived from it |
-| `lock.rs` | `lock::open`: a file opened to append (`0600` when made) under an exclusive `flock`, so two pgbg never lose each other's writes, opened again a few times at most when another pgbg moved or replaced it meanwhile; the history and the usage file take it |
-| `usage.rs` | `[usage]` counts: pgbg's `Rules` for vtui's `usage` (every act under the pane of its first row) and `UsageFile`, `usage.jsonl` in pgbg's cache folder, read, and merged under the file's `lock::open` through a temp file only its owner reads; `tui/usage.rs` is the loop's side, `tui/app/usage.rs` what the app answers |
-| `log.rs` | The log file, in pgbg's cache folder; never a secret, never a row |
-| `update.rs`, `release.rs` | What `pgbg update` runs, as a `Call` that `commands/update.rs` hands to its `Runner`: `brew upgrade` when the binary sits in brew's `Cellar`, else `cargo install --git` unless `git ls-remote` shows the running commit is the latest; `release.rs` holds the `Commit` that `build.rs` embeds and the label `pgbg --version` shows |
-| `signal.rs` | The signals that stop pgbg (`SIGINT`, `SIGTERM`, `SIGHUP`) and the exit code each gives |
+| `commands/` | One module per subcommand, each with a `run`; plain output through `render.rs`, JSON with `--json`; `doctor/` is named checks, pure verdicts and a report |
+| `config/` | `config.toml`: load, validate, refuse secrets; `ai.rs` the `[ai]` table; `write.rs` rewrites key by key with `toml_edit` through a temp file only its owner reads; `keychain.rs` which keychain items a config names |
+| `connection/` | `Connection`, parsed once from config: name, tier, `Target`, tunnel, secret source, write policy, TLS, timeout, schema and AI switches |
+| `secret/` | `Secret` (prints `<redacted>`, never cloned, wiped on drop) and its sources; `holds_secret`, the one rule for a text holding a password |
+| `tunnel/` | `Tunnel`: a child process forwarding a free `127.0.0.1` port; start, wait for the port, stop |
+| `groups.rs` | The process groups pgbg owns, killed whole when dropped and by a panic hook; `output` and `exchange` run a command with capped pipes |
+| `db/` | The only module that sees `tokio_postgres`: connect over rustls, open a session along its route, run, page, cancel |
+| `db/model/` | The neutral model every other module uses: `ResultSet`, `Column` and its `Origin`, `Value`, `Catalog`, `Schema`, `ServerError`, `Route`, `Params`, `CancelToken` |
+| `db/lex.rs` | The tokenizer the guard, parameters, completion and AI share; strings, comments and quoted names hide what they hold |
+| `db/guard.rs` | Classifies a statement before it is sent; `admit` builds the `Admitted`, the only kind a session runs; `write_in` names a write for the confirmation |
+| `db/run.rs`, `db/read_first.rs`, `db/pages.rs` | Running one statement in its transaction, a read with writes refused on a writable connection, and the portal kept open for its next pages |
+| `db/limits.rs`, `db/server.rs`, `db/schema.rs` | The timeouts a session runs with, what the server and the role allow, and the schema read in one snapshot |
+| `query/` | Saved queries: `Roots`, the header, load and save; `versions.rs` the texts a save replaced; `params.rs` `{{name}}` to `$n`; `condition.rs` a `WHERE` added from the grid; all but the file system pure |
+| `complete/` | Completion, pure: the `Index` built from a `Catalog`, the `Ask` at the cursor, ranked candidates, joins on foreign keys |
+| `ai/` | Asking a command for SQL: the prompt and its masking, the schema slice, the answer read back, all pure; `command.rs` runs the command |
+| `format/`, `chart/`, `keys.rs`, `export.rs` | Pure: cell formats under a `Clock`, chart series, a result's keys and lookups, copies as CSV, JSON or Markdown |
+| `history.rs` | Every statement run, per connection, in `<data folder>/history/<connection>.jsonl`; never a row nor a secret |
+| `syntax/` | SQL colours from tree-sitter, JSON colours by hand |
+| `act.rs` | Every action in one table: name, default keys, help line, pane |
+| `tui/mod.rs` | The event loop: keys, pastes, clicks, answers and timers in, frames out |
+| `tui/app/` | `App`, the pure state machine: keys in, `Action`s out, `Answer`s applied; `protocol.rs` what the app and the backend say; one `Overlay` at most takes the keys |
+| `tui/backend/` | `Backend::dispatch` hands each `Action` to its part without waiting: one session task per connection, queries, config, history, AI, clipboard |
+| `tui/ui.rs`, `tui/*_view.rs`, `tui/grid_view/`, `tui/chart_view/`, `tui/theme.rs` | Drawing: one view per pane or overlay, in vtui's palette with the tier colours |
+| `vtui` (git dependency) | Shared with the sibling TUIs: terminal, palette, fields, completion index, help, fuzzy matching, usage |
+| `failure.rs` | Why a session did not open, was lost, or gave no result; the history's `Outcome` derives from it |
+| `lock.rs` | A file opened to append under an exclusive `flock`, so two pgbg never lose each other's writes |
+| `usage.rs`, `log.rs` | The `[usage]` counts and the log file, both in pgbg's cache folder |
+| `update.rs`, `release.rs` | What `pgbg update` runs, and the commit `pgbg --version` shows |
+| `signal.rs` | The signals that stop pgbg and the exit code each gives |
 
 ## Data flow
 
-Running a statement:
+These invariants hold across every flow; a change that breaks one is a bug.
 
-1. The editor hands `App` the statement under the cursor; `App` returns `Action::Run { connection, run, statement }`, and every answer about it carries the same connection and `RunId`, so a late one never lands on another connection or the next run.
-2. `db::guard` classifies it; a write on a read-only connection comes back as `Incoming::Refused` in an `Answer` and never reaches the server.
-   A write on a connection that allows writes asks before `App` returns its `Action::Run`: the footer names its verb and target (`DELETE from orders?`), `y` sends it, any other key drops it unsent, on every tier.
-   `pgbg run` asks `y/N` on the terminal, and refuses a write when stdin is no terminal unless `--yes` says yes ahead.
-   A read there runs with writes refused (`Mode::ReadThenAsk`); when the server refuses a write in it (SQLSTATE `25006`, a function that writes), its transaction is undone, the session answers `Incoming::TriedToWrite`, and the footer asks `this statement tried to write, and may run twice: run it?` once its sheet is on screen with no overlay open, the sheet keeping the question until then; `y` sends it again with a `Confirmed`, which runs it as a write.
-   Inside the user's own transaction a read runs as a write does, unchecked: their `COMMIT` or `ROLLBACK` decides what stays.
-   `pgbg run` asks the same on the terminal, then runs it again on the same session; `--yes` runs it as a write at once.
-   A table preview (`p`, `^r`) is always a read: `name.rs` quotes a table name the guard would read as a write.
-3. The session opens `BEGIN READ ONLY` and binds the statement to a portal (`Transaction::bind`).
-   A portal takes any statement the guard admits; `DECLARE CURSOR` takes only a `SELECT` or `VALUES`, not `SHOW` or `EXPLAIN`.
-4. The first page (`query_portal(&portal, 500)`) comes back in `Incoming::Result`; the grid paints it, and once its cursor is 100 rows from the last one it has, `Action::NextPage` asks for the next, which comes back as `Incoming::Page`.
-   While more pages wait, the session task serves them in `backend/paging.rs`, the portal and its transaction held open; the title says `first 1 500 rows · more…`, then `all 1 732 rows` at the end.
-   The portal closes before its last page on a new run, a cancel, the session closing or lost, its tunnel dying, or 5 minutes without a page asked, so a held snapshot never keeps the server from cleaning up for long; an empty `Cut` page then says the result stays at the rows it has, and a page the server fails comes back as `Incoming::PageFailed`, its words in the status line.
-   A connection that allows writes, and `pgbg run`, keep the first 10 000 rows of a result and say it is cut.
-5. A server error comes back as a `ServerError` with the server's position; the editor marks that character until the text changes.
-6. `Esc` on a running statement returns `Action::Cancel { connection, run }`; the session task sends the server a cancel request over a link of its own, with the session's TLS, only while that run is on the server, and before the next one starts.
-   The task keeps the latest run a cancel came for, so one for a run queued behind a page being fetched still keeps it from the server.
-   The statement fails with the server's words, and the transaction is always rolled back at the end; a run cancelled before it started is never sent.
-7. Closing a session (`ctrl-c` to quit, `ctrl-x` in the picker, a connection removed or changed) stops its running statement as every stop does (`CancelToken::unless_stopped`): it asks the server to cancel it, waiting 1 second at most (`CANCEL_WAIT`), then drops it, so no further round trip is sent.
-   A cancel the server gets while idle between two round trips (a prepare, the savepoint probe when unsure, `BEGIN`, a bind, `COMMIT`) does nothing: only the drop keeps the rest of the statement, a `COMMIT` included, from the server.
-   One not yet sent never is; pgbg waits 3 seconds at most for the session task (`STOP_WAIT`, as for a signal), then sends the cancel again and aborts it.
-   A `Session` dropped in the middle of a statement cuts its link instead of letting it finish.
-   Only a server that sees pgbg go stops the statement then (`client_connection_check_interval`: PostgreSQL 14 or later, on Linux, and not behind PgBouncer in transaction pooling); elsewhere the cancel request is what stops it.
-
-Switching connection:
-
-1. `ctrl-o` opens the connection picker; picking one not yet open starts its sheet and returns `Action::Open { connection, session }` with a new `SessionId`, picking one whose session failed returns it again so its task opens it again, picking one closed with `ctrl-x` opens a new session, picking an open one shows its sheet and returns nothing.
-2. The session task opens through `db::open_along`, as `pgbg run` does: when the connection has a tunnel that is not running, it starts it with `Tunnel::start`, which picks a free port, runs the command, and waits until the port answers.
-   Every answer of the task carries its `SessionId`, and a sheet takes only those of its current session, so the words of one closed or replaced never reach the next.
-3. `Session::open` takes the tunnel's `Route`: it connects to `hostaddr=127.0.0.1` and the tunnel's port, and keeps the URL's host for the TLS certificate check.
-4. The session stays open until pgbg quits or `ctrl-x` in the picker closes it, so switching back is instant; its tunnel stops with it.
-   `ctrl-x` keeps the sheet and its editor text, marks its session closed so a late word from the old task changes nothing, and picking it again opens a new session.
-   When the config changes, the sheet of a connection gone closes and the sheet of one changed opens a new session on it (`Action::Reopen`), unless its session was closed: it only takes the connection as it is now.
-   Either way a statement running on the old session fails, since its answer goes with it.
-   A close or a reopen cuts a result still paging at the rows it has, since its portal closes with the old session.
-   Each sheet keeps its editor text and its result while another one is shown, and the answers of its session land on it alone.
-5. A session whose link is gone, or whose rollback failed, is opened again before the next statement; it is never retried on its own.
-   A statement sent while its session fails to open fails with it, and why, the tunnel's own words included, and is never sent on a later open; once pgbg quits, one still queued is never sent.
-6. Opening picks `statement_timeout`: the connection's own, else the stricter of its tier's (none on local, 60 s on staging, 30 s on production) and the one the server already applies, read from `pg_settings`.
-   Each read-only transaction sets it with `SET LOCAL` right after `BEGIN READ ONLY`, as it sets its idle timeout, so behind PgBouncer in transaction pooling both follow every transaction and never reach another client.
-   A connection that allows writes also sets it on the session, since its statements run outside pgbg's transactions: behind a transaction pooler that holds only on the server link it reached, so give the role its own `statement_timeout` there.
-7. Opening gives up after 10 seconds, TLS and login included, unless the `url` sets `connect_timeout`; and each session asks the server to stop its statement once pgbg is gone (`client_connection_check_interval`), best effort, as step 7 above says.
-
-Reading the schema:
-
-1. The schema is read once it is first needed: the schema tab drawn while the session on screen is open, or switched to, `ctrl-t`, or a first completion asked while the session is open; only switching to the tab, `ctrl-t` and `r` open a failed session again, so a typed key never does; `schema = "off"` on a connection never reads it, and `r` in the schema tab reads it again.
-   `Action::ReadSchema` asks the session task, which opens its session first unless it is open; its `SchemaReader` waits for the route that session took, opens a second session along it, reading the password again from its source (a command runs again), reads the schema and `current_schemas(false)`, closes it and answers `Incoming::Schema`; no password is kept between the two opens, and a failed read is a warning, never a lost session.
-   A session that does not open, or is lost, fails a read waiting on it, so `r` asks again; asking on a failed session shows it opening again, since the ask opens it.
-   The reader is a future of the session task polled beside its statements, so a statement never waits on it, nor it on a statement, and it goes when the task stops.
-   That second session is one more login: it takes a slot of the role's `CONNECTION LIMIT` or of a PgBouncer pool, which can make the main session's reopen fail while it lasts, and one more IAP websocket through a `gcloud` tunnel; that is why it is lazy, short and can be turned off.
-   The catalog query keeps the first 20 000 tables in name order (`LIMIT` in the SQL), and the status line says when it is cut.
-   The foreign keys are one more query in that transaction, as cheap as the indexes one: about 20 ms for 10 000 tables and keys on a laptop, against about 75 ms for the tables or the columns.
-2. The sheet keeps the `Catalog` behind an `Arc`, shared and never changed; a new read replaces it whole, and a sheet opened again on a changed connection reads it again when next needed.
-
-Completing a name:
-
-1. Once the schema reader answers `Incoming::Schema`, it builds the `complete::Index` from that `Catalog` on a blocking thread and answers `Incoming::Index` with both; the sheet keeps the index behind an `Arc` while the catalog it was built from is still the one read.
-2. Only a key that types an identifier character or `.` asks for candidates, and only when the cursor ends the word; the first ask reads the schema while the session is open, and a failed or closed session stays so, and until the index comes the keywords alone complete; the context comes from the tokens of the statement under the cursor alone.
-3. The ghost is prefix only, a binary search in each of vtui's indexes: the rest of the shortest name longer than what was typed shows dimmed after the cursor, and `→` or `⇥` at the end of the word takes it, quoted when its name needs it; after `JOIN` it is the first join a foreign key gives, alias and condition with it; `esc` drops it before it cancels a run; any other key drops it, one that acts (`⏎`, `ctrl-s`) too, while `⇥` and `esc` do their usual work only when no ghost shows (`Act::is_ghost`), and it shows only while the editor has the keys.
-4. `ctrl-space` opens the list in a popup at the cursor, where a fuzzy match joins the prefix ones: vtui ranks each list (prefix matches shortest first, then fuzzy ones by score, only to fill 50), and pgbg merges them: the joins first after `JOIN`, then a prefix before a fuzzy match, a column of a table the statement names before any other, the shorter prefix match first, each name once; at most 50 are kept; `↑↓` pick, `⏎` or `⇥` take, `esc` closes, and typing on narrows it, while `⇥` outside it still switches panes.
-   When no name fits, it opens or stays open saying `no match` and `⏎` and `⇥` do nothing, so a half-typed name never runs; a paste closes it and goes to the editor.
-5. A timing test holds the budget: 20 000 tables and 200 000 columns, one key, under 2.5 ms in a release build, best of five runs.
-   It reads the wall clock, so it is `#[ignore]`d and built in release only, and CI runs it in a step of its own.
-
-Running a statement with parameters:
-
-1. `query::params` reads the `{{name}}` of the statement under the cursor from `db::lex`'s tokens, never inside a string, a comment or a quoted name, and the header's `-- param: since date = 2024-01-01`, `-- param: owner text optional`.
-   A statement holding both a `$n` of its own and a `{{name}}` is refused, and a `{{` the lexer cannot read as a name is too: a doubt never runs.
-2. The parameter bar above the editor shows one field per name, an empty one with what it runs with (its default, `NULL` or `required`); `⇥` from the editor reaches its first field, `⇥` and `⇧⇥` step through them, `⏎` in a field runs and a modified `⏎` types nothing, `esc` cancels a running statement, else goes back to the editor.
-   The values typed stay on the sheet, by name, until pgbg quits and are never written to disk; the run carries them and the header's `-- param:` lines to the session task, which fills and admits the statement as `pgbg run` does.
-3. Each name becomes `$1`, `$2` (the same name the same number), so the guard classifies what the server gets; `admit` takes the values with the statement and, when values came, refuses one whose count of values is not its count of `$n`; a statement given none (`CREATE FUNCTION add1(int) RETURNS int RETURN $1 + 1`) is left to the server.
-   A name left empty, with no default and not `optional`, stops the run before anything is sent; an `optional` one is bound as NULL.
-   A `--param` for a name the statement does not hold, or a name given twice, stops the run too; a params file may name more, so one file serves several queries, and a line of it that is no `name=value` is told by its number only.
-4. Both ways of running bind them: the read-only portal and the one a connection that allows writes uses.
-   The statement is prepared with unknown types (id 0) where the header names none, so the server infers them; a header type is looked up first with `SELECT to_regtype($1)::oid`, the name itself bound, and a type the server does not know stops the run.
-   Each value goes through one `ToSql` wrapper that accepts any type and encodes as text (`encode_format`): the server parses it with that type's own input, and a value it cannot read fails with its words.
-5. The history keeps the statement with its `{{name}}`, never the values; a run its parameters stopped, a type the server does not know included, is `refused`.
-6. `pgbg run` reads the `-- param:` lines heading its statement, and takes `--param name=value`, `--params-file <file>` (one `name=value` a line) or `--params-file -` on stdin, so a value need not sit in argv or the shell's history.
-
-Asking a command for SQL:
-
-1. `[ai] command` in `config.toml` names any program that reads a prompt on stdin and writes SQL on stdout (`llm`, a wrapper around ollama, `claude -p`), as a list run without a shell; without it, or with a program that cannot be run, the feature is off and the keys say so.
-   The `claude` example turns its tools off (`["claude", "-p", "--tools", "", "--strict-mcp-config"]`): a table or column name can carry instructions to the model, and any process of the user, the command included, can read pgbg's keychain items.
-2. A connection says `ai = "off"` to turn it off; it is on otherwise, on every tier and whether the connection allows writes, because of the invariant below.
-3. `ctrl-g` in the editor asks for an instruction on the footer line.
-   The prompt holds only:
-   - the instruction, sent as typed: whatever the user writes in it leaves the machine;
-   - the statement under the cursor with every literal masked (a string as `'<literal 1>'`, a number as `<number 2>`, found with `db::lex`) and its comments stripped, a parameter as its `{{name}}`;
-   - a slice of the schema: the tables the statement names, then those an instruction word of three letters or more starts, or whose name of three letters or more starts that word, then those holding a column it names, then those one foreign key away from any of them, either way, the links of the first kept first;
-     each table is one line written as the body of a `CREATE TABLE`, `public.orders(id integer, customer_id integer references public.customers(id))`, since a model reads that form best: its columns and types, a one-column foreign key on its column, a wider one as `foreign key (...) references ...` after them, and `COMMENT ON` text as `/* ... */`, left out when `secret::holds_secret` trips on it;
-     when no table is kept, every table's name alone, in the order of the search path, then the other schemas, so `SELECT * FROM ` still gets real names;
-   - the tier.
-   A comment is schema metadata the owner wrote, not row data, but it can carry instructions to the model as a name can.
-   It never holds a row, a value from a table, a default, the history, a server's words, nor the connection's name, host or URL; a test builds a prompt from a fixture holding each of them and finds none.
-   The answer's markers are put back from the masked list before it is shown, and a marker of no literal, or of one of another kind, stops it; `[ai] literals = "sent"` sends the literals as typed, comments still stripped.
-   A statement holding a secret, by the rule the history uses (`secret::holds_secret`), is never sent: the ask stops and says why.
-   Nor is one holding a `{{` that opens no parameter, or a quoted name or string it never closes, since no marker masks what follows it.
-   The prompt is capped at 16 KiB, the schema slice cut first, table by table, the farthest first, and the prompt says when it was.
-4. The command runs from a new empty temp folder, removed after, with a cleared environment: `PATH`, `HOME`, `LANG`, `TERM` and the names `[ai] env` lists, never a variable a connection's `password = { env = ... }` names, even when listed, which the config warns of.
-   Only those `env` sources are left out: a listed name a password `command` or a `tunnel` names is passed, with a warning.
-   It runs in its own process group through `groups::exchange`: stdin written then closed while stdout is read, so a big prompt never deadlocks, the command stopped once stdout passes 64 KiB, stderr's last lines kept, the group killed on a drop; `groups::output` would deadlock on a big prompt and keeps no cap.
-   It gets 60 s, or the seconds `[ai] timeout` says; `Esc` while it waits, a new ask or quitting drops it, which kills the group, and a late answer is dropped by its `AskId`.
-   No streaming: the answer is shown whole, once the command exits with 0; another exit shows its last lines of stderr.
-5. `ai::answer` drops a Markdown fence and the prose around it, and splits what is left with `db::lex`; its statements, one after the other, are shown over the result pane as a line diff (`tui/app/diff.rs`) against the statement under the cursor, drawn through `render::printable`.
-   An answer `db::guard` classifies as a write says so in the failure colour, above the diff.
-   `tab` takes it, replacing the statement under the cursor (or inserting at the cursor when there is none) through the editor's paste, so its control characters are dropped as a paste's are; `esc` drops it.
-   `⏎` takes nothing, so taking an answer and running it are always two keys; running it goes through `db::guard` like any statement.
-6. The idle ghost, when `[ai] ghost = true` and the connection does not say `ai = "off"`, asks for the rest of the statement under the cursor once the editor sat 1 s without an event, the loop's timer as for the colours, so the app stays pure and its tests call `ask_idle_ghost` themselves; the same second ends the undo step of the characters typed.
-   A key that leaves the cursor at the start of a blank line right under a `--` line asks at once (`ask_under_an_ended_comment`), since that comment is the instruction.
-   While it waits, the status line says `asking <program>…`, the file name of `[ai] command`'s program, as the `ctrl-g` footer does; both read the ask's state, so an answer, a failure or a drop clears it.
-   It asks only when the cursor ends that statement, or sits on a blank line right under a `--` line past any statement, the editor has the keys with no overlay over it, no completion ghost shows (the local ghost first), and that text was not asked about yet; it goes through `Action::Ask`, the prompt built as for `ctrl-g`, so the backend runs one ask at a time.
-   Its instruction is the text of the `--` lines right above the statement, never inside a string by the editor's `db::lex` tokens, without the `key:` lines of the file's header (`query::Header`), or else a fixed one; either way it asks for the statement typed whole and its rest.
-   Nobody sent that comment, so unlike a typed `ctrl-g` instruction it is masked as the statement is: `ai::Instruction::under_comment` hands it to `ai::prompt`, which masks its literals and each word holding an `@` (`mask::masked_comment`), its markers counted on from the statement's so the answer gets both back; `[ai] literals = "sent"` sends it as typed.
-   A comment holding a secret by `secret::holds_secret` asks nothing, whatever `literals` says; one that opens a quote or a `{{` it never closes cannot be masked, so the idle ask uses the fixed instruction and the app answers `Action::LogCommentLeftOut` for the log.
-   Any key or paste sends `Action::DropAsk`, which kills the command; an answer to an older `AskId`, or for an editor whose `Revision` moved, is dropped, and a failed ask shows nothing on screen: the app answers `Action::LogNoIdleGhost`, and the backend logs why, never the statement nor the answer.
-   The answer's first statement shows only when its `db::lex` tokens start with those typed, blanks, comments and the case of words aside, the last typed word possibly cut short, and under a comment with nothing typed, the whole of it from its first token; the text typed is never changed: what follows, cleaned as a paste is, shows faded, its first line after the cursor as the completion ghost does and the others under the cursor's line, pushing the text below down without changing it, as many as the editor holds, the last row saying how many more there are; `→` or `⇥` takes it whole by the same path, `esc` drops it, and running it still goes through `db::guard` and its confirmation.
-7. The log says which program ran, how long, how it exited and how many bytes went each way; never the prompt, the instruction or the answer.
-
-Following a key:
-
-1. A result's keys come from `keys.rs` when it arrives, as the grid's header shows them, from the table column the server says each result column holds, so a join gives each column the keys of its own table; `⏎` on a cell whose column points to another table returns `Action::LookUp` with a new `LookId` and the `Lookup` its `Target` builds, the row's values bound as text for the server to read with the column's type, and opens the row's detail waiting on it; a NULL key reads nothing and says so.
-2. The session task admits it as a read-only connection would, whatever the connection allows, so `db::guard` and `BEGIN READ ONLY` hold, and its statement timeout with them; it is never recorded in the history.
-   While a result's portal is open, the lookup reads in that portal's transaction behind a savepoint, so the result keeps its next pages.
-3. `Incoming::LookedUp` goes to the detail while it waits on that `LookId`, and a later one to a detail closed or moved on is dropped; its first row goes on the trail with the keys its table gives its columns, marked `→ users`, and the title shows the tables that led to it (`orders › customers`); no row says so on the detail's footer.
-4. In the detail, `⇥` and `⇧⇥` step through the keys of the row shown, the one under the cursor lit and scrolled to, and `⏎` follows it as `⏎` on the grid did; `⌫` goes back to the row before, where it stood, and drops a lookup still on its way, and on the grid's row closes the detail; `esc` closes every row at once.
-5. Each row the detail shows lists the tables whose keys point to a table it was read from (`keys::referrers`, the first 12 in the catalog's order, a NULL value pointing nowhere), each counted by a lookup that stops one row past 1000, so a big table costs no more than a small one.
-   Only a table whose key an index starts with is counted, since a key without one makes the count read the whole table; the others show `—`.
-   The counts go one at a time, the next once the one before is answered, so a run the user starts waits behind one count at most, and none once the detail closes; each runs under a timeout of its own, `SET LOCAL statement_timeout` of 2 s or the connection's when shorter, inside its read-only transaction, or behind a savepoint always rolled back when it reads beside a result's pages.
-   A count that fails shows `!`, and `⇥` onto it, or onto one not counted, says why on the footer.
-   `⇥` reaches them after the row's keys; `⏎` on one puts `SELECT * FROM` it `WHERE` each key column `= {{column}}` at the end of the editor, the text before it ended by a `;`, fills the parameter bar with the row's values and runs it as the editor runs a statement, through the guard and into the history, its values bound, never put in the text.
-6. `e` puts at the end of the editor, unsaved and one step for undo, the statement joining the table holding the grid's key the trail first followed (with no trail, the table of the grid's first primary-key column) to each table of the trail on the key that led to it (`keys::trail_join`), each by its columns' names in their tables whatever the result called them, each called by the alias a completed join takes, and `WHERE` the grid's row by that table's primary key, else by the key the trail left it by, as `{{name}}` parameters whose values fill the parameter bar; it runs nothing.
-
-Filtering and sorting the grid:
-
-1. `/` opens the filter on the footer line, and each key filters again: a row stays when the text of one of its cells, in its column's format, holds what is typed, whatever the case; `⏎` keeps the filter, `esc` drops it.
-2. `s` sorts by the cursor's column, ascending, descending, then in the result's order, comparing values as their type does (`Value::compare`), `NULL` last whichever way; the header ends with `▲` or `▼`.
-3. Both work on the rows loaded: `tui/app/shown_rows.rs` keeps the index of each row shown, in the order shown, never a copy of a row, and the grid asks for no more pages while one is on; a page that comes anyway joins through the same filter and sort.
-4. A key that adds to the filter looks only through the rows it kept; a new filter, `s` and a format change read every row loaded again.
-Narrowing a statement from the grid:
-
-1. `=` or `!` on a cell adds `WHERE column = {{column}}`, or `<>`, to the statement under the editor's cursor, through `query/condition.rs`, as one step to undo; a NULL cell adds `IS NULL` or `IS NOT NULL`.
-2. The cell's raw value goes to the parameter bar under that name, `_2`, `_3` when the statement holds it already, so the run binds it and the text never holds it.
-3. The keys stay on the grid, and the status line says what was added.
-
-Formatting a cell:
-
-1. A result opens with every column in the format the header's `-- format:` names, else the config's `[display] format` (`raw` or `readable`), else raw.
-2. `f` on a column steps through its kind's formats, or says on the status line that it has no other, `F` sets every column raw or readable (a `timestamp` without time zone stays raw, as relative reads it as UTC); the sheet keeps the choice by column index with the result, and the grid widths are measured again on the first page, a relative column at least as wide as `59 min ago`.
-3. The loop reads the clock and the local time zone before each frame and hands them to the app as a `Clock`, so the app and `format/` stay pure; a relative time redraws each minute while one is shown.
-   A header format a column's kind does not allow is left out, and a header name matches a column whatever its case.
-   The row's detail (`tui/detail_view.rs`) puts each column's name on the left and its whole value beside it, wrapped under itself, in the grid's format and colours; a format that changed the value is followed by the raw text, faded.
-   A row a key led to reads in the format a new result opens in.
-4. Formats are for reading only: `pgbg run`, `--json` and a copy give raw values.
-5. Each column's `Colouring` is decided with its widths, when the result arrives and when a format changes; a frame only reads it, and colours a cell by its value: `NULL`, a boolean, a negative number, a repeated text, a UUID's tail, a timestamp's time, a JSON value's tokens through `syntax::highlight_json_line`.
-
-Charting a result:
-
-1. `v` on a result asks `chart::infer` for its `ChartColumns`, by index so two columns of one name (`count`) stay apart: the first text, date or time column as x, else the first numeric column when it holds ascending integers (`year`), every other numeric column as y; bars when x is text or there are at most 12 rows, a line otherwise.
-2. A saved query can set it in its header instead: `-- chart: bar x=day y=orders,refunds`, parsed by `ChartSpec`'s `FromStr`; a header without `x=` or `y=` leaves them to the result, as `infer` would pick them.
-   A header name matches a column whatever its case, as PostgreSQL folds an unquoted name, unless one column has it exactly; a name several columns answer to is refused.
-3. `chart::Series` builds the points: a line over dates, times or integers is placed on their scale and sorted, so a gap shows, and a row with no place on it (NULL, infinity) is left out; bars and a line over text keep the result's order, one point per row.
-4. A y value of NULL, NaN or infinity leaves a gap, and NUMERIC is read as a float; each kind caps its points to what a terminal shows: bars keep the first 64, a line samples 1024 evenly, and the series says when rows were left out.
-5. The sheet keeps the series built on `v` with its result, and a new result starts on the grid, or on the chart of the editor's `-- chart:` header when it fits the result; `chart_view` draws it, or says why the result has no chart.
+- Every `Action` and every answer carries its connection and its `RunId`, `SessionId`, `LookId` or `AskId`: a late answer never lands on another connection, session, run or ask, and is dropped.
+- `db::guard` runs before the server: nothing reaches a session but an `Admitted`, and a write on a read-only connection comes back refused, unsent.
+- A read runs alone in `BEGIN READ ONLY`, always rolled back, with its `statement_timeout`, idle timeout and `standard_conforming_strings` set by `SET LOCAL`, so they follow a transaction pooler.
+- A write on a connection that allows writes runs only with a `Confirmed`, built only by `tui/app/confirm.rs` after `y`, or by `--yes`; the session task refuses one without it.
+- On a writable connection, a read the server finds writing (`25006`) is undone and asks before it runs again as a write: it may run twice.
+- Inside the user's own `BEGIN`, pgbg sends no `BEGIN`, `COMMIT` or `ROLLBACK` and never uses the driver's transaction handle: the user's `COMMIT` or `ROLLBACK` decides.
+- A parameter is always bound as `$n`, never pasted into the text; the history keeps the `{{name}}`, never the value.
+- A result streams a page of 500 rows at a time through a portal; the portal closes on a new run, a cancel, the session closing or lost, its tunnel dying, or 5 minutes idle (a tenth before a stricter server timeout), and the result then stays cut.
+- A writable connection and `pgbg run` keep the first 10 000 rows and say the result is cut.
+- Every stop goes through `CancelToken::unless_stopped`: a cancel within 1 s, then the work is dropped, so no further round trip is sent.
+- A lookup that follows a key runs as on a read-only connection whatever the connection allows, beside an open portal behind a savepoint, and never goes to the history.
+- The schema is read lazily on a second, short session along the same route, never kept between the two logins; `schema = "off"` skips it.
+- An AI prompt never holds a row, a value, a default, the history, a server's words, nor the connection's name, host or URL; literals are masked unless `literals = "sent"`, and a statement or comment holding a secret is never sent.
+- An AI answer is a suggestion: taking it and running it are two keys, and the run goes through the guard.
+- `tui/app/` stays pure: the loop hands it the clock as a `Clock` and the timers as events.
 
 ## Boundaries
 
 - Only `src/db/` sees a `tokio_postgres` type; everything else uses `db/model/`.
-- Side effects live at the edges: `main.rs`, `signal.rs`, `commands/`, `tui/mod.rs`, `tui/backend/`, `tunnel/`, `secret/`, `ai/command.rs`, `config/` when it rewrites the file, `query/` when it lists, reads, writes and makes the user's own queries folders and keeps the versions a save replaced, `history.rs` when it appends and reads its files, `usage.rs` when it reads and writes the usage file, `lock.rs` when it opens and locks a file, `tui/usage.rs` when it reads the clock for it.
-- `tui/app/` is pure: it never reads the clock nor does I/O; its tests drive it with keys and `Answer` values.
-  The usage counts read it from the loop (`tui/usage.rs`): the act a key does where it lands and the screen on show, before the key; the loop keeps the clock and the tally, and writes them once a minute and on quit.
-- `chart/` is pure: a `ResultSet` in, a `Series` out; drawing lives in `tui/chart_view/`.
-- `format/` is pure: a `Value`, a `Format` and a `Clock` in, the cell's text out; it never reads the clock itself.
-- A program that takes the terminal (`$EDITOR` on a saved query) runs from the loop through `Screen::lend`, with the key stream dropped and, through vtui, pastes given back until it exits, then every cell drawn again at the terminal's size; the text it replaced is kept as a version, and the query is read again after.
+- Side effects live at the edges: `main.rs`, `signal.rs`, `commands/`, `tui/mod.rs`, `tui/backend/`, `tunnel/`, `secret/`, `ai/command.rs`, `config/` when it rewrites the file, `query/` when it touches files, `history.rs`, `usage.rs`, `lock.rs`, `tui/usage.rs` when it reads the clock.
+- `tui/app/` is pure: no clock, no I/O; its tests drive it with keys and `Answer` values.
+- `chart/` and `format/` are pure; drawing lives in `tui/`.
+- A program that takes the terminal (`$EDITOR`) runs from the loop through `Screen::lend`.
 - Secrets are read only in `secret/` and sent only by `Session::open` and the keychain write.
 
 ## Read only
 
 Four layers, outermost first; only the last one is a guarantee.
 
-1. **Policy**: each connection chooses; it is read only unless it says `writes = "allowed"`, whatever its tier.
-2. **Guard**: `db::guard` lets through `SELECT`, `WITH` without a data-changing part, `VALUES`, `TABLE`, `EXPLAIN` of a `SELECT`, `WITH`, `VALUES` or `TABLE` only, whatever its options, since a quoted `"analyze"` runs the statement too, and `SHOW`, without a row lock (`FOR UPDATE`, `FOR SHARE`) or `SELECT ... INTO`; anything else is refused locally.
-3. **Transaction**: one statement per round trip (the extended protocol refuses more), inside `BEGIN READ ONLY`, always rolled back; the server refuses writes even when the guard misses one.
-   On a connection that allows writes, a read outside the user's transaction runs read only too, in a `READ ONLY` transaction of pgbg's, committed so a `set_config` stays, and a write the server refuses in it asks before it runs again as a write.
-   What a read-only transaction does not stop (`dblink_exec`, `pg_advisory_lock`, `pg_terminate_backend`) has already run by then, so it runs twice on a `y`.
-   Inside the user's own transaction a read runs as it is, unchecked: a savepoint around it would undo a lock, a cursor or a setting it made, and the user's `COMMIT` or `ROLLBACK` decides what stays.
-4. **Role**: a read-only database role. A read-only transaction still lets a function with side effects run (`pg_terminate_backend`, `dblink`); only the role stops those.
+1. **Policy**: a connection is read only unless it says `writes = "allowed"`, whatever its tier.
+2. **Guard**: `db::guard` lets through `SELECT`, `WITH` without a data-changing part, `VALUES`, `TABLE`, `SHOW`, and `EXPLAIN` of a `SELECT`, `WITH`, `VALUES` or `TABLE` only, whatever its options, since `ANALYZE` runs it; never a row lock or `SELECT ... INTO`.
+3. **Transaction**: one statement per round trip, in `BEGIN READ ONLY`, always rolled back.
+   On a writable connection a read outside the user's transaction runs in pgbg's own `READ ONLY` transaction, committed, and a write the server refuses there asks before it runs again.
+4. **Role**: only a read-only database role stops what a read-only transaction lets through (`dblink`, `pg_terminate_backend`, `pg_advisory_lock`); `pgbg doctor` says what the role can write.
 
-A parameter is always bound, never put in the statement's text: its value cannot change what the guard admitted.
-A lookup that follows a foreign key is admitted as on a read-only connection whatever the connection allows, so it runs in `BEGIN READ ONLY`, rolled back.
-
-The guard reads a backslash in a string as itself, and blanks as PostgreSQL does (` `, tab, newline, carriage return, form feed, vertical tab; any other character outside ASCII is part of a word).
-So the server reads strings the same way, every read-only transaction sets `SET LOCAL standard_conforming_strings = on` with its other limits, and a connection that allows writes sets it for its session.
-That session setting is the one gap, on `Mode::Writes` only: a transaction pooler keeps it on the server link it reached alone, and the user's own `SET standard_conforming_strings = off` turns it off, so there the server can read a backslash in a string as the guard does not.
-
-On a connection that allows writes, a write runs only once `y` or `--yes` confirms it.
-In the TUI the `y` gives the `Action::Run` a `Confirmed`, which only `tui/app/confirm.rs` builds, and the session task refuses a write that comes without one.
-A statement runs as typed, except one that returns rows and is no `CALL` or `DO` (`WritePath`): outside a transaction of the user it goes through a portal in its own committed transaction; inside one, a `SELECT`, `WITH`, `VALUES` or `TABLE` the guard reads as changing nothing goes through `DECLARE CURSOR`, named `pgbg_result_<n>` with the first `n` that no cursor open in `pg_cursors` holds, so it meets none of the user's, and `FETCH` of its first 10 000 rows, then `CLOSE` whether the fetch failed or not, so pgbg sends no `BEGIN`, `COMMIT` or `ROLLBACK` there.
-The driver's transaction handle is never used inside the user's transaction: its `START TRANSACTION`, failing in a failed transaction or cancelled, sends a `ROLLBACK` that would end the user's.
-A `CALL` or a `DO` block, and any other statement returning rows inside the user's transaction, runs as is, every row read; a procedure may `COMMIT`, which it cannot inside a transaction pgbg opened.
-The session tracks that transaction from the first words of each statement the server ran (`BEGIN`, `START`, `COMMIT`, `END`, `ROLLBACK`, `ABORT`, `PREPARE TRANSACTION`, with `AND CHAIN` and `TO SAVEPOINT` read too); when one of those failed, never got its answer or reads unclear, or after a `CALL` or a `DO` block, which may commit inside, a `SAVEPOINT` probe asks the server once.
-pgbg's own read-only transaction (`Session::read_only`) is refused with `InsideUserTransaction` while the user's is open, since its `ROLLBACK` would end it.
-
-`pgbg doctor <connection>` checks the role and says what it can write.
+The guard reads strings and blanks as PostgreSQL does with `standard_conforming_strings = on`, which pgbg sets; the one gap is a writable session where a pooler or the user turns it off.
+Inside the user's transaction, a row-returning read goes through a `DECLARE CURSOR` named `pgbg_result_<n>`, free in `pg_cursors`, then `CLOSE`; a `CALL` or `DO` runs as is.
+The session tracks the user's transaction from each statement's first words and, when unsure, asks once with a `SAVEPOINT` probe.
+`Session::read_only` is refused while the user's transaction is open, since its `ROLLBACK` would end it.
+Transaction control and cursor statements never ask for confirmation, save `COMMIT PREPARED` and `ROLLBACK PREPARED`.
 
 ## Secrets
 
-- A connection names where its password comes from: `password = { keychain = "pgbg/prod" }`, `{ env = "PROD_PGPASSWORD" }` or `{ command = ["gcloud", "secrets", "versions", "access", ...] }`.
-- The password is read when the session opens, kept in a `Secret`, and dropped once connected.
-  `tokio_postgres`'s `Config` keeps its own copy until the session is open, and that copy is not wiped; nor is what `security` or a password command leaves in the memory of the process that read its output.
-- The config loader refuses a plain `password`, and a URL with a password, an `sslpassword` or an `oauth_client_secret` in it.
-- Keychain items live under the service `pgbg`, one account per item; `security -g` reads one on a pipe, in hex when it is not printable ASCII, and `security -i` writes one so the password never shows in argv; an error quotes `security`'s exit status only.
-- `pgbg password set <connection>` takes the password typed hidden or piped in, never as a flag.
-- `pgbg connection remove` deletes the connection's keychain item before its table, unless `--keep-password` or another connection names the same item.
-- A statement in the history may hold personal data in its literals (`WHERE email = '...'`): that is why its file is `0600` and never leaves this machine.
+- A password comes from the keychain, an environment variable or a command; it is read when the session opens, kept in a `Secret`, and dropped once connected.
+- The config loader refuses a `password` key, and a URL with a password, an `sslpassword` or an `oauth_client_secret`.
+- Keychain items live under the service `pgbg`; `security -i` writes one so it never shows in argv, and an error quotes only the exit status.
+- `pgbg password set` reads the password typed hidden or piped in, never from a flag.
+- `pgbg connection remove` deletes its keychain item, unless `--keep-password` or another connection names it.
+- No secret in logs, history, cache, fixtures or `Debug` output; the history file is `0600`, as its literals may hold personal data.
 
 ## Tunnels
 
-- A tunnel is a command with a `{port}` placeholder: `ssh -N -o ControlPath=none -o ExitOnForwardFailure=yes -L 127.0.0.1:{port}:localhost:5432 bastion`, `gcloud compute start-iap-tunnel ... --local-host-port=localhost:{port}`, `cloud-sql-proxy --port {port} ...`.
-- An optional `before` command runs first, once, within 2 minutes, and is safe to run twice (starting a stopped bastion); like a password command, it runs in a process group of its own, killed whole when pgbg stops waiting on it or once it ended, so a helper it left running in the background dies too.
-- pgbg picks the free port, so two pgbg can run side by side; the child runs in its own process group, and stopping or dropping the `Tunnel` kills the whole group, so an `ssh` or `gcloud` it started dies too.
-- Only what stays in that group dies with it: an ssh `ControlMaster` or `ssh -f` keeps the forward elsewhere, so `stop` fails when the port still answers, and a command that ends cleanly before its port answers is said to have handed the forward off.
-- pgbg cannot make the command bind `127.0.0.1` only, nor know who answers on the port: the examples bind it explicitly, and a tunnelled connection needs TLS or `tls = "off"` on purpose, never the clear a local host gets.
-- A tunnel is ready once its port takes a TCP connection while its command still runs, within 30 seconds; one that dies first says how it exited and its last lines of stderr, never its arguments.
-- `SIGINT`, `SIGTERM` and `SIGHUP` stop pgbg through `signal.rs`: `pgbg run`, `pgbg doctor` and `pgbg schema` have the server cancel their statement (within a second) while the link and the tunnel still stand, stop the tunnel, and are dropped past 3 seconds or on a second signal, so every `Drop` runs and the tunnel goes; the TUI quits as `ctrl-c` does, cancelling every running statement, and each session task stops its tunnel, warning when its port still answers, unless a second signal drops them at once; pgbg exits with `128 + n`. Only a `SIGKILL` leaves a tunnel behind.
-- A session through a tunnel connects to `hostaddr=127.0.0.1` on the tunnel's port, and TLS still checks the certificate against the URL's host; that is why the config refuses a `hostaddr` of its own.
-- The session task owns the tunnel with the session: the status line shows `⇄ tunnel :<port>`, `starting…` or how it died; a tunnel that dies closes its session and says why, and the next statement starts both again.
-- A session reopened while its tunnel still runs keeps that tunnel.
-- Release builds abort on a panic, so no `Drop` runs: `groups.rs` keeps every live process group in a registry, and a panic hook kills them all.
-- The hook kills them only when the panic ends the process: always in a release build, and on the main thread only when the build unwinds, since a tokio task, a blocking thread or a test catches its own panic and goes on.
-- A tunnel seen ended has its group killed at once, before its leader is reaped, so before its id can be reused: an `ExitWatch` sees the exit without reaping; a group the hook killed is never signalled again.
-- A `before`, password or `[ai]` command has its group killed once its leader exited but before it is reaped: a zombie leader keeps the group id from being reused; a child it left holding its pipes is waited for a second, then killed with the group, and one that left the group fails the command a second later.
+- A tunnel is a command with a `{port}` placeholder; pgbg picks the free port, so two pgbg run side by side.
+- An optional `before` runs once first, within 2 minutes, and must be safe to run twice.
+- The tunnel, `before`, password and `[ai]` commands each run in their own process group, killed whole on stop, drop, signal or panic (`groups.rs` keeps a registry for the panic hook, since release builds abort).
+- A group is killed before its leader is reaped, so its id is never reused under it.
+- Only what leaves the group escapes: an ssh `ControlMaster` or `ssh -f`; `stop` fails when the port still answers.
+- A tunnel is ready once its port takes a connection while its command runs, within 30 s; one that dies first says how and its last stderr lines, never its arguments.
+- pgbg cannot make a tunnel bind `127.0.0.1` only: a tunnelled connection needs TLS or `tls = "off"` on purpose, and the session connects to `hostaddr=127.0.0.1` while TLS checks the URL's host.
+- `SIGINT`, `SIGTERM` and `SIGHUP` cancel running statements, stop tunnels, and exit with `128 + n`; only `SIGKILL` leaves a tunnel behind.
+- The session task owns its tunnel: a tunnel that dies closes its session, and the next statement starts both.
 
 ## Saved queries
 
-- One `.sql` file per query under `.pgbg/queries/`, found by walking up from the working directory like `.git`, which every connection shows, then under `queries/<connection>/` in pgbg's data folder, the user's own of the connection on screen (`Source::User`), whose folders pgbg makes `0700`; a project's follow the umask.
-- A connection's `queries` key names another connection whose folder it uses; the config refuses a name that is no connection, and a connection name of only dots, so the folder stays inside `queries/`.
-- The app asks for the list of the folder of the connection on screen (`Action::ListQueries`), drops a list of another folder, and asks again after a switch to a connection with another folder, its list emptied until it comes, and after each save.
-- The walk stops at the home folder or at the first folder holding `.git`, so a folder above the project never gives its queries.
-- A new query goes to the project's root when it has one, else to the user's own folder of the connection on screen, made at its first save under the data folder, one folder at a time and refusing a link or a file in the way; pgbg never makes a project's folder.
-- A root that is a link, under a `.pgbg` that is a link, or that another user owns is skipped with a warning: a cloned repository cannot point pgbg at the whole disk.
-- Each list and each read checks the root again, and that it still leads to the real path it had when found: a folder swapped for a link since then is skipped.
-- Folders nest; the sidebar shows the tree and the fuzzy finder searches every file.
-- Listing walks the folders on a blocking thread, keeps only plain files, and never follows a link, so nothing outside the root is listed.
-- Opening reads the file through `tokio::fs`, again only when it is a plain file whose real path stays inside its root, and only up to 1 MiB; a bigger one is too big for the editor.
-- A query path is drawn with its control characters and text-reversing marks escaped.
-- An optional header of `--` lines sets the name, the default connection, the chart, the formats and the parameters; a file without a header is still a query.
-- The header is read again whenever the editor's text changes; a line it cannot read is a warning in the editor's title, never a failure.
-- `-- connection:` only suggests: the editor's title names it, in red when it is a production connection, and a statement always runs on the session on screen.
-- The file is the source of truth: pgbg reads it when it is opened and writes it back when it is saved, nothing else.
-- A save over a query, from `ctrl-s` or `$EDITOR`, first keeps the text it replaces as a version in pgbg's data folder, never in the project; best effort, so a version not kept is logged and never stops the save.
-- `ctrl-v` lists the versions of the query on screen; `⏎` puts one in the editor as unsaved text, and only `ctrl-s` writes it.
-- A save writes a temporary file beside the query and renames it over; it makes the missing folders, refuses a link or a root that changed, and a new query never replaces another file, so saving twice changes nothing.
-- Opening another query or a new, empty one (`ctrl-q`) over unsaved text asks first.
+- A query is one `.sql` file, under the nearest `.pgbg/queries/` walking up from the working directory (stopping at the home folder or a `.git`), or under `<data folder>/queries/<connection>/` (`Source::User`, folders `0700`).
+- `queries = "<connection>"` uses another connection's folder; the config refuses a name that is no connection.
+- A new query goes to the project's root when it has one, else to the user's folder; pgbg never makes a project's folder.
+- A root that is a link or owned by another user is skipped; each list and read checks the root again, follows no link, and reads at most 1 MiB.
+- The file is the source of truth: read on open, written on save through a temp file renamed over; a new query never replaces another file, so saving twice changes nothing.
+- A save over a query keeps the replaced text as a version in the data folder, best effort, the newest 50; a text holding a secret is kept as a note.
+- `-- connection:` only suggests; a statement always runs on the session on screen.
+- A query path is drawn with its control characters escaped.
 
 ## Performance
 
-- Rows stream through a portal, a page at a time; nothing waits on the whole result.
-- The grid draws only the visible window, straight into the frame's buffer; column widths and colourings come from the first page and the header, capped; a cell allocates its text once, and a JSON cell its tokens too.
-- Values are decoded once, at the boundary, into `Value`; drawing formats only what is on screen, and the row's detail at most 64 Ki characters of a value, its lines built once per row and width and kept by the app.
-- Syntax colours live in `tui/app/editor.rs` with the text they colour: an edit or an opened query marks them stale, and the loop rebuilds them once the text stayed still for 40 ms, so a key never waits on tree-sitter.
-- Undo lives in `tui/app/undo.rs`, owned by the editor: the text and cursor before each step, 100 steps at most; typed characters join one step until a word starts, the cursor moves or the editor sits idle, and opening a query or a new one clears it.
-- The editor view draws only the lines in view, each in one pass over its spans.
-- vtui's `Screen` asks the terminal for bracketed paste: a paste comes as one `Event::Paste`, inserted whole, so its line ends never run a statement; `Field::paste` and `Palette::type_str` drop control characters and text-reversing marks.
-- Text from the database or the server (grid cells, the row's detail, chart labels and names, a failed run, the status line) is drawn through `render::printable`, its control characters and text-reversing marks escaped.
+- Rows stream a page at a time; nothing waits on the whole result.
+- The grid draws only the visible window; widths and colourings come from the first page, capped.
+- Values are decoded once, at the boundary, into `Value`; drawing formats only what is on screen.
+- Syntax colours rebuild once the text stayed still for 40 ms, so a key never waits on tree-sitter.
+- Text from the database or the server is drawn through `render::printable`, its control characters and text-reversing marks escaped.
+- Speed budgets live in `budget` modules, release only and `#[ignore]`d: completion on 20 000 tables and 200 000 columns stays under 2.5 ms a key.
 
 ## Glossary
 
@@ -337,26 +133,26 @@ One word per concept, in code, docs and UI.
 |---|---|
 | connection | A named database target in the config: where, how to reach it, how to log in |
 | tier | `local`, `staging` or `production`; sets the colour and the timeout |
-| session | An open link to one connection, with its tunnel if it has one, named by its `SessionId`; its `SessionState` (opening, open, failed, closed) is what the status line says |
-| sheet | One connection in the TUI: its editor text and the saved query it stands for, its last run, its session's state |
-| act | A thing a key does: a row of `act.rs`; the app turns acts into actions |
-| action | What the app asks the backend to do: open a session, run or cancel a statement, list or read queries |
-| answer | What comes back from the backend: a session's `Incoming`, tagged with its connection, or the saved queries' |
-| run | One sending of a statement, named by its `RunId`: running, cancelling, done or failed |
+| session | An open link to one connection, with its tunnel, named by its `SessionId` |
+| sheet | One connection in the TUI: its editor text, saved query, last run and session state |
+| act | A thing a key does: a row of `act.rs` |
+| action | What the app asks the backend to do |
+| answer | What comes back from the backend, tagged with its connection |
+| run | One sending of a statement, named by its `RunId` |
 | tunnel | The child process that forwards a local port to a database out of reach |
 | statement | One SQL statement, the unit pgbg runs |
-| query | A saved `.sql` file under `.pgbg/queries/`, or under the user's own folder of a connection |
+| query | A saved `.sql` file, a project's or the user's own of a connection |
 | result | The columns and rows a statement returned, page by page |
 | page | One batch of rows fetched from the portal |
 | chart | A bar or line drawing of a result |
 | history | Every statement run on a connection |
 | version | A text of a saved query that a save replaced, kept outside the project |
 | schema | The schemas, tables, columns and indexes a session's role can read |
-| catalog | The schema as one read gave it, with the search path it was read under and whether the table cap cut it |
-| completion | A name the editor offers at the cursor, from the schema or the keywords |
-| parameter | A `{{name}}` in a statement, filled in the parameter bar and bound when it runs |
+| catalog | The schema as one read gave it, with its search path and whether the table cap cut it |
+| completion | A name the editor offers at the cursor |
+| parameter | A `{{name}}` in a statement, bound when it runs |
 | format | How a column's cells read: raw, or a readable form of its kind |
-| lookup | A read pgbg builds to follow a foreign key, its values bound, read only and out of the history, named by its `LookId` |
-| trail | The tables of the rows a detail followed, from the grid's row to the one shown |
-| origin | The table column a result's column holds as is, as the server says; a computed column has none |
+| lookup | A read that follows a foreign key, read only and out of the history, named by its `LookId` |
+| trail | The tables of the rows a detail followed |
+| origin | The table column a result's column holds as is; a computed column has none |
 | ask | One sending of an instruction to the `[ai] command`, named by its `AskId`; its answer is a suggestion, never a run |
