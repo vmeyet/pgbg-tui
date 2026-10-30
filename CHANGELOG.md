@@ -22,6 +22,8 @@ Each entry says what changed, then where, then how to use it.
   It says where each one goes, as `~/.config/pgbg/config.toml` or `~/.local/share/pgbg/queries/<connection>/`.
 - **`⌫` keeps the counts already read**, in the TUI's row detail: going back to a row shows the tables pointing to it with the counts it had, without counting them again.
   No count runs while a followed key's row is on its way, so that row comes sooner.
+- **A followed key never shows a row from a connection you changed**, in the TUI's row detail: a row or a count read before the connection's settings changed says it stopped with its session instead.
+  Press `⏎` again to read it on the new session.
 
 ### Removed
 

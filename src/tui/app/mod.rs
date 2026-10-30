@@ -4,6 +4,7 @@ use super::theme::Theme;
 use crate::act::Pane;
 use crate::config::AiSettings;
 use crate::connection::{Connection, ConnectionName};
+use crate::failure::Failure;
 use crate::format::Mode;
 use ask::Asks;
 use ratatui::layout::Rect;
@@ -374,19 +375,20 @@ impl App {
         self.and_the_schema_shown(actions)
     }
 
-    /// Takes what the session `session` of `connection` said, when it is still that sheet's: a lookup's rows go to the
-    /// detail when it is open over that sheet, the rest to the sheet.
+    /// Takes what the session `session` of `connection` said: the rest to that sheet while the session is still its
+    /// own, dropped after; a lookup's rows to the detail its `LookId` names, as a failure once the sheet left the
+    /// session, so a lookup always ends.
     fn take_session_answer(&mut self, connection: &ConnectionName, session: SessionId, incoming: Incoming) -> Vec<Action> {
-        let reading = self.reading;
-        let is_shown = self.sheet().name() == connection;
-        let Some(sheet) = self.sheet_of_mut(connection).filter(|sheet| sheet.session_id == session) else { return vec![] };
-        match incoming {
-            Incoming::LookedUp { look, rows } if is_shown => self.looked_up(look, rows),
-            incoming => {
-                sheet.apply(incoming, &reading);
-                vec![]
-            }
+        let is_its_session = self.sheet_of(connection).is_some_and(|sheet| sheet.session_id == session);
+        if let Incoming::LookedUp { look, rows } = incoming {
+            let rows = if is_its_session { rows } else { Err(Failure::StoppedWithItsSession) };
+            return self.looked_up(look, rows);
         }
+        let reading = self.reading;
+        if let Some(sheet) = self.sheet_of_mut(connection).filter(|_| is_its_session) {
+            sheet.apply(incoming, &reading);
+        }
+        vec![]
     }
 
     fn take_answer(&mut self, answer: Answer) -> Vec<Action> {
