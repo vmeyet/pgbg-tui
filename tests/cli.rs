@@ -167,10 +167,9 @@ fn run_in_a_project(files: &[(&str, &str)], args: &[&str]) -> Output {
 }
 
 #[test]
-fn run_reads_a_saved_query_by_its_path() {
-    let output =
-        run_in_a_project(&[(".pgbg/queries/orders/purge.sql", "-- name: purge\nDELETE FROM orders")], &["--query", "orders/purge"]);
-    assert!(stderr(&output).contains("`DELETE` is not a read"), "{}", stderr(&output));
+fn run_never_reads_a_query_from_the_working_directorys_pgbg_folder() {
+    let output = run_in_a_project(&[(".pgbg/queries/orders/purge.sql", "DELETE FROM orders")], &["--query", "orders/purge"]);
+    assert!(stderr(&output).contains("no saved query orders/purge.sql"), "{}", stderr(&output));
 }
 
 #[test]

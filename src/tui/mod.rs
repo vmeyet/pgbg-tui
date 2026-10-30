@@ -75,7 +75,7 @@ pub(crate) async fn run(
     let mut app = App::new(connections, &first, theme).with_format_mode(format).with_ai(ai);
     // Unbounded: each answer follows an action, a page only once the grid asks for it, and the loop takes one per turn.
     let (answers, mut incoming) = mpsc::unbounded_channel();
-    let roots = Roots::find_here().await?.with_versions(Versions::from_env());
+    let roots = Roots::from_env().with_versions(Versions::from_env());
     let mut backend = Backend::new(roots, config, answers).with_history(Store::from_env());
     for action in app.start() {
         backend.dispatch(action);

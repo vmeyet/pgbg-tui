@@ -4,8 +4,8 @@ expression: terminal.backend()
 ---
 "╭ ● local · local ──╭ Add a connection ────────────────────────────────────────╮───────────────────╮"
 "│╭ [Queries] Schema │   ✗ `` is not a connection name: use letters, digits, `- │──────────────────╮│"
-"││ no saved query un│  tier            ‹ local ›                               │                  ││"
-"││ .pgbg/queries/   │  url                                                     │                  ││"
+"││ no saved query ye│  tier            ‹ local ›                               │                  ││"
+"││ saves one        │  url                                                     │                  ││"
 "││                  │   ✗ `url` is not a URL: relative URL without a base      │                  ││"
 "││                  │  password from   ‹ keychain ›                            │──────────────────╯│"
 "││                  │  keychain item                                           │──────────────────╮│"

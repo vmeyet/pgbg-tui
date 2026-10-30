@@ -139,12 +139,12 @@ pub(in crate::tui) mod tests {
     use crate::chart::Series;
     use crate::fixtures::orders;
     use crate::format::Format;
-    use crate::query::{QueryPath, Source};
+    use crate::query::QueryPath;
     use crossterm::event::{KeyCode, KeyModifiers};
     use std::time::Duration;
 
     pub(in crate::tui) fn query(path: &str) -> Query {
-        Query { source: Source::Project, path: QueryPath::parse(path).unwrap() }
+        Query { folder: shop(), path: QueryPath::parse(path).unwrap() }
     }
 
     /// The list of the queries of `shop`, the connection on screen.

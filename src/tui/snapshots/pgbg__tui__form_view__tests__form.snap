@@ -4,8 +4,8 @@ expression: terminal.backend()
 ---
 "╭ ● local · local ─────────────────────────────────────────────────────────────────────────────────╮"
 "│╭ [Queries] Schema ──────────╮╭ Editor ─ READ ONLY ──────────────────────────────────────────────╮│"
-"││ no saved query un╭ Add a connection ────────────────────────────────────────╮                  ││"
-"││ .pgbg/queries/   │ ▎name            my shop                                 │                  ││"
+"││ no saved query ye╭ Add a connection ────────────────────────────────────────╮                  ││"
+"││ saves one        │ ▎name            my shop                                 │                  ││"
 "││                  │   ✗ `my shop` is not a connection name: use letters, dig │                  ││"
 "││                  │  tier            ‹ local ›                               │                  ││"
 "││                  │  url                                                     │                  ││"

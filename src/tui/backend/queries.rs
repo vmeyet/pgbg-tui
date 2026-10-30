@@ -14,8 +14,7 @@ pub(in crate::tui) struct QueryFiles {
 }
 
 impl QueryFiles {
-    /// Lists the project's queries and the user's own of `folder` on a blocking thread; the list comes back as
-    /// `QueryAnswer::All`.
+    /// Lists the queries of `folder` on a blocking thread; the list comes back as `QueryAnswer::All`.
     pub(in crate::tui) fn list(&self, folder: ConnectionName) {
         let (roots, answers) = (self.roots.clone(), self.answers.clone());
         tokio::task::spawn_blocking(move || {
@@ -67,12 +66,11 @@ impl QueryFiles {
         });
     }
 
-    /// Writes `text` as a new query at `path`, never over another one: under the project's queries folder when it has
-    /// one, else under the user's own `folder`; answers as `save` does.
+    /// Writes `text` as a new query at `path` in `folder`, never over another one; answers as `save` does.
     pub(in crate::tui) fn save_new(&self, connection: ConnectionName, folder: ConnectionName, path: QueryPath, text: String) {
         let (roots, answers) = (self.roots.clone(), self.answers.clone());
         tokio::task::spawn_blocking(move || {
-            let query = roots.new_query(path.clone(), &folder);
+            let query = Query { folder, path: path.clone() };
             let saved = roots.write(&query, &text, Write::Create).map(|()| query);
             send(&answers, Answer::Queries(saved_answer(Saving { connection, path, saved, text })));
         });

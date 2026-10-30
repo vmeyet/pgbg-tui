@@ -4,8 +4,8 @@ expression: terminal.backend()
 ---
 "╭ ● local · local ─────────────────────────────────────────────────────────────────────────────────╮"
 "│╭ [Queries] Schema ──────────╮╭ Editor ─ READ ONLY ──────────────────────────────────────────────╮│"
-"││ no saved query un╭ Add a connection ────────────────────────────────────────╮                  ││"
-"││ .pgbg/queries/   │  name                                                    │                  ││"
+"││ no saved query ye╭ Add a connection ────────────────────────────────────────╮                  ││"
+"││ saves one        │  name                                                    │                  ││"
 "││                  │  tier            ‹ local ›                               │                  ││"
 "││                  │ ▎url             pplication_name=pgbg&connect_timeout=5  │                  ││"
 "││                  │  password from   ‹ none ›                                │                  ││"

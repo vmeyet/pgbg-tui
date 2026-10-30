@@ -1,4 +1,4 @@
-//! The texts a save replaced, kept outside the project in pgbg's data folder: one file each in
+//! The texts a save replaced, kept in pgbg's data folder: one file each in
 //! `versions/<hash of the query's real path>/<when it was replaced>.sql`, the newest `MAX_VERSIONS` of each query.
 use super::{Query, Roots};
 use crate::config;
@@ -71,7 +71,7 @@ impl Roots {
 
     /// The real path of the file of `query`, which names its versions.
     fn real_file(&self, query: &Query) -> Result<PathBuf> {
-        Ok(query.path.under(&self.existing_root(&query.source)?.real))
+        Ok(query.path.under(&self.existing_root(&query.folder)?.real))
     }
 }
 
@@ -151,12 +151,12 @@ fn version(folder: &Path, name: &str) -> Option<Version> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{QueryPath, Root, Source, Write};
+    use super::super::{QueryPath, Write};
     use super::*;
     use chrono::Duration;
     use std::os::unix::fs::PermissionsExt;
 
-    const DAILY: &str = "/Users/nina/shop/.pgbg/queries/daily.sql";
+    const DAILY: &str = "/Users/nina/.local/share/pgbg/queries/shop/daily.sql";
 
     fn store(dir: &tempfile::TempDir) -> Versions {
         Versions { dir: dir.path().join("versions") }
@@ -170,15 +170,13 @@ mod tests {
         versions.list(Path::new(DAILY)).unwrap().into_iter().filter_map(|version| version.text).collect()
     }
 
-    /// A project whose queries live in `queries` and whose versions live in `data`.
-    fn kept(queries: &tempfile::TempDir, data: &tempfile::TempDir) -> Roots {
-        let project = Root::checked(queries.path().into(), vec![queries.path().into()]);
-        let roots = Roots { project, ..Roots::default() };
-        roots.with_versions(Some(store(data)))
+    /// The roots whose queries and versions live in the data folder `data`.
+    fn kept(data: &tempfile::TempDir) -> Roots {
+        Roots { data_dir: Some(data.path().into()), ..Roots::default() }.with_versions(Some(store(data)))
     }
 
     fn daily() -> Query {
-        Query { source: Source::Project, path: QueryPath::parse("daily.sql").unwrap() }
+        Query { folder: "shop".parse().unwrap(), path: QueryPath::parse("daily.sql").unwrap() }
     }
 
     fn version_texts(roots: &Roots) -> Vec<String> {
@@ -221,7 +219,7 @@ mod tests {
     #[test]
     fn each_query_has_its_own_versions() {
         let dir = tempfile::tempdir().unwrap();
-        store(&dir).keep(Path::new("/Users/nina/shop/.pgbg/queries/weekly.sql"), "SELECT 7", at(0)).unwrap();
+        store(&dir).keep(Path::new("/Users/nina/.local/share/pgbg/queries/shop/weekly.sql"), "SELECT 7", at(0)).unwrap();
         assert_eq!(texts(&store(&dir)), Vec::<String>::new());
     }
 
@@ -248,8 +246,8 @@ mod tests {
 
     #[test]
     fn a_save_over_a_query_keeps_the_text_it_replaced() {
-        let (queries, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        let roots = kept(&queries, &data);
+        let data = tempfile::tempdir().unwrap();
+        let roots = kept(&data);
         roots.write(&daily(), "SELECT 1", Write::Create).unwrap();
         roots.write(&daily(), "SELECT 2", Write::Replace).unwrap();
         assert_eq!(version_texts(&roots), ["SELECT 1"]);
@@ -257,8 +255,8 @@ mod tests {
 
     #[test]
     fn saving_the_same_text_keeps_nothing() {
-        let (queries, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        let roots = kept(&queries, &data);
+        let data = tempfile::tempdir().unwrap();
+        let roots = kept(&data);
         for _ in 0..2 {
             roots.write(&daily(), "SELECT 1", Write::Replace).unwrap();
         }
@@ -266,18 +264,18 @@ mod tests {
     }
 
     #[test]
-    fn a_version_is_never_kept_in_the_project() {
-        let (queries, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        let roots = kept(&queries, &data);
+    fn a_version_is_never_kept_beside_its_query() {
+        let data = tempfile::tempdir().unwrap();
+        let roots = kept(&data);
         roots.write(&daily(), "SELECT 1", Write::Create).unwrap();
         roots.write(&daily(), "SELECT 2", Write::Replace).unwrap();
-        assert_eq!(fs::read_dir(queries.path()).unwrap().count(), 1);
+        assert_eq!(fs::read_dir(data.path().join("queries/shop")).unwrap().count(), 1);
     }
 
     #[test]
     fn an_edit_in_the_users_editor_keeps_the_text_it_replaced() {
-        let (queries, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        let roots = kept(&queries, &data);
+        let data = tempfile::tempdir().unwrap();
+        let roots = kept(&data);
         roots.write(&daily(), "SELECT 1", Write::Create).unwrap();
         roots.edit_kept(&daily(), |path| Ok(fs::write(path, "SELECT 2")?)).unwrap();
         assert_eq!(version_texts(&roots), ["SELECT 1"]);
@@ -298,8 +296,8 @@ mod tests {
 
     #[test]
     fn an_edit_that_changes_nothing_keeps_nothing() {
-        let (queries, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        let roots = kept(&queries, &data);
+        let data = tempfile::tempdir().unwrap();
+        let roots = kept(&data);
         roots.write(&daily(), "SELECT 1", Write::Create).unwrap();
         roots.edit_kept(&daily(), |_| Ok(())).unwrap();
         assert_eq!(version_texts(&roots), Vec::<String>::new());
@@ -312,11 +310,11 @@ mod tests {
 
     #[test]
     fn a_replaced_text_holding_a_password_leaves_no_password_on_disk() {
-        let (queries, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        let roots = kept(&queries, &data);
+        let data = tempfile::tempdir().unwrap();
+        let roots = kept(&data);
         roots.write(&daily(), "ALTER ROLE nina PASSWORD 'hunter2'", Write::Create).unwrap();
         roots.write(&daily(), "SELECT 1", Write::Replace).unwrap();
-        assert_eq!(files_in(data.path()), [secret::NOT_KEPT]);
+        assert_eq!(files_in(&data.path().join("versions")), [secret::NOT_KEPT]);
     }
 
     #[test]
