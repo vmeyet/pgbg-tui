@@ -106,7 +106,7 @@ The review of #214 to #231 found these, most severe first.
 ## 23. Preview a write
 
 - [x] The question before a write says how many rows an `UPDATE` or `DELETE` would touch, counted by a read of its `WHERE`, in the TUI
-- [ ] `pgbg run` says the same count in its `y/N` question
+- [x] `pgbg run` says the same count in its `y/N` question
 
 ## Later
 
