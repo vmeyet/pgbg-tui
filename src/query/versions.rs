@@ -46,16 +46,17 @@ impl Roots {
         Ok(versions.list(&self.real_file(query)?)?)
     }
 
-    /// Runs `edit` on the file of `query`, as the user's editor does, then keeps the text it replaced. Blocks.
+    /// Runs `edit` on the file of `query`, as the user's editor does, then keeps the text it replaced, even when `edit`
+    /// fails: an editor can write the file and still exit with an error. Blocks.
     pub(crate) fn edit_kept(&self, query: &Query, edit: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
         let path = self.file(query)?;
         let before = self.read_blocking(query);
-        edit(&path)?;
+        let edited = edit(&path);
         match (before, self.read_blocking(query)) {
             (Ok(before), Ok(after)) => self.keep(query, &before, &after),
             (Err(err), _) | (_, Err(err)) => tracing::warn!("the version the editor replaced was not kept: {err:#}"),
         }
-        Ok(())
+        edited
     }
 
     /// Keeps `old`, the text of `query` that `new` replaces, best effort: a version not kept is logged and never stops
@@ -279,6 +280,19 @@ mod tests {
         let roots = kept(&queries, &data);
         roots.write(&daily(), "SELECT 1", Write::Create).unwrap();
         roots.edit_kept(&daily(), |path| Ok(fs::write(path, "SELECT 2")?)).unwrap();
+        assert_eq!(version_texts(&roots), ["SELECT 1"]);
+    }
+
+    #[test]
+    fn an_editor_that_fails_after_writing_still_keeps_the_text_it_replaced() {
+        let (queries, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let roots = kept(&queries, &data);
+        roots.write(&daily(), "SELECT 1", Write::Create).unwrap();
+        let edited = roots.edit_kept(&daily(), |path| {
+            fs::write(path, "SELECT 2")?;
+            anyhow::bail!("the editor exited with status 1")
+        });
+        assert!(edited.is_err(), "the editor's failure is still said");
         assert_eq!(version_texts(&roots), ["SELECT 1"]);
     }
 
