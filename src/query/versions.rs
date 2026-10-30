@@ -93,7 +93,7 @@ impl Versions {
         }
         files::make_private_dir(&folder)?;
         let kept = name(at);
-        files::write_whole(&folder.join(&kept), &text, Readers::Owner)?;
+        files::write_whole(&folder.join(&kept), text, Readers::Owner)?;
         for oldest in names.iter().filter(|name| **name != kept).skip(MAX_VERSIONS - 1) {
             fs::remove_file(folder.join(oldest))?;
         }

@@ -22,6 +22,12 @@ pub(crate) fn make_private_dir(dir: &Path) -> io::Result<()> {
     DirBuilder::new().recursive(true).mode(PRIVATE_DIR_MODE).create(dir)
 }
 
+/// Makes `dir` alone, for its owner alone, its parent already there; anything already at `dir`, a link to a folder
+/// included, fails it, so a caller checking each step of a path never follows a link made meanwhile.
+pub(crate) fn make_one_private_dir(dir: &Path) -> io::Result<()> {
+    DirBuilder::new().mode(PRIVATE_DIR_MODE).create(dir)
+}
+
 /// Writes `text` as the whole file at `path` through a temp file beside it, synced to disk before a rename, so the
 /// file is always the old one or the new one; its folder must exist.
 pub(crate) fn write_whole(path: &Path, text: &str, readers: Readers) -> io::Result<()> {
@@ -58,6 +64,22 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         make_private_dir(&dir.path().join("pgbg/history")).unwrap();
         assert_eq!((mode(&dir.path().join("pgbg")), mode(&dir.path().join("pgbg/history"))), (0o700, 0o700));
+    }
+
+    #[test]
+    fn one_private_dir_is_never_made_over_a_link_to_a_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("elsewhere")).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("elsewhere"), dir.path().join("shop")).unwrap();
+        let made = make_one_private_dir(&dir.path().join("shop"));
+        assert_eq!(made.map_err(|err| err.kind()), Err(io::ErrorKind::AlreadyExists));
+    }
+
+    #[test]
+    fn one_private_dir_is_for_its_owner_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        make_one_private_dir(&dir.path().join("shop")).unwrap();
+        assert_eq!(mode(&dir.path().join("shop")), 0o700);
     }
 
     #[test]

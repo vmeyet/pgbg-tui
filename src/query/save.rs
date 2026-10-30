@@ -36,7 +36,7 @@ impl Roots {
             bail!("there is no data folder: set $PGBG_DATA_DIR");
         };
         files::make_private_dir(data_dir)?;
-        make_folders(files::make_private_dir, data_dir, &dir)
+        make_folders(files::make_one_private_dir, data_dir, &dir)
     }
 }
 
@@ -64,7 +64,7 @@ fn write_inside(root: &Root, query: &Query, text: &str, write: Write) -> Result<
     }
     let target = query.path.under(&root.dir);
     let folder = target.parent().unwrap_or(&root.dir);
-    make_folders(files::make_private_dir, &root.dir, folder)?;
+    make_folders(files::make_one_private_dir, &root.dir, folder)?;
     if !fs::canonicalize(folder)?.starts_with(&root.real) {
         bail!("it leads out of the queries folder");
     }
