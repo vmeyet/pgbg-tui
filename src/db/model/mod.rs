@@ -127,6 +127,11 @@ impl ColumnKind {
     pub(crate) const fn is_number(&self) -> bool {
         matches!(self, Self::Int | Self::Float | Self::Numeric)
     }
+
+    /// Whether pgbg decodes its values, so they compare one with another.
+    pub(crate) const fn is_decoded(&self) -> bool {
+        !matches!(self, Self::Other)
+    }
 }
 
 /// A column's name: as the server sent it, where one result may hold the same name twice or an empty one, or as a

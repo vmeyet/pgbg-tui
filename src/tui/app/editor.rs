@@ -4,6 +4,7 @@ use super::undo::{Change, Undo};
 use super::{Action, Sheet};
 use crate::db::lex::Lexed;
 use crate::query::Header;
+use crate::render;
 use crate::syntax::{self, Spans};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::ops::Range;
@@ -79,15 +80,27 @@ impl Editor {
         self.field.deselect();
     }
 
-    /// Puts the cursor at `place`, where the mouse pressed; a double click selects the word there, a triple its line.
+    /// Puts the cursor at `place`, where the mouse pressed; a double click selects the SQL word there, a triple its line.
     pub(super) fn click(&mut self, place: Place, click: Click) {
         self.undo.end_typing();
         self.field.move_to(place);
         match click {
             Click::Single => {}
-            Click::Double => self.field.select_word(),
+            Click::Double => self.select_sql_word(),
             Click::Triple => self.field.select_line(),
         }
+    }
+
+    /// Selects the letters, digits and `_` around the cursor, the cursor at their end; nothing when there are none.
+    fn select_sql_word(&mut self) {
+        let text = self.field.text();
+        let word = sql_word_around(text, self.split().0.len());
+        if word.is_empty() {
+            return;
+        }
+        let (start, end) = (place_of(text, word.start), place_of(text, word.end));
+        self.field.move_to(start);
+        self.field.select_to(end);
     }
 
     /// Selects from where the mouse pressed, or the selection started, to `place`.
@@ -306,6 +319,24 @@ impl Sheet {
     }
 }
 
+fn is_sql_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// The bytes of the run of SQL word characters that holds `at` or ends there.
+fn sql_word_around(text: &str, at: usize) -> Range<usize> {
+    let start = text[..at].char_indices().rfind(|&(_, c)| !is_sql_word_char(c)).map_or(0, |(i, c)| i + c.len_utf8());
+    let end = text[at..].find(|c: char| !is_sql_word_char(c)).map_or(text.len(), |i| at + i);
+    start..end
+}
+
+/// Where byte `offset` of `text` shows: its line, and the terminal columns before it on that line.
+fn place_of(text: &str, offset: usize) -> Place {
+    let before = &text[..offset];
+    let line_start = before.rfind('\n').map_or(0, |newline| newline + 1);
+    Place { line: before.matches('\n').count(), column: render::width(&before[line_start..]) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::fixtures::{app, typed};
@@ -337,6 +368,22 @@ mod tests {
         let mut editor = Editor::new(text);
         editor.paste(paste);
         editor
+    }
+
+    fn double_clicked(text: &str, place: Place) -> Option<String> {
+        let mut editor = Editor::new(text);
+        editor.click(place, Click::Double);
+        editor.selected().map(str::to_owned)
+    }
+
+    #[test]
+    fn a_double_click_selects_the_sql_word_and_stops_at_punctuation() {
+        assert_eq!(double_clicked("SELECT count(o.total_2) FROM orders o", Place { line: 0, column: 15 }).as_deref(), Some("total_2"));
+    }
+
+    #[test]
+    fn a_double_click_finds_its_word_past_wide_characters_on_a_later_line() {
+        assert_eq!(double_clicked("SELECT 1\n'日本',orders", Place { line: 1, column: 8 }).as_deref(), Some("orders"));
     }
 
     #[test]

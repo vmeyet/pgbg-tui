@@ -85,6 +85,7 @@ impl Value {
     pub(crate) fn compare(&self, other: &Self) -> Ordering {
         match (self, other) {
             (Self::Int(a), Self::Int(b)) => a.cmp(b),
+            (Self::Numeric(a), Self::Numeric(b)) => Decimal::of(a).cmp(&Decimal::of(b)),
             (Self::Int(_) | Self::Float(_) | Self::Numeric(_), Self::Int(_) | Self::Float(_) | Self::Numeric(_)) => {
                 self.number().total_cmp(&other.number())
             }
@@ -101,7 +102,8 @@ impl Value {
         }
     }
 
-    /// A number as a float, so a `NUMERIC` compares with another; NaN, as PostgreSQL sorts it, after every number.
+    /// A number as a float, so an integer, a float and a `NUMERIC` compare with one another; NaN, as PostgreSQL sorts it,
+    /// after every number.
     fn number(&self) -> f64 {
         match self {
             #[expect(clippy::cast_precision_loss, reason = "only an integer and a float of one column compare this way")]
@@ -121,6 +123,69 @@ impl Value {
             Self::Null => 4,
             _ => 1,
         }
+    }
+}
+
+/// A `NUMERIC`'s decimal text read so two compare digit by digit, as PostgreSQL sorts them: `-Infinity`, the finite
+/// values, `Infinity`, then `NaN`.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum Decimal<'a> {
+    NegativeInfinity,
+    Finite(Finite<'a>),
+    Infinity,
+    NaN,
+}
+
+/// A finite decimal as its sign and its digits, without the leading zeros of its integer part or the trailing zeros of
+/// its fraction, so one value written two ways reads the same.
+#[derive(PartialEq, Eq)]
+struct Finite<'a> {
+    is_negative: bool,
+    integer: &'a str,
+    fraction: &'a str,
+}
+
+impl<'a> Decimal<'a> {
+    fn of(text: &'a str) -> Self {
+        match text {
+            "NaN" => Self::NaN,
+            "Infinity" => Self::Infinity,
+            "-Infinity" => Self::NegativeInfinity,
+            _ => Self::Finite(Finite::of(text)),
+        }
+    }
+}
+
+impl<'a> Finite<'a> {
+    fn of(text: &'a str) -> Self {
+        let (has_minus, digits) = text.strip_prefix('-').map_or((false, text), |digits| (true, digits));
+        let (integer, fraction) = digits.split_once('.').unwrap_or((digits, ""));
+        let (integer, fraction) = (integer.trim_start_matches('0'), fraction.trim_end_matches('0'));
+        let is_zero = integer.is_empty() && fraction.is_empty();
+        Self { is_negative: has_minus && !is_zero, integer, fraction }
+    }
+
+    /// How its distance from zero compares with `other`'s: a longer integer part is the greater, then digit by digit.
+    fn compare_size(&self, other: &Self) -> Ordering {
+        let integer = self.integer.len().cmp(&other.integer.len()).then_with(|| self.integer.cmp(other.integer));
+        integer.then_with(|| self.fraction.cmp(other.fraction))
+    }
+}
+
+impl Ord for Finite<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self.is_negative, other.is_negative) {
+            (false, false) => self.compare_size(other),
+            (true, true) => other.compare_size(self),
+            (true, false) => Ordering::Less,
+            (false, true) => Ordering::Greater,
+        }
+    }
+}
+
+impl PartialOrd for Finite<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -260,6 +325,27 @@ mod tests {
     fn numbers_compare_as_numbers_not_as_text() {
         let numerics = ["9.5", "10", "-2"].map(|text| Value::Numeric(text.into()));
         assert_eq!(sorted(numerics.to_vec()), ["-2", "9.5", "10"].map(|text| Value::Numeric(text.into())));
+    }
+
+    fn numerics(texts: &[&str]) -> Vec<Value> {
+        texts.iter().map(|&text| Value::Numeric(text.into())).collect()
+    }
+
+    #[test]
+    fn numerics_past_a_floats_digits_still_compare_apart() {
+        let [a, b] = [Value::Numeric("12345678901234567890.1".into()), Value::Numeric("12345678901234567890.2".into())];
+        assert_eq!(a.compare(&b), Ordering::Less);
+    }
+
+    #[test]
+    fn numerics_compare_by_their_decimal_value_signs_and_specials_included() {
+        let unsorted = numerics(&["NaN", "-9.5", "0.07", "Infinity", "-10", "100", "-Infinity", "0", "99.99"]);
+        assert_eq!(sorted(unsorted), numerics(&["-Infinity", "-10", "-9.5", "0", "0.07", "99.99", "100", "Infinity", "NaN"]));
+    }
+
+    #[test]
+    fn numerics_of_one_value_written_two_ways_are_equal() {
+        assert_eq!(Value::Numeric("1.50".into()).compare(&Value::Numeric("01.5".into())), Ordering::Equal);
     }
 
     #[test]

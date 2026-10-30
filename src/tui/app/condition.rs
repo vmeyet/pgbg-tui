@@ -1,39 +1,62 @@
 //! `=` and `!` on the grid: the cell under the cursor added to the statement under the editor's cursor, as
 //! `WHERE column = {{column}}` or `<>`, its value in the parameter bar so it is bound, never spliced into the text.
 use super::{App, Run, Sheet};
-use crate::db::model::{ColumnName, Value};
+use crate::db::model::{ColumnName, ParamValue, Value};
 use crate::query::condition::{self, Comparison};
 use crate::query::params::{self, ParamName};
 
+/// What a cell compares as: NULL, which `IS NULL` reads without a parameter, or a value bound as one.
+enum Compared {
+    Null,
+    Bound(ParamValue),
+}
+
+impl Compared {
+    /// None for a value pgbg could not decode, which no text binds.
+    fn of(value: &Value) -> Option<Self> {
+        match value {
+            Value::Null => Some(Self::Null),
+            other => other.as_param().map(Self::Bound),
+        }
+    }
+}
+
 impl App {
     /// Adds the cell under the grid's cursor to the statement under the editor's cursor, and says so on the status line;
-    /// the keys stay on the grid.
+    /// the keys stay on the grid. A value pgbg could not decode is refused, as a lookup refuses it.
     pub(super) fn add_condition(&mut self, comparison: Comparison) {
-        let Some((column, value)) = self.cell_under_cursor() else { return };
-        let added = self.sheet_mut().add_condition(&column, &value, comparison);
+        let Some((column, compared)) = self.cell_under_cursor() else { return };
+        let Some(compared) = compared else {
+            self.note = Some(format!("{column} holds a value pgbg could not decode"));
+            return;
+        };
+        let added = self.sheet_mut().add_condition(&column, compared, comparison);
         self.note = Some(added.map_or_else(|| "no statement under the editor's cursor".to_owned(), |added| format!("added {added}")));
     }
 
-    fn cell_under_cursor(&self) -> Option<(ColumnName, Value)> {
+    fn cell_under_cursor(&self) -> Option<(ColumnName, Option<Compared>)> {
         let Run::Done { result, grid, .. } = &self.sheet().run else { return None };
         let value = result.rows().get(grid.row)?.get(grid.column)?;
-        Some((result.columns()[grid.column].name.clone(), value.clone()))
+        Some((result.columns()[grid.column].name.clone(), Compared::of(value)))
     }
 }
 
 impl Sheet {
-    /// Adds `column` compared with `value` to the statement under the editor's cursor as one step to undo, `value` in
-    /// the parameter bar under a name the statement does not hold yet; gives the condition added.
-    fn add_condition(&mut self, column: &ColumnName, value: &Value, comparison: Comparison) -> Option<String> {
+    /// Adds `column` compared with `compared` to the statement under the editor's cursor as one step to undo, a value
+    /// bound in the parameter bar under a name the statement does not hold yet; gives the condition added.
+    fn add_condition(&mut self, column: &ColumnName, compared: Compared, comparison: Comparison) -> Option<String> {
         let tokens = self.editor.lexed().tokens_in(self.range_under_cursor()?);
         let taken = params::names(tokens).unwrap_or_default();
-        let param = (*value != Value::Null).then(|| ParamName::for_column(column.as_str(), &taken));
-        let condition = condition::condition(column.as_str(), comparison, param.as_ref());
+        let bound = match compared {
+            Compared::Null => None,
+            Compared::Bound(value) => Some((ParamName::for_column(column.as_str(), &taken), value)),
+        };
+        let condition = condition::condition(column.as_str(), comparison, bound.as_ref().map(|(param, _)| param));
         let splice = condition::add(self.editor.text(), tokens, &condition)?;
         self.editor.replace(splice.range, &splice.text);
         self.text_changed();
-        if let Some(param) = &param {
-            self.bar.put(param, &value.to_string());
+        if let Some((param, value)) = &bound {
+            self.bar.put(param, value.as_str());
         }
         Some(condition)
     }
@@ -44,7 +67,7 @@ mod tests {
     use super::super::fixtures::{enter, on_the_result, press, to_shop, typed};
     use super::super::{Action, Focus, Incoming, RunId};
     use super::*;
-    use crate::fixtures::orders;
+    use crate::fixtures::{orders, undecoded};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::time::Duration;
 
@@ -108,9 +131,24 @@ mod tests {
         let [Action::Run { statement, input, .. }] = &enter(&mut app)[..] else { panic!("no run") };
         let filled = params::fill(statement, &input.given, &input.specs).unwrap();
         assert_eq!(
-            (filled.statement.as_str(), filled.params.values()[0].as_ref().map(crate::db::model::ParamValue::as_str)),
+            (filled.statement.as_str(), filled.params.values()[0].as_ref().map(ParamValue::as_str)),
             ("SELECT * FROM orders WHERE id = $1", Some("7"))
         );
+    }
+
+    #[test]
+    fn a_cell_pgbg_could_not_decode_adds_no_condition_and_says_so() {
+        let mut app = on_the_result(undecoded());
+        press(&mut app, KeyCode::Char('='));
+        assert_eq!((app.sheet().editor.text(), app.note()), ("SELECT 1", Some("shape holds a value pgbg could not decode")));
+    }
+
+    #[test]
+    fn equal_and_bang_while_the_filter_hides_the_cursors_row_add_nothing() {
+        let mut app = pressed("SELECT * FROM orders", "/zzz");
+        press(&mut app, KeyCode::Enter);
+        "=!".chars().for_each(|c| press(&mut app, KeyCode::Char(c)));
+        assert_eq!(app.sheet().editor.text(), "SELECT * FROM orders");
     }
 
     #[test]

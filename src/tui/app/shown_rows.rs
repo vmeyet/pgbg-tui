@@ -164,6 +164,10 @@ impl App {
 
     /// Sorts the grid's rows by the column under its cursor, the next way.
     pub(super) fn step_sort(&mut self) {
+        if let Some(column) = self.sheet().undecoded_column() {
+            self.note = Some(format!("{column} cannot be sorted: pgbg does not decode its type"));
+            return;
+        }
         let clock = self.reading.clock;
         self.sheet_mut().step_sort(&clock);
     }
@@ -174,7 +178,7 @@ mod tests {
     use super::super::fixtures::{on_the_result, press};
     use super::*;
     use crate::db::model::{ColumnKind, Extent};
-    use crate::fixtures::{column, orders, page};
+    use crate::fixtures::{column, orders, page, undecoded};
     use crossterm::event::KeyCode;
 
     fn shown(filter: &str, sort: Option<Sort>, result: &ResultSet) -> Vec<usize> {
@@ -244,6 +248,13 @@ mod tests {
     fn shown_count(app: &App) -> usize {
         let Run::Done { grid, result, .. } = &app.sheet().run else { panic!("no result") };
         grid.shown().count(result.rows().len())
+    }
+
+    #[test]
+    fn s_on_a_column_pgbg_cannot_decode_sorts_nothing_and_says_so() {
+        let app = pressed(undecoded(), "s");
+        let Run::Done { grid, .. } = &app.sheet().run else { panic!("no result") };
+        assert_eq!((grid.shown().sort(), app.note()), (None, Some("shape cannot be sorted: pgbg does not decode its type")));
     }
 
     #[test]

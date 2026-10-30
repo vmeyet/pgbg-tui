@@ -6,6 +6,15 @@ Each entry says what changed, then where, then how to use it.
 
 ## Unreleased
 
+### Fixed
+
+- **`s` and `i` refuse a column pgbg cannot decode**, in the TUI's result grid: the status line says so, where `i` counted all its values as one.
+- **`NUMERIC` values sort and count by their exact digits**, in the TUI's result grid with `s` and `i`: two values past a float's precision no longer tie.
+- **`=` and `!` refuse a cell pgbg could not decode**, in the TUI's result grid: the status line says so, where the parameter bar got `<unsupported>`.
+- **`=`, `!` and `i` do nothing while the filter hides every row**, in the TUI's result grid: they acted on a row the grid did not show.
+- **A long schema comment no longer crowds out other tables**, in the prompt `ctrl-g` sends: each comment is cut to 300 bytes, and a table too long for the room left is skipped, not the end of the schema.
+- **A double click selects an SQL word**, in the TUI's editor: letters, digits and `_`, so `orders.id` or `count(id)` gives `orders` or `id`, not the whole run between two spaces.
+
 ## 0.1.0 - 2026-10-29
 
 ### New
