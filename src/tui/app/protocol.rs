@@ -94,14 +94,13 @@ pub(in crate::tui) enum Action {
     LookUp { connection: ConnectionName, look: LookId, lookup: Lookup },
     /// Cancel this run if the connection's session is still running it.
     Cancel { connection: ConnectionName, run: RunId },
-    /// List the project's saved queries and the user's own of this connection's queries folder.
+    /// List the saved queries of this connection's queries folder.
     ListQueries(ConnectionName),
     /// Read this query into the editor of the connection's sheet.
     OpenQuery { connection: ConnectionName, query: Query },
     /// Write the text of the connection's editor over the query it stands for.
     SaveQuery { connection: ConnectionName, query: Query, text: String },
-    /// Write the text of the connection's editor as a new query at this path, never over another one: under the
-    /// project's queries folder when it has one, else under the user's own `folder`.
+    /// Write the text of the connection's editor as a new query at this path in `folder`, never over another one.
     SaveNewQuery { connection: ConnectionName, folder: ConnectionName, path: QueryPath, text: String },
     /// Lend the terminal to the user's editor on this query's file, then read the file again into the connection's sheet.
     /// The loop runs it, not the backend.
@@ -219,7 +218,7 @@ pub(in crate::tui) enum ConfigAnswer {
 /// The outcome of reading or writing the saved queries.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::tui) enum QueryAnswer {
-    /// The project's saved queries and the user's own of `folder`, sorted.
+    /// The saved queries of `folder`, sorted.
     All {
         folder: ConnectionName,
         queries: Vec<Query>,

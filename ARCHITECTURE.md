@@ -107,9 +107,9 @@ Transaction control and cursor statements never ask for confirmation, save `COMM
 
 ## Saved queries
 
-- A query is one `.sql` file, under the nearest `.pgbg/queries/` walking up from the working directory (stopping at the home folder or a `.git`), or under `<data folder>/queries/<connection>/` (`Source::User`, folders `0700`).
+- A query is one `.sql` file under `<data folder>/queries/<connection>/` (`Query::folder`, folders `0700`); the working directory plays no part, so a query never lands in a repository.
 - `queries = "<connection>"` uses another connection's folder; the config refuses a name that is no connection.
-- A new query goes to the project's root when it has one, else to the user's folder; pgbg never makes a project's folder.
+- A new query goes to the folder of the connection on screen, made at its first save.
 - A root that is a link or owned by another user is skipped; each list and read checks the root again, follows no link, and reads at most 1 MiB.
 - The file is the source of truth: read on open, written on save through a temp file renamed over; a new query never replaces another file, so saving twice changes nothing.
 - A save over a query keeps the replaced text as a version in the data folder, best effort, the newest 50; a text holding a secret is kept as a note.
@@ -141,12 +141,12 @@ One word per concept, in code, docs and UI.
 | run | One sending of a statement, named by its `RunId` |
 | tunnel | The child process that forwards a local port to a database out of reach |
 | statement | One SQL statement, the unit pgbg runs |
-| query | A saved `.sql` file, a project's or the user's own of a connection |
+| query | A saved `.sql` file in a connection's queries folder |
 | result | The columns and rows a statement returned, page by page |
 | page | One batch of rows fetched from the portal |
 | chart | A bar or line drawing of a result |
 | history | Every statement run on a connection |
-| version | A text of a saved query that a save replaced, kept outside the project |
+| version | A text of a saved query that a save replaced, kept apart from the queries |
 | schema | The schemas, tables, columns and indexes a session's role can read |
 | catalog | The schema as one read gave it, with its search path and whether the table cap cut it |
 | completion | A name the editor offers at the cursor |

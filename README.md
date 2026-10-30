@@ -4,7 +4,7 @@ Read your PostgreSQL databases from the terminal: local, staging, and production
 
 - **Read only by default.** A connection takes writes only when you say so, and then each write asks first, even one inside a function call.
 - **Tunnels built in.** pgbg starts your `ssh` (or any other) tunnel, and stops it when you quit.
-- **Saved queries are plain `.sql` files.** Your own live per connection in pgbg's data folder; a project's `.pgbg/queries/` sits next to the code, reviewed like code.
+- **Saved queries are plain `.sql` files.** They live per connection in pgbg's data folder, never in a repository, and open in `$EDITOR` with `ctrl-x`.
 - **Charts in the terminal.** Press `v` on a result to see it as bars or a line.
 - **Safe on production.** Its own frame colour, a short statement timeout, and `pgbg doctor` to check the role you log in with.
 
@@ -169,18 +169,15 @@ It exits 1 when a check fails, so a script can run it.
 
 ## Saved queries
 
-Saved queries are `.sql` files, in folders if you like, in two places:
+Saved queries are `.sql` files, in folders if you like, under `queries/<connection>/` in pgbg's data folder, as `~/.local/share/pgbg/queries/prod/`.
+The data folder is `$PGBG_DATA_DIR`, else `$XDG_DATA_HOME/pgbg`, else `~/.local/share/pgbg`, on macOS too.
+pgbg never reads nor writes a query in the folder you start it in, so a query never lands in a repository.
 
-- **Your own**, per connection: `queries/<connection>/` in pgbg's data folder, as `~/.local/share/pgbg/queries/prod/`.
-  The data folder is `$PGBG_DATA_DIR`, else `$XDG_DATA_HOME/pgbg`, else `~/.local/share/pgbg`, on macOS too.
-- **A project's**, shared with your team: `.pgbg/queries/` in the project.
-  pgbg finds the nearest one from the folder you start it in, up to the repository root, the way git finds `.git`, and shows it on every connection.
-
-The sidebar and `ctrl-p` show the project's queries and your own of the connection on screen.
+The sidebar and `ctrl-p` show the queries of the connection on screen.
 `queries = "prod"` on another connection, as a replica, makes it use the folder of `prod` instead of its own.
-`ctrl-s` on a new query saves it in the project's `.pgbg/queries/` when there is one, else in your own folder; pgbg never makes a project's folder itself.
+`ctrl-s` on a new query saves it in that folder, and `ctrl-x` opens the query in `$EDITOR`.
 
-Each save over a query, from `ctrl-s` or `$EDITOR`, keeps the text it replaced under `versions/` in pgbg's data folder, never in your project: the newest 50 of each query.
+Each save over a query, from `ctrl-s` or `$EDITOR`, keeps the text it replaced under `versions/` in pgbg's data folder: the newest 50 of each query.
 `ctrl-v` lists them, and `⏎` puts one back in the editor, unsaved until you press `ctrl-s`.
 A text holding a password is kept as a note instead, as the history does, and cannot be put back.
 

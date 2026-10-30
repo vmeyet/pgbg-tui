@@ -51,11 +51,10 @@ fn check_one_reader_of_stdin(file: Option<&Path>, params_file: Option<&Path>) ->
     Ok(())
 }
 
-/// The text of the statement as typed, of the saved query, the project's before the user's own of `folder`, or of the
-/// file `statement` names.
+/// The text of the statement as typed, of the saved query in `folder`, or of the file `statement` names.
 async fn statement_text(statement: &StatementArgs, folder: &ConnectionName) -> Result<String> {
     if let Some(path) = &statement.query {
-        let roots = Roots::find_here().await?;
+        let roots = Roots::from_env();
         return roots.read(&roots.named(path, folder).await?).await;
     }
     match &statement.file {

@@ -4,8 +4,8 @@ expression: terminal.backend()
 ---
 "╭ ● local · local ──╭ Connections ─────────────────────────────────────────────╮───────────────────╮"
 "│╭ [Queries] Schema │ › ▌                                                      │──────────────────╮│"
-"││ no saved query un│                                                          │                  ││"
-"││ .pgbg/queries/   │  ● local  localhost/shop · read only  open               │                  ││"
+"││ no saved query ye│                                                          │                  ││"
+"││ saves one        │  ● local  localhost/shop · read only  open               │                  ││"
 "││                  │ ▎● prod  via tunnel · read only                          │──────────────────╯│"
 "││                  │  ● staging  db.example.com/shop  WRITES                  │──────────────────╮│"
 "││                  │   remove `prod`? y removes it, any other key keeps it    │                  ││"

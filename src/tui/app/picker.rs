@@ -342,7 +342,7 @@ pub(in crate::tui) mod tests {
 
     fn listed_on_local(app: &mut App) {
         let path = crate::query::QueryPath::parse("mine.sql").unwrap();
-        let queries = vec![crate::query::Query { source: crate::query::Source::User(name("local")), path }];
+        let queries = vec![crate::query::Query { folder: name("local"), path }];
         app.apply(Answer::Queries(QueryAnswer::All { folder: name("local"), queries }));
     }
 
@@ -377,8 +377,7 @@ pub(in crate::tui) mod tests {
     #[test]
     fn a_saved_query_stays_with_the_connection_it_was_opened_on() {
         let mut app = on_local();
-        let customers =
-            crate::query::Query { source: crate::query::Source::Project, path: crate::query::QueryPath::parse("customers.sql").unwrap() };
+        let customers = crate::query::Query { folder: name("local"), path: crate::query::QueryPath::parse("customers.sql").unwrap() };
         app.apply(Answer::Queries(QueryAnswer::Opened { connection: name("local"), query: customers.clone(), text: "SELECT 1".into() }));
         switch_to(&mut app, "prod");
         assert_eq!(app.sheet().opened, None);
@@ -389,8 +388,7 @@ pub(in crate::tui) mod tests {
     #[test]
     fn a_saved_query_read_after_a_switch_lands_on_the_sheet_that_asked_for_it() {
         let mut app = on_local();
-        let customers =
-            crate::query::Query { source: crate::query::Source::Project, path: crate::query::QueryPath::parse("customers.sql").unwrap() };
+        let customers = crate::query::Query { folder: name("local"), path: crate::query::QueryPath::parse("customers.sql").unwrap() };
         switch_to(&mut app, "prod");
         app.apply(Answer::Queries(QueryAnswer::Opened { connection: name("local"), query: customers.clone(), text: "SELECT 1".into() }));
         app.apply(Answer::Queries(QueryAnswer::NotOpened {

@@ -157,7 +157,7 @@ pub enum ConnectionCommand {
 pub struct StatementArgs {
     /// One SQL statement; each `{{name}}` in it is bound to the value given for it, never spliced into the text.
     pub sql: Option<String>,
-    /// A saved query, by its path under `.pgbg/queries/` or the connection's own queries folder: `orders/daily`.
+    /// A saved query, by its path under the connection's queries folder: `orders/daily`.
     #[arg(long, value_name = "PATH")]
     pub query: Option<String>,
     /// A file holding the statement, or `-` for stdin.

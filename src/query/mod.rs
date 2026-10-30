@@ -1,5 +1,4 @@
-//! Saved queries: the `.sql` files under the `.pgbg/queries/` nearest the working directory, found the way git finds
-//! `.git`, and under `queries/<connection>/` in pgbg's data folder.
+//! Saved queries: the `.sql` files under `queries/<connection>/` in pgbg's data folder, never in a project.
 use crate::config;
 use crate::connection::ConnectionName;
 use crate::render;
@@ -29,9 +28,7 @@ mod save;
 mod tree;
 mod versions;
 
-const PROJECT_DIR: &str = ".pgbg";
 const QUERIES_DIR: &str = "queries";
-const REPOSITORY_MARKER: &str = ".git";
 const EXTENSION: &str = ".sql";
 /// The biggest query the editor takes: past it, the file is a dump, not a query.
 const MAX_QUERY_BYTES: u64 = 1 << 20;
@@ -70,38 +67,12 @@ impl fmt::Display for QueryPath {
     }
 }
 
-/// Which root a query is under.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum Source {
-    /// The `.pgbg/queries/` nearest the working directory, which every connection shows.
-    Project,
-    /// The user's own folder of this connection, `queries/<connection>/` in pgbg's data folder.
-    User(ConnectionName),
-}
-
-impl fmt::Display for Source {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Project => "project",
-            Self::User(_) => "user",
-        })
-    }
-}
-
-/// One saved query: its root and its path under it.
+/// One saved query: the queries folder it is under and its path there.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Query {
-    pub(crate) source: Source,
+    /// The connection whose folder, `queries/<connection>/` in pgbg's data folder, holds the query.
+    pub(crate) folder: ConnectionName,
     pub(crate) path: QueryPath,
-}
-
-/// Where the roots are looked for: the walk up from `working_dir` stops at `home` or at the first repository root.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Places<'a> {
-    pub(crate) working_dir: &'a Path,
-    pub(crate) home: Option<&'a Path>,
-    /// pgbg's data folder, whose `queries/<connection>/` holds the user's own queries of each connection.
-    pub(crate) data_dir: Option<&'a Path>,
 }
 
 /// Why a folder is not taken as a root of queries.
@@ -169,34 +140,14 @@ impl Root {
     }
 }
 
-/// The folders from `working_dir` up to `home` or the first one holding `.git`, both included.
-fn walked<'a>(places: &Places<'a>) -> Vec<&'a Path> {
-    let ancestors: Vec<&Path> = places.working_dir.ancestors().collect();
-    let is_last = |dir: &&Path| places.home == Some(*dir) || dir.join(REPOSITORY_MARKER).exists();
-    let kept = ancestors.iter().position(is_last).map_or(ancestors.len(), |last| last + 1);
-    ancestors[..kept].to_vec()
-}
-
-/// The `.pgbg/queries/` nearest the working directory up, when one exists and passes the checks.
-fn project_root(places: &Places<'_>) -> Option<Root> {
-    let dir = walked(places).into_iter().find(|dir| exists(&queries_dir(dir)))?;
-    let root = queries_dir(dir);
-    Root::checked(root.clone(), vec![dir.join(PROJECT_DIR), root])
-}
-
-fn queries_dir(dir: &Path) -> PathBuf {
-    dir.join(PROJECT_DIR).join(QUERIES_DIR)
-}
-
 fn exists(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok()
 }
 
-/// The folders queries live in: the project's when it has one, and the user's own folder of each connection.
+/// The folders queries live in: one of each connection, under pgbg's data folder.
 #[derive(Clone, Debug)]
 #[cfg_attr(test, derive(Default))]
 pub(crate) struct Roots {
-    project: Option<Root>,
     /// pgbg's data folder, where a connection's own folder is made at its first save; none keeps no query of the user's.
     data_dir: Option<PathBuf>,
     /// Where a save keeps the text it replaces; none keeps no version.
@@ -204,21 +155,12 @@ pub(crate) struct Roots {
 }
 
 impl Roots {
-    /// The nearest `.pgbg/queries/` from the working directory up, and the user's folders under pgbg's data folder; a
-    /// root that is a link, or that another user owns, is skipped. Blocks on the file system.
-    pub(crate) fn find(places: &Places<'_>) -> Self {
-        Self { project: project_root(places), data_dir: places.data_dir.map(Path::to_path_buf), versions: None }
+    /// The folders under pgbg's data folder; the working directory plays no part, so a project never gives a query.
+    pub(crate) fn from_env() -> Self {
+        Self { data_dir: config::data_dir(), versions: None }
     }
 
-    /// The roots for the working directory, the home folder and pgbg's data folder, found off the runtime.
-    pub(crate) async fn find_here() -> Result<Self> {
-        let working_dir = std::env::current_dir()?;
-        let (home, data_dir) = (dirs::home_dir(), config::data_dir());
-        let found = move || Self::find(&Places { working_dir: &working_dir, home: home.as_deref(), data_dir: data_dir.as_deref() });
-        Ok(tokio::task::spawn_blocking(found).await?)
-    }
-
-    /// The query at `path`, `.sql` added when it lacks it: the project's before the user's own of `folder`.
+    /// The query at `path` in `folder`, `.sql` added when it lacks it.
     pub(crate) async fn named(&self, path: &str, folder: &ConnectionName) -> Result<Query> {
         let with_extension = if path.ends_with(EXTENSION) { path.to_owned() } else { format!("{path}{EXTENSION}") };
         let path = QueryPath::parse(&with_extension)?;
@@ -230,31 +172,23 @@ impl Roots {
             .with_context(|| format!("no saved query {path}: `pgbg` lists them in its sidebar"))
     }
 
-    /// The user's own folder of the connection `folder`, `queries/<connection>/` in pgbg's data folder.
-    fn user_dir(&self, folder: &ConnectionName) -> Option<PathBuf> {
+    /// The folder of the connection `folder`, `queries/<connection>/` in pgbg's data folder.
+    fn dir(&self, folder: &ConnectionName) -> Option<PathBuf> {
         Some(self.data_dir.as_ref()?.join(QUERIES_DIR).join(folder.to_string()))
     }
 
-    /// The root of `source`, when it exists. Blocks on the file system.
-    fn root(&self, source: &Source) -> Option<Root> {
-        match source {
-            Source::Project => self.project.clone(),
-            Source::User(folder) => {
-                let root = self.user_dir(folder).filter(|dir| exists(dir))?;
-                let queries = root.parent()?.to_path_buf();
-                Root::checked(root.clone(), vec![queries, root])
-            }
-        }
+    /// The root of `folder`, when it exists and passes the checks. Blocks on the file system.
+    fn root(&self, folder: &ConnectionName) -> Option<Root> {
+        let root = self.dir(folder).filter(|dir| exists(dir))?;
+        let queries = root.parent()?.to_path_buf();
+        Root::checked(root.clone(), vec![queries, root])
     }
 
-    /// Every query of the project and of the user's own `folder`, sorted; a folder that cannot be read, or that changed
-    /// since it was found, is skipped with a warning. Blocks on the file system.
+    /// Every query of `folder`, sorted; a folder that cannot be read, or that changed since it was found, is skipped
+    /// with a warning. Blocks on the file system.
     pub(crate) fn list(&self, folder: &ConnectionName) -> Vec<Query> {
-        let safe = |source: Source| self.root(&source).filter(Root::is_still_safe).map(|root| (source, root.dir));
-        let found = [Source::Project, Source::User(folder.clone())].into_iter().filter_map(safe);
-        let mut queries: Vec<Query> = found
-            .flat_map(|(source, dir)| files_under(&dir, "").into_iter().map(move |path| Query { source: source.clone(), path }))
-            .collect();
+        let Some(root) = self.root(folder).filter(Root::is_still_safe) else { return vec![] };
+        let mut queries: Vec<Query> = files_under(&root.dir, "").into_iter().map(|path| Query { folder: folder.clone(), path }).collect();
         queries.sort();
         queries
     }
@@ -267,13 +201,13 @@ impl Roots {
     }
 
     fn read_blocking(&self, query: &Query) -> Result<String> {
-        let root = self.existing_root(&query.source)?;
+        let root = self.existing_root(&query.folder)?;
         read_checked(&root, &query.path.under(&root.real))
     }
 
-    /// The root of `source`, or an error naming it when it does not exist. Blocks on the file system.
-    fn existing_root(&self, source: &Source) -> Result<Root> {
-        self.root(source).with_context(|| format!("no {source} queries folder"))
+    /// The root of `folder`, or an error naming it when it does not exist. Blocks on the file system.
+    fn existing_root(&self, folder: &ConnectionName) -> Result<Root> {
+        self.root(folder).with_context(|| format!("no queries folder for {folder}"))
     }
 }
 
@@ -383,20 +317,27 @@ mod tests {
         fs::write(at, "SELECT 1").unwrap();
     }
 
-    fn project(root: &Path) -> Roots {
-        Roots { project: Some(unchecked(root)), ..Roots::default() }
-    }
-
     fn name(text: &str) -> ConnectionName {
         text.parse().unwrap()
     }
 
-    fn unchecked(dir: &Path) -> Root {
-        Root { dir: dir.into(), checked: vec![], real: fs::canonicalize(dir).unwrap() }
+    fn in_data(data: &Path) -> Roots {
+        Roots { data_dir: Some(data.into()), ..Roots::default() }
+    }
+
+    /// The folder of `shop` under the data folder `data`, made empty.
+    fn shop_dir(data: &Path) -> PathBuf {
+        let dir = data.join("queries/shop");
+        fs::create_dir_all(&dir).unwrap();
+        dir
     }
 
     fn listed(roots: &Roots) -> Vec<String> {
-        roots.list(&name("shop")).iter().map(|query| format!("{} {}", query.source, query.path)).collect()
+        roots.list(&name("shop")).iter().map(|query| query.path.to_string()).collect()
+    }
+
+    fn daily() -> Query {
+        Query { folder: name("shop"), path: QueryPath::parse("orders/daily.sql").unwrap() }
     }
 
     #[test]
@@ -408,34 +349,19 @@ mod tests {
     }
 
     #[test]
-    fn the_root_is_the_nearest_one_up_from_the_working_directory() {
-        let home = tempfile::tempdir().unwrap();
-        write(home.path(), ".pgbg/queries/top.sql");
-        write(home.path(), "shop/.pgbg/queries/near.sql");
-        fs::create_dir_all(home.path().join("shop/src")).unwrap();
-        assert_eq!(find_from(&home.path().join("shop/src"), None), Some(home.path().join("shop/.pgbg/queries")));
-    }
-
-    fn with_data(roots: Roots, data: &Path) -> Roots {
-        Roots { data_dir: Some(data.into()), ..roots }
-    }
-
-    #[test]
-    fn listing_finds_every_sql_file_of_the_project_and_the_connections_own_folder_sorted() {
-        let (root, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    fn listing_finds_every_sql_file_of_the_connections_folder_sorted() {
+        let data = tempfile::tempdir().unwrap();
         for file in ["orders/daily.sql", "customers.sql", "notes.txt", "orders/weekly/top.sql"] {
-            write(root.path(), file);
+            write(&shop_dir(data.path()), file);
         }
-        write(data.path(), "queries/shop/mine.sql");
-        let roots = with_data(project(root.path()), data.path());
-        assert_eq!(listed(&roots), ["project customers.sql", "project orders/daily.sql", "project orders/weekly/top.sql", "user mine.sql"]);
+        assert_eq!(listed(&in_data(data.path())), ["customers.sql", "orders/daily.sql", "orders/weekly/top.sql"]);
     }
 
     #[test]
     fn a_connections_own_query_is_not_listed_on_another_connection() {
         let data = tempfile::tempdir().unwrap();
         write(data.path(), "queries/staging/mine.sql");
-        let roots = with_data(Roots::default(), data.path());
+        let roots = in_data(data.path());
         assert_eq!(roots.list(&name("shop")), []);
         assert_eq!(roots.list(&name("staging")).len(), 1);
     }
@@ -447,25 +373,27 @@ mod tests {
         write(outside.path(), "mine.sql");
         fs::create_dir_all(data.path().join("queries")).unwrap();
         std::os::unix::fs::symlink(outside.path(), data.path().join("queries/shop")).unwrap();
-        assert_eq!(listed(&with_data(Roots::default(), data.path())), Vec::<String>::new());
+        assert_eq!(listed(&in_data(data.path())), Vec::<String>::new());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_queries_folder_that_is_a_link_is_refused() {
+        let (data, outside) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        write(outside.path(), "shop/mine.sql");
+        std::os::unix::fs::symlink(outside.path(), data.path().join("queries")).unwrap();
+        assert_eq!(listed(&in_data(data.path())), Vec::<String>::new());
     }
 
     #[cfg(unix)]
     #[test]
     fn listing_follows_no_link_out_of_the_root() {
-        let (root, outside) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (data, outside) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let root = shop_dir(data.path());
         write(outside.path(), "secret.sql");
-        std::os::unix::fs::symlink(outside.path(), root.path().join("elsewhere")).unwrap();
-        std::os::unix::fs::symlink(outside.path().join("secret.sql"), root.path().join("secret.sql")).unwrap();
-        assert_eq!(listed(&project(root.path())), Vec::<String>::new());
-    }
-
-    fn find_from(working_dir: &Path, home: Option<&Path>) -> Option<PathBuf> {
-        Roots::find(&Places { working_dir, home, data_dir: None }).project.map(|root| root.dir)
-    }
-
-    fn daily() -> Query {
-        Query { source: Source::Project, path: QueryPath::parse("orders/daily.sql").unwrap() }
+        std::os::unix::fs::symlink(outside.path(), root.join("elsewhere")).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret.sql"), root.join("secret.sql")).unwrap();
+        assert_eq!(listed(&in_data(data.path())), Vec::<String>::new());
     }
 
     #[test]
@@ -480,65 +408,14 @@ mod tests {
         assert_eq!(QueryPath::parse("orders/\u{202e}lqs.sql").unwrap().to_string(), "orders/\\u{202e}lqs.sql");
     }
 
-    #[test]
-    fn the_walk_stops_at_the_repository_root() {
-        let home = tempfile::tempdir().unwrap();
-        write(home.path(), ".pgbg/queries/top.sql");
-        fs::create_dir_all(home.path().join("shop/.git")).unwrap();
-        fs::create_dir_all(home.path().join("shop/src")).unwrap();
-        assert_eq!(find_from(&home.path().join("shop/src"), None), None);
-    }
-
-    #[test]
-    fn the_walk_stops_at_the_home_folder() {
-        let machine = tempfile::tempdir().unwrap();
-        write(machine.path(), ".pgbg/queries/shared.sql");
-        let home = machine.path().join("nina");
-        fs::create_dir_all(home.join("shop")).unwrap();
-        assert_eq!(find_from(&home.join("shop"), Some(&home)), None);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_queries_folder_that_is_a_link_is_refused() {
-        let (project, outside) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        fs::create_dir_all(project.path().join(".pgbg")).unwrap();
-        std::os::unix::fs::symlink(outside.path(), project.path().join(".pgbg/queries")).unwrap();
-        assert_eq!(find_from(project.path(), None), None);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_pgbg_folder_that_is_a_link_is_refused() {
-        let (project, outside) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        write(outside.path(), "queries/secret.sql");
-        std::os::unix::fs::symlink(outside.path(), project.path().join(".pgbg")).unwrap();
-        assert_eq!(find_from(project.path(), None), None);
-    }
-
-    /// The roots found in a project whose `.pgbg` is then swapped for a link to another one with the same queries.
-    fn found_then_swapped_for_a_link() -> (Roots, [tempfile::TempDir; 2]) {
-        let (project, outside) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        write(project.path(), ".pgbg/queries/orders/daily.sql");
-        write(outside.path(), "queries/orders/daily.sql");
-        let roots = Roots::find(&Places { working_dir: project.path(), home: None, data_dir: None });
-        fs::rename(project.path().join(".pgbg"), project.path().join("was")).unwrap();
-        std::os::unix::fs::symlink(outside.path(), project.path().join(".pgbg")).unwrap();
-        (roots, [project, outside])
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn listing_skips_a_root_swapped_for_a_link_since_it_was_found() {
-        let (roots, _dirs) = found_then_swapped_for_a_link();
-        assert_eq!(listed(&roots), Vec::<String>::new());
-    }
-
     #[cfg(unix)]
     #[tokio::test]
-    async fn reading_refuses_a_root_swapped_for_a_link_since_it_was_found() {
-        let (roots, _dirs) = found_then_swapped_for_a_link();
-        assert!(roots.read(&daily()).await.is_err());
+    async fn reading_refuses_a_connections_folder_that_is_a_link() {
+        let (data, outside) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        write(outside.path(), "orders/daily.sql");
+        fs::create_dir_all(data.path().join("queries")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), data.path().join("queries/shop")).unwrap();
+        assert!(in_data(data.path()).read(&daily()).await.is_err());
     }
 
     #[test]
@@ -552,54 +429,55 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn listing_skips_what_is_not_a_regular_file() {
-        let root = tempfile::tempdir().unwrap();
-        let _socket = std::os::unix::net::UnixListener::bind(root.path().join("socket.sql")).unwrap();
-        assert_eq!(listed(&project(root.path())), Vec::<String>::new());
+        let data = tempfile::tempdir().unwrap();
+        let _socket = std::os::unix::net::UnixListener::bind(shop_dir(data.path()).join("socket.sql")).unwrap();
+        assert_eq!(listed(&in_data(data.path())), Vec::<String>::new());
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn reading_refuses_what_is_not_a_regular_file() {
-        let root = tempfile::tempdir().unwrap();
-        fs::create_dir_all(root.path().join("orders")).unwrap();
-        let _socket = std::os::unix::net::UnixListener::bind(root.path().join("orders/daily.sql")).unwrap();
-        assert!(project(root.path()).read(&daily()).await.is_err());
+        let data = tempfile::tempdir().unwrap();
+        let root = shop_dir(data.path());
+        fs::create_dir_all(root.join("orders")).unwrap();
+        let _socket = std::os::unix::net::UnixListener::bind(root.join("orders/daily.sql")).unwrap();
+        assert!(in_data(data.path()).read(&daily()).await.is_err());
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn reading_refuses_a_query_replaced_by_a_link() {
-        let (root, outside) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (data, outside) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let root = shop_dir(data.path());
         write(outside.path(), "secret.sql");
-        fs::create_dir_all(root.path().join("orders")).unwrap();
-        std::os::unix::fs::symlink(outside.path().join("secret.sql"), root.path().join("orders/daily.sql")).unwrap();
-        assert!(project(root.path()).read(&daily()).await.is_err());
+        fs::create_dir_all(root.join("orders")).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret.sql"), root.join("orders/daily.sql")).unwrap();
+        assert!(in_data(data.path()).read(&daily()).await.is_err());
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn reading_refuses_a_query_under_a_folder_replaced_by_a_link() {
-        let (root, outside) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (data, outside) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         write(outside.path(), "daily.sql");
-        std::os::unix::fs::symlink(outside.path(), root.path().join("orders")).unwrap();
-        assert!(project(root.path()).read(&daily()).await.is_err());
+        std::os::unix::fs::symlink(outside.path(), shop_dir(data.path()).join("orders")).unwrap();
+        assert!(in_data(data.path()).read(&daily()).await.is_err());
     }
 
     #[tokio::test]
     async fn reading_refuses_a_query_too_big_for_the_editor() {
-        let root = tempfile::tempdir().unwrap();
-        write(root.path(), "orders/daily.sql");
-        fs::write(root.path().join("orders/daily.sql"), "-".repeat(MAX_QUERY_BYTES as usize + 1)).unwrap();
-        let error = project(root.path()).read(&daily()).await.unwrap_err();
+        let data = tempfile::tempdir().unwrap();
+        let root = shop_dir(data.path());
+        write(&root, "orders/daily.sql");
+        fs::write(root.join("orders/daily.sql"), "-".repeat(MAX_QUERY_BYTES as usize + 1)).unwrap();
+        let error = in_data(data.path()).read(&daily()).await.unwrap_err();
         assert!(format!("{error:#}").contains("too big"), "{error:#}");
     }
 
     #[tokio::test]
     async fn reading_a_query_gives_its_text() {
-        let root = tempfile::tempdir().unwrap();
-        write(root.path(), "orders/daily.sql");
-        let query = Query { source: Source::Project, path: QueryPath::parse("orders/daily.sql").unwrap() };
-        let text = project(root.path()).read(&query).await.unwrap();
-        assert_eq!(text, "SELECT 1");
+        let data = tempfile::tempdir().unwrap();
+        write(&shop_dir(data.path()), "orders/daily.sql");
+        assert_eq!(in_data(data.path()).read(&daily()).await.unwrap(), "SELECT 1");
     }
 }

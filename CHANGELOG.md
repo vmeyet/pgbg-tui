@@ -16,6 +16,11 @@ Each entry says what changed, then where, then how to use it.
 - **A double click selects an SQL word**, in the TUI's editor: letters, digits and `_`, so `orders.id` or `count(id)` gives `orders` or `id`, not the whole run between two spaces.
 - **A query edited in `$EDITOR` keeps its old text as a version even when the editor exits with an error**, in the TUI: `ctrl-v` lists it as it lists any other version.
 
+### Removed
+
+- **A project's `.pgbg/queries/` is no longer read**, in the TUI and `pgbg run --query`: saved queries live only in pgbg's data folder, under `queries/<connection>/`, so a query never lands in a repository.
+  Move a project's queries with `mv .pgbg/queries/* ~/.local/share/pgbg/queries/<connection>/`; `queries = "<connection>"` on another connection still shows them there too.
+
 ## 0.1.0 - 2026-10-29
 
 ### New
