@@ -48,6 +48,7 @@ pub(crate) enum Act {
     WhereEqual,
     WhereNotEqual,
     ColumnStats,
+    JsonTree,
     CopyCell,
     CopyRow,
     CopyResult,
@@ -56,6 +57,7 @@ pub(crate) enum Act {
     CopyMarkdown,
     CopyStatement,
     CopySelection,
+    CopyPath,
     Paste,
     SwitchTab,
     Filter,
@@ -116,6 +118,7 @@ impl Act {
             Self::WhereEqual => "where_equal",
             Self::WhereNotEqual => "where_not_equal",
             Self::ColumnStats => "column_stats",
+            Self::JsonTree => "json_tree",
             Self::CopyCell => "copy_cell",
             Self::CopyRow => "copy_row",
             Self::CopyResult => "copy_result",
@@ -124,6 +127,7 @@ impl Act {
             Self::CopyMarkdown => "copy_markdown",
             Self::CopyStatement => "copy_statement",
             Self::CopySelection => "copy_selection",
+            Self::CopyPath => "copy_path",
             Self::Paste => "paste",
             Self::SwitchTab => "switch_tab",
             Self::Filter => "filter",
@@ -158,6 +162,7 @@ impl Act {
                 | Self::WhereEqual
                 | Self::WhereNotEqual
                 | Self::ColumnStats
+                | Self::JsonTree
                 | Self::CopyCell
                 | Self::CopyRow
                 | Self::StepFormat
@@ -206,6 +211,8 @@ pub(crate) enum Pane {
     Detail,
     /// The figures of the grid's column over the screen, a popup like the row's detail.
     ColumnStats,
+    /// The JSON of the grid's cell as a tree that folds, a popup like the row's detail.
+    JsonTree,
     /// A question on the footer line, the format to copy the result as: while open it takes every key.
     CopyAs,
     /// The `ctrl-space` list of names at the cursor: while open it takes every key.
@@ -220,7 +227,7 @@ pub(crate) enum Pane {
 
 impl Pane {
     /// The order the `?` help lists the panes in.
-    const IN_HELP: [Self; 21] = [
+    const IN_HELP: [Self; 22] = [
         Self::Editor,
         Self::Params,
         Self::Result,
@@ -236,6 +243,7 @@ impl Pane {
         Self::Confirm,
         Self::Detail,
         Self::ColumnStats,
+        Self::JsonTree,
         Self::CopyAs,
         Self::Completion,
         Self::Instruction,
@@ -262,6 +270,7 @@ impl Pane {
             Self::Confirm => "write",
             Self::Detail => "row",
             Self::ColumnStats => "column",
+            Self::JsonTree => "json",
             Self::CopyAs => "copy as",
             Self::Completion => "names",
             Self::Instruction => "ask",
@@ -388,6 +397,7 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::WhereNotEqual, Pane::Result, &[key(KeyCode::Char('!'))]),
     row(Act::ColumnStats, Pane::Result, &[key(KeyCode::Char('i'))])
         .help("i", "the column's distinct values, NULLs, least, greatest and most common, over the rows loaded"),
+    row(Act::JsonTree, Pane::Result, &[key(KeyCode::Char('o'))]).help("o", "the JSON cell as a tree that folds"),
     row(Act::Help, Pane::Result, &[key(KeyCode::Char('?'))]).help("?", HELP_KEYS),
     row(Act::Down, Pane::Queries, &[key(KeyCode::Char('j')), key(KeyCode::Down)]).help("j k", "next, previous query").footer("j/k", "move"),
     row(Act::Up, Pane::Queries, &[key(KeyCode::Char('k')), key(KeyCode::Up)]),
@@ -474,6 +484,17 @@ pub(crate) const ROWS: &[Row] = &[
         .help("esc i", "back to the grid")
         .footer("esc", "closes"),
     row(Act::Quit, Pane::ColumnStats, &[control('c')]).help("^c", "quit"),
+    row(Act::Down, Pane::JsonTree, &[key(KeyCode::Char('j')), key(KeyCode::Down)]).help("j k", "next, previous line"),
+    row(Act::Up, Pane::JsonTree, &[key(KeyCode::Char('k')), key(KeyCode::Up)]),
+    row(Act::Open, Pane::JsonTree, &[key(KeyCode::Enter), key(KeyCode::Char(' '))])
+        .help("⏎ space", "fold or unfold; on a value that does not fold, the one holding it")
+        .footer("⏎", "fold"),
+    row(Act::CopyCell, Pane::JsonTree, &[key(KeyCode::Char('y'))]).help("y", "copy the value, a string unquoted").footer("y", "value"),
+    row(Act::CopyPath, Pane::JsonTree, &[key(KeyCode::Char('Y'))]).help("Y", "copy the path, as jq writes it").footer("Y", "path"),
+    row(Act::Close, Pane::JsonTree, &[key(KeyCode::Esc), key(KeyCode::Char('o'))])
+        .help("esc o", "back to the grid")
+        .footer("esc", "closes"),
+    row(Act::Quit, Pane::JsonTree, &[control('c')]).help("^c", "quit"),
     row(Act::Down, Pane::Completion, &[key(KeyCode::Down), control('n')]).help("↓ ^n", "next, previous name").footer("↑↓", "pick"),
     row(Act::Up, Pane::Completion, &[key(KeyCode::Up), control('p')]),
     row(Act::Open, Pane::Completion, &[key(KeyCode::Enter), key(KeyCode::Tab)]).help("⏎ ⇥", "take the name").footer("⏎", "takes"),
@@ -536,6 +557,7 @@ fn works_in(row: &Row, pane: Pane) -> bool {
                     | Pane::Confirm
                     | Pane::Detail
                     | Pane::ColumnStats
+                    | Pane::JsonTree
                     | Pane::CopyAs
                     | Pane::SchemaFilter
                     | Pane::RowFilter
@@ -660,6 +682,7 @@ mod tests {
             Pane::Confirm,
             Pane::Detail,
             Pane::ColumnStats,
+            Pane::JsonTree,
             Pane::CopyAs,
             Pane::Completion,
             Pane::Instruction,
@@ -748,6 +771,6 @@ mod tests {
     fn the_first_help_lists_the_focused_pane_and_what_works_anywhere() {
         let titles: Vec<&str> = sections(Pane::Result, false).iter().map(|section| section.title).collect();
         assert_eq!(titles, ["result", "anywhere"]);
-        assert_eq!(sections(Pane::Result, true).len(), 21);
+        assert_eq!(sections(Pane::Result, true).len(), 22);
     }
 }

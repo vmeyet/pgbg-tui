@@ -27,7 +27,7 @@ pub(crate) fn highlight_json_line(line: &str) -> Spans {
 }
 
 /// The byte after the string opened at `start`: past its closing quote, or the line's end.
-fn string_end(bytes: &[u8], start: usize) -> usize {
+pub(crate) fn string_end(bytes: &[u8], start: usize) -> usize {
     let mut at = start + 1;
     while at < bytes.len() {
         match bytes[at] {

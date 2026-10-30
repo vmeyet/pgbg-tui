@@ -13,6 +13,7 @@ mod grid_view;
 mod help_view;
 mod history_view;
 mod ink;
+mod json_tree_view;
 mod outside;
 mod palette_footer;
 mod param_bar_view;
