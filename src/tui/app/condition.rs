@@ -131,7 +131,7 @@ mod tests {
         let [Action::Run { statement, input, .. }] = &enter(&mut app)[..] else { panic!("no run") };
         let filled = params::fill(statement, &input.given, &input.specs).unwrap();
         assert_eq!(
-            (filled.statement.as_str(), filled.params.values()[0].as_ref().map(crate::db::model::ParamValue::as_str)),
+            (filled.statement.as_str(), filled.params.values()[0].as_ref().map(ParamValue::as_str)),
             ("SELECT * FROM orders WHERE id = $1", Some("7"))
         );
     }
