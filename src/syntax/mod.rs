@@ -6,7 +6,7 @@ use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter}
 
 pub(crate) use vtui::theme::Token;
 
-pub(crate) use json::{highlight_json_line, string_end as json_string_end};
+pub(crate) use json::highlight_json_line;
 
 mod json;
 

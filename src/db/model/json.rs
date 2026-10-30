@@ -48,6 +48,19 @@ impl Serialize for JsonText {
     }
 }
 
+/// The byte after the JSON string opened at `start` in `bytes`: past its closing quote, or the end when it is cut.
+pub(crate) fn string_end(bytes: &[u8], start: usize) -> usize {
+    let mut at = start + 1;
+    while at < bytes.len() {
+        match bytes[at] {
+            b'\\' => at += 2,
+            b'"' => return at + 1,
+            _ => at += 1,
+        }
+    }
+    bytes.len()
+}
+
 fn is_blank(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\n' | '\r')
 }
@@ -116,6 +129,11 @@ mod tests {
 
     /// Keys in name order at every depth, as `serde_json` keeps them; strings holding what is structure outside them.
     const TRICKY: &str = r#"{"a": [1, {}, [], {"q": "say \"hi\", {x: [y]}"}], "b": {"e": "back\\", "z": null}, "c": true}"#;
+
+    #[test]
+    fn a_string_ends_past_its_closing_quote_whatever_it_escapes_or_at_the_end_when_cut() {
+        assert_eq!((string_end(br#""a\"b" 1"#, 0), string_end(br#""cut"#, 0)), (6, 4));
+    }
 
     #[test]
     fn json_drops_the_blanks_outside_its_strings_and_keeps_its_keys_in_order() {

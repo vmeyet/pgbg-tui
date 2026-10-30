@@ -2,8 +2,7 @@
 //! under the cursor copied.
 use super::{Action, App, Overlay, Run};
 use crate::act::{self, Act, Pane};
-use crate::db::model::{ColumnName, JsonText, Value};
-use crate::syntax::json_string_end;
+use crate::db::model::{ColumnName, JsonText, Value, json_string_end};
 use crossterm::event::KeyEvent;
 use std::collections::BTreeSet;
 use std::ops::Range;
@@ -62,6 +61,8 @@ pub(in crate::tui) struct JsonTree {
     json: JsonText,
     nodes: Vec<Node>,
     folded: BTreeSet<usize>,
+    /// The node of each line shown, built again only when a value folds or unfolds.
+    shown: Vec<usize>,
     pub(in crate::tui) at: usize,
 }
 
@@ -146,7 +147,8 @@ fn is_identifier(key: &str) -> bool {
 impl JsonTree {
     pub(in crate::tui) fn new(column: ColumnName, row: usize, json: JsonText) -> Self {
         let nodes = nodes_of(&json);
-        Self { column, row, json, nodes, folded: BTreeSet::new(), at: 0 }
+        let tree = Self { column, row, json, nodes, folded: BTreeSet::new(), shown: vec![], at: 0 };
+        Self { shown: tree.shown(), ..tree }
     }
 
     /// The node of each line shown: every value in order, the members of a folded one left out.
@@ -170,8 +172,9 @@ impl JsonTree {
         }
     }
 
-    pub(in crate::tui) fn lines(&self) -> Vec<TreeLine> {
-        self.shown().into_iter().map(|shown| self.line(shown)).collect()
+    /// The `count` lines from `first` on, built for a frame that draws only those.
+    pub(in crate::tui) fn lines_in(&self, first: usize, count: usize) -> Vec<TreeLine> {
+        self.shown.iter().skip(first).take(count).map(|&index| self.line(index)).collect()
     }
 
     fn line(&self, index: usize) -> TreeLine {
@@ -192,21 +195,22 @@ impl JsonTree {
     }
 
     fn node_at(&self) -> usize {
-        self.shown().get(self.at).copied().unwrap_or(0)
+        self.shown.get(self.at).copied().unwrap_or(0)
     }
 
     fn step(&mut self, delta: isize) {
-        let last = self.shown().len().saturating_sub(1);
+        let last = self.shown.len().saturating_sub(1);
         self.at = self.at.saturating_add_signed(delta).min(last);
     }
 
     fn go_to(&mut self, index: usize) {
-        self.at = self.shown().iter().position(|&shown| shown == index).unwrap_or(0);
+        self.at = self.shown.iter().position(|&shown| shown == index).unwrap_or(0);
     }
 
     fn set_fold(&mut self, index: usize, is_folded: bool) {
         if self.mark(index) != Mark::Leaf {
             _ = if is_folded { self.folded.insert(index) } else { self.folded.remove(&index) };
+            self.shown = self.shown();
         }
         self.go_to(index);
     }
@@ -235,8 +239,8 @@ impl JsonTree {
         steps
     }
 
-    /// The path under the cursor as jq writes it: `.items[0].sku`, a key that is no plain word in quotes, `.` alone at the
-    /// top.
+    /// The path under the cursor as jq writes it: `.items[0].sku`, a key that is no plain word in quotes, `.[0]` into a
+    /// top-level array, `.` alone at the top.
     pub(in crate::tui) fn path(&self) -> String {
         let written: String = self
             .steps()
@@ -247,7 +251,7 @@ impl JsonTree {
                 Step::Index(index) => format!("[{index}]"),
             })
             .collect();
-        if written.is_empty() { ".".to_owned() } else { written }
+        if written.starts_with('.') { written } else { format!(".{written}") }
     }
 }
 
@@ -304,7 +308,7 @@ mod tests {
     }
 
     fn texts(tree: &JsonTree) -> Vec<String> {
-        tree.lines().into_iter().map(|line| format!("{}{}", "  ".repeat(line.depth), line.text)).collect()
+        tree.lines_in(0, tree.shown.len()).into_iter().map(|line| format!("{}{}", "  ".repeat(line.depth), line.text)).collect()
     }
 
     fn on_line(json: &str, line: usize) -> JsonTree {
@@ -335,17 +339,17 @@ mod tests {
     fn toggling_an_array_folds_its_members_away_and_again_brings_them_back() {
         let mut tree = on_line(ORDER, 2);
         tree.toggle();
-        let line = &tree.lines()[2];
-        assert_eq!((line.text.as_str(), line.mark, tree.lines().len()), (r#""items": […]"#, Mark::Folded, 5));
+        let line = &tree.lines_in(2, 1)[0];
+        assert_eq!((line.text.as_str(), line.mark, tree.shown.len()), (r#""items": […]"#, Mark::Folded, 5));
         tree.toggle();
-        assert_eq!(tree.lines().len(), 11);
+        assert_eq!(tree.shown.len(), 11);
     }
 
     #[test]
     fn toggling_a_scalar_folds_the_value_holding_it_and_moves_there() {
         let mut tree = on_line(ORDER, 4);
         tree.toggle();
-        assert_eq!((tree.at, tree.lines()[3].mark), (3, Mark::Folded));
+        assert_eq!((tree.at, tree.lines_in(3, 1)[0].mark), (3, Mark::Folded));
     }
 
     #[test]
@@ -353,6 +357,17 @@ mod tests {
         assert_eq!(on_line(ORDER, 7).path(), ".items[1].sku");
         assert_eq!(on_line(ORDER, 9).path(), r#"."gift note""#);
         assert_eq!(on_line(ORDER, 0).path(), ".");
+    }
+
+    #[test]
+    fn the_path_into_a_top_level_array_starts_with_a_dot() {
+        assert_eq!(on_line("[1,[2]]", 3).path(), ".[1][0]");
+    }
+
+    #[test]
+    fn the_lines_of_a_window_are_those_lines_alone() {
+        let lines = tree_of(ORDER).lines_in(7, 2);
+        assert_eq!(lines.iter().map(|line| line.text.as_str()).collect::<Vec<_>>(), [r#""sku": "say \"hi\", [x]""#, r#""count": 1"#]);
     }
 
     #[test]

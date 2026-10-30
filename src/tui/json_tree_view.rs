@@ -25,8 +25,8 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) {
     let [body, footer] = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(block.inner(area));
     let height = usize::from(body.height);
     let first = tree.at.saturating_sub(height.saturating_sub(1));
-    let lines: Vec<Line<'static>> =
-        tree.lines().iter().enumerate().skip(first).take(height).map(|(at, line)| drawn(theme, line, at == tree.at)).collect();
+    let window = tree.lines_in(first, height);
+    let lines: Vec<Line<'static>> = window.iter().zip(first..).map(|(line, at)| drawn(theme, line, at == tree.at)).collect();
     f.render_widget(Clear, area);
     f.render_widget(block.style(Style::default().bg(theme.surface)), area);
     f.render_widget(Paragraph::new(lines), body);
