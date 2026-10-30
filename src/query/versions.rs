@@ -2,20 +2,19 @@
 //! `versions/<hash of the query's real path>/<when it was replaced>.sql`, the newest `MAX_VERSIONS` of each query.
 use super::{Query, Roots};
 use crate::config;
+use crate::files::{self, Readers};
 use crate::secret;
 use anyhow::Result;
 use chrono::{DateTime, NaiveDateTime, Utc};
-use std::fs::{self, DirBuilder};
-use std::io::{self, Write as _};
+use std::fs;
+use std::io;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 
 /// How many versions a query keeps, the oldest dropped past it: a save every few minutes keeps about a working day,
 /// and a query of 1 MiB, the most the editor takes, never fills more than 50 MiB.
 const MAX_VERSIONS: usize = 50;
 /// Only the user reads the folder: a query can quote a value its author did not mean to share.
-pub(super) const DIR_MODE: u32 = 0o700;
 const EXTENSION: &str = ".sql";
 /// When the version was replaced, in UTC to the millisecond, so the names sort as the versions do.
 const NAME_FORMAT: &str = "%Y%m%dT%H%M%S%.3fZ";
@@ -92,11 +91,9 @@ impl Versions {
         {
             return Ok(());
         }
-        DirBuilder::new().recursive(true).mode(DIR_MODE).create(&folder)?;
-        let mut temporary = tempfile::NamedTempFile::new_in(&folder)?;
-        temporary.write_all(text.as_bytes())?;
+        files::make_private_dir(&folder)?;
         let kept = name(at);
-        temporary.persist(folder.join(&kept)).map_err(|err| err.error)?;
+        files::write_whole(&folder.join(&kept), text, Readers::Owner)?;
         for oldest in names.iter().filter(|name| **name != kept).skip(MAX_VERSIONS - 1) {
             fs::remove_file(folder.join(oldest))?;
         }
@@ -228,7 +225,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         store(&dir).keep(Path::new(DAILY), "SELECT 1", at(0)).unwrap();
         let folder = store(&dir).folder(Path::new(DAILY));
-        assert_eq!(fs::metadata(folder).unwrap().permissions().mode() & 0o777, DIR_MODE);
+        assert_eq!(fs::metadata(folder).unwrap().permissions().mode() & 0o777, 0o700);
     }
 
     #[test]

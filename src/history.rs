@@ -4,21 +4,20 @@ use crate::config;
 use crate::connection::ConnectionName;
 use crate::db::model::{ResultSet, Statement};
 use crate::failure::Failure;
+use crate::files;
 use crate::lock;
 use crate::secret;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
-use std::fs::{DirBuilder, File};
+use std::fs::File;
 use std::io::{self, Write};
-use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::task::JoinHandle;
 
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
-const DIR_MODE: u32 = 0o700;
 
 /// What came of a statement, without the server's words: they can quote a row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -126,7 +125,7 @@ impl Store {
     /// Adds `entry` at the end of its connection's file; a statement that holds a password is kept as a note instead.
     /// The file is locked while it is rolled over and written, so two pgbg never lose each other's lines.
     pub(crate) fn append(&self, entry: &Entry) -> io::Result<()> {
-        DirBuilder::new().recursive(true).mode(DIR_MODE).create(&self.dir)?;
+        files::make_private_dir(&self.dir)?;
         let line = serde_json::to_string(&kept(entry)).map_err(io::Error::other)? + "\n";
         let path = self.file(&entry.connection);
         let file = lock::open(&path)?;
@@ -264,7 +263,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         store(&dir).append(&entry("shop", "SELECT 1", 1)).unwrap();
         let mode = |path: PathBuf| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode(dir.path().join("history")), DIR_MODE);
+        assert_eq!(mode(dir.path().join("history")), 0o700);
         assert_eq!(mode(dir.path().join("history/shop.jsonl")), 0o600);
     }
 

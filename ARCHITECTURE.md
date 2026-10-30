@@ -34,6 +34,7 @@ The code is the contract; this page describes it, and changes in the MR that cha
 | `tui/ui.rs`, `tui/*_view.rs`, `tui/grid_view/`, `tui/chart_view/`, `tui/theme.rs` | Drawing: one view per pane or overlay, in vtui's palette with the tier colours |
 | `vtui` (git dependency) | Shared with the sibling TUIs: terminal, palette, fields, completion index, help, fuzzy matching, usage |
 | `failure.rs` | Why a session did not open, was lost, or gave no result; the history's `Outcome` derives from it |
+| `files.rs` | `make_private_dir`, folders for their owner alone (`0700`), and `write_whole`, a whole file through a synced temp file and a rename; every file pgbg writes whole goes through it |
 | `lock.rs` | A file opened to append under an exclusive `flock`, so two pgbg never lose each other's writes |
 | `usage.rs`, `log.rs` | The `[usage]` counts and the log file, both in pgbg's cache folder |
 | `update.rs`, `release.rs` | What `pgbg update` runs, and the commit `pgbg --version` shows |
@@ -62,7 +63,7 @@ These invariants hold across every flow; a change that breaks one is a bug.
 ## Boundaries
 
 - Only `src/db/` sees a `tokio_postgres` type; everything else uses `db/model/`.
-- Side effects live at the edges: `main.rs`, `signal.rs`, `commands/`, `tui/mod.rs`, `tui/backend/`, `tunnel/`, `secret/`, `ai/command.rs`, `config/` when it rewrites the file, `query/` when it touches files, `history.rs`, `usage.rs`, `lock.rs`, `tui/usage.rs` when it reads the clock.
+- Side effects live at the edges: `main.rs`, `signal.rs`, `commands/`, `tui/mod.rs`, `tui/backend/`, `tunnel/`, `secret/`, `ai/command.rs`, `config/` when it rewrites the file, `query/` when it touches files, `history.rs`, `usage.rs`, `files.rs`, `lock.rs`, `tui/usage.rs` when it reads the clock.
 - `tui/app/` is pure: no clock, no I/O; its tests drive it with keys and `Answer` values.
 - `chart/` and `format/` are pure; drawing lives in `tui/`.
 - A program that takes the terminal (`$EDITOR`) runs from the loop through `Screen::lend`.

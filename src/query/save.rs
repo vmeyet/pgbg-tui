@@ -1,11 +1,10 @@
 //! Writing a query back: into its connection's folder in pgbg's data folder, through a temporary file renamed over the old one.
-use super::versions::DIR_MODE;
 use super::{Query, Root, Roots};
 use crate::connection::ConnectionName;
+use crate::files::{self, Readers};
 use anyhow::{Context, Result, bail};
-use std::fs::{self, DirBuilder};
-use std::io::Write as _;
-use std::os::unix::fs::DirBuilderExt;
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 /// Whether a save may replace a file that is there.
@@ -36,8 +35,8 @@ impl Roots {
         let (Some(data_dir), Some(dir)) = (&self.data_dir, self.dir(folder)) else {
             bail!("there is no data folder: set $PGBG_DATA_DIR");
         };
-        DirBuilder::new().recursive(true).mode(DIR_MODE).create(data_dir)?;
-        make_folders(DirBuilder::new().mode(DIR_MODE), data_dir, &dir)
+        files::make_private_dir(data_dir)?;
+        make_folders(files::make_one_private_dir, data_dir, &dir)
     }
 }
 
@@ -65,25 +64,19 @@ fn write_inside(root: &Root, query: &Query, text: &str, write: Write) -> Result<
     }
     let target = query.path.under(&root.dir);
     let folder = target.parent().unwrap_or(&root.dir);
-    make_folders(DirBuilder::new().mode(DIR_MODE), &root.dir, folder)?;
+    make_folders(files::make_one_private_dir, &root.dir, folder)?;
     if !fs::canonicalize(folder)?.starts_with(&root.real) {
         bail!("it leads out of the queries folder");
     }
     if let Ok(old) = fs::symlink_metadata(&target) {
         check_replaceable(&target, &old, text, write)?;
     }
-    let mut temporary = tempfile::NamedTempFile::new_in(folder)?;
-    temporary.write_all(text.as_bytes())?;
-    if let Ok(old) = fs::metadata(&target) {
-        fs::set_permissions(temporary.path(), old.permissions())?;
-    }
-    temporary.persist(&target)?;
-    Ok(())
+    Ok(files::write_whole(&target, text, Readers::AsReplaced)?)
 }
 
-/// Makes each folder from `root` down to `folder` with `builder`; one that is a link or a file is refused, so the write
+/// Makes each folder from `root` down to `folder` with `make`; one that is a link or a file is refused, so the write
 /// stays in the root.
-fn make_folders(builder: &DirBuilder, root: &Path, folder: &Path) -> Result<()> {
+fn make_folders(make: fn(&Path) -> io::Result<()>, root: &Path, folder: &Path) -> Result<()> {
     let below = folder.strip_prefix(root)?;
     let mut at = root.to_path_buf();
     for part in below.components() {
@@ -91,7 +84,7 @@ fn make_folders(builder: &DirBuilder, root: &Path, folder: &Path) -> Result<()> 
         match fs::symlink_metadata(&at) {
             Ok(metadata) if metadata.is_dir() => {}
             Ok(_) => bail!("{} is not a folder", at.display()),
-            Err(_) => builder.create(&at)?,
+            Err(_) => make(&at)?,
         }
     }
     Ok(())

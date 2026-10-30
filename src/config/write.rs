@@ -3,10 +3,10 @@
 //! The helpers below change the `toml_edit` document through `&mut`, since its API only edits in place.
 use super::parse;
 use crate::connection::{ConnectionName, StatementTimeout, Target, Tier, Tls, TunnelSpec, WritePolicy};
+use crate::files::{self, Readers};
 use crate::secret::SecretSource;
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Serialize;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use toml_edit::ser::ValueSerializer;
 use toml_edit::{DocumentMut, InlineTable, Item, Table, TableLike, Value};
@@ -154,16 +154,11 @@ pub(crate) fn read_kept(path: &Path) -> Result<String> {
     }
 }
 
-/// Writes `text` to `path` through a temp file only its owner reads, synced to disk before a rename,
-/// so the file is always the old one or the new one.
-pub(crate) fn write_whole(path: &Path, text: &str) -> Result<()> {
+/// Writes `text` as the config at `path`, which only its owner reads, making its folder when needed.
+fn write_whole(path: &Path, text: &str) -> Result<()> {
     let dir = path.parent().with_context(|| format!("{} has no folder", path.display()))?;
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    let mut temp = tempfile::Builder::new().prefix(".tmp-").tempfile_in(dir).context("creating a temp file")?;
-    temp.write_all(text.as_bytes()).context("writing a temp file")?;
-    temp.as_file().sync_all().context("writing a temp file")?;
-    temp.persist(path).with_context(|| format!("writing {}", path.display()))?;
-    Ok(())
+    files::write_whole(path, text, Readers::Owner).with_context(|| format!("writing {}", path.display()))
 }
 
 #[cfg(test)]
