@@ -20,6 +20,8 @@ Each entry says what changed, then where, then how to use it.
 - **pgbg's log is in `~/.cache/pgbg/` on macOS too**: it was `~/Library/Caches/pgbg/`; set `$XDG_CACHE_HOME` to move it.
 - **pgbg warns of a file left where it no longer reads it**, as any command starts and on the TUI's status line until the first key: a config, history or saved queries in `~/Library/Application Support/pgbg/`, saved queries in `~/.config/pgbg/queries/`, or usage counts in a cache folder.
   It says where each one goes, as `~/.config/pgbg/config.toml` or `~/.local/share/pgbg/queries/<connection>/`.
+- **`⌫` keeps the counts already read**, in the TUI's row detail: going back to a row shows the tables pointing to it with the counts it had, without counting them again.
+  No count runs while a followed key's row is on its way, so that row comes sooner.
 
 ### Removed
 

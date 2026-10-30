@@ -229,7 +229,7 @@ impl App {
         let detail = Detail::at_column(column);
         let Some(shown) = self.shown_row(&detail) else { return vec![] };
         match shown.targets().iter().position(|target| target.pairs.iter().any(|pair| pair.at == column)) {
-            Some(key) => self.follow(Detail { key, ..detail }),
+            Some(key) => self.follow(self.with_referrers(Detail { key, ..detail })),
             None => self.show_detail(detail),
         }
     }
@@ -293,7 +293,7 @@ impl App {
             None => (detail, vec![]),
         };
         self.overlay = Some(Overlay::Detail(detail));
-        actions
+        actions.into_iter().chain(self.count_next()).collect()
     }
 
     /// Puts `prefilled` at the end of the editor, its values in the parameter bar, and runs it as the editor runs a
@@ -306,9 +306,14 @@ impl App {
 
     /// Opens `detail` and counts the rows of each table pointing to the row it shows whose key an index starts with.
     fn show_detail(&mut self, detail: Detail) -> Vec<Action> {
+        let detail = self.with_referrers(detail);
+        self.count_on(detail)
+    }
+
+    /// `detail` with the tables pointing to the row it shows, those whose key an index starts with queued to be counted.
+    fn with_referrers(&self, detail: Detail) -> Detail {
         let counted = |referrer: Referrer| Counted { count: if referrer.is_indexed { Count::Queued } else { Count::NotCounted }, referrer };
-        let referrers = self.referrers_of(&detail).into_iter().map(counted).collect();
-        self.count_on(Detail { referrers, ..detail })
+        Detail { referrers: self.referrers_of(&detail).into_iter().map(counted).collect(), ..detail }
     }
 
     /// Opens `detail` and sends the next count of the tables pointing to its row.
@@ -501,8 +506,8 @@ mod tests {
         let mut app = on_the_keyed_orders();
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Char('l'));
-        assert_eq!(press(&mut app, KeyCode::Enter), []);
-        assert_eq!(detail(&app).note.as_deref(), Some(NULL_KEY));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!((detail(&app).waiting.as_ref(), detail(&app).note.as_deref()), (None, Some(NULL_KEY)));
     }
 
     #[test]
@@ -705,6 +710,14 @@ mod tests {
         let invoices = billing.tables[0].clone();
         billing.tables.push(Table { oid: TableOid::new(5), name: "refunds".to_owned(), ..invoices });
         catalog
+    }
+
+    #[test]
+    fn backspace_from_a_row_opened_on_a_key_cell_counts_the_tables_pointing_to_the_grids_row() {
+        let mut app = on_the_customer();
+        let Action::LookUp { lookup, .. } = press(&mut app, KeyCode::Backspace).remove(0) else { panic!("no count") };
+        let count = "SELECT count(*) FROM (SELECT FROM billing.invoices WHERE order_id = $1 LIMIT 1001) AS pointing";
+        assert_eq!((lookup.statement, detail(&app).referrers.len()), (Statement::new(count), 1));
     }
 
     #[test]
