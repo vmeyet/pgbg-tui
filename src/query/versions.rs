@@ -283,8 +283,8 @@ mod tests {
 
     #[test]
     fn an_editor_that_fails_after_writing_still_keeps_the_text_it_replaced() {
-        let (queries, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        let roots = kept(&queries, &data);
+        let data = tempfile::tempdir().unwrap();
+        let roots = kept(&data);
         roots.write(&daily(), "SELECT 1", Write::Create).unwrap();
         let edited = roots.edit_kept(&daily(), |path| {
             fs::write(path, "SELECT 2")?;
