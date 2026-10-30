@@ -6,6 +6,8 @@ Each entry says what changed, then where, then how to use it.
 
 ## Unreleased
 
+## 0.2.0 - 2026-10-30
+
 ### New
 
 - **Themes**: `[tui] theme = "dracula"` in `config.toml` paints the whole TUI in that palette: frames, grid, SQL and JSON colours, charts, help and footer.
