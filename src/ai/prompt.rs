@@ -134,17 +134,20 @@ fn head(input: &PromptInput<'_>, instruction: &str, statement: &str) -> String {
     )
 }
 
-/// The first `lines` that fit in `room` bytes, one a line, and a note when some were left out.
+/// The `lines` that fit in `room` bytes, one a line, in order, each too long for the room left skipped, and a note when
+/// some were.
 fn fitted(lines: impl Iterator<Item = String>, room: usize) -> String {
     let mut text = String::new();
+    let mut is_cut = false;
     for line in lines {
         if text.len() + line.len() + 1 > room {
-            return text + CUT_NOTE;
+            is_cut = true;
+            continue;
         }
         text += &line;
         text.push('\n');
     }
-    text
+    if is_cut { text + CUT_NOTE } else { text }
 }
 
 impl Prompt {
@@ -290,6 +293,12 @@ mod tests {
         let text = prompt_for("SELECT * FROM orders", "orders", &wide_catalog()).unwrap().text().to_owned();
         assert!(text.len() <= MAX_BYTES && text.ends_with(CUT_NOTE));
         assert!(text.contains("public.orders(id integer, customer_id integer references public.customers(id), total numeric(10,2))\n"));
+    }
+
+    #[test]
+    fn a_line_too_long_for_the_room_is_skipped_and_the_lines_after_it_still_fit() {
+        let lines = ["a".repeat(10), "b".repeat(100), "c".to_owned()].into_iter();
+        assert_eq!(fitted(lines, 20), format!("aaaaaaaaaa\nc\n{CUT_NOTE}"));
     }
 
     #[test]

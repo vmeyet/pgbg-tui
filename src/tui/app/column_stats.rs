@@ -54,8 +54,12 @@ impl ColumnStats {
 }
 
 impl App {
-    /// Opens the figures of the grid's column over the rows loaded.
+    /// Opens the figures of the grid's column over the rows loaded; a column pgbg does not decode has none.
     pub(super) fn open_column_stats(&mut self) {
+        if let Some(column) = self.sheet().undecoded_column() {
+            self.note = Some(format!("{column} has no figures: pgbg does not decode its type"));
+            return;
+        }
         let Run::Done { result, grid, .. } = &self.sheet().run else { return };
         if grid.column < result.columns().len() {
             self.overlay = Some(Overlay::ColumnStats(Box::new(ColumnStats::of(result, grid.column))));
@@ -78,7 +82,7 @@ mod tests {
     use super::super::fixtures::{on_the_result, press};
     use super::*;
     use crate::db::model::ColumnKind;
-    use crate::fixtures::{column, orders};
+    use crate::fixtures::{column, orders, undecoded};
     use crossterm::event::KeyCode;
 
     fn stats(kind: ColumnKind, values: Vec<Value>) -> ColumnStats {
@@ -122,6 +126,22 @@ mod tests {
         assert!(matches!(&app.overlay, Some(Overlay::ColumnStats(stats)) if stats.column.as_str() == "total"));
         press(&mut app, KeyCode::Esc);
         assert_eq!(app.overlay, None);
+    }
+
+    #[test]
+    fn i_on_a_column_pgbg_cannot_decode_opens_no_figures_and_says_so() {
+        let mut app = on_the_result(undecoded());
+        press(&mut app, KeyCode::Char('i'));
+        assert_eq!((app.overlay.is_none(), app.note()), (true, Some("shape has no figures: pgbg does not decode its type")));
+    }
+
+    #[test]
+    fn i_while_the_filter_hides_the_cursors_row_opens_no_figures() {
+        let mut app = on_the_result(orders());
+        "/zzz".chars().for_each(|c| press(&mut app, KeyCode::Char(c)));
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('i'));
+        assert!(app.overlay.is_none());
     }
 
     /// The wall clock, read in a release build only, by CI's own step: `cargo test --release --lib -- --ignored budget::`.

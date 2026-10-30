@@ -211,6 +211,11 @@ pub(crate) fn orders() -> ResultSet {
     )
 }
 
+/// Two rows of one column of a type pgbg does not decode, `shape`.
+pub(crate) fn undecoded() -> ResultSet {
+    ResultSet::whole(vec![column("shape", ColumnKind::Other)], vec![vec![Value::Unsupported]; 2])
+}
+
 pub(crate) fn schema_column(name: &str, type_name: &str, default: Option<&str>) -> SchemaColumn {
     SchemaColumn {
         number: ColumnNumber::new(0),

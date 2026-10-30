@@ -7,6 +7,10 @@ use std::collections::{HashMap, HashSet};
 
 /// The shortest instruction word that may name a table or a column, so `a` or `of` pulls in nothing.
 const MIN_WORD: usize = 3;
+/// How much of a comment a line keeps, so one long comment never takes the room of other tables.
+const MAX_COMMENT_BYTES: usize = 300;
+/// What ends a comment cut short.
+const CUT_MARK: &str = "…";
 
 /// Why a table is in the slice, the most likely wanted first.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -139,11 +143,21 @@ fn column_list(columns: &[String]) -> String {
     columns.iter().map(|column| sql_name(column)).collect::<Vec<_>>().join(", ")
 }
 
-/// ` /* comment */` on one line, or nothing when there is none or it holds a secret, by the rule the history keeps.
+/// ` /* comment */` on one line and cut to [`MAX_COMMENT_BYTES`], or nothing when there is none or it holds a secret, by
+/// the rule the history keeps.
 fn comment_part(comment: Option<&str>) -> String {
     let Some(comment) = comment.filter(|comment| !secret::holds_secret(comment)) else { return String::new() };
     let one_line = comment.split_whitespace().collect::<Vec<_>>().join(" ");
-    format!(" /* {} */", one_line.replace("*/", "* /"))
+    format!(" /* {} */", cut(&one_line).replace("*/", "* /"))
+}
+
+/// `text` whole when it fits in [`MAX_COMMENT_BYTES`], else its first characters that do and [`CUT_MARK`].
+fn cut(text: &str) -> String {
+    if text.len() <= MAX_COMMENT_BYTES {
+        return text.to_owned();
+    }
+    let end = text.floor_char_boundary(MAX_COMMENT_BYTES - CUT_MARK.len());
+    format!("{}{CUT_MARK}", text[..end].trim_end())
 }
 
 #[cfg(test)]
@@ -200,6 +214,21 @@ mod tests {
             line_of(&catalog, "customers"),
             "public.customers(id integer, name text /* as typed at checkout * / */) /* one row a buyer */"
         );
+    }
+
+    #[test]
+    fn a_long_comment_is_cut_to_a_few_hundred_bytes() {
+        let mut catalog = shop_catalog();
+        catalog.schema.schemas[1].tables[1].comment = Some("one row a buyer ".repeat(100));
+        let line = line_of(&catalog, "customers");
+        assert!(line.len() < 400 && line.ends_with("… */"), "{line}");
+    }
+
+    #[test]
+    fn a_comment_is_cut_between_two_characters() {
+        let mut catalog = shop_catalog();
+        catalog.schema.schemas[1].tables[1].comment = Some("Zoë".repeat(200));
+        assert!(line_of(&catalog, "customers").ends_with("… */"));
     }
 
     #[test]

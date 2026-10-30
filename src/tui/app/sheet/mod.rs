@@ -476,6 +476,12 @@ impl Sheet {
         }
     }
 
+    /// The column under the grid's cursor, when pgbg does not decode its type.
+    pub(super) fn undecoded_column(&self) -> Option<ColumnName> {
+        let Run::Done { result, grid, .. } = &self.run else { return None };
+        result.columns().get(grid.column).filter(|column| !column.kind.is_decoded()).map(|column| column.name.clone())
+    }
+
     /// Whether the grid shows a row under its cursor, which a filter can hide.
     pub(super) fn shows_cursor_row(&self) -> bool {
         matches!(&self.run, Run::Done { result, grid, .. } if grid.shows_cursor_row(result))

@@ -159,7 +159,8 @@ impl App {
             Act::Down if self.focus == Focus::Queries => self.step_sidebar(1),
             Act::Up if self.focus == Focus::Queries => self.step_sidebar(-1),
             act if act.is_grid() && self.sheet().is_chart_shown() => {}
-            Act::Detail | Act::CopyCell | Act::CopyRow if !self.sheet().shows_cursor_row() => {}
+            Act::Detail | Act::CopyCell | Act::CopyRow | Act::WhereEqual | Act::WhereNotEqual | Act::ColumnStats
+                if !self.sheet().shows_cursor_row() => {}
             Act::Down => return self.grid_step(Move::Down),
             Act::Up => return self.grid_step(Move::Up),
             Act::PageDown => return self.grid_step(Move::PageDown),
