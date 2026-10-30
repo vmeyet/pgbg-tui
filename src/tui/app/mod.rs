@@ -3,7 +3,8 @@
 use super::theme::Theme;
 use crate::act::Pane;
 use crate::config::AiSettings;
-use crate::connection::Connection;
+use crate::connection::{Connection, ConnectionName};
+use crate::failure::Failure;
 use crate::format::Mode;
 use ask::Asks;
 use ratatui::layout::Rect;
@@ -374,15 +375,25 @@ impl App {
         self.and_the_schema_shown(actions)
     }
 
+    /// Takes what the session `session` of `connection` said: the rest to that sheet while the session is still its
+    /// own, dropped after; a lookup's rows to the detail its `LookId` names, as a failure once the sheet left the
+    /// session, so a lookup always ends.
+    fn take_session_answer(&mut self, connection: &ConnectionName, session: SessionId, incoming: Incoming) -> Vec<Action> {
+        let is_its_session = self.sheet_of(connection).is_some_and(|sheet| sheet.session_id == session);
+        if let Incoming::LookedUp { look, rows } = incoming {
+            let rows = if is_its_session { rows } else { Err(Failure::StoppedWithItsSession) };
+            return self.looked_up(look, rows);
+        }
+        let reading = self.reading;
+        if let Some(sheet) = self.sheet_of_mut(connection).filter(|_| is_its_session) {
+            sheet.apply(incoming, &reading);
+        }
+        vec![]
+    }
+
     fn take_answer(&mut self, answer: Answer) -> Vec<Action> {
         match answer {
-            Answer::Session { incoming: Incoming::LookedUp { look, rows }, .. } => return self.looked_up(look, rows),
-            Answer::Session { connection, session, incoming } => {
-                let reading = self.reading;
-                if let Some(sheet) = self.sheet_of_mut(&connection).filter(|sheet| sheet.session_id == session) {
-                    sheet.apply(incoming, &reading);
-                }
-            }
+            Answer::Session { connection, session, incoming } => return self.take_session_answer(&connection, session, incoming),
             Answer::Queries(QueryAnswer::All { folder, queries }) => self.listed(&folder, queries),
             Answer::Queries(QueryAnswer::Opened { connection, query, text }) => self.opened(&connection, query, &text),
             Answer::Queries(QueryAnswer::NotOpened { connection, query, error }) => {

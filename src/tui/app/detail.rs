@@ -440,7 +440,7 @@ fn back(detail: Detail) -> Option<Detail> {
 #[cfg(test)]
 mod tests {
     use super::super::fixtures::{on_keyed, on_the_keyed_orders, on_the_result, shop, to_shop, typed};
-    use super::super::{Fit, Incoming, RunId};
+    use super::super::{Answer, Fit, Incoming, RunId, SessionId};
     use super::*;
     use crate::db::model::{Catalog, Table, TableOid};
     use crate::db::model::{ColumnKind, ColumnName, ParamValue, Params, Statement};
@@ -517,6 +517,35 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         app.apply(to_shop(Incoming::LookedUp { look: LookId::FIRST, rows: Ok(keyed_customer()) }));
         assert_eq!(detail(&app).trail, []);
+    }
+
+    fn customer_read_on(connection: &str, session: SessionId) -> Answer {
+        let incoming = Incoming::LookedUp { look: LookId::FIRST, rows: Ok(keyed_customer()) };
+        Answer::Session { connection: connection.parse().unwrap(), session, incoming }
+    }
+
+    #[test]
+    fn a_row_read_on_another_connection_never_shows() {
+        let mut app = on_a_key();
+        app.apply(customer_read_on("prod", SessionId::FIRST));
+        assert_eq!(detail(&app).trail, []);
+    }
+
+    #[test]
+    fn a_row_read_on_a_session_the_sheet_left_never_shows_and_says_why() {
+        let mut app = on_a_key();
+        app.apply(customer_read_on("shop", SessionId::FIRST.next()));
+        assert_eq!((detail(&app).trail.as_slice(), detail(&app).note.clone()), (&[][..], Some(Failure::StoppedWithItsSession.to_string())));
+    }
+
+    #[test]
+    fn a_count_read_on_a_session_the_sheet_left_ends_as_failed() {
+        let mut app = on_the_keyed_orders();
+        press(&mut app, KeyCode::Enter);
+        let read = ResultSet::whole(vec![column("count", ColumnKind::Int)], vec![vec![Value::Int(12)]]);
+        let incoming = Incoming::LookedUp { look: LookId::FIRST, rows: Ok(read) };
+        app.apply(Answer::Session { connection: shop(), session: SessionId::FIRST.next(), incoming });
+        assert_eq!(detail(&app).referrers[0].count, Count::Failed(Failure::StoppedWithItsSession.to_string()));
     }
 
     /// The keyed orders with the detail on the customer of order 7, read.

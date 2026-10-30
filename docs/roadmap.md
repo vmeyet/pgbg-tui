@@ -84,7 +84,7 @@ Each step is one MR, in this order.
 - [x] Counts pause while a key is followed, and going back keeps the counts already read
 - [x] `keys` finds a table once and gives its keys, so a lookup does not parse its own SQL again
 - [x] One builder writes `column = $n AND …` for a lookup and a referrer, and the footer hints share one fitting
-- [ ] A lookup's answer reaches the sheet as an `Answer`, not app-wide
+- [x] A lookup's answer reaches the sheet as an `Answer`, not app-wide
 
 ## 22. Review of the pleasure batch
 
