@@ -11,7 +11,7 @@ use crate::db::guard::{self, Write};
 use crate::db::model::{ColumnName, Extent, Page, ResultSet, Statement};
 use crate::failure::Failure;
 use crate::format::{self, Format};
-use crate::keys::{self, ColumnKey};
+use crate::keys::{self, Keys};
 use crate::query::params::{self, Numbering, ParamInput, ParamName};
 use crate::query::{Header, Query};
 use crossterm::event::KeyEvent;
@@ -347,7 +347,7 @@ impl Sheet {
         }
         let run = self.next_run();
         self.shown = Some(title);
-        let grid = Box::new(Grid::new(&result, format::opening(result.columns(), &[], reading.mode), vec![], &reading.clock));
+        let grid = Box::new(Grid::new(&result, format::opening(result.columns(), &[], reading.mode), Keys::default(), &reading.clock));
         self.run = Run::Done { run, grid, result, took: Duration::ZERO, view: View::Grid, is_page_asked: false };
     }
 
@@ -422,8 +422,8 @@ impl Sheet {
     }
 
     /// The keys of the columns of `result` in the tables they were read from, once the schema is read.
-    fn keys_of(&self, result: &ResultSet) -> Vec<ColumnKey> {
-        self.catalog().map(|catalog| keys::column_keys(catalog, result.columns())).unwrap_or_default()
+    fn keys_of(&self, result: &ResultSet) -> Keys {
+        self.catalog().map(|catalog| keys::keys(catalog, result.columns())).unwrap_or_default()
     }
 
     /// The statement that tried to write and waits to be asked about, once.

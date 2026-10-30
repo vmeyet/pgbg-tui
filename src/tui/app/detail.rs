@@ -7,7 +7,7 @@ use crate::act::{self, Act, Pane};
 use crate::connection::ConnectionName;
 use crate::db::model::{Column, ResultSet, Value};
 use crate::failure::Failure;
-use crate::keys::{self, ColumnKey, Hop, Lookup, Prefilled, Referrer, TableIn, Target};
+use crate::keys::{self, Hop, Keys, Lookup, Prefilled, Referrer, TableRead, Target};
 use crossterm::event::KeyEvent;
 use ratatui::text::Line;
 
@@ -44,7 +44,7 @@ pub(in crate::tui) struct Followed {
     pub(in crate::tui) look: LookId,
     pub(in crate::tui) hop: Hop,
     pub(in crate::tui) result: ResultSet,
-    keys: Vec<ColumnKey>,
+    keys: Keys,
     back_to: Spot,
 }
 
@@ -87,8 +87,8 @@ pub(in crate::tui) enum Count {
 pub(in crate::tui) struct ShownRow<'a> {
     pub(in crate::tui) columns: &'a [Column],
     pub(in crate::tui) row: &'a [Value],
-    /// Each column's key, by index; empty when the table the row comes from is unknown.
-    keys: &'a [ColumnKey],
+    /// Each column's key, and the tables they were read from.
+    keys: &'a Keys,
     /// The grid's table first, empty while the detail shows the grid's row.
     pub(in crate::tui) trail: Vec<&'a str>,
     pub(in crate::tui) of: RowOf,
@@ -160,18 +160,18 @@ fn count_in(read: &ResultSet) -> Option<u64> {
 impl<'a> ShownRow<'a> {
     /// Whether the column at `column` is part of its table's primary key.
     pub(in crate::tui) fn is_primary(&self, column: usize) -> bool {
-        self.keys.get(column).is_some_and(|key| key.is_primary)
+        self.keys.columns().get(column).is_some_and(|key| key.is_primary)
     }
 
     /// Where the column at `column` points through a foreign key.
     pub(in crate::tui) fn points_to(&self, column: usize) -> Option<&'a Target> {
-        self.keys.get(column)?.points_to.as_ref()
+        self.keys.columns().get(column)?.points_to.as_ref()
     }
 
     /// Where the row's keys point, each key once, in the order of their columns.
     pub(in crate::tui) fn targets(&self) -> Vec<&'a Target> {
         let mut targets: Vec<&'a Target> = vec![];
-        for target in self.keys.iter().filter_map(|key| key.points_to.as_ref()) {
+        for target in self.keys.columns().iter().filter_map(|key| key.points_to.as_ref()) {
             if !targets.contains(&target) {
                 targets.push(target);
             }
@@ -194,9 +194,9 @@ impl App {
     pub(in crate::tui) fn shown_row<'a>(&'a self, detail: &'a Detail) -> Option<ShownRow<'a>> {
         let grid = self.grid_row()?;
         let Some(last) = detail.trail.last() else { return Some(grid) };
-        let start = self.trail_start(&grid, detail);
+        let start = trail_start(&grid, detail);
         let followed = detail.trail.iter().map(|followed| followed.hop.table.as_str());
-        let trail = std::iter::once(start.map_or("row", |start| start.table.name.as_str())).chain(followed).collect();
+        let trail = std::iter::once(start.map_or("row", |start| start.table.as_str())).chain(followed).collect();
         let (row, of) = (last.result.rows().first()?, RowOf::Followed(last.look));
         Some(ShownRow { columns: last.result.columns(), row, keys: &last.keys, trail, of })
     }
@@ -206,17 +206,6 @@ impl App {
         let Run::Done { run, result, grid, .. } = &self.sheet().run else { return None };
         let (row, of) = (result.rows().get(grid.row)?, RowOf::Grid { run: *run, row: grid.row });
         Some(ShownRow { columns: result.columns(), row, keys: grid.keys(), trail: vec![], of })
-    }
-
-    /// The table the trail of `detail` starts from: the one holding the key of `grid`, the grid's row, it first followed;
-    /// with no trail yet, the one holding the grid's first primary-key column.
-    fn trail_start<'a>(&'a self, grid: &ShownRow<'a>, detail: &Detail) -> Option<TableIn<'a>> {
-        let column = if detail.trail.is_empty() {
-            grid.keys.iter().position(|key| key.is_primary)?
-        } else {
-            first_followed(grid, detail)?.first_column()
-        };
-        keys::table_read(self.sheet().catalog()?, grid.columns.get(column)?)
     }
 
     /// Opens the detail of the grid's row at the cursor's column; on a foreign key's cell, reads the row it points to.
@@ -364,8 +353,8 @@ impl App {
     }
 
     /// The keys the catalog gives the columns of a row a lookup read.
-    fn keys_of(&self, read: Option<&ResultSet>) -> Vec<ColumnKey> {
-        self.sheet().catalog().zip(read).map(|(catalog, read)| keys::column_keys(catalog, read.columns())).unwrap_or_default()
+    fn keys_of(&self, read: Option<&ResultSet>) -> Keys {
+        self.sheet().catalog().zip(read).map(|(catalog, read)| keys::keys(catalog, read.columns())).unwrap_or_default()
     }
 
     /// Takes the count the lookup `look` read, when it counts the rows of a table pointing to the row shown.
@@ -392,13 +381,23 @@ impl App {
 
     fn trail_join(&self, detail: &Detail) -> Option<Prefilled> {
         let grid = self.grid_row()?;
-        let start = self.trail_start(&grid, detail)?;
-        let first = Hop { schema: start.schema.to_owned(), table: start.table.name.clone(), on: vec![] };
-        let tables: Vec<Hop> = std::iter::once(first).chain(detail.trail.iter().map(|followed| followed.hop.clone())).collect();
+        let start = trail_start(&grid, detail)?;
+        let tables: Vec<Hop> = std::iter::once(start.hop()).chain(detail.trail.iter().map(|followed| followed.hop.clone())).collect();
         let left_by = || first_followed(&grid, detail)?.key(grid.row);
-        let key = keys::primary_key(start.table, grid.columns, grid.row).or_else(left_by)?;
+        let key = start.primary_key(grid.row).or_else(left_by)?;
         keys::trail_join(&tables, &key)
     }
+}
+
+/// The table the trail of `detail` starts from: the one holding the key of `grid`, the grid's row, it first followed;
+/// with no trail yet, the one holding the grid's first primary-key column.
+fn trail_start<'a>(grid: &ShownRow<'a>, detail: &Detail) -> Option<&'a TableRead> {
+    let column = if detail.trail.is_empty() {
+        grid.keys.columns().iter().position(|key| key.is_primary)?
+    } else {
+        first_followed(grid, detail)?.first_column()
+    };
+    grid.keys.table_of(grid.columns.get(column)?)
 }
 
 /// The key of `grid`, the grid's row, that the trail of `detail` first followed; none with no trail.

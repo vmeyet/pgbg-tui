@@ -154,6 +154,7 @@ mod tests {
     use super::*;
     use crate::db::model::{ColumnKind, JsonText};
     use crate::fixtures::{column, orders, shop_column};
+    use crate::keys::Keys;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -232,7 +233,7 @@ mod tests {
         let columns = vec![column("amount", ColumnKind::Int), column("paid_at", ColumnKind::TimestampTz)];
         let result = ResultSet::whole(columns, vec![paid_at("2026-07-14T09:00:00Z"), paid_at("2026-07-12T12:00:00Z")]);
         let clock = Clock { now: at("2026-07-14T12:00:00Z"), zone: chrono::Local };
-        let grid = Grid::new(&result, vec![Format::Grouped, Format::Relative], vec![], &clock);
+        let grid = Grid::new(&result, vec![Format::Grouped, Format::Relative], Keys::default(), &clock);
         insta::assert_snapshot!("formatted", render(&result, &grid, 30, 3).backend());
     }
 
@@ -271,7 +272,7 @@ mod tests {
     fn a_boolean_reads_as_a_mark_when_checked() {
         let result = ResultSet::whole(vec![column("paid", ColumnKind::Bool)], vec![vec![Value::Bool(true)], vec![Value::Bool(false)]]);
         let clock = Clock { now: at("2026-07-14T12:00:00Z"), zone: chrono::Local };
-        let grid = Grid::new(&result, vec![Format::Check], vec![], &clock);
+        let grid = Grid::new(&result, vec![Format::Check], Keys::default(), &clock);
         insta::assert_snapshot!("checked", render(&result, &grid, 8, 3).backend());
     }
 
@@ -307,7 +308,7 @@ mod tests {
             ],
             vec![vec![Value::Int(7), Value::Int(3), Value::Numeric("12.50".into())]],
         );
-        let keys = crate::keys::column_keys(&crate::fixtures::shop_catalog(), result.columns());
+        let keys = crate::keys::keys(&crate::fixtures::shop_catalog(), result.columns());
         let clock = Clock { now: at("2026-07-14T12:00:00Z"), zone: chrono::Local };
         let mut grid = Grid::new(&result, vec![Format::Raw; 3], keys, &clock);
         grid.column = usize::MAX;
