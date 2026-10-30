@@ -440,7 +440,7 @@ fn back(detail: Detail) -> Option<Detail> {
 #[cfg(test)]
 mod tests {
     use super::super::fixtures::{on_keyed, on_the_keyed_orders, on_the_result, shop, to_shop, typed};
-    use super::super::{Fit, Incoming, RunId};
+    use super::super::{Answer, Fit, Incoming, RunId, SessionId};
     use super::*;
     use crate::db::model::{Catalog, Table, TableOid};
     use crate::db::model::{ColumnKind, ColumnName, ParamValue, Params, Statement};
@@ -516,6 +516,25 @@ mod tests {
         press(&mut app, KeyCode::Esc);
         press(&mut app, KeyCode::Enter);
         app.apply(to_shop(Incoming::LookedUp { look: LookId::FIRST, rows: Ok(keyed_customer()) }));
+        assert_eq!(detail(&app).trail, []);
+    }
+
+    fn customer_read_on(connection: &str, session: SessionId) -> Answer {
+        let incoming = Incoming::LookedUp { look: LookId::FIRST, rows: Ok(keyed_customer()) };
+        Answer::Session { connection: connection.parse().unwrap(), session, incoming }
+    }
+
+    #[test]
+    fn a_row_read_on_another_connection_never_shows() {
+        let mut app = on_a_key();
+        app.apply(customer_read_on("prod", SessionId::FIRST));
+        assert_eq!(detail(&app).trail, []);
+    }
+
+    #[test]
+    fn a_row_read_on_a_session_the_sheet_left_never_shows() {
+        let mut app = on_a_key();
+        app.apply(customer_read_on("shop", SessionId::FIRST.next()));
         assert_eq!(detail(&app).trail, []);
     }
 

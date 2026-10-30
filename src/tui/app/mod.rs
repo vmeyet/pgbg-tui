@@ -3,7 +3,7 @@
 use super::theme::Theme;
 use crate::act::Pane;
 use crate::config::AiSettings;
-use crate::connection::Connection;
+use crate::connection::{Connection, ConnectionName};
 use crate::format::Mode;
 use ask::Asks;
 use ratatui::layout::Rect;
@@ -374,15 +374,24 @@ impl App {
         self.and_the_schema_shown(actions)
     }
 
+    /// Takes what the session `session` of `connection` said, when it is still that sheet's: a lookup's rows go to the
+    /// detail when it is open over that sheet, the rest to the sheet.
+    fn take_session_answer(&mut self, connection: &ConnectionName, session: SessionId, incoming: Incoming) -> Vec<Action> {
+        let reading = self.reading;
+        let is_shown = self.sheet().name() == connection;
+        let Some(sheet) = self.sheet_of_mut(connection).filter(|sheet| sheet.session_id == session) else { return vec![] };
+        match incoming {
+            Incoming::LookedUp { look, rows } if is_shown => self.looked_up(look, rows),
+            incoming => {
+                sheet.apply(incoming, &reading);
+                vec![]
+            }
+        }
+    }
+
     fn take_answer(&mut self, answer: Answer) -> Vec<Action> {
         match answer {
-            Answer::Session { incoming: Incoming::LookedUp { look, rows }, .. } => return self.looked_up(look, rows),
-            Answer::Session { connection, session, incoming } => {
-                let reading = self.reading;
-                if let Some(sheet) = self.sheet_of_mut(&connection).filter(|sheet| sheet.session_id == session) {
-                    sheet.apply(incoming, &reading);
-                }
-            }
+            Answer::Session { connection, session, incoming } => return self.take_session_answer(&connection, session, incoming),
             Answer::Queries(QueryAnswer::All { folder, queries }) => self.listed(&folder, queries),
             Answer::Queries(QueryAnswer::Opened { connection, query, text }) => self.opened(&connection, query, &text),
             Answer::Queries(QueryAnswer::NotOpened { connection, query, error }) => {
