@@ -13,7 +13,7 @@ pub(in crate::tui) enum Colouring {
     Plain,
     /// Few distinct texts, each repeated: one colour per text, the same in every result.
     PerText,
-    /// A timestamp read as a date and a time: the time dimmed after the date.
+    /// A timestamp read as a date and a time, or an interval as days and a time: the time dimmed after the days.
     DateTime,
 }
 
@@ -27,6 +27,7 @@ fn colouring(result: &ResultSet, at: usize, kind: &ColumnKind, format: Format, s
     let sampled = || result.rows().iter().take(sample).filter_map(|row| row.get(at));
     match (kind, format) {
         (ColumnKind::Timestamp | ColumnKind::TimestampTz, Format::Raw | Format::Local) => Colouring::DateTime,
+        (ColumnKind::Interval, Format::Raw) => Colouring::DateTime,
         (ColumnKind::Text, _) if has_few_repeated_texts(sampled()) => Colouring::PerText,
         _ => Colouring::Plain,
     }
@@ -101,5 +102,13 @@ mod tests {
     fn a_timestamp_splits_its_date_from_its_time_only_when_it_reads_as_a_date_and_a_time() {
         assert_eq!(one_of(ColumnKind::TimestampTz, Format::Local), Colouring::DateTime);
         assert_eq!(one_of(ColumnKind::TimestampTz, Format::Relative), Colouring::Plain);
+    }
+
+    #[test]
+    fn an_interval_splits_its_days_from_its_time_only_when_raw() {
+        assert_eq!(
+            [one_of(ColumnKind::Interval, Format::Raw), one_of(ColumnKind::Interval, Format::Duration)],
+            [Colouring::DateTime, Colouring::Plain]
+        );
     }
 }

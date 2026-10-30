@@ -201,7 +201,7 @@ ORDER BY 1;
 | `-- connection:` | The connection it was written for; the query still runs on the one on screen. |
 | `-- chart:` | `bar` or `line`, with optional `x=` and `y=` columns (`y=orders,refunds`). |
 | `-- param:` | A parameter: `name type = default`, or `name type optional` for NULL when empty. |
-| `-- format:` | How columns open: `raw`, `local`, `relative`, `grouped`, `bytes`, `short` or `check`. |
+| `-- format:` | How columns open: `raw`, `local`, `relative`, `grouped`, `bytes`, `short`, `check` or `duration`. |
 
 `{{name}}` in a statement is a parameter.
 Its value is always bound, never pasted into the SQL text.
@@ -244,6 +244,7 @@ The grid colours each value by its kind, so a column reads at a glance.
 | A text column of a few values that repeat, as a status | One colour per value, the same in every result: eight values at most among the first 500 rows, each found twice on average. |
 | A UUID | Its first eight digits plain, the rest dimmed. |
 | A timestamp | Its date plain, its time dimmed. |
+| An interval | On the right, its days plain and its time dimmed, as `1 day 04:05:06`; a negative one red; `f` reads it as `1d 4h 5m`. |
 | JSON | Keys, strings and numbers each in their colour. |
 
 The header names a primary-key column in bold and ends a column with a foreign key with `→`, whatever the statement calls it and in a join too: pgbg asks the server which table column each result column holds, so a computed column has no key.

@@ -1,4 +1,4 @@
-use super::{JsonText, ParamValue};
+use super::{Interval, JsonText, ParamValue};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use serde::{Serialize, Serializer};
 use std::cmp::Ordering;
@@ -20,10 +20,11 @@ pub(crate) enum Value {
     Time(NaiveTime),
     Timestamp(NaiveDateTime),
     TimestampTz(DateTime<Utc>),
+    Interval(Interval),
     Bytes(Box<[u8]>),
-    /// A date or timestamp of `infinity`.
+    /// A date, timestamp or interval of `infinity`.
     Infinity,
-    /// A date or timestamp of `-infinity`.
+    /// A date, timestamp or interval of `-infinity`.
     NegativeInfinity,
     /// A value of a type pgbg does not decode, or out of the range it can hold.
     Unsupported,
@@ -46,6 +47,7 @@ impl fmt::Display for Value {
             Self::Time(value) => write!(f, "{value}"),
             Self::Timestamp(value) => write!(f, "{value}"),
             Self::TimestampTz(value) => write!(f, "{}", value.format("%Y-%m-%d %H:%M:%S%.f%:z")),
+            Self::Interval(value) => write!(f, "{value}"),
             Self::Bytes(bytes) => {
                 f.write_str("\\x")?;
                 bytes.iter().try_for_each(|byte| write!(f, "{byte:02x}"))
@@ -97,6 +99,7 @@ impl Value {
             (Self::Time(a), Self::Time(b)) => a.cmp(b),
             (Self::Timestamp(a), Self::Timestamp(b)) => a.cmp(b),
             (Self::TimestampTz(a), Self::TimestampTz(b)) => a.cmp(b),
+            (Self::Interval(a), Self::Interval(b)) => a.compare(b),
             (Self::Bytes(a), Self::Bytes(b)) => a.cmp(b),
             _ => self.rank().cmp(&other.rank()),
         }
@@ -353,6 +356,23 @@ mod tests {
         let day = |text: &str| Value::Date(text.parse().unwrap());
         let days = vec![Value::Infinity, day("2026-10-02"), Value::NegativeInfinity, day("2025-12-31")];
         assert_eq!(sorted(days), [Value::NegativeInfinity, day("2025-12-31"), day("2026-10-02"), Value::Infinity]);
+    }
+
+    #[test]
+    fn intervals_compare_as_postgres_does_a_month_as_thirty_days() {
+        let days = |days| Value::Interval(Interval { days, ..Interval::default() });
+        let month = Value::Interval(Interval { months: 1, ..Interval::default() });
+        assert_eq!(sorted(vec![days(31), month.clone(), Value::Infinity, days(29)]), [days(29), month, days(31), Value::Infinity]);
+        assert_eq!(days(30).compare(&Value::Interval(Interval { months: 1, ..Interval::default() })), Ordering::Equal);
+    }
+
+    #[test]
+    fn an_interval_binds_and_copies_as_the_text_postgres_prints() {
+        let interval = Value::Interval(Interval { months: 1, days: -2, microseconds: 0 });
+        assert_eq!(
+            (interval.as_param(), serde_json::to_string(&interval).unwrap()),
+            (Some(ParamValue::new("1 mon -2 days")), r#""1 mon -2 days""#.to_owned())
+        );
     }
 
     #[test]

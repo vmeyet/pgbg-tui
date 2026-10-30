@@ -17,6 +17,8 @@ Each entry says what changed, then where, then how to use it.
   `⏎` folds or unfolds an object or an array, or the one holding the value under the cursor, `y` copies the value under the cursor and `Y` its path, as `.items[0].sku`.
 - **`pgbg run` says how many rows a write would touch** in its `y/N` question, for an `UPDATE` or a `DELETE`: `DELETE from orders? 42 rows [y/N]`.
   `--yes` sends the write at once, without counting.
+- **`interval` columns read, sort and count**, in the TUI's result grid and copies: on the right, as PostgreSQL prints them; `f` or `F` reads them as `1y 2mo 3d`, `s` and `i` compare a month as 30 days, and `=` or `!` bind them.
+- **`i` shows its values in the column's format**, in the TUI's result grid: a grouped number or a duration reads as it does in the grid.
 
 ### Fixed
 

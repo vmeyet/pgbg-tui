@@ -1,8 +1,9 @@
 //! The figures of the grid's column over the screen, framed as the row's detail: distinct values, NULLs, the least and
-//! the greatest, then the most common with how many rows hold each, every value raw and escaped.
+//! the greatest, then the most common with how many rows hold each, every value in the column's format and escaped.
 use super::app::{App, ColumnStats, Overlay};
 use crate::act::{self, Pane};
 use crate::db::model::Value;
+use crate::format;
 use crate::render;
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -33,7 +34,8 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) {
 fn lines(app: &App, stats: &ColumnStats, room: usize) -> Vec<Line<'static>> {
     let muted = Style::default().fg(app.theme().muted);
     let figure = |label: &str, text: String| Line::from(vec![Span::styled(format!("{label:<LABEL_WIDTH$}"), muted), Span::raw(text)]);
-    let value = |value: Option<&Value>| value.map_or_else(|| "–".to_owned(), |value| render::cell_text(value, room));
+    let shown = |value: &Value| format::cell(value, stats.format, app.clock(), room);
+    let value = |value: Option<&Value>| value.map_or_else(|| "–".to_owned(), shown);
     let mut lines = vec![
         figure("distinct", render::grouped(stats.distinct)),
         figure("NULL", render::grouped(stats.nulls)),
@@ -45,7 +47,7 @@ fn lines(app: &App, stats: &ColumnStats, room: usize) -> Vec<Line<'static>> {
     let widest = stats.common.iter().map(|counted| render::grouped(counted.rows).len()).max().unwrap_or(0);
     lines.extend(stats.common.iter().map(|counted| {
         let rows = format!("{:>widest$}× ", render::grouped(counted.rows));
-        Line::from(vec![Span::styled(rows, muted), Span::raw(render::cell_text(&counted.value, room))])
+        Line::from(vec![Span::styled(rows, muted), Span::raw(shown(&counted.value))])
     }));
     lines
 }
@@ -60,7 +62,7 @@ fn centred(area: Rect, width: u16, lines: usize) -> Rect {
 mod tests {
     use super::super::app::fixtures::{on_the_result, press};
     use super::super::ui;
-    use crate::db::model::{ColumnKind, ResultSet, Value};
+    use crate::db::model::{ColumnKind, Interval, ResultSet, Value};
     use crate::fixtures::column;
     use crossterm::event::KeyCode;
     use ratatui::Terminal;
@@ -75,5 +77,17 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(70, 18)).unwrap();
         terminal.draw(|f| _ = ui::draw(f, &app)).unwrap();
         insta::assert_snapshot!("column_stats", terminal.backend());
+    }
+
+    #[test]
+    fn the_figures_show_values_in_the_columns_format() {
+        let interval = |days, microseconds| vec![Value::Interval(Interval { months: 0, days, microseconds })];
+        let rows = vec![interval(1, 0), interval(0, 9_000_000_000), interval(0, 9_000_000_000), interval(0, -350_000)];
+        let mut app = on_the_result(ResultSet::whole(vec![column("waited", ColumnKind::Interval)], rows));
+        press(&mut app, KeyCode::Char('f'));
+        press(&mut app, KeyCode::Char('i'));
+        let mut terminal = Terminal::new(TestBackend::new(70, 18)).unwrap();
+        terminal.draw(|f| _ = ui::draw(f, &app)).unwrap();
+        insta::assert_snapshot!("column_stats_formatted", terminal.backend());
     }
 }

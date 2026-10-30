@@ -11,6 +11,7 @@ use std::fmt;
 use std::str::FromStr;
 
 mod columns;
+mod duration;
 mod number;
 mod time;
 
@@ -35,10 +36,12 @@ pub(crate) enum Format {
     Short,
     /// A boolean as `✓` or `✗`.
     Check,
+    /// An interval in its three largest units: `1y 2mo 3d`, `2h 30m`.
+    Duration,
 }
 
 impl Format {
-    const ALL: [Self; 7] = [Self::Raw, Self::Local, Self::Relative, Self::Grouped, Self::Bytes, Self::Short, Self::Check];
+    const ALL: [Self; 8] = [Self::Raw, Self::Local, Self::Relative, Self::Grouped, Self::Bytes, Self::Short, Self::Check, Self::Duration];
 
     /// The word a `-- format:` header and the config use for it.
     pub(crate) const fn name(self) -> &'static str {
@@ -50,6 +53,7 @@ impl Format {
             Self::Bytes => "bytes",
             Self::Short => "short",
             Self::Check => "check",
+            Self::Duration => "duration",
         }
     }
 
@@ -95,6 +99,7 @@ pub(crate) fn allowed(kind: &ColumnKind) -> &'static [Format] {
         ColumnKind::Uuid => &[Format::Raw, Format::Short],
         ColumnKind::Bytes => &[Format::Raw, Format::Bytes],
         ColumnKind::Bool => &[Format::Raw, Format::Check],
+        ColumnKind::Interval => &[Format::Raw, Format::Duration],
         ColumnKind::Text | ColumnKind::Json | ColumnKind::Time | ColumnKind::Other => &[Format::Raw],
     }
 }
@@ -114,7 +119,7 @@ pub(crate) fn readable(kind: &ColumnKind) -> Format {
 pub(crate) const fn least_width(format: Format) -> usize {
     match format {
         Format::Relative => time::WIDEST_UNDER_A_YEAR.len(),
-        Format::Raw | Format::Local | Format::Grouped | Format::Bytes | Format::Short | Format::Check => 0,
+        Format::Raw | Format::Local | Format::Grouped | Format::Bytes | Format::Short | Format::Check | Format::Duration => 0,
     }
 }
 
@@ -152,6 +157,7 @@ pub(crate) fn formatted<Tz: TimeZone>(value: &Value, format: Format, clock: &Clo
         (Format::Bytes, Value::Bytes(bytes)) => Some(number::size(bytes.len() as f64)),
         (Format::Short, Value::Uuid(id)) => Some(id.simple().to_string()[..SHORT_UUID_DIGITS].to_owned()),
         (Format::Check, Value::Bool(value)) => Some(if *value { "✓" } else { "✗" }.to_owned()),
+        (Format::Duration, Value::Interval(interval)) => Some(duration::duration(*interval)),
         _ => None,
     }
 }
@@ -236,7 +242,7 @@ mod tests {
     #[test]
     fn an_unknown_format_name_says_which_ones_exist() {
         let error = "pretty".parse::<Format>().unwrap_err();
-        assert_eq!(error.to_string(), "`pretty` is not a format: raw, local, relative, grouped, bytes, short, check");
+        assert_eq!(error.to_string(), "`pretty` is not a format: raw, local, relative, grouped, bytes, short, check, duration");
     }
 
     #[test]
@@ -347,6 +353,17 @@ mod tests {
     #[test]
     fn a_boolean_steps_to_check_and_is_a_check_when_readable() {
         assert_eq!((Format::Raw.next(&ColumnKind::Bool), readable(&ColumnKind::Bool)), (Format::Check, Format::Check));
+    }
+
+    #[test]
+    fn an_interval_steps_to_a_duration_and_is_one_when_readable() {
+        assert_eq!((Format::Raw.next(&ColumnKind::Interval), readable(&ColumnKind::Interval)), (Format::Duration, Format::Duration));
+    }
+
+    #[test]
+    fn an_interval_reads_raw_as_postgres_prints_it_and_as_a_duration() {
+        let interval = Value::Interval(crate::db::model::Interval { months: 14, days: 3, microseconds: 14_706_789_000 });
+        assert_eq!([read(&interval, Format::Raw), read(&interval, Format::Duration)], ["1 year 2 mons 3 days 04:05:06.789", "1y 2mo 3d"]);
     }
 
     #[test]

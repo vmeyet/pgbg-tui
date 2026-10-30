@@ -1,0 +1,26 @@
+---
+source: src/tui/grid_view/mod.rs
+expression: "styled::runs(render(&result, &grid, 40, 6).backend().buffer())"
+---
+Reset/NONE "                              "
+Cyan/NONE "waited"
+Reset/NONE "    "
+---
+Cyan/NONE " "
+Reset/NONE "  1 year 2 mons 3 days"
+Indexed(245)/NONE " 04:05:06.789"
+Reset/NONE "    "
+---
+Cyan/NONE " "
+Reset/NONE "                           02:30:00    "
+---
+Cyan/NONE " "
+Reset/NONE "                      1 mon -2 days    "
+---
+Cyan/NONE " "
+Reset/NONE "                          "
+Red/NONE "-00:00:01"
+Reset/NONE "    "
+---
+Cyan/NONE " "
+Reset/NONE "                           00:00:00    "
