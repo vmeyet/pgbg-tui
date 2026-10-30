@@ -48,10 +48,12 @@ pub(in crate::tui) struct Followed {
     back_to: Spot,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Where the detail stood on a row, and the counts of the tables pointing to it, kept for `⌫`.
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct Spot {
     scroll: DetailScroll,
     key: usize,
+    referrers: Vec<Counted>,
 }
 
 /// A lookup sent, what it reads, and the table whose row it reads.
@@ -138,14 +140,26 @@ impl Detail {
         self.referrers.get(key.checked_sub(targets)?)
     }
 
-    /// The count of the first table still queued, marked as counting by `look`; none while a count is on its way.
+    /// The count of the first table of the row shown still queued, marked as counting by `look`; none while a count is
+    /// on its way, for this row or one the trail left, or while the row a key points to is: the row shown is then
+    /// about to be left.
     fn start_next_count(&mut self, look: LookId) -> Option<Lookup> {
-        if self.referrers.iter().any(|counted| matches!(counted.count, Count::Counting(_))) {
+        let is_counting = self.counts().any(|counted| matches!(counted.count, Count::Counting(_)));
+        if is_counting || self.waiting.is_some() {
             return None;
         }
         let next = self.referrers.iter_mut().find(|counted| counted.count == Count::Queued)?;
         next.count = Count::Counting(look);
         Some(next.referrer.count())
+    }
+
+    /// The tables pointing to the row shown and to each row the trail left, whose counts `⌫` brings back.
+    fn counts(&self) -> impl Iterator<Item = &Counted> {
+        self.referrers.iter().chain(self.trail.iter().flat_map(|followed| &followed.back_to.referrers))
+    }
+
+    fn counts_mut(&mut self) -> impl Iterator<Item = &mut Counted> {
+        self.referrers.iter_mut().chain(self.trail.iter_mut().flat_map(|followed| &mut followed.back_to.referrers))
     }
 }
 
@@ -235,7 +249,7 @@ impl App {
             Some(Act::Left) => self.on_key(detail, -1),
             Some(Act::Open) => return self.follow(detail),
             Some(Act::Edit) => return self.write_join(detail),
-            Some(Act::Back) => return back(detail).map(|before| self.show_detail(before)).unwrap_or_default(),
+            Some(Act::Back) => return back(detail).map(|before| self.count_on(before)).unwrap_or_default(),
             Some(Act::Quit) => return self.quit(),
             Some(Act::Close) => return vec![],
             _ => detail,
@@ -294,7 +308,12 @@ impl App {
     fn show_detail(&mut self, detail: Detail) -> Vec<Action> {
         let counted = |referrer: Referrer| Counted { count: if referrer.is_indexed { Count::Queued } else { Count::NotCounted }, referrer };
         let referrers = self.referrers_of(&detail).into_iter().map(counted).collect();
-        self.overlay = Some(Overlay::Detail(Detail { referrers, ..detail }));
+        self.count_on(Detail { referrers, ..detail })
+    }
+
+    /// Opens `detail` and sends the next count of the tables pointing to its row.
+    fn count_on(&mut self, detail: Detail) -> Vec<Action> {
+        self.overlay = Some(Overlay::Detail(detail));
         self.count_next()
     }
 
@@ -341,15 +360,14 @@ impl App {
         let Some(Waiting { hop, .. }) = detail.waiting.take() else { return vec![] };
         match rows {
             Ok(result) if !result.rows().is_empty() => {
-                let back_to = Spot { scroll: detail.scroll, key: detail.key };
+                let back_to = Spot { scroll: detail.scroll, key: detail.key, referrers: std::mem::take(&mut detail.referrers) };
                 detail.trail.push(Followed { look, hop, result, keys, back_to });
                 return self.show_detail(Detail { scroll: DetailScroll::ToColumn(0), key: 0, ..detail });
             }
             Ok(_) => detail.note = Some(format!("no row of {} has this key", hop.table)),
             Err(failure) => detail.note = Some(failure.to_string()),
         }
-        self.overlay = Some(Overlay::Detail(detail));
-        vec![]
+        self.count_on(detail)
     }
 
     /// The keys the catalog gives the columns of a row a lookup read.
@@ -357,10 +375,11 @@ impl App {
         self.sheet().catalog().zip(read).map(|(catalog, read)| keys::keys(catalog, read.columns())).unwrap_or_default()
     }
 
-    /// Takes the count the lookup `look` read, when it counts the rows of a table pointing to the row shown.
+    /// Takes the count the lookup `look` read, when it counts the rows of a table pointing to the row shown or to one
+    /// the trail left.
     fn counted(&mut self, look: LookId, read: Result<&ResultSet, &Failure>) {
         let Some(Overlay::Detail(detail)) = &mut self.overlay else { return };
-        let Some(counted) = detail.referrers.iter_mut().find(|counted| counted.count == Count::Counting(look)) else { return };
+        let Some(counted) = detail.counts_mut().find(|counted| counted.count == Count::Counting(look)) else { return };
         counted.count = match read {
             Ok(read) => count_in(read).map_or_else(|| Count::Failed("it read no number".to_owned()), Count::Rows),
             Err(failure) => Count::Failed(failure.to_string()),
@@ -405,11 +424,12 @@ fn first_followed<'a>(grid: &ShownRow<'a>, detail: &Detail) -> Option<&'a Target
     grid.targets().get(detail.trail.first()?.back_to.key).copied()
 }
 
-/// The detail of the row before the last one followed, where it stood; none on the grid's row, which `⌫` leaves.
+/// The detail of the row before the last one followed, where it stood, with the counts it had; none on the grid's row,
+/// which `⌫` leaves.
 fn back(detail: Detail) -> Option<Detail> {
     let mut trail = detail.trail;
-    let left = trail.pop()?;
-    Some(Detail { scroll: left.back_to.scroll, key: left.back_to.key, trail, referrers: vec![], waiting: None, note: None })
+    let Spot { scroll, key, referrers } = trail.pop()?.back_to;
+    Some(Detail { scroll, key, trail, referrers, waiting: None, note: None })
 }
 
 #[cfg(test)]
@@ -417,10 +437,12 @@ mod tests {
     use super::super::fixtures::{on_keyed, on_the_keyed_orders, on_the_result, shop, to_shop, typed};
     use super::super::{Fit, Incoming, RunId};
     use super::*;
+    use crate::db::model::{Catalog, Table, TableOid};
     use crate::db::model::{ColumnKind, ColumnName, ParamValue, Params, Statement};
-    use crate::fixtures::{column, keyed_customer, orders, shop_column};
+    use crate::fixtures::{column, keyed_catalog, keyed_customer, keyed_orders, orders, shop_column};
     use crate::query::params::Given;
     use crossterm::event::{KeyCode, KeyModifiers};
+    use std::sync::Arc;
     use std::time::Duration;
 
     fn press(app: &mut App, code: KeyCode) -> Vec<Action> {
@@ -657,6 +679,56 @@ mod tests {
         detail.referrers[0].count = Count::Rows(3);
         detail.start_next_count(LookId::FIRST.next());
         assert_eq!(detail.referrers[1].count, Count::Counting(LookId::FIRST.next()));
+    }
+
+    fn counted_as(rows: i64) -> Incoming {
+        let read = ResultSet::whole(vec![column("count", ColumnKind::Int)], vec![vec![Value::Int(rows)]]);
+        Incoming::LookedUp { look: LookId::FIRST, rows: Ok(read) }
+    }
+
+    /// The grid's row of the keyed orders open, its count of `invoices` sent, then its customer's key followed.
+    fn following_with_a_count_on_its_way(catalog: Catalog) -> App {
+        let mut app = typed("SELECT * FROM orders");
+        press(&mut app, KeyCode::Enter);
+        app.apply(to_shop(Incoming::Schema(Ok(Arc::new(catalog)))));
+        app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result: keyed_orders(), took: Duration::ZERO }));
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Enter);
+        app
+    }
+
+    /// [`keyed_catalog`] with `billing.refunds` pointing to `orders` too, on an index of its key.
+    fn pointed_by_invoices_and_refunds() -> Catalog {
+        let mut catalog = keyed_catalog();
+        let billing = &mut catalog.schema.schemas[0];
+        let invoices = billing.tables[0].clone();
+        billing.tables.push(Table { oid: TableOid::new(5), name: "refunds".to_owned(), ..invoices });
+        catalog
+    }
+
+    #[test]
+    fn a_count_read_while_a_key_is_followed_sends_no_other_count_of_the_row_left() {
+        let mut app = following_with_a_count_on_its_way(pointed_by_invoices_and_refunds());
+        assert_eq!(app.apply(to_shop(counted_as(12))), []);
+    }
+
+    #[test]
+    fn backspace_brings_back_the_counts_the_row_had() {
+        let mut app = following_with_a_count_on_its_way(keyed_catalog());
+        app.apply(to_shop(counted_as(12)));
+        app.apply(to_shop(Incoming::LookedUp { look: LookId::FIRST.next(), rows: Ok(keyed_customer()) }));
+        let actions = press(&mut app, KeyCode::Backspace);
+        assert_eq!((actions, &detail(&app).referrers[0].count), (vec![], &Count::Rows(12)));
+    }
+
+    #[test]
+    fn a_count_read_once_its_row_was_left_shows_on_the_way_back() {
+        let mut app = following_with_a_count_on_its_way(keyed_catalog());
+        app.apply(to_shop(Incoming::LookedUp { look: LookId::FIRST.next(), rows: Ok(keyed_customer()) }));
+        app.apply(to_shop(counted_as(12)));
+        press(&mut app, KeyCode::Backspace);
+        assert_eq!(detail(&app).referrers[0].count, Count::Rows(12));
     }
 
     #[test]
