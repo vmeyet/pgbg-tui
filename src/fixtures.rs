@@ -5,7 +5,6 @@ use crate::db::model::{
     SchemaColumn, SchemaNode, Statement, Table, TableKind, TableOid, TypeName, Value,
 };
 use crate::db::{Session, guard};
-use crate::release::Commit;
 use rustix::process::{Pid, test_kill_process};
 use std::path::Path;
 use std::time::Duration;
@@ -366,14 +365,4 @@ pub(crate) fn capped() -> ResultSet {
     };
     let rows = (0..10_000).map(|n| cells(n).into_iter().cycle().take(50).collect()).collect();
     ResultSet::new(columns, Page { rows, extent: Extent::Cut })
-}
-
-/// The commit a test binary runs, as `build.rs` would embed it.
-pub(crate) const RUNNING: &str = "9731436a0e7c4d1b2f3a4b5c6d7e8f9a0b1c2d3e";
-
-/// A commit past [`RUNNING`], as the repo's latest.
-pub(crate) const NEWER: &str = "635cf1b0000000000000000000000000000000ff";
-
-pub(crate) fn commit(hash: &str) -> Commit {
-    Commit::parse(hash).unwrap()
 }

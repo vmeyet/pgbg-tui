@@ -110,5 +110,5 @@ The review of #214 to #231 found these, most severe first.
 
 ## Later
 
-- `update` and the brew check move to vtui, shared by revu, slack and pgbg
+- revu and slack run `update` and the brew check through `vtui::update`, as pgbg does
 - More chart kinds: a new `ChartKind` variant and one file in `chart/` and `tui/chart_view/`
