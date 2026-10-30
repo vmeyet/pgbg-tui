@@ -20,7 +20,7 @@ pub mod update;
 /// `pgbg usage`.
 pub mod usage;
 
-use crate::config::{self, Config, Places};
+use crate::config::{self, Config, Loaded, Places};
 use crate::connection::{Connection, ConnectionName};
 use crate::db::{Attempt, Interrupted, Session, open_once};
 use crate::history::Store as HistoryStore;
@@ -117,12 +117,17 @@ fn left_behind(config: &Path) -> Vec<String> {
 /// Loads the config at `path`, warning on stderr of each key it ignores and of each file left where pgbg no longer
 /// reads it.
 fn load(path: &Path) -> Result<Config> {
+    load_warned(path).map(|loaded| loaded.config)
+}
+
+/// [`load`], keeping the warnings on the config for a caller that shows them again.
+fn load_warned(path: &Path) -> Result<Loaded> {
     let loaded = Config::read(path)?;
     warn_of_ignored_keys(&loaded.warnings, path);
     for line in left_behind(path) {
         warn(&line);
     }
-    Ok(loaded.config)
+    Ok(loaded)
 }
 
 fn no_connection(name: &ConnectionName, path: &Path) -> anyhow::Error {

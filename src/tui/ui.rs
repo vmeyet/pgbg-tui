@@ -194,6 +194,7 @@ mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::style::Color;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -245,6 +246,45 @@ mod tests {
         app.apply(to_shop(Incoming::Opened));
         app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result: orders(), took: Duration::from_millis(38) }));
         insta::assert_snapshot!("result", render(&app, 60, 14).backend());
+    }
+
+    fn dracula() -> Theme {
+        Theme::from(vtui::theme::Theme::named("dracula").unwrap())
+    }
+
+    /// The app in `theme` with the result of `SELECT id, customer FROM orders` on screen.
+    fn a_result_in(theme: Theme) -> App {
+        let shop = connection("local", "read-only");
+        let mut app = App::new(vec![shop.clone()], &shop, theme);
+        "SELECT id, customer FROM orders".chars().for_each(|c| _ = app.handle_key(KeyEvent::from(KeyCode::Char(c))));
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        app.apply(to_shop(Incoming::Opened));
+        app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result: orders(), took: Duration::from_millis(38) }));
+        app
+    }
+
+    #[test]
+    fn a_named_theme_paints_the_result_screen_in_its_own_colours() {
+        insta::assert_snapshot!("result_dracula", styled::runs(render(&a_result_in(dracula()), 60, 14).backend().buffer()));
+    }
+
+    #[test]
+    fn a_palette_with_its_own_ground_paints_no_colour_of_the_terminal_on_any_screen() {
+        let mut app = a_result_in(dracula());
+        let result = render(&app, 60, 14);
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        app.handle_key(KeyEvent::from(KeyCode::Char('v')));
+        let chart = render(&app, 60, 14);
+        app.handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+        let picker = render(&app, 60, 14);
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        app.handle_key(KeyEvent::from(KeyCode::F(1)));
+        let help = render(&app, 60, 20);
+        for terminal in [result, chart, picker, help] {
+            let painted = terminal.backend().buffer().content().iter().map(|cell| cell.fg).filter(|fg| *fg != Color::Reset);
+            let terminal_colours: Vec<Color> = painted.filter(|fg| !matches!(fg, Color::Rgb(..))).collect();
+            assert_eq!(terminal_colours, vec![], "a colour that bypasses the theme");
+        }
     }
 
     #[test]

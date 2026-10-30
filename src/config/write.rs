@@ -270,6 +270,14 @@ mod tests {
     }
 
     #[test]
+    fn adding_a_connection_keeps_the_tui_table_and_its_comment() {
+        let typed = format!("[tui]\ntheme = \"dracula\" # dark terminal\n\n{TYPED}");
+        let (_dir, path) = typed_config(&typed);
+        add_connection(&path, &"staging".parse().unwrap(), &staging()).unwrap();
+        assert!(read(&path).starts_with(&typed), "{}", read(&path));
+    }
+
+    #[test]
     fn adding_to_no_file_creates_its_folder_and_the_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("pgbg").join("config.toml");
