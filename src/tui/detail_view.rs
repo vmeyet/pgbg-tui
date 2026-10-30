@@ -5,7 +5,8 @@ use super::app::{
     App, Clock, Colouring, Count, Counted, Detail, DetailFit, DetailScroll, DrawnDetail, DrawnRow, GAP, Grid, Overlay, RowOf, Run, ShownRow,
 };
 use super::ink::{Ink, ink};
-use crate::act::{self, Hint, Pane};
+use super::palette_footer;
+use crate::act::Pane;
 use crate::db::model::{Column, Value};
 use crate::format::{self, Format};
 use crate::keys::COUNTED_ROWS;
@@ -27,7 +28,6 @@ const INDENT: &str = "  ";
 const SHARE_OF_SCREEN_PCT: u16 = 80;
 /// The narrowest popup, so a value keeps room on a small terminal; a screen narrower than it is taken whole.
 const MIN_WIDTH: u16 = 60;
-const HINT_SEPARATOR: &str = " · ";
 const POINTING_HEADING: &str = "Pointing to it ";
 
 /// The detail when it is open; returns the line it started at, how far it can scroll, and its lines when it built
@@ -113,7 +113,7 @@ fn title(app: &App, shown: &ShownRow<'_>) -> String {
 fn footer_line(theme: &Theme, note: Option<&str>, columns: u16) -> Line<'static> {
     match note {
         Some(note) => Line::styled(render::printable(note).into_owned(), Style::default().fg(theme.warn)),
-        None => Line::styled(hints(columns), faded(theme)),
+        None => Line::styled(palette_footer::fitted(Pane::Detail, usize::from(columns)), faded(theme)),
     }
 }
 
@@ -250,17 +250,6 @@ fn centred(area: Rect) -> Rect {
 /// `SHARE_OF_SCREEN_PCT` of `cells`, computed in a type wide enough for any screen.
 fn share_of_screen(cells: u16) -> u16 {
     u16::try_from(u32::from(cells) * u32::from(SHARE_OF_SCREEN_PCT) / 100).unwrap_or(cells)
-}
-
-/// The hints that fit in `columns`, the way out kept longest.
-fn hints(columns: u16) -> String {
-    let width = |hint: Hint| written(hint).chars().count() + HINT_SEPARATOR.chars().count();
-    let room = usize::from(columns) + HINT_SEPARATOR.chars().count();
-    act::footer_within(Pane::Detail, room, width).into_iter().map(written).collect::<Vec<_>>().join(HINT_SEPARATOR)
-}
-
-fn written(hint: Hint) -> String {
-    format!("{} {}", hint.keys, hint.does)
 }
 
 #[cfg(test)]

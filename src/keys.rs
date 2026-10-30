@@ -162,6 +162,12 @@ pub(crate) fn primary_key(table: &Table, columns: &[Column], row: &[Value]) -> O
     key.columns.iter().map(|name| Some(Pointing { column: name.clone(), value: value(name)? })).collect()
 }
 
+/// `a = $1 AND b = $2`: each of `columns` equal to the value bound at its place.
+fn bound_condition<'a>(columns: impl Iterator<Item = &'a str>) -> String {
+    let equal = columns.enumerate().map(|(at, column)| format!("{} = ${}", sql_name(column), at + 1));
+    equal.collect::<Vec<_>>().join(" AND ")
+}
+
 impl Target {
     /// The hop the key makes from the row holding it to the row it points to.
     pub(crate) fn hop(&self) -> Hop {
@@ -184,8 +190,7 @@ impl Target {
     /// is NULL, which points nowhere.
     pub(crate) fn lookup(&self, row: &[Value]) -> Option<Lookup> {
         let values = self.key(row)?.into_iter().map(|pointing| Some(pointing.value)).collect();
-        let equal = self.pairs.iter().enumerate().map(|(at, pair)| format!("{} = ${}", sql_name(&pair.to), at + 1));
-        let condition = equal.collect::<Vec<_>>().join(" AND ");
+        let condition = bound_condition(self.pairs.iter().map(|pair| pair.to.as_str()));
         let statement = Statement::new(format!("SELECT * FROM {} WHERE {condition}", qualified(&self.schema, &self.table)));
         Some(Lookup { statement, params: Params::new(values, vec![]), own_timeout: None })
     }
@@ -222,7 +227,7 @@ impl Referrer {
         let statement = format!(
             "SELECT count(*) FROM (SELECT FROM {} WHERE {} LIMIT {}) AS pointing",
             self.sql_name(),
-            self.condition(),
+            bound_condition(self.pairs.iter().map(|pair| pair.column.as_str())),
             COUNTED_ROWS + 1
         );
         let values = self.pairs.iter().map(|pair| Some(pair.value.clone())).collect();
@@ -237,11 +242,6 @@ impl Referrer {
 
     fn sql_name(&self) -> String {
         qualified(&self.schema, &self.table)
-    }
-
-    fn condition(&self) -> String {
-        let equal = self.pairs.iter().enumerate().map(|(at, pair)| format!("{} = ${}", sql_name(&pair.column), at + 1));
-        equal.collect::<Vec<_>>().join(" AND ")
     }
 }
 
@@ -361,6 +361,17 @@ mod tests {
     fn the_key_of_a_target_is_named_as_in_its_table_with_the_rows_values() {
         let key = to_id("public", "customers", 0, "customer_id").key(&[Value::Int(3)]);
         assert_eq!(key, Some(vec![Pointing { column: "customer_id".to_owned(), value: ParamValue::new("3") }]));
+    }
+
+    #[test]
+    fn the_lookup_of_a_key_of_several_columns_binds_each_in_turn() {
+        let pair = |at, from: &str, to: &str| KeyPair { at, from: from.to_owned(), to: to.to_owned() };
+        let target = Target {
+            pairs: vec![pair(0, "customer_id", "id"), pair(1, "customer_region", "region")],
+            ..to_id("public", "customers", 0, "")
+        };
+        let lookup = target.lookup(&[Value::Int(3), Value::Text("eu".into())]).unwrap();
+        assert_eq!(lookup.statement, Statement::new("SELECT * FROM public.customers WHERE id = $1 AND region = $2"));
     }
 
     #[test]

@@ -83,7 +83,7 @@ Each step is one MR, in this order.
 - [ ] The grid keeps the table a result reads, so a followed key does not lex the statement again on every frame
 - [ ] Count lookups that went stale are dropped from the queue, and going back keeps the counts already read
 - [ ] `keys` finds a table once and gives its keys, so a lookup does not parse its own SQL again
-- [ ] One builder writes `column = $n AND …` for a lookup and a referrer, and the footer hints share one fitting
+- [x] One builder writes `column = $n AND …` for a lookup and a referrer, and the footer hints share one fitting
 - [ ] A lookup's answer reaches the sheet as an `Answer`, not app-wide
 
 ## 22. Review of the pleasure batch
