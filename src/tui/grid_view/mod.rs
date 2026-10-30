@@ -317,7 +317,7 @@ mod tests {
     fn an_interval_reads_as_a_duration_when_readable() {
         let result = intervals();
         let clock = Clock { now: at("2026-07-14T12:00:00Z"), zone: chrono::Local };
-        let mut grid = Grid::new(&result, vec![Format::Duration], vec![], &clock);
+        let mut grid = Grid::new(&result, vec![Format::Duration], Keys::default(), &clock);
         grid.row = usize::MAX;
         insta::assert_snapshot!("interval_duration", styled::runs(render(&result, &grid, 40, 6).backend().buffer()));
     }
