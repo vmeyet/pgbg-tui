@@ -1,5 +1,5 @@
 //! One connection's sheet: its editor, the last statement run and its outcome, and the state of its session.
-use super::editor::Editor;
+use super::editor::{Editor, below};
 use super::ghost::Ghost;
 use super::grid::{Clock, Move, Reading, Room};
 use super::param_bar::{Direction, ParamBar};
@@ -139,6 +139,15 @@ pub(in crate::tui) struct Sheet {
     pub(in crate::tui) bar: ParamBar,
     /// The statement that tried to write while the sheet was off screen or under an overlay, asked about once it shows.
     tried_to_write: Option<ToRun>,
+    /// The last table browsed, replaced by the next one while the editor still holds exactly what browsing wrote.
+    browsed: Option<Browsed>,
+}
+
+/// The editor's text before a table was browsed, and the text browsing wrote.
+#[derive(Clone, Debug, PartialEq)]
+struct Browsed {
+    before: String,
+    written: String,
 }
 
 impl Sheet {
@@ -164,6 +173,7 @@ impl Sheet {
             ghost: None,
             bar: ParamBar::default(),
             tried_to_write: None,
+            browsed: None,
         }
     }
 
@@ -328,6 +338,24 @@ impl Sheet {
     /// Runs `to_run`; the backend refuses a write unless `confirmed` shows the user answered `y`.
     pub(super) fn run(&mut self, to_run: ToRun, confirmed: Option<Confirmed>) -> Vec<Action> {
         self.run_statement(to_run.statement, to_run.start, to_run.input, confirmed)
+    }
+
+    /// Writes `preview` at the end of the editor, in place of the table browsed last while the editor still holds what
+    /// that wrote, and runs `preview` alone, whatever the text above it; nothing while a statement runs.
+    pub(super) fn browse(&mut self, preview: Statement) -> Vec<Action> {
+        if self.is_running() {
+            return vec![];
+        }
+        let before = match self.browsed.take() {
+            Some(browsed) if browsed.written == self.editor.text() => browsed.before,
+            _ => self.editor.text().to_owned(),
+        };
+        let written = below(&before, preview.as_str());
+        let start = written.len() - preview.as_str().len();
+        self.editor.rewrite(&written);
+        self.text_changed();
+        self.browsed = Some(Browsed { before, written });
+        self.run_statement(preview, Some(start), ParamInput::default(), None)
     }
 
     /// Runs `statement` with `input` for its parameters; `start` is its first editor byte when it was cut from the

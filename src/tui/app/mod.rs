@@ -335,6 +335,7 @@ impl App {
         let built = fit.detail.drawn.take();
         let (room, editor_rows) = (fit.grid, fit.editor_text.height);
         self.fit = fit;
+        self.schema_tab.keep_first(self.fit.schema_rows.first);
         self.sheet_mut().editor.keep_in_view(editor_rows);
         if let Run::Done { grid, view: View::Grid, .. } = &mut self.sheet_mut().run {
             grid.keep_in_view(room);

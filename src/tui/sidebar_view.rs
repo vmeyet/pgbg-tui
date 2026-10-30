@@ -100,7 +100,7 @@ fn draw_schema(f: &mut Frame<'_>, app: &App, inside: Rect, focused: bool) -> Sch
     }
     let height = usize::from(rows_area.height);
     let selected = app.schema_tab().selected.min(rows.len() - 1);
-    let scroll = selected.saturating_sub(height.saturating_sub(1));
+    let scroll = app.schema_tab().first_shown(rows.len(), height);
     let width = usize::from(rows_area.width);
     let lines: Vec<Line<'_>> = rows
         .iter()

@@ -1,5 +1,4 @@
 //! The sidebar's schema tab: the schemas and tables of the sheet on screen, which fold and filter, and its cursor.
-use super::history::below;
 use super::save::typed_into;
 use super::{Action, App, Focus, Overlay};
 use crate::act::{self, Act, Pane};
@@ -19,10 +18,13 @@ pub(in crate::tui) enum SidebarTab {
     Schema,
 }
 
-/// The folded schemas, the filter typed with `/`, and the cursor's row.
+/// The folded schemas, the filter typed with `/`, the cursor's row and the row drawn first.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(in crate::tui) struct SchemaTab {
     pub(in crate::tui) selected: usize,
+    /// The row the last frame drew first; it moves only when the cursor leaves the rows drawn, so a click never shifts
+    /// them.
+    first: usize,
     closed: BTreeSet<String>,
     pub(in crate::tui) filter: Field,
 }
@@ -41,7 +43,7 @@ impl PickedTable {
     }
 
     fn preview(&self) -> Statement {
-        Statement::new(format!("{PREVIEW_START}{} LIMIT {PREVIEW_ROWS}", self.sql_name()))
+        Statement::new(format!("SELECT * FROM {} LIMIT {PREVIEW_ROWS}", self.sql_name()))
     }
 
     fn in_catalog<'a>(&self, catalog: &'a Catalog) -> Option<&'a Table> {
@@ -71,7 +73,6 @@ pub(in crate::tui) enum SchemaRow<'a> {
     Table { schema: &'a str, table: &'a Table },
 }
 
-const PREVIEW_START: &str = "SELECT * FROM ";
 const PREVIEW_ROWS: usize = 100;
 const DESCRIBED: [&str; 4] = ["", "name", "type", "detail"];
 
@@ -117,20 +118,20 @@ fn texts(cells: [&str; 4]) -> Vec<Value> {
     cells.into_iter().map(|cell| Value::Text(cell.into())).collect()
 }
 
-/// Whether `line` is a table's preview as [`PickedTable::preview`] writes it.
-fn is_preview(line: &str) -> bool {
-    line.starts_with(PREVIEW_START) && line.ends_with(&format!(" LIMIT {PREVIEW_ROWS}"))
-}
-
-/// `held` with `preview` in place of its last line when that line is a preview too, else below its statements.
-fn browsed(held: &str, preview: &Statement) -> String {
-    let held = held.trim_end();
-    let (before, last_line) = held.rsplit_once('\n').unwrap_or(("", held));
-    let kept = if is_preview(last_line) { before } else { held };
-    below(kept, preview.as_str())
-}
-
 impl SchemaTab {
+    /// Keeps `first` as the row the last frame drew first.
+    pub(super) fn keep_first(&mut self, first: usize) {
+        self.first = first;
+    }
+
+    /// The row to draw first among `rows`, `height` of them shown: the one drawn last time, moved only as far as the
+    /// cursor needs to show.
+    pub(in crate::tui) fn first_shown(&self, rows: usize, height: usize) -> usize {
+        let selected = self.selected.min(rows.saturating_sub(1));
+        let lowest = selected.saturating_sub(height.saturating_sub(1));
+        self.first.clamp(lowest, selected)
+    }
+
     /// The schemas that hold a table the filter keeps, each followed by those tables unless it is folded.
     pub(in crate::tui) fn rows<'a>(&self, catalog: &'a Catalog) -> Vec<SchemaRow<'a>> {
         let filter = self.filter.text().to_lowercase();
@@ -247,18 +248,11 @@ impl App {
         self.sheet_mut().show(title, result, &reading);
     }
 
-    /// Writes `SELECT * FROM` `picked` for its first rows at the end of the editor, in place of the table previewed
-    /// last, and runs it as the editor runs a statement; the keys stay where they were, so the next table is a key away.
+    /// Writes `SELECT * FROM` `picked` for its first rows at the end of the editor, in place of the table browsed last,
+    /// and runs it; the keys stay where they were, so the next table is a key away.
     /// It is a read whatever the table's name, so it never asks for confirmation as a write does.
     pub(super) fn preview_table(&mut self, picked: &PickedTable) -> Vec<Action> {
-        if self.sheet().is_running() {
-            return vec![];
-        }
-        let text = browsed(self.sheet().editor.text(), &picked.preview());
-        let sheet = self.sheet_mut();
-        sheet.editor.rewrite(&text);
-        sheet.text_changed();
-        sheet.editor_run().map(|to_run| sheet.run(to_run, None)).unwrap_or_default()
+        self.sheet_mut().browse(picked.preview())
     }
 
     /// Puts the name of `picked` in the editor at its cursor, and gives the editor the keys.
@@ -477,6 +471,47 @@ mod tests {
         assert_eq!(app.sheet().editor.text(), "SELECT 1;\n\nSELECT * FROM public.customers LIMIT 100");
     }
 
+    /// Answers the run of the table browsed, then browses `public.customers`.
+    fn browse_customers(app: &mut App) -> Vec<Action> {
+        answered(app);
+        press(app, KeyCode::Char('/'));
+        press(app, KeyCode::Esc);
+        (0..4).for_each(|_| _ = press(app, KeyCode::Char('j')));
+        press(app, KeyCode::Enter)
+    }
+
+    fn rewritten(app: &mut App, text: &str) {
+        let sheet = app.sheet_mut();
+        sheet.editor.rewrite(text);
+        sheet.text_changed();
+    }
+
+    #[test]
+    fn a_preview_refined_in_the_editor_stays_and_the_next_table_goes_below_it() {
+        let mut app = on_orders();
+        press(&mut app, KeyCode::Enter);
+        rewritten(&mut app, "SELECT * FROM public.orders WHERE paid LIMIT 100");
+        browse_customers(&mut app);
+        let text = "SELECT * FROM public.orders WHERE paid LIMIT 100;\n\nSELECT * FROM public.customers LIMIT 100";
+        assert_eq!(app.sheet().editor.text(), text);
+    }
+
+    #[test]
+    fn a_last_line_that_looks_like_a_preview_but_was_typed_stays_whole() {
+        let mut app = on_orders();
+        rewritten(&mut app, "INSERT INTO archive\nSELECT * FROM orders LIMIT 100");
+        browse_customers(&mut app);
+        let text = "INSERT INTO archive\nSELECT * FROM orders LIMIT 100;\n\nSELECT * FROM public.customers LIMIT 100";
+        assert_eq!(app.sheet().editor.text(), text);
+    }
+
+    #[test]
+    fn a_table_browsed_below_an_unterminated_text_runs_its_preview_alone() {
+        let mut app = on_orders();
+        rewritten(&mut app, "SELECT 'abc");
+        assert_eq!(press(&mut app, KeyCode::Enter), [run_of("SELECT * FROM public.orders LIMIT 100")]);
+    }
+
     #[test]
     fn a_table_browsed_while_a_statement_runs_leaves_the_editor_as_it_was() {
         let mut app = on_orders();
@@ -509,6 +544,13 @@ mod tests {
     #[test]
     fn a_click_finds_the_row_drawn_under_it_when_the_tab_scrolled() {
         assert_eq!(click_at(&mut drawn_from(2), 8, 2), [run_of("SELECT * FROM public.orders LIMIT 100")]);
+    }
+
+    #[test]
+    fn a_click_on_a_scrolled_tab_leaves_its_rows_where_they_were_drawn() {
+        let mut app = drawn_from(2);
+        click_at(&mut app, 8, 2);
+        assert_eq!(app.schema_tab.first_shown(5, 22), 2);
     }
 
     #[test]
