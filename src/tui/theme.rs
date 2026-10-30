@@ -30,14 +30,22 @@ impl Deref for Theme {
 
 impl Default for Theme {
     fn default() -> Self {
-        Self::over(vtui::theme::Theme::default())
+        Self::from(vtui::theme::Theme::default())
+    }
+}
+
+/// pgbg's colours over the palette `[tui] theme` names.
+impl From<vtui::theme::Theme> for Theme {
+    fn from(ui: vtui::theme::Theme) -> Self {
+        let production = hex(ui.danger).map_or(Color::Magenta, |danger| mix(danger, MAGENTA, PRODUCTION_PCT));
+        Self { ui, production }
     }
 }
 
 impl Theme {
     /// A palette that does not know its background takes the terminal's; one with an RGB background keeps its own.
     pub(super) fn with_ground(self, ground: u32) -> Self {
-        Self::over(self.ui.with_ground(ground))
+        Self::from(self.ui.with_ground(ground))
     }
 
     /// Local is green, staging is amber, and production has its own colour.
@@ -47,11 +55,6 @@ impl Theme {
             Tier::Staging => self.warn,
             Tier::Production => self.production,
         }
-    }
-
-    fn over(ui: vtui::theme::Theme) -> Self {
-        let production = hex(ui.danger).map_or(Color::Magenta, |danger| mix(danger, MAGENTA, PRODUCTION_PCT));
-        Self { ui, production }
     }
 }
 
@@ -68,7 +71,7 @@ mod tests {
     use super::*;
 
     fn every_palette() -> impl Iterator<Item = Theme> {
-        vtui::theme::Theme::NAMES.into_iter().map(|name| Theme::over(vtui::theme::Theme::named(name).unwrap()))
+        vtui::theme::Theme::NAMES.into_iter().map(|name| Theme::from(vtui::theme::Theme::named(name).unwrap()))
     }
 
     #[test]
@@ -79,10 +82,11 @@ mod tests {
     }
 
     #[test]
-    fn production_never_takes_the_colour_of_another_tier() {
+    fn every_tier_keeps_its_own_colour_on_every_palette() {
         for theme in every_palette() {
             assert_ne!(theme.tier(Tier::Production), theme.tier(Tier::Staging), "{}", theme.name);
             assert_ne!(theme.tier(Tier::Production), theme.tier(Tier::Local), "{}", theme.name);
+            assert_ne!(theme.tier(Tier::Staging), theme.tier(Tier::Local), "{}", theme.name);
         }
     }
 }

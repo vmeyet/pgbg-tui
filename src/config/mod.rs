@@ -1,4 +1,4 @@
-//! `config.toml`: the connections, how results show, the command `ctrl-g` asks, and whether usage is counted.
+//! `config.toml`: the connections, how results show, the TUI's palette, the command `ctrl-g` asks, and whether usage is counted.
 //! It is read once, with a warning for each key pgbg ignores.
 use crate::connection::{Connection, Entry};
 use crate::format::Mode;
@@ -9,11 +9,13 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use tui::TuiTable;
 
 mod ai;
 mod ignored;
 mod keychain;
 mod left_behind;
+mod tui;
 mod write;
 
 pub(crate) use keychain::{keychain_item_to_delete, replaced_keychain_item};
@@ -29,6 +31,8 @@ struct ConfigFile {
     connections: BTreeMap<String, Entry>,
     #[serde(default)]
     display: Display,
+    #[serde(default)]
+    tui: TuiTable,
     #[serde(default)]
     ai: AiTable,
     #[serde(default)]
@@ -56,6 +60,8 @@ pub(crate) struct Config {
     pub(crate) connections: Vec<Connection>,
     /// How the TUI's results open: raw, or each column readable.
     pub(crate) format: Mode,
+    /// `[tui] theme`: the palette every pane draws with.
+    pub(crate) theme: vtui::theme::Theme,
     /// How `ctrl-g` asks for SQL; none when `[ai]` names no command.
     pub(crate) ai: Option<AiSettings>,
     /// `[usage] enabled`: the TUI counts the acts used and the time on each pane, for `pgbg usage`.
@@ -138,8 +144,10 @@ fn parse(text: &str) -> Result<Loaded> {
         .collect::<Result<_>>()?;
     check_queries_named(&connections)?;
     let ai = ai::read(file.ai, &connections)?;
-    let warnings = warnings.into_iter().chain(ai.warnings).collect();
-    let config = Config { connections, format: file.display.format, ai: ai.settings, counts_usage: file.usage.enabled };
+    let tui = tui::read(file.tui);
+    let warnings = warnings.into_iter().chain(tui.warnings).chain(ai.warnings).collect();
+    let format = file.display.format;
+    let config = Config { connections, format, theme: tui.theme, ai: ai.settings, counts_usage: file.usage.enabled };
     Ok(Loaded { config, warnings })
 }
 
@@ -196,6 +204,19 @@ url = "postgres://nina@localhost:5432/shop"
     #[test]
     fn a_refused_ai_table_fails_the_config() {
         assert!(format!("{:#}", parse("[ai]\ncommand = []\n").unwrap_err()).contains("[ai] command"));
+    }
+
+    #[test]
+    fn the_tui_table_names_the_palette() {
+        assert_eq!(parse(SHOP).unwrap().config.theme.name, "default");
+        assert_eq!(parse(&format!("[tui]\ntheme = \"Dracula\"\n{SHOP}")).unwrap().config.theme.name, "dracula");
+    }
+
+    #[test]
+    fn an_unknown_theme_warns_and_the_rest_loads() {
+        let loaded = parse(&format!("[tui]\ntheme = \"solarized\"\n{SHOP}")).unwrap();
+        assert_eq!((names(&loaded), loaded.config.theme.name), (vec!["local".to_owned(), "staging".to_owned()], "default"));
+        assert_eq!(loaded.warnings.len(), 1, "{:?}", loaded.warnings);
     }
 
     #[test]

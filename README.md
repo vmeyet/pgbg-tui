@@ -232,6 +232,20 @@ In the TUI, a bar above the editor shows one field per parameter.
 
 `pgbg tui <connection>` opens the TUI on another connection than the first.
 
+### Theme
+
+`[tui] theme` in `config.toml` picks the palette of every pane, as in the other TUIs built on vtui:
+
+```toml
+[tui]
+theme = "dracula"   # default, dracula, catppuccin, catppuccin-latte, rosepine, rosepine-dawn, nord, tokyonight, monokai
+```
+
+Case, spaces and dashes do not matter: `Tokyo Night` is `tokyonight`.
+An unknown name warns, on stderr and on the status line, and the default palette is used.
+The default palette follows the terminal's own colours; the others bring their own.
+On every palette the frame keeps the colour of its tier: green for local, amber for staging, and a red of its own for production.
+
 ### Reading a result
 
 The grid colours each value by its kind, so a column reads at a glance.

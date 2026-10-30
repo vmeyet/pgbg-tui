@@ -8,6 +8,8 @@ Each entry says what changed, then where, then how to use it.
 
 ### New
 
+- **Themes**: `[tui] theme = "dracula"` in `config.toml` paints the whole TUI in that palette: frames, grid, SQL and JSON colours, charts, help and footer.
+  The names are those of the other vtui TUIs (`default`, `dracula`, `catppuccin`, `catppuccin-latte`, `rosepine`, `rosepine-dawn`, `nord`, `tokyonight`, `monokai`); an unknown one warns and falls back to `default`, and tier frames keep their colours on each.
 - **The question before a write says how many rows it would touch**, in the TUI, for an `UPDATE` or a `DELETE` on a connection that allows writes: the footer reads `DELETE from orders? 42 rows` while it waits for `y`.
   The count is a read of the same `WHERE`, run read only and rolled back within 2 s, so the write itself never runs before `y`; past 10 000 rows it says `more than 10 000 rows`.
 - **Browse a table without SQL**: in the schema tab of the sidebar and in the `ctrl-t` table finder, `⏎` or a click on a table writes `SELECT * FROM` it `LIMIT 100` in the editor and runs it, so you can refine it there.

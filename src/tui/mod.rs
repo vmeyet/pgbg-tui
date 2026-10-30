@@ -29,9 +29,8 @@ mod ui;
 mod usage;
 mod versions_view;
 
-use crate::config::AiSettings;
+use crate::config::Config;
 use crate::connection::{Connection, ConnectionName};
-use crate::format::Mode;
 use crate::history::Store;
 use crate::query::{Query, Roots, Versions};
 use crate::signal::Signals;
@@ -59,26 +58,21 @@ const IDLE_DELAY: Duration = Duration::from_secs(1);
 /// How often the screen is drawn again while a column shows time from now, so it stays right to the minute.
 const RELATIVE_TIME_REDRAW: Duration = Duration::from_secs(60);
 
-/// Runs the TUI on `first` until the user quits, with `connections` to switch to, read from the `config` file, each
-/// result opening in `format`, `ctrl-g` asking the command of `ai`, and the usage counted into `usage` when given; it
-/// gives the terminal back on the way out.
+/// Runs the TUI on `first` until the user quits, with the connections of `config` to switch to, each result opening in
+/// its format, drawn in its theme, `ctrl-g` asking the command of its `[ai]` table, and the usage counted into `usage`
+/// when given; `path` is the config file, and `warning` shows on the status line. It gives the terminal back on the way
+/// out.
 /// A signal while the sessions stop drops them at once, as a command does.
-pub(crate) async fn run(
-    connections: Vec<Connection>,
-    first: Connection,
-    config: PathBuf,
-    format: Mode,
-    ai: Option<AiSettings>,
-    usage: Option<UsageFile>,
-    warning: Option<String>,
-) -> Result<()> {
+pub(crate) async fn run(config: Config, first: Connection, path: PathBuf, usage: Option<UsageFile>, warning: Option<String>) -> Result<()> {
+    let Config { connections, format, theme, ai, .. } = config;
     let mut signals = Signals::listen()?;
-    let theme = vtui::ground::ask().map_or_else(Theme::default, |ground| Theme::default().with_ground(ground));
+    let theme = Theme::from(theme);
+    let theme = vtui::ground::ask().map_or(theme, |ground| theme.with_ground(ground));
     let mut app = App::new(connections, &first, theme).with_format_mode(format).with_ai(ai).with_warning(warning);
     // Unbounded: each answer follows an action, a page only once the grid asks for it, and the loop takes one per turn.
     let (answers, mut incoming) = mpsc::unbounded_channel();
     let roots = Roots::from_env().with_versions(Versions::from_env());
-    let mut backend = Backend::new(roots, config, answers).with_history(Store::from_env());
+    let mut backend = Backend::new(roots, path, answers).with_history(Store::from_env());
     for action in app.start() {
         backend.dispatch(action);
     }
