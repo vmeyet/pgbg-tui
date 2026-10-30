@@ -20,6 +20,10 @@ Each entry says what changed, then where, then how to use it.
 
 - **A project's `.pgbg/queries/` is no longer read**, in the TUI and `pgbg run --query`: saved queries live only in pgbg's data folder, under `queries/<connection>/`, so a query never lands in a repository.
   Move a project's queries with `mv .pgbg/queries/* ~/.local/share/pgbg/queries/<connection>/`; `queries = "<connection>"` on another connection still shows them there too.
+- **pgbg's usage counts are in `~/.local/share/pgbg/` beside the history**, for `pgbg usage`: they were in the cache folder, which the system may empty.
+  Move `~/Library/Caches/pgbg/usage.jsonl` there, or `~/.cache/pgbg/usage.jsonl` on Linux, to keep the counts so far.
+- **pgbg's log is in `~/.cache/pgbg/` on macOS too**: it was `~/Library/Caches/pgbg/`; set `$XDG_CACHE_HOME` to move it.
+- **pgbg warns of a config, history or usage file left in the old macOS folders**, as any command starts: it says where to move each one, as `~/.config/pgbg/config.toml`.
 
 ## 0.1.0 - 2026-10-29
 

@@ -20,12 +20,14 @@ pub mod update;
 /// `pgbg usage`.
 pub mod usage;
 
-use crate::config::{self, Config};
+use crate::config::{self, Config, Places};
 use crate::connection::{Connection, ConnectionName};
 use crate::db::{Attempt, Interrupted, Session, open_once};
+use crate::history::Store as HistoryStore;
 use crate::render::printable;
 use crate::signal::Signals;
 use crate::tunnel::Tunnel;
+use crate::usage::UsageFile;
 use anyhow::{Result, anyhow};
 use std::path::Path;
 
@@ -93,10 +95,21 @@ fn warn_of_ignored_keys(warnings: &[String], path: &Path) {
     eprintln!("  in {}", path.display());
 }
 
-/// Loads the config at `path`, warning on stderr of each key it ignores.
+/// Warns on stderr of each file pgbg left in an old macOS folder, with where it goes now that `config` is the config.
+fn warn_of_left_behind(config: &Path) {
+    let (Some(home), Some(history), Some(usage)) = (dirs::home_dir(), HistoryStore::from_env(), UsageFile::from_env()) else {
+        return;
+    };
+    for left in config::left_behind(&home, &Places { config, history: history.dir(), usage: usage.path() }) {
+        warn(&left.to_string());
+    }
+}
+
+/// Loads the config at `path`, warning on stderr of each key it ignores and of each file left in an old folder.
 fn load(path: &Path) -> Result<Config> {
     let loaded = Config::read(path)?;
     warn_of_ignored_keys(&loaded.warnings, path);
+    warn_of_left_behind(path);
     Ok(loaded.config)
 }
 

@@ -7,7 +7,7 @@ use vtui::usage::{RARELY, Report, Window};
 
 /// Prints what the `[usage]` counts say about the days within `since`: plain text, or JSON with `json`.
 pub fn run(since: Window, json: bool) -> Result<()> {
-    let file = UsageFile::from_env().ok_or_else(|| anyhow!("no cache folder to keep the usage counts in"))?;
+    let file = UsageFile::from_env().ok_or_else(|| anyhow!("no data folder to keep the usage counts in: set $PGBG_DATA_DIR"))?;
     let path = config::path();
     let is_counting = super::load(&path)?.counts_usage;
     let report = usage::rules().report(&file.read()?, chrono::Local::now().date_naive(), since);

@@ -13,9 +13,11 @@ use std::path::{Path, PathBuf};
 mod ai;
 mod ignored;
 mod keychain;
+mod left_behind;
 mod write;
 
 pub(crate) use keychain::{keychain_item_to_delete, replaced_keychain_item};
+pub(crate) use left_behind::{Places, left_behind};
 pub(crate) use write::{ConnectionChange, add_connection, edit_connection, read_kept, remove_connection, set_password};
 
 const PATH_VARIABLE: &str = "PGBG_CONFIG";
@@ -93,7 +95,7 @@ fn dir_from(xdg: Option<OsString>, home: Option<PathBuf>) -> PathBuf {
 }
 
 /// `$PGBG_DATA_DIR`, else `$XDG_DATA_HOME/pgbg`, else `~/.local/share/pgbg`, on every system, macOS included: where
-/// pgbg keeps what it writes for itself, the history and the versions of saved queries.
+/// pgbg keeps what it writes for itself, the history, the versions of saved queries and the usage counts.
 pub(crate) fn data_dir() -> Option<PathBuf> {
     data_dir_from(std::env::var_os(DATA_DIR_VARIABLE), std::env::var_os("XDG_DATA_HOME"), dirs::home_dir())
 }
@@ -102,9 +104,13 @@ fn data_dir_from(variable: Option<OsString>, xdg: Option<OsString>, home: Option
     named_path(variable).or_else(|| xdg_folder(xdg, home, ".local/share").map(|dir| dir.join("pgbg")))
 }
 
-/// pgbg's folder in the system's cache folder, where it keeps its log and the usage counts.
+/// `$XDG_CACHE_HOME/pgbg`, else `~/.cache/pgbg`, on every system, macOS included: where pgbg keeps its log.
 pub(crate) fn cache_dir() -> Option<PathBuf> {
-    dirs::cache_dir().map(|cache| cache.join("pgbg"))
+    cache_dir_from(std::env::var_os("XDG_CACHE_HOME"), dirs::home_dir())
+}
+
+fn cache_dir_from(xdg: Option<OsString>, home: Option<PathBuf>) -> Option<PathBuf> {
+    xdg_folder(xdg, home, ".cache").map(|dir| dir.join("pgbg"))
 }
 
 /// The folder an `$XDG_*_HOME` variable holds when it is absolute, as the spec asks, else `under_home` in `home`.
@@ -280,5 +286,14 @@ url = "postgres://nina@localhost:5432/shop"
         assert_eq!(data_dir_from(None, None, home()), Some(PathBuf::from("/Users/nina/.local/share/pgbg")));
         assert_eq!(data_dir_from(None, Some("relative".into()), home()), Some(PathBuf::from("/Users/nina/.local/share/pgbg")));
         assert_eq!(data_dir_from(None, None, None), None);
+    }
+
+    #[test]
+    fn the_cache_folder_is_pgbg_in_xdg_cache_home_else_dot_cache_under_home() {
+        let home = || Some(PathBuf::from("/Users/nina"));
+        assert_eq!(cache_dir_from(Some("/cache".into()), home()), Some(PathBuf::from("/cache/pgbg")));
+        assert_eq!(cache_dir_from(None, home()), Some(PathBuf::from("/Users/nina/.cache/pgbg")));
+        assert_eq!(cache_dir_from(Some("relative".into()), home()), Some(PathBuf::from("/Users/nina/.cache/pgbg")));
+        assert_eq!(cache_dir_from(None, None), None);
     }
 }

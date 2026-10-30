@@ -122,6 +122,11 @@ impl Store {
         config::data_dir().map(|dir| Self { dir: dir.join("history"), max_bytes: MAX_BYTES })
     }
 
+    /// The folder of the history files.
+    pub(crate) fn dir(&self) -> &Path {
+        &self.dir
+    }
+
     /// Adds `entry` at the end of its connection's file; a statement that holds a password is kept as a note instead.
     /// The file is locked while it is rolled over and written, so two pgbg never lose each other's lines.
     pub(crate) fn append(&self, entry: &Entry) -> io::Result<()> {
