@@ -38,7 +38,7 @@ The code is the contract; this page describes it, and changes in the MR that cha
 | `files.rs` | `make_private_dir`, folders for their owner alone (`0700`), and `write_whole`, a whole file through a synced temp file and a rename; every file pgbg writes whole goes through it |
 | `lock.rs` | A file opened to append under an exclusive `flock`, so two pgbg never lose each other's writes |
 | `usage.rs`, `log.rs` | The `[usage]` counts, in pgbg's data folder, and the log file, in its cache folder (`$XDG_CACHE_HOME`, else `~/.cache`) |
-| `update.rs`, `release.rs` | What `pgbg update` runs, and the commit `pgbg --version` shows |
+| `release.rs` | `PGBG`, the `vtui::update::App` that `pgbg update` and `pgbg --version` run on: number, commit, repo and Homebrew formula |
 | `signal.rs` | The signals that stop pgbg and the exit code each gives |
 
 ## Data flow

@@ -28,5 +28,4 @@ pub mod signal;
 mod syntax;
 mod tui;
 mod tunnel;
-mod update;
 mod usage;
