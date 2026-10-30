@@ -171,6 +171,9 @@ pub(super) struct App {
     next_session: SessionId,
     /// Why a change to the config failed when no form waits on it; the status line says it until the next key.
     config_failure: Option<String>,
+    /// What pgbg warned of as it started, as a file left where it no longer reads it; the status line says it until the
+    /// next key.
+    warning: Option<String>,
     /// What the last key did when it shows nowhere else, as a copy's outcome; the status line says it until the next key.
     note: Option<String>,
     /// The format mode new results open in, and the clock the loop last read.
@@ -200,6 +203,7 @@ impl App {
             next_session: SessionId::FIRST.next(),
             next_look: LookId::FIRST,
             config_failure: None,
+            warning: None,
             note: None,
             reading: Reading { mode: Mode::Raw, clock: grid::clock_at_epoch() },
             asks: Asks::new(None),
@@ -210,6 +214,11 @@ impl App {
     /// The app with each new result opening in `mode`.
     pub(super) fn with_format_mode(self, mode: Mode) -> Self {
         Self { reading: Reading { mode, ..self.reading }, ..self }
+    }
+
+    /// The app saying `warning` on the status line until the first key.
+    pub(super) fn with_warning(self, warning: Option<String>) -> Self {
+        Self { warning, ..self }
     }
 
     /// The app asking the `[ai] command` of `settings`; none leaves asking off.
@@ -264,6 +273,11 @@ impl App {
 
     pub(super) fn note(&self) -> Option<&str> {
         self.note.as_deref()
+    }
+
+    /// What pgbg warned of as it started, until the first key.
+    pub(super) fn warning(&self) -> Option<&str> {
+        self.warning.as_deref()
     }
 
     pub(super) fn clock(&self) -> &Clock {

@@ -81,7 +81,7 @@ fn a_config_left_in_the_old_macos_folder_is_warned_of_with_where_to_move_it() {
     let output = pgbg_in(dir.path(), SHOP, &["connections"]);
     let warned = stderr(&output);
     let line = format!(
-        "! {} sits in an old macOS folder pgbg no longer reads: move it to {}",
+        "! {} sits in a folder pgbg no longer reads: move it to {}",
         old.join("config.toml").display(),
         dir.path().join("config.toml").display()
     );

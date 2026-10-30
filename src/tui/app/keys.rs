@@ -34,6 +34,7 @@ impl App {
 
     fn take_key(&mut self, key: KeyEvent) -> Vec<Action> {
         self.config_failure = None;
+        self.warning = None;
         self.note = None;
         self.asks.failure = None;
         if let Some(overlay) = self.overlay.take() {

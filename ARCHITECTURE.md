@@ -10,7 +10,7 @@ The code is the contract; this page describes it, and changes in the MR that cha
 |---|---|
 | `main.rs`, `cli.rs` | The clap command line and the dispatch to `commands/` |
 | `commands/` | One module per subcommand, each with a `run`; plain output through `render.rs`, JSON with `--json`; `doctor/` is named checks, pure verdicts and a report |
-| `config/` | `config.toml`: load, validate, refuse secrets; `ai.rs` the `[ai]` table; `write.rs` rewrites key by key with `toml_edit` through a temp file only its owner reads; `keychain.rs` which keychain items a config names; `left_behind.rs` the files an earlier pgbg kept in folders it no longer reads, warned of with where each goes |
+| `config/` | `config.toml`: load, validate, refuse secrets; `ai.rs` the `[ai]` table; `write.rs` rewrites key by key with `toml_edit` through a temp file only its owner reads; `keychain.rs` which keychain items a config names; `left_behind.rs` the files an earlier pgbg kept in folders it no longer reads, warned of on stderr and on the TUI's status line with where each goes |
 | `connection/` | `Connection`, parsed once from config: name, tier, `Target`, tunnel, secret source, write policy, TLS, timeout, schema and AI switches |
 | `secret/` | `Secret` (prints `<redacted>`, never cloned, wiped on drop) and its sources; `holds_secret`, the one rule for a text holding a password |
 | `tunnel/` | `Tunnel`: a child process forwarding a free `127.0.0.1` port; start, wait for the port, stop |

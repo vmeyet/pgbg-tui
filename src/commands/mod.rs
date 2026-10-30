@@ -24,6 +24,7 @@ use crate::config::{self, Config, Places};
 use crate::connection::{Connection, ConnectionName};
 use crate::db::{Attempt, Interrupted, Session, open_once};
 use crate::history::Store as HistoryStore;
+use crate::query;
 use crate::render::printable;
 use crate::signal::Signals;
 use crate::tunnel::Tunnel;
@@ -95,21 +96,32 @@ fn warn_of_ignored_keys(warnings: &[String], path: &Path) {
     eprintln!("  in {}", path.display());
 }
 
-/// Warns on stderr of each file pgbg left in an old macOS folder, with where it goes now that `config` is the config.
-fn warn_of_left_behind(config: &Path) {
-    let (Some(home), Some(history), Some(usage)) = (dirs::home_dir(), HistoryStore::from_env(), UsageFile::from_env()) else {
-        return;
+/// One line for each file an earlier pgbg kept where this one no longer reads it, with where it goes now that `config`
+/// is the config.
+fn left_behind(config: &Path) -> Vec<String> {
+    let (Some(home), Some(data_dir), Some(cache_dir)) = (dirs::home_dir(), config::data_dir(), config::cache_dir()) else {
+        return vec![];
     };
-    for left in config::left_behind(&home, &Places { config, history: history.dir(), usage: usage.path() }) {
-        warn(&left.to_string());
-    }
+    let (history, usage) = (HistoryStore::in_data_dir(&data_dir), UsageFile::in_dir(&data_dir));
+    let places = Places {
+        config,
+        config_dir: &config::dir(),
+        cache_dir: &cache_dir,
+        history: history.dir(),
+        queries: &query::user_queries_dir(&data_dir),
+        usage: usage.path(),
+    };
+    config::left_behind(&home, &places).iter().map(ToString::to_string).collect()
 }
 
-/// Loads the config at `path`, warning on stderr of each key it ignores and of each file left in an old folder.
+/// Loads the config at `path`, warning on stderr of each key it ignores and of each file left where pgbg no longer
+/// reads it.
 fn load(path: &Path) -> Result<Config> {
     let loaded = Config::read(path)?;
     warn_of_ignored_keys(&loaded.warnings, path);
-    warn_of_left_behind(path);
+    for line in left_behind(path) {
+        warn(&line);
+    }
     Ok(loaded.config)
 }
 

@@ -144,6 +144,11 @@ fn exists(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok()
 }
 
+/// The folder in `data_dir` that holds the saved queries, one folder per connection.
+pub(crate) fn user_queries_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join(QUERIES_DIR)
+}
+
 /// The folders queries live in: one of each connection, under pgbg's data folder.
 #[derive(Clone, Debug)]
 #[cfg_attr(test, derive(Default))]
@@ -174,7 +179,7 @@ impl Roots {
 
     /// The folder of the connection `folder`, `queries/<connection>/` in pgbg's data folder.
     fn dir(&self, folder: &ConnectionName) -> Option<PathBuf> {
-        Some(self.data_dir.as_ref()?.join(QUERIES_DIR).join(folder.to_string()))
+        Some(user_queries_dir(self.data_dir.as_ref()?).join(folder.to_string()))
     }
 
     /// The root of `folder`, when it exists and passes the checks. Blocks on the file system.
