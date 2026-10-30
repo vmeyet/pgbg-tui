@@ -119,7 +119,17 @@ pub(crate) struct Store {
 impl Store {
     /// The `history` folder in pgbg's data folder.
     pub(crate) fn from_env() -> Option<Self> {
-        config::data_dir().map(|dir| Self { dir: dir.join("history"), max_bytes: MAX_BYTES })
+        config::data_dir().map(|dir| Self::in_data_dir(&dir))
+    }
+
+    /// The `history` folder in `data_dir`.
+    pub(crate) fn in_data_dir(data_dir: &Path) -> Self {
+        Self { dir: data_dir.join("history"), max_bytes: MAX_BYTES }
+    }
+
+    /// The folder of the history files.
+    pub(crate) fn dir(&self) -> &Path {
+        &self.dir
     }
 
     /// Adds `entry` at the end of its connection's file; a statement that holds a password is kept as a note instead.

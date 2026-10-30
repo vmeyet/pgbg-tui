@@ -21,16 +21,20 @@ pub(crate) fn rules() -> Rules {
     Rules { actions, groups, hints: &[], renamed: &[], counting: COUNTING }
 }
 
-/// `usage.jsonl` in pgbg's cache folder; deleting it starts the counts again.
+/// `usage.jsonl` in pgbg's data folder; deleting it starts the counts again.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct UsageFile {
     path: PathBuf,
 }
 
 impl UsageFile {
-    /// The file in pgbg's cache folder, where the log is; none when the system has no cache folder.
+    /// The file in pgbg's data folder, where the history is; none when there is no data folder.
     pub(crate) fn from_env() -> Option<Self> {
-        config::cache_dir().map(|dir| Self::in_dir(&dir))
+        config::data_dir().map(|dir| Self::in_dir(&dir))
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
     }
 
     /// The file in `dir`.

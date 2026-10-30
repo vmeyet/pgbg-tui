@@ -289,7 +289,7 @@ With `literals = "sent"`, the comment is sent as typed; one holding a password i
 Press `⏎` at the end of `-- the ten biggest orders`, with nothing typed under it, and it asks at once for the whole statement.
 While the command runs, the footer says `asking claude…`, named after your program.
 
-When the AI completion shows nothing, `pgbg.log` in pgbg's cache folder says why.
+When the AI completion shows nothing, `pgbg.log` in pgbg's cache folder says why: `$XDG_CACHE_HOME/pgbg/` when it is set, else `~/.cache/pgbg/`, on macOS too.
 
 ## On the command line
 
@@ -331,7 +331,7 @@ It is off until you ask for it:
 enabled = true
 ```
 
-The counts stay on this machine, in `usage.jsonl` in pgbg's cache folder (`~/Library/Caches/pgbg` on macOS, `~/.cache/pgbg` on Linux), and are never sent anywhere.
+The counts stay on this machine, in `usage.jsonl` in pgbg's data folder (`~/.local/share/pgbg/`, as the history), and are never sent anywhere.
 They hold act names and seconds per pane only: no statement, table, row, connection or host.
 A key counts as what it did where you pressed it; a pane stops counting time a minute after your last key, and while the terminal is in the background.
 Delete the file to start again.

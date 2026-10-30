@@ -125,6 +125,9 @@ fn status(app: &App, width: usize) -> Line<'static> {
     if let Some(why) = app.config_failure() {
         return failure(app, why, width);
     }
+    if let Some(warning) = app.warning() {
+        return failure(app, warning, width);
+    }
     if let Some(why) = app.ask_failure() {
         return failure(app, &why.to_string(), width);
     }
@@ -495,6 +498,14 @@ mod tests {
         let mut app = on_the_result(orders());
         app.apply(Answer::Copied("copied row 1 as CSV".into()));
         assert!(footer_of(&render(&app, 100, 8)).contains("✓ copied row 1 as CSV"));
+    }
+
+    #[test]
+    fn a_warning_given_at_start_shows_in_the_status_line_until_a_key() {
+        let mut app = app().with_warning(Some("old.toml sits in a folder pgbg no longer reads".into()));
+        assert!(footer_of(&render(&app, 100, 8)).contains("✗ old.toml sits in a folder pgbg no longer reads"));
+        app.handle_key(KeyEvent::from(KeyCode::Char('x')));
+        assert!(!footer_of(&render(&app, 100, 8)).contains("old.toml"));
     }
 
     #[test]

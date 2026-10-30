@@ -69,10 +69,11 @@ pub(crate) async fn run(
     format: Mode,
     ai: Option<AiSettings>,
     usage: Option<UsageFile>,
+    warning: Option<String>,
 ) -> Result<()> {
     let mut signals = Signals::listen()?;
     let theme = vtui::ground::ask().map_or_else(Theme::default, |ground| Theme::default().with_ground(ground));
-    let mut app = App::new(connections, &first, theme).with_format_mode(format).with_ai(ai);
+    let mut app = App::new(connections, &first, theme).with_format_mode(format).with_ai(ai).with_warning(warning);
     // Unbounded: each answer follows an action, a page only once the grid asks for it, and the loop takes one per turn.
     let (answers, mut incoming) = mpsc::unbounded_channel();
     let roots = Roots::from_env().with_versions(Versions::from_env());

@@ -32,7 +32,8 @@ fn pgbg_rewriting(config: &str, args: &[&str]) -> (Output, String) {
     (output, std::fs::read_to_string(dir.path().join("config.toml")).unwrap_or_default())
 }
 
-/// The binary on `config`, written in `dir`, which also holds its data folder, so no run writes the real history.
+/// The binary on `config`, written in `dir`, which also holds its data folder and its home, so no run reads or writes
+/// the real ones.
 fn pgbg_in(dir: &Path, config: &str, args: &[&str]) -> Output {
     let path = dir.join("config.toml");
     std::fs::write(&path, config).unwrap();
@@ -41,6 +42,7 @@ fn pgbg_in(dir: &Path, config: &str, args: &[&str]) -> Output {
         .env("PGBG_CONFIG", &path)
         .env("PGBG_LOG", "off")
         .env("PGBG_DATA_DIR", dir)
+        .env("HOME", dir)
         .output();
     command.unwrap()
 }
@@ -68,6 +70,31 @@ fn connections_lists_each_one_by_name() {
     assert!(output.status.success(), "{}", stderr(&output));
     let lines: Vec<String> = stdout(&output).lines().map(str::to_owned).collect();
     assert!(lines[0].starts_with("local ") && lines[1].starts_with("prod "), "{lines:?}");
+}
+
+#[test]
+fn a_config_left_in_the_old_macos_folder_is_warned_of_with_where_to_move_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let old = dir.path().join("Library/Application Support/pgbg");
+    std::fs::create_dir_all(&old).unwrap();
+    std::fs::write(old.join("config.toml"), SHOP).unwrap();
+    let output = pgbg_in(dir.path(), SHOP, &["connections"]);
+    let warned = stderr(&output);
+    let line = format!(
+        "! {} sits in a folder pgbg no longer reads: move it to {}",
+        old.join("config.toml").display(),
+        dir.path().join("config.toml").display()
+    );
+    assert_eq!(warned.matches(&line).count(), 1, "{warned}");
+}
+
+#[test]
+fn usage_reads_the_counts_in_the_data_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("usage.jsonl"), "{\"date\":\"2026-10-26\",\"actions\":{\"run\":3}}\n").unwrap();
+    let output = pgbg_in(dir.path(), SHOP, &["usage", "--since", "all", "--json"]);
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|_| panic!("{}", stderr(&output)));
+    assert_eq!(json["days"], 1, "{json}");
 }
 
 #[test]
