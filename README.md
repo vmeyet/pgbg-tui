@@ -226,6 +226,7 @@ In the TUI, a bar above the editor shows one field per parameter.
 | `^s` | Save the query. |
 | `v` | Show the result as a chart, or as a grid again. |
 | `y` `Y` `c` | Copy the cell; the row as CSV; the result as CSV, JSON or Markdown. |
+| `o` | A JSON cell as a tree: `⏎` folds, `y` copies the value, `Y` its path as `.items[0].sku`. |
 | `F1` `?` | Every key of the pane you are in: filter, sort, formats, mouse, undo and the rest. |
 | `^c` | Quit. |
 

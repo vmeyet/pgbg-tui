@@ -13,6 +13,8 @@ Each entry says what changed, then where, then how to use it.
 - **Browse a table without SQL**: in the schema tab of the sidebar and in the `ctrl-t` table finder, `⏎` or a click on a table writes `SELECT * FROM` it `LIMIT 100` in the editor and runs it, so you can refine it there.
   Browsing the next table replaces that statement, unless you edited the editor since, and the result pages as any other.
   Its columns and indexes moved to `d` in the sidebar and `ctrl-d` in the finder.
+- **JSON tree**: on a `json` or `jsonb` cell of the grid, `o` opens its value as a tree, coloured as the grid colours JSON.
+  `⏎` folds or unfolds an object or an array, or the one holding the value under the cursor, `y` copies the value under the cursor and `Y` its path, as `.items[0].sku`.
 
 ### Fixed
 

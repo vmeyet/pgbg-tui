@@ -22,6 +22,7 @@ pub(super) use diff::Change;
 pub(super) use form::{Form, PasswordFrom, Slot};
 pub(super) use grid::{Clock, GAP, Grid, Reading, Room};
 pub(super) use history::Recall;
+pub(super) use json_tree::{JsonTree, Mark, TreeLine};
 pub(super) use panes::Panes;
 pub(super) use picker::{Note, Picker};
 pub(super) use protocol::{
@@ -54,6 +55,7 @@ mod ghost;
 mod grid;
 pub(super) mod history;
 pub(super) mod idle_ghost;
+mod json_tree;
 mod keys;
 mod mouse;
 mod panes;
@@ -133,6 +135,8 @@ pub(super) enum Overlay {
     Detail(Detail),
     /// The figures of the grid's column over the rows loaded.
     ColumnStats(Box<ColumnStats>),
+    /// The JSON of the grid's cell as a tree.
+    JsonTree(Box<JsonTree>),
     /// A question on the footer line: which format the whole result is copied as.
     CopyAs,
     /// The schema tab's filter line, typed into from `/` until `⏎` or `esc`.

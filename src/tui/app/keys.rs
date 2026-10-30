@@ -82,6 +82,7 @@ impl App {
             Some(Overlay::Completion(_)) => self.paste_past_completions(text),
             Some(Overlay::Ask(AskStep::Instruction(instruction))) => instruction.paste(text),
             Some(Overlay::Ask(_)) => {}
+            Some(Overlay::JsonTree(_)) => {}
             Some(
                 Overlay::Help(_) | Overlay::Picker(_) | Overlay::Prompt(_) | Overlay::Detail(_) | Overlay::ColumnStats(_) | Overlay::CopyAs,
             ) => {}
@@ -124,6 +125,7 @@ impl App {
             }
             Overlay::Detail(detail) => self.detail_key(detail, key),
             Overlay::ColumnStats(stats) => self.column_stats_key(stats, key),
+            Overlay::JsonTree(tree) => self.json_tree_key(tree, key),
             Overlay::CopyAs => self.copy_as_key(key),
             Overlay::SchemaFilter => self.schema_filter_key(key),
             Overlay::RowFilter(filter) => self.row_filter_key(filter, key),
@@ -191,6 +193,7 @@ impl App {
             Act::WhereEqual => self.add_condition(Comparison::Equal),
             Act::WhereNotEqual => self.add_condition(Comparison::NotEqual),
             Act::ColumnStats => self.open_column_stats(),
+            Act::JsonTree => self.open_json_tree(),
             Act::CopyCell => return self.copy_cell(),
             Act::CopyRow => return self.copy_row(),
             Act::CopyStatement => return self.copy_statement(),
@@ -199,7 +202,7 @@ impl App {
             Act::CopyResult => self.ask_copy_format(),
             Act::SwitchTab => return self.switch_tab(),
             Act::Close | Act::Delete | Act::CloseSession | Act::Add | Act::Edit | Act::CopyCsv | Act::CopyJson | Act::CopyMarkdown => {}
-            Act::ReadAgain | Act::Preview | Act::Insert | Act::TakeGhost | Act::DropGhost | Act::Back => {}
+            Act::ReadAgain | Act::Preview | Act::Insert | Act::TakeGhost | Act::DropGhost | Act::Back | Act::CopyPath => {}
         }
         vec![]
     }

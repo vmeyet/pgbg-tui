@@ -1,5 +1,6 @@
 //! JSON colours for one line of indented JSON, by hand: the text is small and already valid, so a grammar would cost more.
 use super::{Painted, Spans, Token};
+use crate::db::model::json_string_end as string_end;
 
 /// The coloured pieces of one line of indented JSON: a key as a keyword, then strings, numbers, `true`, `false` and
 /// `null`, and the punctuation. A string cut at the line's end runs to it.
@@ -24,19 +25,6 @@ pub(crate) fn highlight_json_line(line: &str) -> Spans {
         at = end;
     }
     spans
-}
-
-/// The byte after the string opened at `start`: past its closing quote, or the line's end.
-fn string_end(bytes: &[u8], start: usize) -> usize {
-    let mut at = start + 1;
-    while at < bytes.len() {
-        match bytes[at] {
-            b'\\' => at += 2,
-            b'"' => return at + 1,
-            _ => at += 1,
-        }
-    }
-    bytes.len()
 }
 
 /// A key when a `:` follows the string, else a string.

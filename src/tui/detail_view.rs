@@ -223,7 +223,7 @@ fn inked(theme: &Theme, line: &str, value: &Value, colouring: Colouring) -> Vec<
 }
 
 /// `line` split at its painted pieces, each piece escaped on its own and drawn in its token's colour.
-fn painted_spans(theme: &Theme, line: &str, painted: &[Painted]) -> Vec<Span<'static>> {
+pub(super) fn painted_spans(theme: &Theme, line: &str, painted: &[Painted]) -> Vec<Span<'static>> {
     let mut spans = vec![];
     let mut at = 0;
     for piece in painted {
@@ -241,7 +241,7 @@ fn faded(theme: &Theme) -> Style {
 }
 
 /// `SHARE_OF_SCREEN_PCT` of the screen, and at least `MIN_WIDTH` columns wide.
-fn centred(area: Rect) -> Rect {
+pub(super) fn centred(area: Rect) -> Rect {
     let width = share_of_screen(area.width).max(area.width.min(MIN_WIDTH));
     let height = share_of_screen(area.height);
     Rect { x: area.x + (area.width - width) / 2, y: area.y + (area.height - height) / 2, width, height }
