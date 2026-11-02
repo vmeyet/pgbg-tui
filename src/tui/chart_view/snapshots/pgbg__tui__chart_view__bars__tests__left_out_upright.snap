@@ -1,0 +1,10 @@
+---
+source: src/tui/chart_view/bars.rs
+expression: "render(&series(&daily_orders_and_refunds(), \"grouped\"), 6, 6).backend()"
+---
+"■ orde"
+"■ refu"
+"  █   "
+"█ █ ██"
+"2026-…"
+"+1 mor"

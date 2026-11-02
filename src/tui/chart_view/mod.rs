@@ -37,7 +37,7 @@ fn draw_series(f: &mut Frame<'_>, series: &Series, theme: &Theme, area: Rect) {
     let legend_rows = u16::try_from(legend.len()).unwrap_or(u16::MAX).min(area.height / PANE_ROWS_PER_LEGEND_ROW);
     let [legend_area, plot] = Layout::vertical([Constraint::Length(legend_rows), Constraint::Fill(1)]).areas(area);
     f.render_widget(Paragraph::new(legend), legend_area);
-    match series.kind {
+    match series.columns.kind {
         ChartKind::Grouped => bars::draw(f, &chart::grouped_bars(&series.y), series, theme, plot),
         ChartKind::Line => line::draw(f, series, theme, plot),
     }

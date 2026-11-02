@@ -31,8 +31,16 @@ impl ChartKind {
     /// The word a `-- chart:` header uses for it.
     pub(crate) const fn name(self) -> &'static str {
         match self {
-            Self::Grouped => "bar",
+            Self::Grouped => "grouped",
             Self::Line => "line",
+        }
+    }
+
+    /// Whether it can draw its bars upright or on their side; a line goes left to right.
+    const fn has_orientation(self) -> bool {
+        match self {
+            Self::Grouped => true,
+            Self::Line => false,
         }
     }
 
@@ -45,10 +53,31 @@ impl ChartKind {
     }
 }
 
+/// Which way the bars of a chart run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Orientation {
+    /// Upright columns, one beside the other.
+    Vertical,
+    /// Bars on their side, one under the other, so a long text label stays readable.
+    Horizontal,
+}
+
+impl Orientation {
+    /// The word a `-- chart:` header uses for it.
+    fn named(word: &str) -> Option<Self> {
+        match word {
+            "vertical" => Some(Self::Vertical),
+            "horizontal" => Some(Self::Horizontal),
+            _ => None,
+        }
+    }
+}
+
 /// A chart's kind and its columns, by index in one result, so two columns of the same name stay apart.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ChartColumns {
     pub(crate) kind: ChartKind,
+    pub(crate) orientation: Orientation,
     pub(crate) x: usize,
     pub(crate) y: Vec<usize>,
 }
@@ -57,7 +86,7 @@ pub(crate) struct ChartColumns {
 ///
 /// x is the first text, date, time or timestamp column, else the first numeric column when it holds integers in ascending order
 /// (`year`, `generate_series`); y is every other numeric column.
-/// The kind is bar when x is text or there are at most `FEW_POINTS` rows, line otherwise.
+/// The kind is grouped bars on their side when x is text or there are at most `FEW_POINTS` rows, line otherwise.
 /// A line reads a trend; bars compare a few values.
 pub(crate) fn infer(result: &ResultSet) -> Option<ChartColumns> {
     let x = default_x(result)?;
@@ -65,13 +94,13 @@ pub(crate) fn infer(result: &ResultSet) -> Option<ChartColumns> {
     if y.is_empty() {
         return None;
     }
-    Some(ChartColumns { kind: suited_kind(&result.columns()[x], result.rows().len()), x, y })
+    Some(ChartColumns { kind: suited_kind(&result.columns()[x], result.rows().len()), orientation: Orientation::Horizontal, x, y })
 }
 
 /// The series of the chart `infer` picks for `result`, or why there is none.
 pub(crate) fn infer_series(result: &ResultSet) -> Result<Series, ChartError> {
     let columns = infer(result).ok_or_else(|| missing_axis(result))?;
-    Series::from_columns(result, &columns)
+    Series::from_columns(result, columns)
 }
 
 fn missing_axis(result: &ResultSet) -> ChartError {
@@ -133,7 +162,10 @@ mod tests {
             vec![column("id", ColumnKind::Int), column("customer", ColumnKind::Text), column("total", ColumnKind::Numeric)],
             vec![vec![Value::Int(7), Value::Text("nina".into()), Value::Numeric("12.50".into())]],
         );
-        assert_eq!(infer(&orders), Some(ChartColumns { kind: ChartKind::Grouped, x: 1, y: vec![0, 2] }));
+        assert_eq!(
+            infer(&orders),
+            Some(ChartColumns { kind: ChartKind::Grouped, orientation: Orientation::Horizontal, x: 1, y: vec![0, 2] })
+        );
     }
 
     #[test]
@@ -202,7 +234,7 @@ mod tests {
             vec![column("year", ColumnKind::Int), column("orders", ColumnKind::Int)],
             rows(3, |i| vec![Value::Int(2024 + i as i64), Value::Int(9)]),
         );
-        assert_eq!(infer(&yearly), Some(ChartColumns { kind: ChartKind::Grouped, x: 0, y: vec![1] }));
+        assert_eq!(infer(&yearly), Some(ChartColumns { kind: ChartKind::Grouped, orientation: Orientation::Horizontal, x: 0, y: vec![1] }));
     }
 
     #[test]

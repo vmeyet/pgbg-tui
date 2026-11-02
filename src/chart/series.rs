@@ -1,5 +1,5 @@
 use super::axis::XAxis;
-use super::{ChartColumns, ChartKind, ChartSpec, default_x, default_y};
+use super::{ChartColumns, ChartSpec, Orientation, default_x, default_y};
 use crate::db::model::{Column, ColumnName, ResultSet, Value};
 use std::fmt;
 
@@ -9,9 +9,8 @@ const MAX_LABEL_CHARS: usize = 32;
 /// The points a chart draws: one x position and label per point and, for each y column, one value per point.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Series {
-    pub(crate) kind: ChartKind,
-    /// The x column's name, the axis title.
-    pub(crate) x: ColumnName,
+    /// What this series draws from the result, kept so a change of kind reads the same columns again.
+    pub(crate) columns: ChartColumns,
     pub(crate) axis: XAxis,
     /// Each point's place on the axis, ascending.
     pub(crate) positions: Vec<f64>,
@@ -69,25 +68,24 @@ impl Series {
     /// The points of `result` for `spec`, x and y filled as `chart::infer` would when the spec leaves them out.
     /// A name matches a column whatever its case, as PostgreSQL folds an unquoted name, unless a column has that exact name.
     pub(crate) fn from_result(result: &ResultSet, spec: &ChartSpec) -> Result<Self, ChartError> {
-        Self::from_columns(result, &resolve(result, spec)?)
+        Self::from_columns(result, resolve(result, spec)?)
     }
 
     /// The points of `result` for the columns picked by index.
     /// A line over dates, times or integers is placed on their scale and sorted; anything else keeps the result's order.
-    pub(crate) fn from_columns(result: &ResultSet, columns: &ChartColumns) -> Result<Self, ChartError> {
-        let ChartColumns { kind, x, ref y } = *columns;
+    pub(crate) fn from_columns(result: &ResultSet, columns: ChartColumns) -> Result<Self, ChartError> {
+        let ChartColumns { kind, x, ref y, .. } = columns;
         let axis = XAxis::of(kind, &result.columns()[x].kind);
         let placed = place(result, x, axis);
         let kept: Vec<Placed> = kind.keep(placed.len()).into_iter().map(|index| placed[index]).collect();
         let rows: Vec<usize> = kept.iter().map(|point| point.row).collect();
         let series = Self {
-            kind,
-            x: result.columns()[x].name.clone(),
             axis,
             positions: kept.iter().map(|point| point.position).collect(),
             labels: rows.iter().map(|&row| result.rows()[row][x].prefix(MAX_LABEL_CHARS)).collect(),
             y: y.iter().map(|&column| y_values(result, column, &rows)).collect(),
             is_cut: !result.is_whole() || kept.len() < result.rows().len(),
+            columns,
         };
         if series.has_no_value() {
             return Err(ChartError::Empty);
@@ -133,7 +131,7 @@ fn resolve(result: &ResultSet, spec: &ChartSpec) -> Result<ChartColumns, ChartEr
     if y.is_empty() {
         return Err(ChartError::NoY);
     }
-    Ok(ChartColumns { kind: spec.kind, x, y })
+    Ok(ChartColumns { kind: spec.kind, orientation: spec.orientation.unwrap_or(Orientation::Vertical), x, y })
 }
 
 fn find_numbers(columns: &[Column], names: &[ColumnName]) -> Result<Vec<usize>, ChartError> {
@@ -181,7 +179,7 @@ fn number(value: &Value) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::super::tests::{column, result};
-    use super::super::{bars, line};
+    use super::super::{ChartKind, bars, line};
     use super::*;
     use crate::db::model::{ColumnKind, Extent, Page};
 
@@ -221,9 +219,9 @@ mod tests {
     #[test]
     fn a_spec_without_x_or_y_fills_them_from_the_result() {
         let series = Series::from_result(&orders(), &spec("line")).unwrap();
-        assert_eq!(series.x.as_str(), "customer");
+        assert_eq!(series.columns.x, 0);
         assert_eq!(series.y.iter().map(|column| column.name.as_str()).collect::<Vec<_>>(), ["orders", "total"]);
-        assert_eq!(series.kind, ChartKind::Line);
+        assert_eq!(series.columns.kind, ChartKind::Line);
     }
 
     #[test]

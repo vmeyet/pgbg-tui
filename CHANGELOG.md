@@ -41,6 +41,8 @@ Each entry says what changed, then where, then how to use it.
   What runs from the pane you are on comes first, and `⏎` runs it as its key does; the others name the pane they work in.
 - **Pick a theme live**: type `theme` in the command palette and move over a name to see it on the whole TUI.
   `esc` brings the old one back, and `⏎` keeps it and writes `[tui] theme` in `config.toml`, comments untouched.
+- **Grouped charts, upright or on their side**, in the `-- chart:` header: `-- chart: grouped x=day y=orders,refunds`, or with `horizontal` at the end.
+  `bar` stays valid and means `grouped horizontal`.
 - **A bar chart says what did not fit**, in the TUI's chart view: a pane too small says `+3 more` for the points it leaves out.
 - **A legend names each series in its colour**, on a chart of several `y=` columns: it goes on to more rows in a narrow pane, and the colours keep neighbours apart on every `[tui] theme`, starting over past the sixth.
 
