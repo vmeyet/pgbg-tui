@@ -8,6 +8,8 @@ Each entry says what changed, then where, then how to use it.
 
 ### New
 
+- **Ask for a fix**, in the TUI after a server's error: with `errors = "code"` in `[ai]`, the footer offers `^g ⏎`, and a blank instruction asks to fix the statement that failed.
+  Only the SQLSTATE and the character position go along, never the server's message; off by default.
 - **Ask for a chart**, in the TUI's `ctrl-g`: say `orders per week as a line`, take the answer with `⇥`, run it with `⏎`, and the result opens as that chart.
   The answer leads with a `-- chart:` line right above its statement, so each statement of a file can have its own, and the comments above the statement stay.
 - **`ctrl-g` on the result pane**, in the TUI: asks about the statement that gave the result, for `chart this by week`, with its columns' names and types, never a row or a value.

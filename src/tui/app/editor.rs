@@ -385,14 +385,15 @@ impl Sheet {
         }
     }
 
-    /// Reads the header of the new text, and drops the ghost, the rewrite, the error mark and the position of the statement
-    /// sent, which all pointed into the old text; the colours are rebuilt later by `recolour`.
+    /// Reads the header of the new text, and drops the ghost, the rewrite, the error mark, its code and the position of the
+    /// statement sent, which all pointed into the old text; the colours are rebuilt later by `recolour`.
     pub(super) fn text_changed(&mut self) {
         self.ghost = None;
         self.rewrite = None;
         self.header = Header::parse(self.editor.text());
         self.is_dirty = true;
         self.error_mark = None;
+        self.error_code = None;
         self.forget_sent_place();
     }
 }

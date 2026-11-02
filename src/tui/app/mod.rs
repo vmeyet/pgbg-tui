@@ -627,7 +627,7 @@ mod tests {
     fn an_error_without_a_position_marks_nothing_and_shows_as_it_did() {
         let mut app = typed("SELECT x");
         enter(&mut app);
-        let failure = Failure::Server { message: "ERROR: out of memory".into(), position: None };
+        let failure = Failure::Server { message: "ERROR: out of memory".into(), position: None, code: None };
         app.apply(to_shop(Incoming::Failed { run: RunId::FIRST, failure }));
         assert_eq!(app.sheet().error_mark, None);
         assert_eq!(app.sheet().run, Run::Failed("ERROR: out of memory".into()));

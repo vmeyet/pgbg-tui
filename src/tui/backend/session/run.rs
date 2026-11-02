@@ -270,7 +270,7 @@ mod tests {
 
     #[test]
     fn a_read_the_server_failed_does_not_go_again() {
-        let failure = Failure::Server { message: "FATAL: terminating connection".into(), position: None };
+        let failure = Failure::Server { message: "FATAL: terminating connection".into(), position: None, code: None };
         assert!(!may_go_again_after("SELECT * FROM orders", None, WritePolicy::ReadOnly, &failure));
     }
 

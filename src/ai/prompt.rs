@@ -1,14 +1,15 @@
 //! The text sent on a command's stdin: the instruction, the masked statement, the columns of its result when asked from
 //! there, a slice of the schema and the tier.
 use super::answer::{self, AnswerError};
-use super::mask::{LiteralPolicy, Literals, Masked, masked, masked_comment};
+use super::mask::{LiteralPolicy, Literals, Masked, masked, masked_comment, masked_position};
 use super::slice::{Line, TableUse, slice};
 use crate::chart::ChartKind;
 use crate::connection::Tier;
 use crate::db::lex::Lexed;
-use crate::db::model::{Catalog, Column, Statement, sql_name};
+use crate::db::model::{Catalog, Column, ErrorCode, Statement, sql_name};
 use crate::render::printable;
 use crate::secret;
+use serde::Deserialize;
 use std::fmt;
 
 /// The most bytes a prompt holds, so a big schema never makes a slow or costly ask.
@@ -20,6 +21,25 @@ const CUT_NOTE: &str = "(The schema was cut to fit: more tables exist.)\n";
 const COLUMNS_CUT_NOTE: &str = "(The columns were cut to fit: more exist.)\n";
 const MASKING_NOTE: &str = "Values are masked: keep each '<literal n>' and <number n> where its value stays, and pgbg puts the values \
                             back. Never write a marker the instruction or the statement does not hold.\n";
+
+const FIX: &str = "Fix the statement under the cursor, so the server no longer fails it.";
+
+/// Whether a prompt may tell of a server's error (`[ai] errors`): nothing, the default, or its SQLSTATE and position.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ServerErrors {
+    #[default]
+    Off,
+    Code,
+}
+
+/// What a prompt may tell of a server's error: never its words, which can hold values.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Fault {
+    pub(crate) code: ErrorCode,
+    /// The byte of the statement where the server stopped, when it said.
+    pub(crate) at: Option<usize>,
+}
 
 /// What the user asked for: typed for the ask and sent as typed, whatever it holds leaving the machine; or read off the
 /// `--` lines above the statement, then pgbg's own words, the comment masked as the statement is, since nobody sent it.
@@ -37,6 +57,8 @@ pub(crate) struct PromptInput<'a> {
     pub(crate) statement: Option<&'a Statement>,
     /// The columns of the statement's result, when asked from the result pane; only their names and types are sent.
     pub(crate) columns: &'a [Column],
+    /// The server's error on the statement, when asked to fix it.
+    pub(crate) fault: Option<&'a Fault>,
     pub(crate) catalog: &'a Catalog,
     pub(crate) table_use: &'a TableUse,
     pub(crate) tier: Tier,
@@ -69,6 +91,11 @@ pub(crate) enum NotSent {
 impl Instruction {
     pub(crate) fn new(text: impl Into<String>) -> Self {
         Self { comment: None, text: text.into() }
+    }
+
+    /// The instruction of an ask for a fix: pgbg's words alone.
+    pub(crate) fn fix() -> Self {
+        Self::new(FIX)
     }
 
     /// `comment`, the `--` lines above the statement, followed by `text`.
@@ -126,6 +153,7 @@ fn head(input: &PromptInput<'_>, instruction: &str, statement: &str) -> String {
     };
     let kinds = ChartKind::ALL.map(ChartKind::name).join(", ");
     let columns = columns_section(input.columns);
+    let fault = fault_section(input);
     format!(
         "You write PostgreSQL for pgbg, a SQL editor. Answer with SQL statements only, in one ```sql fence.\n\
          {masking}\
@@ -135,10 +163,20 @@ fn head(input: &PromptInput<'_>, instruction: &str, statement: &str) -> String {
          The database is a {} one.\n\n\
          Instruction:\n{instruction}\n\n\
          Statement under the cursor:\n{statement}\n\n\
+         {fault}\
          {columns}\
          Schema, where a line with a name alone is a table whose columns are left out:\n",
         input.tier
     )
+}
+
+/// The server's code and where it stopped, counted in the statement as the prompt shows it; empty with no fault.
+fn fault_section(input: &PromptInput<'_>) -> String {
+    let Some(fault) = input.fault else { return String::new() };
+    let sql = input.statement.map_or("", Statement::as_str);
+    let position = fault.at.and_then(|at| masked_position(sql, at, input.literals));
+    let place = position.map_or(String::new(), |position| format!(", at its character {position}"));
+    format!("The server failed it with SQLSTATE {}{place}.\n\n", fault.code)
 }
 
 /// The name and type of each of `columns`, one a line and escaped, since a statement can name a column anything; empty when
@@ -215,6 +253,7 @@ mod tests {
             instruction: &instruction,
             statement: Some(&statement),
             columns: &[],
+            fault: None,
             catalog,
             table_use: &TableUse::default(),
             tier: Tier::Production,
@@ -368,6 +407,7 @@ mod tests {
             instruction: &instruction,
             statement: Some(&statement),
             columns: &[],
+            fault: None,
             catalog: &shop_catalog(),
             table_use: &TableUse::default(),
             tier: Tier::Production,
@@ -432,6 +472,7 @@ mod tests {
             instruction: &instruction,
             statement: Some(&statement),
             columns,
+            fault: None,
             catalog: &shop_catalog(),
             table_use: &TableUse::default(),
             tier: Tier::Production,
@@ -487,6 +528,60 @@ mod tests {
         let reply = "```sql\n-- chart: grouped x=name y=orders\nSELECT name, 1 AS orders FROM customers WHERE name = '<literal 1>'\n```";
         let expected = "-- chart: grouped x=name y=orders\nSELECT name, 1 AS orders FROM customers WHERE name = 'nina'";
         assert_eq!(prompt.answer(reply).unwrap(), [Statement::new(expected)]);
+    }
+
+    fn fix_prompt(sql: &str, at: Option<usize>, literals: LiteralPolicy) -> String {
+        let (instruction, statement) = (Instruction::fix(), Statement::new(sql));
+        let fault = Fault { code: ErrorCode::parse("42703").unwrap(), at };
+        let input = PromptInput {
+            instruction: &instruction,
+            statement: Some(&statement),
+            columns: &[],
+            fault: Some(&fault),
+            catalog: &shop_catalog(),
+            table_use: &TableUse::default(),
+            tier: Tier::Production,
+            literals,
+        };
+        prompt(&input).unwrap().text().to_owned()
+    }
+
+    fn with_fault(sql: &str, word: &str, literals: LiteralPolicy) -> (String, usize) {
+        let text = fix_prompt(sql, sql.find(word), literals);
+        let (_, after) = text.split_once("at its character ").unwrap();
+        let position = after.split_once('.').unwrap().0.parse().unwrap();
+        (text, position)
+    }
+
+    /// The text of the statement as `text` shows it, from character `position`.
+    fn shown_from(text: &str, position: usize) -> String {
+        let statement = text.split_once("Statement under the cursor:\n").unwrap().1.split_once("\n\n").unwrap().0;
+        statement.chars().skip(position - 1).collect()
+    }
+
+    #[test]
+    fn a_fault_says_its_code_and_its_place_in_the_masked_statement() {
+        let sql = "-- chart: line\nSELECT 'nina', 4217 /* note */ FROM orders WHERE nope = 1";
+        let (text, position) = with_fault(sql, "nope", LiteralPolicy::Masked);
+        assert!(text.contains("SQLSTATE 42703") && !text.contains("nina"), "{text}");
+        assert_eq!(shown_from(&text, position), "nope = <number 3>");
+    }
+
+    #[test]
+    fn a_fault_counts_in_the_statement_as_sent_with_literals_sent() {
+        let (text, position) = with_fault("SELECT 'nina' -- note\nFROM nope", "nope", LiteralPolicy::Sent);
+        assert_eq!(shown_from(&text, position), "nope");
+    }
+
+    #[test]
+    fn a_fault_with_no_place_says_its_code_alone() {
+        let text = fix_prompt("SELECT 1", None, LiteralPolicy::Masked);
+        assert!(text.contains("SQLSTATE 42703.\n") && !text.contains("character"), "{text}");
+    }
+
+    #[test]
+    fn a_prompt_with_no_fault_names_no_sqlstate() {
+        assert!(!text("SELECT 1", "ids").contains("SQLSTATE"));
     }
 
     #[test]

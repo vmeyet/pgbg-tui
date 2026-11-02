@@ -70,6 +70,7 @@ mod tests {
             env: vec!["PATH".to_owned()],
             timeout: Duration::from_secs(60),
             literals: LiteralPolicy::Masked,
+            errors: ai::ServerErrors::Off,
             ghost: false,
             ghost_command: None,
         };
@@ -84,6 +85,7 @@ mod tests {
             instruction: &instruction,
             statement: Some(&statement),
             columns: &[],
+            fault: None,
             catalog: &catalog,
             table_use: &ai::TableUse::default(),
             tier: Tier::Local,

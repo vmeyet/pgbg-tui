@@ -56,6 +56,13 @@ pub(super) fn masked(sql: &str, policy: LiteralPolicy) -> Masked {
     masked_after(sql, &lex::tokens(sql), policy, Literals(vec![]), &[])
 }
 
+/// The character, counted from 1, of the masked `sql` that byte `at` of `sql` becomes: masking moves every character after
+/// the first comment or literal, so the server's own count would point elsewhere; the `;` keeps the blanks before it.
+pub(super) fn masked_position(sql: &str, at: usize, policy: LiteralPolicy) -> Option<usize> {
+    let before = sql.get(..at)?;
+    Some(masked(&format!("{before};"), policy).text.chars().count())
+}
+
 /// `comment`, the words of the `--` lines above a statement, masked as `masked` masks a statement, with each word
 /// holding an `@`, as an email does, a string marker too; its markers count on from the `before` literals, so one answer
 /// puts back the values of both; none when a quote or a `{{` of it cannot be masked whole.

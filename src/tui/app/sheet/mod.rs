@@ -7,13 +7,13 @@ use super::param_bar::{Direction, ParamBar};
 use super::plan_tree::PlanTree;
 use super::shown_columns::KeptColumns;
 use super::{Action, Confirmed, Grid, Incoming, RunId, SessionId, TunnelState};
-use crate::ai::TableUse;
+use crate::ai::{Fault, TableUse};
 use crate::chart::{self, ChartColumns, ChartError, ChartSpec, Series};
 use crate::complete::Index;
 use crate::connection::{Connection, ConnectionName, WritePolicy};
 use crate::db::explain::Explain;
 use crate::db::guard::{self, Write};
-use crate::db::model::{Column, ColumnName, Extent, Page, ResultSet, Statement};
+use crate::db::model::{Column, ColumnName, ErrorCode, Extent, Page, ResultSet, Statement};
 use crate::db::preview;
 use crate::failure::Failure;
 use crate::format::{self, Format};
@@ -138,6 +138,8 @@ pub(in crate::tui) struct Sheet {
     /// The editor bytes of the token the server's last error points at, until the text changes or the next run starts;
     /// empty at the end of a line, where there is nothing to mark but its end.
     pub(in crate::tui) error_mark: Option<Range<usize>>,
+    /// The SQLSTATE of the server's last error, until the text changes or the next run starts.
+    pub(super) error_code: Option<ErrorCode>,
     /// The saved query the editor stands for, once one has been opened in it.
     pub(in crate::tui) opened: Option<Query>,
     /// Why the last query asked for could not be opened, until a query opens.
@@ -191,6 +193,7 @@ impl Sheet {
             sent: None,
             last_run: None,
             error_mark: None,
+            error_code: None,
             opened: None,
             query_error: None,
             header: Header::default(),
@@ -489,6 +492,7 @@ impl Sheet {
         self.last_run = Some(run);
         self.error_mark = None;
         self.editor.stop_revealing();
+        self.error_code = None;
         self.page_failure = None;
         self.shown = None;
         run
@@ -518,6 +522,12 @@ impl Sheet {
         }
         let character = self.editor.text().get(at..)?.chars().next().filter(|&c| c != '\n');
         Some(at..at + character.map_or(0, char::len_utf8))
+    }
+
+    /// What an ask for a fix may tell of the server's last error, while the editor still holds the statement it failed.
+    pub(super) fn fault(&self) -> Option<Fault> {
+        let start = self.sent.as_ref()?.start?;
+        Some(Fault { code: self.error_code.clone()?, at: self.error_mark.as_ref().and_then(|mark| mark.start.checked_sub(start)) })
     }
 
     /// Takes an answer from the session; a result opens in the formats its header and `reading` give it.
@@ -571,6 +581,7 @@ impl Sheet {
             }
             Incoming::Failed { failure, .. } => {
                 self.mark_error(failure.position());
+                self.error_code = failure.code().cloned();
                 self.run = Run::Failed(failure.to_string());
             }
         }
@@ -982,7 +993,7 @@ mod tests {
         let position = statement.as_str().find("nope").unwrap() + 1;
         app.apply(to_shop(Incoming::Failed {
             run: RunId::FIRST,
-            failure: Failure::Server { message: "ERROR: column does not exist".into(), position: Some(position) },
+            failure: Failure::Server { message: "ERROR: column does not exist".into(), position: Some(position), code: None },
         }));
         assert_eq!(app.sheet().error_mark.clone().map(|mark| &app.sheet().editor.text()[mark]), Some("nope"));
     }

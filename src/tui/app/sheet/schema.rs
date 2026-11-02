@@ -135,6 +135,7 @@ mod tests {
         app.apply(to_shop(Incoming::Schema(Err(Failure::Server {
             message: "permission denied for table pg_class".into(),
             position: None,
+            code: None,
         }))));
         assert_eq!(app.sheet().schema, SchemaState::Failed("permission denied for table pg_class".to_owned()));
     }

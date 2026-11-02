@@ -1,5 +1,5 @@
 //! The `[ai]` table: the command `ctrl-g` asks for SQL, the one the idle ghost asks, and what reaches them.
-use crate::ai::LiteralPolicy;
+use crate::ai::{LiteralPolicy, ServerErrors};
 use crate::connection::{Connection, TunnelSpec};
 use crate::secret::SecretSource;
 use anyhow::{Result, bail};
@@ -26,6 +26,8 @@ pub(super) struct AiTable {
     #[serde(default)]
     literals: LiteralPolicy,
     #[serde(default)]
+    errors: ServerErrors,
+    #[serde(default)]
     ghost: bool,
 }
 
@@ -38,6 +40,8 @@ pub(crate) struct AiSettings {
     pub(crate) env: Vec<String>,
     pub(crate) timeout: Duration,
     pub(crate) literals: LiteralPolicy,
+    /// Whether an ask for a fix may tell of the server's error: off unless `errors = "code"`.
+    pub(crate) errors: ServerErrors,
     /// Whether a second without a key asks for the rest of the statement under the cursor: off unless `ghost = true`.
     pub(crate) ghost: bool,
     /// What the idle ghost runs in place of `command`, when set; `ghost` alone decides whether it runs.
@@ -53,7 +57,7 @@ pub(super) struct ReadAi {
 
 /// The settings `table` gives, given `connections`, whose password variables never reach the command.
 pub(super) fn read(table: AiTable, connections: &[Connection]) -> Result<ReadAi> {
-    let AiTable { command, ghost_command, env, timeout, literals, ghost } = table;
+    let AiTable { command, ghost_command, env, timeout, literals, errors, ghost } = table;
     let ghost_command = checked_command(ghost_command, "ghost_command")?;
     let Some(command) = checked_command(command, "command")? else { return Ok(ReadAi { settings: None, warnings: vec![] }) };
     let timeout = match timeout {
@@ -64,7 +68,7 @@ pub(super) fn read(table: AiTable, connections: &[Connection]) -> Result<ReadAi>
     let arguments = command_arguments(connections);
     let warnings = env.iter().filter_map(|name| warning(name, &passwords, &arguments)).collect();
     let env = passed_variables(env, &passwords);
-    Ok(ReadAi { settings: Some(AiSettings { command, env, timeout, literals, ghost, ghost_command }), warnings })
+    Ok(ReadAi { settings: Some(AiSettings { command, env, timeout, literals, errors, ghost, ghost_command }), warnings })
 }
 
 /// `command` as the `[ai]` table's `key` gives it, refused when it names no program.
@@ -191,10 +195,18 @@ mod tests {
             env: ["PATH", "HOME", "LANG", "TERM", "OPENAI_API_KEY"].map(str::to_owned).to_vec(),
             timeout: Duration::from_secs(60),
             literals: LiteralPolicy::Masked,
+            errors: ServerErrors::Off,
             ghost: false,
             ghost_command: None,
         };
         assert_eq!((read.settings, read.warnings.len()), (Some(expected), 0));
+    }
+
+    #[test]
+    fn errors_code_is_read_and_any_other_word_refused() {
+        let read = settings("command = [\"llm\"]\nerrors = \"code\"", &[]).unwrap().settings.unwrap();
+        assert_eq!(read.errors, ServerErrors::Code);
+        assert!(settings("command = [\"llm\"]\nerrors = \"words\"", &[]).is_err());
     }
 
     #[test]

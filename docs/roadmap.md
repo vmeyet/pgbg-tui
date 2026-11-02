@@ -132,6 +132,7 @@ The review of #214 to #231 found these, most severe first.
 - [x] The ghost offers the rest of the past read run most on this connection, from three typed characters, after a schema name and before a keyword or an idle ask
 - [x] The history ghost ends the keyword you are typing in your case, and leaves the rest as the past statement wrote it
 - [x] Snapshots pin negative grouped bars again, upright and on their side
+- [x] Ask for a fix after a server's error, with `[ai] errors = "code"`: the SQLSTATE and the position go along, never the server's words
 - [x] Ask for a chart: the answer leads with a `-- chart:` line, its statement's own, and `ctrl-g` on the result pane sends the columns' names and types
 
 ## Later

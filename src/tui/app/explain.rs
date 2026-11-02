@@ -75,7 +75,7 @@ mod tests {
         let mut app = typed("SELECT 1;\nSELECT nope");
         option(&mut app, 'e');
         let position = "EXPLAIN (FORMAT JSON) SELECT n".len();
-        let failure = Failure::Server { message: "ERROR: no such column".into(), position: Some(position) };
+        let failure = Failure::Server { message: "ERROR: no such column".into(), position: Some(position), code: None };
         app.apply(to_shop(Incoming::Failed { run: RunId::FIRST, failure }));
         assert_eq!(app.sheet().error_mark.clone().map(|at| &app.sheet().editor.text()[at]), Some("nope"));
     }
@@ -84,7 +84,7 @@ mod tests {
     fn a_server_error_in_the_explain_itself_marks_nothing() {
         let mut app = typed("SELECT 1");
         option(&mut app, 'e');
-        let failure = Failure::Server { message: "ERROR: unknown option".into(), position: Some(3) };
+        let failure = Failure::Server { message: "ERROR: unknown option".into(), position: Some(3), code: None };
         app.apply(to_shop(Incoming::Failed { run: RunId::FIRST, failure }));
         assert_eq!(app.sheet().error_mark, None);
     }
