@@ -93,7 +93,7 @@ pub(in crate::tui) fn enter(app: &mut App) -> Vec<Action> {
 pub(in crate::tui) fn failed_at(app: &mut App, position: usize) {
     app.apply(to_shop(Incoming::Failed {
         run: RunId::FIRST,
-        failure: Failure::Server { message: "ERROR: syntax error".into(), position: Some(position) },
+        failure: Failure::Server { message: "ERROR: syntax error".into(), position: Some(position), code: None },
     }));
 }
 

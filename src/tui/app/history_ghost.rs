@@ -273,7 +273,7 @@ mod tests {
     fn a_failed_run_never_shows() {
         let mut app = typed(ORDERS);
         enter(&mut app);
-        let failure = Failure::Server { message: "ERROR: no such table".into(), position: None };
+        let failure = Failure::Server { message: "ERROR: no such table".into(), position: None, code: None };
         app.apply(to_shop(Incoming::Failed { run: RunId::FIRST, failure }));
         ctrl(&mut app, 'u');
         press(&mut app, "SELECT * ");

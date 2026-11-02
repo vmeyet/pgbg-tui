@@ -18,6 +18,7 @@ pub(super) fn footer(f: &mut Frame<'_>, app: &App, step: &AskStep, area: Rect) {
             Span::styled(" ask › ", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
             Span::raw(instruction.text().to_owned()),
             Span::styled("▌ ", Style::default().fg(theme.accent)),
+            Span::styled(blank_means(app, instruction.text()), Style::default().fg(theme.muted)),
         ],
         AskStep::Waiting { .. } => vec![Span::styled(asking(app), Style::default().fg(theme.warn))],
         AskStep::Answered(_) => {
@@ -28,6 +29,11 @@ pub(super) fn footer(f: &mut Frame<'_>, app: &App, step: &AskStep, area: Rect) {
         act::footer(step.pane()).map(|hint| Span::styled(format!(" {} {} ", hint.keys, hint.does), Style::default().fg(theme.muted)));
     spans.extend(hints);
     f.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// What `⏎` does on an instruction still blank, when it does anything.
+fn blank_means(app: &App, typed: &str) -> &'static str {
+    if typed.is_empty() && app.offers_fix() { " blank asks for a fix " } else { "" }
 }
 
 /// ` asking claude… `: what the footer says while the `[ai] command` runs.

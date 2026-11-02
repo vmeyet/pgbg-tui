@@ -137,6 +137,7 @@ fn from_server(err: tokio_postgres::Error, position: Option<usize>) -> anyhow::E
         hint: db.hint().map(str::to_owned),
         position,
         is_refused_write: db.code() == &SqlState::READ_ONLY_SQL_TRANSACTION,
+        code: model::ErrorCode::parse(db.code().code()),
     })
 }
 

@@ -1,6 +1,6 @@
 //! The neutral model of what a statement returns: code outside `db/` never sees a driver type.
 pub(crate) use cancel::CancelToken;
-pub(crate) use error::{InsideUserTransaction, ServerError, TriedToWrite, UnknownType};
+pub(crate) use error::{ErrorCode, InsideUserTransaction, ServerError, TriedToWrite, UnknownType};
 pub(crate) use interval::Interval;
 pub(crate) use json::{JsonText, string_end as json_string_end};
 pub(crate) use name::{needs_quotes, qualified, sql_name};

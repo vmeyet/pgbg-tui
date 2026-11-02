@@ -14,6 +14,25 @@ pub(crate) struct ServerError {
     pub(crate) position: Option<usize>,
     /// A read-only transaction refused a write the statement tried (SQLSTATE `25006`).
     pub(crate) is_refused_write: bool,
+    pub(crate) code: Option<ErrorCode>,
+}
+
+/// A SQLSTATE such as `42703`: five digits or capital letters, which is all it can hold, so no value of the server's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ErrorCode(String);
+
+impl ErrorCode {
+    /// `code` when it reads as a SQLSTATE; a server is free to send anything.
+    pub(crate) fn parse(code: &str) -> Option<Self> {
+        let is_code = code.len() == 5 && code.bytes().all(|byte| byte.is_ascii_digit() || byte.is_ascii_uppercase());
+        is_code.then(|| Self(code.to_owned()))
+    }
+}
+
+impl fmt::Display for ErrorCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 /// The severity and message, then the detail and the hint on lines of their own.
@@ -73,6 +92,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_code_is_five_digits_or_capitals() {
+        assert_eq!(ErrorCode::parse("42P01").map(|code| code.to_string()).as_deref(), Some("42P01"));
+        for not_a_code in ["", "4270", "427033", "nina@", "42 01"] {
+            assert_eq!(ErrorCode::parse(not_a_code), None, "{not_a_code}");
+        }
+    }
+
+    #[test]
     fn an_error_prints_its_detail_and_hint_under_its_message() {
         let error = ServerError {
             severity: "ERROR".into(),
@@ -81,6 +108,7 @@ mod tests {
             hint: Some("Perhaps you meant to reference the column \"orders.total\".".into()),
             position: Some(8),
             is_refused_write: false,
+            code: None,
         };
         assert_eq!(error.to_string(), "ERROR: column \"totl\" does not exist\nPerhaps you meant to reference the column \"orders.total\".");
     }

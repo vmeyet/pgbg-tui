@@ -314,6 +314,7 @@ env = ["USER"]                                  # claude finds its login through
 ghost = true                                    # the AI completion; off by default
 ghost_command = ["llm", "-m", "fast"]           # what the AI completion asks; command by default
 literals = "masked"                             # or "sent"; masked by default
+errors = "off"                                  # or "code", to ask for a fix; off by default
 timeout = 60                                    # seconds; 60 by default
 ```
 
@@ -324,6 +325,7 @@ timeout = 60                                    # seconds; 60 by default
 | `ghost` | The AI completion: asks for the rest of the statement after 1 s without a key, when no completion or past statement shows, and shows it as a suggestion; `→` takes it. An answer that rewrites what you typed instead waits: the footer says `^g rewrite waiting`, and `ctrl-g` shows its diff. |
 | `ghost_command` | The program and its arguments for the AI completion alone, as a quicker model; it gets the same `env`, `timeout` and `literals`, `ghost` still turns it on, and `ctrl-g` keeps `command`. |
 | `literals` | `masked` replaces the statement's values with markers, `sent` sends them as typed. |
+| `errors` | `code` lets `ctrl-g` ask for a fix after a server's error, with its SQLSTATE and position; `off` tells the command nothing of an error. The server's message never goes, as it can hold values. |
 | `timeout` | How long the command has before it is stopped. |
 
 `ai = "off"` on a connection keeps both from asking there.
@@ -334,6 +336,10 @@ A `-- chart:` line goes right above its statement, so each statement of a file c
 
 `ctrl-g` on the result pane asks about the statement that gave the result, for instructions like `chart this by week`.
 It adds the names and types of the result's columns, never a row or a value.
+
+With `errors = "code"`, a server's error puts `^g ⏎ ask for a fix` on the footer: `ctrl-g` then `⏎` on a blank instruction asks to fix the statement that failed.
+Only the SQLSTATE and the character position go along, never the server's message.
+The answer shows as a diff, `⇥` takes it and `⏎` runs it; words you type instead make an ordinary ask, which tells nothing of the error.
 
 The statement under the cursor goes along with the tables it needs: those it or your words name, then those one foreign key away, each with its columns, types, enum labels, foreign keys and comments, then the name alone of every other table, within 16 KiB.
 A comment holding a password is left out.

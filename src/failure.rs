@@ -1,6 +1,6 @@
 //! Why a session did not open, was lost, or gave a run no result: one kind per reason, its words drawn or logged only.
 use crate::db::guard::Refusal;
-use crate::db::model::{InsideUserTransaction, ServerError, TriedToWrite, UnknownType};
+use crate::db::model::{ErrorCode, InsideUserTransaction, ServerError, TriedToWrite, UnknownType};
 use crate::query::params::ParamError;
 use std::fmt;
 
@@ -56,6 +56,7 @@ pub(crate) enum Failure {
         message: String,
         /// A character position in the statement sent, counted from 1 as PostgreSQL counts.
         position: Option<usize>,
+        code: Option<ErrorCode>,
     },
 }
 
@@ -64,6 +65,14 @@ impl Failure {
     pub(crate) fn position(&self) -> Option<usize> {
         match self {
             Self::Server { position, .. } => *position,
+            _ => None,
+        }
+    }
+
+    /// The server's SQLSTATE, when it failed the statement and said.
+    pub(crate) fn code(&self) -> Option<&ErrorCode> {
+        match self {
+            Self::Server { code, .. } => code.as_ref(),
             _ => None,
         }
     }
@@ -80,7 +89,7 @@ impl From<&anyhow::Error> for Failure {
             return Self::Refused(words);
         }
         match err.downcast_ref::<ServerError>() {
-            Some(server) => Self::Server { position: server.position, message: words },
+            Some(server) => Self::Server { position: server.position, code: server.code.clone(), message: words },
             None => Self::Link(words),
         }
     }
@@ -113,6 +122,7 @@ mod tests {
             hint: None,
             position,
             is_refused_write: false,
+            code: ErrorCode::parse("42703"),
         }
     }
 
@@ -120,6 +130,13 @@ mod tests {
     fn a_tunnel_that_did_not_start_says_how_it_ended() {
         let failure = Failure::TunnelNotStarted("the tunnel `ssh` died, exit status: 255".into());
         assert_eq!(failure.to_string(), "its tunnel did not start: the tunnel `ssh` died, exit status: 255");
+    }
+
+    #[test]
+    fn a_server_error_keeps_its_code_and_nothing_else_has_one() {
+        let failure = Failure::from(&anyhow::Error::new(server_error(None)));
+        assert_eq!(failure.code().map(ToString::to_string).as_deref(), Some("42703"));
+        assert_eq!(Failure::Link("gone".into()).code(), None);
     }
 
     #[test]

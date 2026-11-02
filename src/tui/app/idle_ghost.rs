@@ -203,7 +203,7 @@ impl Sheet {
     /// comment holds a secret.
     fn idle_prompt(&self, question: &Question<'_>, literals: LiteralPolicy) -> Option<IdlePrompt> {
         let statement = Statement::new(question.typed);
-        let ask = |instruction: &Instruction| self.prompt_about(instruction, Some(&statement), &[], literals);
+        let ask = |instruction: &Instruction| self.prompt_about(instruction, Some(&statement), &[], None, literals);
         match ask(&question.instruction()) {
             Err(NotSent::UnmaskableComment) => {
                 ask(&no_comment()).ok().map(|prompt| IdlePrompt { prompt, left_out: Some(NotSent::UnmaskableComment) })
@@ -674,6 +674,13 @@ pub(in crate::tui) mod tests {
     #[test]
     fn a_key_line_out_of_the_file_header_is_a_comment_above() {
         assert_eq!(comment_at_end("SELECT 1;\n-- note: paid only\n"), ["note: paid only"]);
+    }
+
+    #[test]
+    fn an_idle_ask_tells_nothing_of_a_server_error_even_with_errors_code() {
+        let mut app = idle_on("SELECT * FROM orders WHERE ");
+        app.sheet_mut().error_code = crate::db::model::ErrorCode::parse("42703");
+        assert!(!prompt_text(&mut app).contains("SQLSTATE"));
     }
 
     #[test]

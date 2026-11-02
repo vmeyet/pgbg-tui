@@ -365,6 +365,7 @@ mod tests {
             hint: None,
             position: None,
             is_refused_write: false,
+            code: None,
         };
         assert_eq!(Outcome::of(&Err(server.into())), Outcome::ServerError);
         assert_eq!(Outcome::of(&Err(anyhow::anyhow!("connection refused"))), Outcome::LinkError);

@@ -1,13 +1,14 @@
 //! `ctrl-g`: an instruction typed on the footer line, the `[ai] command` asked about the statement under the cursor,
 //! and its answer, which `tab` puts in the editor; nothing of it ever runs by itself.
 //! From the result pane the ask is about the statement that gave the result, and adds its columns' names and types.
+//! A blank instruction after a server's error asks for a fix, under `[ai] errors = "code"`, with its code and position.
 use super::diff::{self, DiffLine};
 use super::editor::{Edited, Revision};
 use super::idle_ghost::IdleAsk;
 use super::save::typed_into;
 use super::{Action, App, AskFailure, AskId, Focus, Overlay, Sheet};
 use crate::act::{self, Act, Pane};
-use crate::ai::{self, Instruction, LiteralPolicy, NotSent, Prompt};
+use crate::ai::{self, Fault, Instruction, LiteralPolicy, NotSent, Prompt, ServerErrors};
 use crate::config::AiSettings;
 use crate::connection::AiAsking;
 use crate::db::guard::{self, Write};
@@ -123,24 +124,27 @@ impl App {
         }
     }
 
-    /// Asks with `instruction` unless it is blank, or says why the prompt is not sent.
+    /// Asks with `instruction`, or for a fix when it is blank and one is on offer; says why the prompt is not sent; a blank
+    /// one with no fix on offer waits for words.
     fn send_ask(&mut self, instruction: Field) -> Vec<Action> {
         if let Some(why) = self.why_asking_is_off() {
             self.asks.failure = Some(why);
             return vec![];
         }
-        let Some(settings) = self.asks.settings.as_ref().filter(|_| !instruction.text().trim().is_empty()) else {
+        let is_blank = instruction.text().trim().is_empty();
+        let fault = self.fault_on_offer().filter(|_| is_blank);
+        let Some(settings) = self.asks.settings.as_ref().filter(|_| !is_blank || fault.is_some()) else {
             self.overlay = Some(Overlay::Ask(AskStep::Instruction(instruction)));
             return vec![];
         };
         let settings = settings.without_passwords_of(&self.connections);
-        let columns = if self.focus == Focus::Result {
+        let is_on_result = self.focus == Focus::Result;
+        if is_on_result || fault.is_some() {
             self.sheet_mut().go_to_sent();
-            self.sheet().result_columns()
-        } else {
-            &[]
-        };
-        match self.sheet().prompt(&Instruction::new(instruction.text()), columns, settings.literals) {
+        }
+        let words = if fault.is_some() { Instruction::fix() } else { Instruction::new(instruction.text()) };
+        let columns = if is_on_result { self.sheet().result_columns() } else { &[] };
+        match self.sheet().prompt(&words, columns, fault.as_ref(), settings.literals) {
             Err(not_sent) => {
                 self.asks.failure = Some(AskFailure::NotSent(not_sent));
                 vec![]
@@ -174,6 +178,19 @@ impl App {
         vec![]
     }
 
+    /// The server's error a blank instruction would ask to fix: `[ai] errors = "code"`, asking on, and the editor still
+    /// holding the statement that failed.
+    fn fault_on_offer(&self) -> Option<Fault> {
+        let settings = self.asks.settings.as_ref().filter(|settings| settings.errors == ServerErrors::Code);
+        settings.filter(|_| self.why_asking_is_off().is_none())?;
+        self.sheet().fault()
+    }
+
+    /// Whether a blank instruction asks for a fix now.
+    pub(in crate::tui) fn offers_fix(&self) -> bool {
+        self.fault_on_offer().is_some()
+    }
+
     /// Why `ctrl-g` asks nothing on the sheet on screen, as the config stands now.
     fn why_asking_is_off(&self) -> Option<AskFailure> {
         if self.sheet().connection.ai() == AiAsking::Off {
@@ -205,19 +222,26 @@ impl App {
 }
 
 impl Sheet {
-    /// The prompt for `instruction` about the statement under the cursor and its result's `columns`, with the schema read
-    /// so far.
-    fn prompt(&self, instruction: &Instruction, columns: &[Column], literals: LiteralPolicy) -> Result<Prompt, NotSent> {
+    /// The prompt for `instruction` about the statement under the cursor, its result's `columns` and its `fault`, with the
+    /// schema read so far.
+    fn prompt(
+        &self,
+        instruction: &Instruction,
+        columns: &[Column],
+        fault: Option<&Fault>,
+        literals: LiteralPolicy,
+    ) -> Result<Prompt, NotSent> {
         let statement = self.range_under_cursor().map(|range| Statement::new(&self.editor.text()[range]));
-        self.prompt_about(instruction, statement.as_ref(), columns, literals)
+        self.prompt_about(instruction, statement.as_ref(), columns, fault, literals)
     }
 
-    /// The prompt for `instruction` about `statement` and its result's `columns`, with the schema read so far.
+    /// The prompt for `instruction` about `statement`, its result's `columns` and its `fault`, with the schema read so far.
     pub(super) fn prompt_about(
         &self,
         instruction: &Instruction,
         statement: Option<&Statement>,
         columns: &[Column],
+        fault: Option<&Fault>,
         literals: LiteralPolicy,
     ) -> Result<Prompt, NotSent> {
         let unread = Catalog::default();
@@ -226,6 +250,7 @@ impl Sheet {
             instruction,
             statement,
             columns,
+            fault,
             catalog,
             table_use: &self.table_use,
             tier: self.connection.tier(),
@@ -287,8 +312,10 @@ impl Sheet {
 pub(in crate::tui) mod tests {
     use super::super::fixtures::{app_on, connection, grid, shop, to_shop};
     use super::super::queries::tests::query;
-    use super::super::{Answer, Incoming, QueryAnswer, Run};
+    use super::super::{Answer, Incoming, QueryAnswer, Run, RunId};
     use super::*;
+    use crate::db::model::ErrorCode;
+    use crate::failure::Failure;
     use crate::fixtures::{self, shop_catalog};
     use crossterm::event::{KeyCode, KeyModifiers};
     use std::sync::Arc;
@@ -313,6 +340,7 @@ pub(in crate::tui) mod tests {
             env,
             timeout: Duration::from_secs(60),
             literals: LiteralPolicy::Masked,
+            errors: ServerErrors::Off,
             ghost: false,
             ghost_command: None,
         }
@@ -636,6 +664,125 @@ pub(in crate::tui) mod tests {
         let app = answered("SELECT 1", "-- chart: line\nSELECT 2");
         let Some(AskStep::Answered(suggestion)) = step(&app) else { panic!("no answer") };
         assert!(suggestion.lines.iter().any(|line| line.text == "-- chart: line"), "{:?}", suggestion.lines);
+    }
+
+    /// The server's words, holding a value no prompt may show.
+    const SERVER_WORDS: &str = "ERROR: invalid input for nina@example.com";
+
+    fn server_failure(position: Option<usize>) -> Failure {
+        Failure::Server { message: SERVER_WORDS.into(), position, code: ErrorCode::parse("42703") }
+    }
+
+    /// The app on `text`, under `errors`, its statement at the cursor failed by the server at `position`.
+    pub(in crate::tui) fn failed_on(text: &str, errors: ServerErrors, position: Option<usize>) -> App {
+        let mut app = asking_on("");
+        app = app.with_ai(Some(AiSettings { errors, ..ai_settings() }));
+        app.sheet_mut().paste(text);
+        let sent = press(&mut app, KeyCode::Enter);
+        let [Action::Run { run, .. }] = &*sent else { panic!("{sent:?}") };
+        app.apply(to_shop(Incoming::Failed { run: *run, failure: server_failure(position) }));
+        app
+    }
+
+    fn blank_ask(app: &mut App) -> Vec<Action> {
+        ctrl_g(app);
+        press(app, KeyCode::Enter)
+    }
+
+    #[test]
+    fn a_blank_instruction_after_a_server_error_asks_for_a_fix_with_its_code_and_place() {
+        let mut app = failed_on("SELECT nope FROM orders", ServerErrors::Code, Some(8));
+        let text = prompt_sent(&mut app, "");
+        assert!(text.contains("Fix the statement") && text.contains("SQLSTATE 42703, at its character 8."), "{text}");
+    }
+
+    #[test]
+    fn an_ask_for_a_fix_never_holds_the_servers_words_a_literal_or_where_the_connection_is() {
+        let mut app = failed_on("SELECT 'zoe', 4217 FROM orders", ServerErrors::Code, Some(8));
+        let text = prompt_sent(&mut app, "");
+        for held in ["invalid input", "nina@", "zoe", "4217", "localhost", "shop"] {
+            assert!(!text.contains(held), "{held} in {text}");
+        }
+    }
+
+    #[test]
+    fn with_errors_off_a_blank_instruction_still_sends_nothing() {
+        let mut app = failed_on("SELECT nope", ServerErrors::Off, Some(8));
+        assert_eq!(blank_ask(&mut app), []);
+        assert!(!app.offers_fix());
+    }
+
+    #[test]
+    fn a_typed_instruction_after_a_server_error_tells_nothing_of_it() {
+        let mut app = failed_on("SELECT nope", ServerErrors::Code, Some(8));
+        let text = prompt_sent(&mut app, "only the ids");
+        assert!(text.contains("only the ids") && !text.contains("SQLSTATE"), "{text}");
+    }
+
+    #[test]
+    fn a_change_to_the_text_takes_the_fix_off_offer() {
+        let mut app = failed_on("SELECT nope", ServerErrors::Code, Some(8));
+        assert!(app.offers_fix());
+        press(&mut app, KeyCode::Char('x'));
+        assert!(!app.offers_fix());
+        assert_eq!(blank_ask(&mut app), []);
+    }
+
+    #[test]
+    fn a_failure_of_the_link_offers_no_fix() {
+        let mut app = asking_on("");
+        app = app.with_ai(Some(AiSettings { errors: ServerErrors::Code, ..ai_settings() }));
+        app.sheet_mut().paste("SELECT 1");
+        press(&mut app, KeyCode::Enter);
+        app.apply(to_shop(Incoming::Failed { run: RunId::FIRST, failure: Failure::Link("gone".into()) }));
+        assert!(!app.offers_fix());
+    }
+
+    #[test]
+    fn a_connection_with_ai_off_offers_no_fix() {
+        let mut app = failed_on("SELECT nope", ServerErrors::Code, Some(8));
+        app.sheet_mut().connection = fixtures::connection("tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\nai = \"off\"\n");
+        assert!(!app.offers_fix());
+    }
+
+    #[test]
+    fn a_fix_is_about_the_statement_that_failed_wherever_the_cursor_went() {
+        let mut app = failed_on("SELECT 1;\nSELECT nope", ServerErrors::Code, Some(8));
+        app.sheet_mut().editor.move_cursor_to(0);
+        assert!(prompt_sent(&mut app, "").contains("Statement under the cursor:\nSELECT nope\n"));
+        app.apply(Answer::Asked { ask: AskId::FIRST, answer: Ok(vec![Statement::new("SELECT id FROM orders")]) });
+        assert!(matches!(step(&app), Some(AskStep::Answered(_))));
+        assert_eq!(press(&mut app, KeyCode::Tab), []);
+        assert_eq!(app.sheet().editor.text(), "SELECT 1;\nSELECT id FROM orders");
+    }
+
+    #[test]
+    fn a_fix_after_an_explain_counts_its_place_in_the_statement_the_editor_holds() {
+        let mut app = asking_on("");
+        app = app.with_ai(Some(AiSettings { errors: ServerErrors::Code, ..ai_settings() }));
+        app.sheet_mut().paste("SELECT nope FROM orders");
+        let sent = app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::ALT));
+        let [Action::Run { run, statement, .. }] = &*sent else { panic!("{sent:?}") };
+        let position = statement.as_str().find("nope").map(|at| at + 1);
+        app.apply(to_shop(Incoming::Failed { run: *run, failure: server_failure(position) }));
+        let text = prompt_sent(&mut app, "");
+        assert!(text.contains("Statement under the cursor:\nSELECT nope FROM orders\n"), "{text}");
+        assert!(text.contains("SQLSTATE 42703, at its character 8."), "{text}");
+    }
+
+    #[test]
+    fn a_failed_statement_holding_a_secret_is_not_sent_for_a_fix() {
+        let mut app = failed_on("ALTER ROLE nina PASSWORD 'x'", ServerErrors::Code, None);
+        assert_eq!(blank_ask(&mut app), []);
+        assert_eq!(app.ask_failure(), Some(&AskFailure::NotSent(NotSent::HoldsSecret)));
+    }
+
+    #[test]
+    fn the_result_pane_asks_for_a_fix_as_the_editor_does() {
+        let mut app = failed_on("SELECT nope", ServerErrors::Code, Some(8));
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.focus, Focus::Result);
+        assert!(app.offers_fix() && prompt_sent(&mut app, "").contains("SQLSTATE 42703"));
     }
 
     fn open_in_the_editor(app: &mut App, text: &str) {

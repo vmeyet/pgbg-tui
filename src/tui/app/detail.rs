@@ -672,7 +672,7 @@ mod tests {
     fn with_a_failed_count() -> App {
         let mut app = on_the_keyed_orders();
         press(&mut app, KeyCode::Enter);
-        let failure = Failure::Server { message: "canceling statement due to statement timeout".into(), position: None };
+        let failure = Failure::Server { message: "canceling statement due to statement timeout".into(), position: None, code: None };
         app.apply(to_shop(Incoming::LookedUp { look: LookId::FIRST, rows: Err(failure) }));
         app
     }
