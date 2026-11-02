@@ -222,7 +222,7 @@ In the TUI, a bar above the editor shows one field per parameter.
 | `^o` | Pick another connection; sessions stay open. |
 | `^p` | Find a saved query. |
 | `^t` | Find a table of the schema. |
-| `^l` `:` | The command palette: every command, filtered as you type; `:` where it types nothing, so not in the editor nor in a field. |
+| `^l` `:` | The command palette: every command and theme, filtered as you type; `:` where it types nothing, so not in the editor nor in a field. |
 | `⏎` `d` | In the schema tab: a table's first rows, written in the editor to refine, a click doing the same; its columns and indexes. |
 | `^r` | Search the history of this connection. |
 | `^s` | Save the query. |
@@ -249,6 +249,9 @@ A command run from it does what its key does: a write still asks first.
 [tui]
 theme = "dracula"   # default, dracula, catppuccin, catppuccin-latte, rosepine, rosepine-dawn, nord, tokyonight, monokai
 ```
+
+Or type `theme` in the command palette: moving over a name shows it on the whole TUI, `esc` brings the old one back, and `⏎` keeps it and writes `[tui] theme`, leaving the rest of the file as it is.
+A write that fails says so on the status line, and the theme stays until you quit.
 
 Case, spaces and dashes do not matter: `Tokyo Night` is `tokyonight`.
 An unknown name warns, on stderr and on the status line, and the default palette is used.

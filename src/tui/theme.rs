@@ -44,8 +44,8 @@ impl From<vtui::theme::Theme> for Theme {
 
 impl Theme {
     /// A palette that does not know its background takes the terminal's; one with an RGB background keeps its own.
-    pub(super) fn with_ground(self, ground: u32) -> Self {
-        Self::from(self.ui.with_ground(ground))
+    pub(super) fn with_ground(self, ground: Option<u32>) -> Self {
+        ground.map_or(self, |ground| Self::from(self.ui.with_ground(ground)))
     }
 
     /// Local is green, staging is amber, and production has its own colour.

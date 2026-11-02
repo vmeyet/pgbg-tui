@@ -10,6 +10,7 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 use toml_edit::ser::ValueSerializer;
 use toml_edit::{DocumentMut, InlineTable, Item, Table, TableLike, Value};
+use vtui::theme::Theme;
 
 /// The keys of a connection to set; a `None` key is left as it is.
 /// Each key is already checked on its own; the load that follows checks them together.
@@ -68,6 +69,15 @@ pub(crate) fn remove_connection(path: &Path, name: &ConnectionName) -> Result<()
 pub(crate) fn set_password(path: &Path, name: &ConnectionName, source: &SecretSource) -> Result<()> {
     let change = ConnectionChange { password: Some(source.clone()), ..ConnectionChange::default() };
     edit_connection(path, name, &change)
+}
+
+/// Sets `[tui] theme` to the name of `theme`, adding the table when there is none; every other key keeps its text.
+pub(crate) fn set_theme(path: &Path, theme: &Theme) -> Result<()> {
+    rewrite(path, |document| {
+        let tui = document.entry("tui").or_insert_with(|| Item::Table(Table::new()));
+        set_value(tui.as_table_like_mut().context("`tui` in the config is not a table")?, "theme", Value::from(theme.name));
+        Ok(())
+    })
 }
 
 /// Each key `change` sets, in place of the old one; a tunnel sets only the keys it has.
@@ -164,6 +174,7 @@ fn write_whole(path: &Path, text: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fixtures::nord;
 
     const TYPED: &str = "# my databases\n[connections.local]\ntier = \"local\" # docker\nurl = \"postgres://nina@localhost:5432/shop\"\n\n# the real one\n[connections.prod]\ntier = \"production\"\nurl = \"postgres://nina@db.example.com/shop?sslmode=require\"\nwrites = \"read-only\" # always\n";
 
@@ -180,6 +191,37 @@ mod tests {
 
     fn keychain(item: &str) -> SecretSource {
         SecretSource::Keychain(item.parse().unwrap())
+    }
+
+    #[test]
+    fn setting_a_theme_adds_the_table_and_keeps_the_rest_of_the_file() {
+        let (_dir, path) = typed_config(TYPED);
+        set_theme(&path, &nord()).unwrap();
+        assert_eq!(read(&path), format!("{TYPED}\n[tui]\ntheme = \"nord\"\n"));
+    }
+
+    #[test]
+    fn setting_a_theme_replaces_the_old_one_where_it_stands_with_its_comment() {
+        let (_dir, path) = typed_config(&format!("[tui]\ntheme = \"dracula\" # my eyes\n\n{TYPED}"));
+        set_theme(&path, &nord()).unwrap();
+        assert_eq!(read(&path), format!("[tui]\ntheme = \"nord\" # my eyes\n\n{TYPED}"));
+    }
+
+    #[test]
+    fn setting_the_same_theme_twice_changes_nothing_the_second_time() {
+        let (_dir, path) = typed_config(TYPED);
+        set_theme(&path, &nord()).unwrap();
+        let once = read(&path);
+        set_theme(&path, &nord()).unwrap();
+        assert_eq!(read(&path), once);
+    }
+
+    #[test]
+    fn setting_a_theme_on_a_tui_key_that_is_no_table_is_an_error_and_the_file_stays() {
+        let text = format!("tui = 1\n{TYPED}");
+        let (_dir, path) = typed_config(&text);
+        assert!(set_theme(&path, &nord()).is_err());
+        assert_eq!(read(&path), text);
     }
 
     #[test]

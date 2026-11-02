@@ -7,6 +7,7 @@ use crate::secret::{Keychain, KeychainItem};
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use vtui::theme::Theme;
 
 /// The handle to the task that changes the config one change at a time, so answers come back in the order asked.
 #[derive(Debug)]
@@ -19,6 +20,7 @@ pub(in crate::tui) struct ConfigFile {
 enum Change {
     Remove { id: ConfigChangeId, name: ConnectionName },
     Save(Box<SaveConnection>),
+    Theme { id: ConfigChangeId, theme: Theme },
 }
 
 impl ConfigFile {
@@ -40,6 +42,11 @@ impl ConfigFile {
     /// An edit that names a new item then deletes the old item when no other connection names it.
     pub(super) fn save(&self, save: SaveConnection) {
         self.queue(Change::Save(Box::new(save)));
+    }
+
+    /// Writes `[tui] theme` in turn with the other changes, since each rewrites the whole file.
+    pub(super) fn save_theme(&self, id: ConfigChangeId, theme: Theme) {
+        self.queue(Change::Theme { id, theme });
     }
 
     fn queue(&self, change: Change) {
@@ -65,6 +72,7 @@ impl Change {
         match self {
             Self::Remove { id, .. } => *id,
             Self::Save(save) => save.id,
+            Self::Theme { id, .. } => *id,
         }
     }
 
@@ -72,7 +80,16 @@ impl Change {
         match self {
             Self::Remove { name, .. } => changed(path, |path| remove(path, &name)),
             Self::Save(save) => save_answer(path, *save, &Keychain::PGBG),
+            Self::Theme { theme, .. } => theme_answer(path, &theme),
         }
+    }
+}
+
+/// The outcome of writing `theme`, which touches no connection, so none comes back; a failure says the theme stays on screen.
+fn theme_answer(path: &Path, theme: &Theme) -> ConfigAnswer {
+    match config::set_theme(path, theme) {
+        Ok(()) => ConfigAnswer::ThemeSaved(theme.name),
+        Err(err) => ConfigAnswer::Failed { why: format!("theme {} is for this session, not saved: {err:#}", theme.name), password: None },
     }
 }
 
@@ -86,7 +103,7 @@ fn save_answer(path: &Path, save: SaveConnection, keychain: &Keychain) -> Config
     let warning = keychain_followed(&save, replaced, keychain).err().map(|err| format!("saved `{}`, but {err:#}", save.name));
     match changed(path, |_| Ok(())) {
         ConfigAnswer::Changed { connections, .. } => ConfigAnswer::Changed { connections, warning },
-        failed @ ConfigAnswer::Failed { .. } => failed,
+        answer => answer,
     }
 }
 
@@ -145,6 +162,7 @@ fn send(answers: &UnboundedSender<Answer>, id: ConfigChangeId, answer: ConfigAns
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fixtures::nord;
 
     const SHOP: &str = "[connections.local]\ntier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\n\n[connections.replica]\ntier = \"local\"\nurl = \"postgres://nina@localhost/shop_replica\"\n";
 
@@ -249,6 +267,21 @@ mod tests {
         let save = SaveConnection { id: ConfigChangeId::FIRST, name: "local".parse().unwrap(), saving: Saving::Add, change, password };
         let answer = save_answer(&path, save, &Keychain::TEST);
         assert!(matches!(&answer, ConfigAnswer::Failed { password: Some(back), .. } if back.expose() == "hunter2"), "{answer:?}");
+    }
+
+    #[test]
+    fn a_saved_theme_answers_with_its_name_and_reads_back() {
+        let (_dir, path) = config(SHOP);
+        assert_eq!(theme_answer(&path, &nord()), ConfigAnswer::ThemeSaved("nord"));
+        assert_eq!(Config::read(&path).unwrap().config.theme.name, "nord");
+    }
+
+    #[test]
+    fn a_theme_the_file_refuses_is_a_failure_and_the_file_stays() {
+        let (_dir, path) = config("not toml [");
+        let answer = theme_answer(&path, &nord());
+        assert!(matches!(&answer, ConfigAnswer::Failed { why, .. } if why.starts_with("theme nord is for this session")), "{answer:?}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "not toml [");
     }
 
     #[test]

@@ -113,6 +113,8 @@ pub(in crate::tui) enum Action {
     RemoveConnection { id: ConfigChangeId, connection: ConnectionName },
     /// Write a connection the form filled in.
     SaveConnection(SaveConnection),
+    /// Write `[tui] theme` as the name of this theme.
+    SaveTheme { id: ConfigChangeId, theme: vtui::theme::Theme },
     /// Read the history of the connection, for `ctrl-r`.
     ListHistory(ConnectionName),
     /// Read the versions of the query a save replaced, for `ctrl-v`, each compared with the editor's `text`.
@@ -210,6 +212,8 @@ pub(in crate::tui) enum ConfigAnswer {
     /// The connections read back from the file after the change, and, for the status line, what failed after the
     /// file took the change (the keychain step of a save).
     Changed { connections: Vec<Connection>, warning: Option<String> },
+    /// `[tui] theme` now names this theme.
+    ThemeSaved(&'static str),
     /// The change was refused or failed, with the error's message; the file did not change, and the typed password
     /// goes back to the form.
     Failed { why: String, password: Option<Secret> },

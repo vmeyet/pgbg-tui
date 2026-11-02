@@ -67,9 +67,11 @@ const RELATIVE_TIME_REDRAW: Duration = Duration::from_secs(60);
 pub(crate) async fn run(config: Config, first: Connection, path: PathBuf, usage: Option<UsageFile>, warning: Option<String>) -> Result<()> {
     let Config { connections, format, theme, ai, .. } = config;
     let mut signals = Signals::listen()?;
-    let theme = Theme::from(theme);
-    let theme = vtui::ground::ask().map_or(theme, |ground| theme.with_ground(ground));
-    let mut app = App::new(connections, &first, theme).with_format_mode(format).with_ai(ai).with_warning(warning);
+    let mut app = App::new(connections, &first, Theme::from(theme))
+        .with_ground(vtui::ground::ask())
+        .with_format_mode(format)
+        .with_ai(ai)
+        .with_warning(warning);
     // Unbounded: each answer follows an action, a page only once the grid asks for it, and the loop takes one per turn.
     let (answers, mut incoming) = mpsc::unbounded_channel();
     let roots = Roots::from_env().with_versions(Versions::from_env());

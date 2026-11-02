@@ -15,7 +15,7 @@ use vtui::help::Help;
 pub(super) use ask::{AskStep, Suggestion};
 pub(super) use colouring::Colouring;
 pub(super) use column_stats::ColumnStats;
-pub(super) use commands::Commands;
+pub(super) use commands::{Command, Commands};
 pub(super) use completion::Completions;
 pub(super) use confirm::{Confirmed, WriteToSend};
 pub(super) use detail::{Count, Counted, Detail, DetailFit, DetailScroll, DrawnDetail, DrawnRow, RowOf, ShownRow};
@@ -159,6 +159,8 @@ pub(super) enum Overlay {
 #[derive(Debug)]
 pub(super) struct App {
     theme: Theme,
+    /// The terminal's background, which a theme the command palette picks takes as the first one did.
+    ground: Option<u32>,
     /// Every connection of the config, by name, for the picker.
     connections: Vec<Connection>,
     /// A sheet for each connection opened since pgbg started, in the order they were opened.
@@ -199,6 +201,7 @@ impl App {
     pub(super) fn new(connections: Vec<Connection>, first: &Connection, theme: Theme) -> Self {
         Self {
             theme,
+            ground: None,
             connections,
             sheets: vec![Sheet::new(first, SessionId::FIRST)],
             shown: 0,
@@ -220,6 +223,11 @@ impl App {
             asks: Asks::new(None),
             clicks: Clicks::default(),
         }
+    }
+
+    /// The app drawing on a terminal whose background is `ground`, when it says.
+    pub(super) fn with_ground(self, ground: Option<u32>) -> Self {
+        Self { theme: self.theme.with_ground(ground), ground, ..self }
     }
 
     /// The app with each new result opening in `mode`.
@@ -427,6 +435,7 @@ impl App {
                 return self.take_connections(id, connections, warning);
             }
             Answer::Config { id, answer: ConfigAnswer::Failed { why, password } } => self.config_failed(id, why, password),
+            Answer::Config { answer: ConfigAnswer::ThemeSaved(name), .. } => self.note = Some(format!("theme {name} saved")),
             Answer::History { connection, entries } => self.history_read(&connection, entries),
             Answer::Versions { query, versions } => self.versions_read(&query, versions),
             Answer::Copied(note) => self.copied(note),

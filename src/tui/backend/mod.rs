@@ -86,6 +86,7 @@ impl Backend {
             }
             Action::RemoveConnection { id, connection } => self.config.remove(id, connection),
             Action::SaveConnection(save) => self.config.save(save),
+            Action::SaveTheme { id, theme } => self.config.save_theme(id, theme),
             Action::ListHistory(connection) => self.list_history(connection),
             Action::ListVersions { query, text } => self.queries.list_versions(query, text),
             Action::Copy { text, done } => clipboard::copy(text, done, self.answers.clone()),

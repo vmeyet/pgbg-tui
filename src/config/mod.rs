@@ -20,7 +20,7 @@ mod write;
 
 pub(crate) use keychain::{keychain_item_to_delete, replaced_keychain_item};
 pub(crate) use left_behind::{Places, left_behind};
-pub(crate) use write::{ConnectionChange, add_connection, edit_connection, read_kept, remove_connection, set_password};
+pub(crate) use write::{ConnectionChange, add_connection, edit_connection, read_kept, remove_connection, set_password, set_theme};
 
 const PATH_VARIABLE: &str = "PGBG_CONFIG";
 const DATA_DIR_VARIABLE: &str = "PGBG_DATA_DIR";
