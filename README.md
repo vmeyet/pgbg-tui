@@ -223,7 +223,7 @@ In the TUI, a bar above the editor shows one field per parameter.
 | `⌥a` | The same plan as it ran, with `ANALYZE` and `BUFFERS`: the read runs, read only and rolled back, under the connection's timeout, and a write is never offered. |
 | `esc` | Drop the suggestion after the cursor while one shows; else cancel the running statement. |
 | `tab` `⇧tab` | Next, previous pane: editor, parameters, result, sidebar. |
-| `→` `tab` | In the editor: take the suggestion after the cursor, a completion or the AI completion. |
+| `→` `tab` | In the editor: take the suggestion after the cursor, a completion, a past statement or the AI completion. |
 | `^space` `^n` | List the names that fit at the cursor; `^n` where macOS takes `^space`. |
 | `^o` | Pick another connection; sessions stay open. |
 | `^p` | Find a saved query. |
@@ -321,7 +321,7 @@ timeout = 60                                    # seconds; 60 by default
 | --- | --- |
 | `command` | The program and its arguments; it runs from an empty folder. |
 | `env` | The variables it gets besides `PATH`, `HOME`, `LANG` and `TERM`; one a password names is never passed. |
-| `ghost` | The AI completion: asks for the rest of the statement after 1 s without a key, when no completion shows, and shows it as a suggestion; `→` takes it. An answer that rewrites what you typed instead waits: the footer says `^g rewrite waiting`, and `ctrl-g` shows its diff. |
+| `ghost` | The AI completion: asks for the rest of the statement after 1 s without a key, when no completion or past statement shows, and shows it as a suggestion; `→` takes it. An answer that rewrites what you typed instead waits: the footer says `^g rewrite waiting`, and `ctrl-g` shows its diff. |
 | `ghost_command` | The program and its arguments for the AI completion alone, as a quicker model; it gets the same `env`, `timeout` and `literals`, `ghost` still turns it on, and `ctrl-g` keeps `command`. |
 | `literals` | `masked` replaces the statement's values with markers, `sent` sends them as typed. |
 | `timeout` | How long the command has before it is stopped. |
@@ -370,6 +370,10 @@ pgbg run scratch "DELETE FROM orders WHERE id = 7" --yes
 The history lives in `$XDG_DATA_HOME/pgbg/history/` when it is set, else `~/.local/share/pgbg/history/`, on macOS too; set `$PGBG_DATA_DIR` to keep it elsewhere.
 The versions of saved queries live beside it, in `versions/`.
 It keeps when, how long and what came of each statement, never a row.
+
+As you type a statement in the TUI, from three characters on and with the cursor at its end, the past read that starts with what you typed shows faded after the cursor; `→` or `tab` takes it.
+Only reads that succeeded on this connection count, never a write: the one run most, then the one run last, with case, blanks and comments above it aside.
+A table or column name shows first, a past read beats a keyword, and a match saves the AI completion's ask; it stays on your machine and never goes into a prompt.
 
 ### Usage counts
 

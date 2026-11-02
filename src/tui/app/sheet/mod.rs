@@ -17,9 +17,11 @@ use crate::db::model::{ColumnName, Extent, Page, ResultSet, Statement};
 use crate::db::preview;
 use crate::failure::Failure;
 use crate::format::{self, Format};
+use crate::history::HistoryIndex;
 use crate::keys::{self, Keys, Lookup};
 use crate::query::params::{self, Filled, Numbering, ParamInput, ParamName};
 use crate::query::{Header, Query};
+use chrono::{DateTime, Utc};
 use crossterm::event::KeyEvent;
 use std::ops::Range;
 use std::sync::Arc;
@@ -151,6 +153,8 @@ pub(in crate::tui) struct Sheet {
     pub(in crate::tui) index: Option<Arc<Index>>,
     /// How much the history uses each table of the schema read, which orders what an ask shows of it.
     pub(in crate::tui) table_use: TableUse,
+    /// The connection's successful statements, read once and added to at each result, which the ghost offers from.
+    pub(super) history_index: HistoryIndex,
     pub(in crate::tui) ghost: Option<Ghost>,
     /// An idle answer that rewrites what is typed, until `ctrl-g` shows it or the next key drops it.
     pub(super) rewrite: Option<Suggestion>,
@@ -193,6 +197,7 @@ impl Sheet {
             schema: SchemaState::NotRead,
             index: None,
             table_use: TableUse::default(),
+            history_index: HistoryIndex::default(),
             ghost: None,
             rewrite: None,
             bar: ParamBar::default(),
@@ -537,6 +542,7 @@ impl Sheet {
             Incoming::TableUse(table_use) => self.table_use = table_use,
             Incoming::Result { run, .. } | Incoming::Failed { run, .. } if !self.is_answer_to_running(run) => {}
             Incoming::Result { run, result, took } => {
+                self.add_sent_to_history_index(reading.clock.now);
                 self.left_chart = None;
                 let view = plan_view_of(&result).unwrap_or_else(|| self.header_view(&result));
                 let grid = Box::new(self.grid_on(&result, reading));
@@ -559,6 +565,12 @@ impl Sheet {
     /// How the header asks for `result` to open: as the chart it names, when that chart fits, else as the grid.
     fn header_view(&self, result: &ResultSet) -> View {
         Series::asked(self.header.chart.as_ref(), result).map_or(View::Grid, |series| View::Chart(Ok(series)))
+    }
+
+    fn add_sent_to_history_index(&mut self, at: DateTime<Utc>) {
+        if let Some(sent) = &self.sent {
+            self.history_index.add(&sent.statement, at);
+        }
     }
 
     /// The keys of the columns of `result` in the tables they were read from, once the schema is read.

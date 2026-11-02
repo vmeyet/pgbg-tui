@@ -69,6 +69,11 @@ pub(in crate::tui) fn typed(text: &str) -> App {
     app
 }
 
+/// What the ghost shows after the cursor.
+pub(in crate::tui) fn rest(app: &App) -> Option<&str> {
+    app.sheet().ghost.as_ref().map(|ghost| ghost.rest.as_str())
+}
+
 /// The first run of `sql` on `connection`, with no parameter.
 pub(in crate::tui) fn first_run(connection: &ConnectionName, sql: &str) -> Action {
     Action::Run {

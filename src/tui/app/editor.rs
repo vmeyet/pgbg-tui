@@ -1,5 +1,4 @@
 //! The SQL editor: its text, the editing keys and pastes that change it, their undo, and the syntax colours that follow it.
-use super::ghost::is_name_key;
 use super::undo::{Change, Undo};
 use super::{Action, App, Focus, Sheet};
 use crate::db::lex::{Lexed, Token};
@@ -351,13 +350,13 @@ impl App {
 }
 
 impl Sheet {
-    /// Applies `key` to the editor; a key that types a name asks for the next ghost.
+    /// Applies `key` to the editor, and offers the next ghost when it changed the text.
     pub(super) fn edit(&mut self, key: KeyEvent) -> Vec<Action> {
         if self.editor.edit(key) != Edited::Text {
             return vec![];
         }
         self.text_changed();
-        if is_name_key(key) { self.ask_ghost() } else { vec![] }
+        self.offer_ghost(key)
     }
 
     /// Takes the editor's text back to before its last step.

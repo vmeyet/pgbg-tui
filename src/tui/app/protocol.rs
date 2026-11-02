@@ -8,7 +8,7 @@ use crate::connection::{Connection, ConnectionName};
 use crate::db::model::{Catalog, LocalPort, Page, ResultSet, Statement};
 use crate::export::Format;
 use crate::failure::{Failure, Lost};
-use crate::history::Entry;
+use crate::history::{Entry, HistoryIndex};
 use crate::keys::Lookup;
 use crate::query::params::ParamInput;
 use crate::query::{Query, QueryPath};
@@ -120,6 +120,8 @@ pub(in crate::tui) enum Action {
     SaveTheme { id: ConfigChangeId, theme: vtui::theme::Theme },
     /// Read the history of the connection, for `ctrl-r`.
     ListHistory(ConnectionName),
+    /// Read the history of the connection once, for the ghost of its sheet.
+    ReadHistoryIndex(ConnectionName),
     /// Read the versions of the query a save replaced, for `ctrl-v`, each compared with the editor's `text`.
     ListVersions { query: Query, text: String },
     /// Put `text` on the clipboard, then report `done`; the loop also sends it to the terminal, unless it is too big.
@@ -174,6 +176,8 @@ pub(in crate::tui) enum Answer {
     Config { id: ConfigChangeId, answer: ConfigAnswer },
     /// The history of `connection`: each statement once, newest first.
     History { connection: ConnectionName, entries: Vec<Entry> },
+    /// The successful statements of `connection`, for the ghost of its sheet; empty when its history cannot be read.
+    HistoryIndex { connection: ConnectionName, index: HistoryIndex },
     /// The versions of `query` a save replaced, newest first.
     Versions { query: Query, versions: Vec<Listed> },
     /// The outcome of a copy to the clipboard, in a few words.

@@ -2,7 +2,7 @@
 use super::app::{Action, Answer, Confirmed, RunId, SessionId};
 use crate::connection::{Connection, ConnectionName};
 use crate::db::model::Statement;
-use crate::history::{History, Store};
+use crate::history::{History, HistoryIndex, Store};
 use crate::query::params::ParamInput;
 use crate::query::{Query, Roots};
 use ask::Asks;
@@ -91,6 +91,7 @@ impl Backend {
             Action::SaveConnection(save) => self.config.save(save),
             Action::SaveTheme { id, theme } => self.config.save_theme(id, theme),
             Action::ListHistory(connection) => self.list_history(connection),
+            Action::ReadHistoryIndex(connection) => self.read_history_index(connection),
             Action::ListVersions { query, text } => self.queries.list_versions(query, text),
             Action::Copy { text, done } => clipboard::copy(text, done, self.answers.clone()),
             Action::CopyResult { result, format, done } => clipboard::export(result, format, done, self.answers.clone()),
@@ -102,17 +103,22 @@ impl Backend {
         }
     }
 
-    /// Reads the history of `connection` on a blocking thread; a history that cannot be read is logged and comes back
-    /// empty.
+    /// Reads the history of `connection` on a blocking thread, for `ctrl-r`.
     fn list_history(&self, connection: ConnectionName) {
+        self.answer_from_history(connection, |connection, history| Answer::History { connection, entries: history.distinct() });
+    }
+
+    /// Reads and sorts the history of `connection` on a blocking thread, for its ghost.
+    fn read_history_index(&self, connection: ConnectionName) {
+        self.answer_from_history(connection, |connection, history| Answer::HistoryIndex { connection, index: HistoryIndex::of(&history) });
+    }
+
+    /// Sends what `answer` makes of the history of `connection`, all of it on a blocking thread.
+    fn answer_from_history(&self, connection: ConnectionName, answer: impl FnOnce(ConnectionName, History) -> Answer + Send + 'static) {
         let (history, answers) = (self.history.clone(), self.answers.clone());
         tokio::task::spawn_blocking(move || {
-            let read = history.map(|store| store.read(&connection)).transpose();
-            let entries = read.unwrap_or_else(|err| {
-                tracing::warn!("the history of `{connection}` was not read: {err}");
-                None
-            });
-            send(&answers, Answer::History { connection, entries: entries.map(History::distinct).unwrap_or_default() });
+            let read = history_or_empty(history.as_ref(), &connection);
+            send(&answers, answer(connection, read));
         });
     }
 
@@ -191,9 +197,42 @@ impl Backend {
     }
 }
 
+/// The history of `connection`; one that cannot be read is logged and comes back empty, as with no store.
+fn history_or_empty(history: Option<&Store>, connection: &ConnectionName) -> History {
+    let Some(store) = history else { return History::default() };
+    store.read(connection).inspect_err(|err| tracing::warn!("the history of `{connection}` was not read: {err}")).unwrap_or_default()
+}
+
 /// Hands `answer` to the loop; an answer sent after the loop ended is dropped with a warning.
 fn send(answers: &UnboundedSender<Answer>, answer: Answer) {
     if answers.send(answer).is_err() {
         tracing::warn!("the loop is gone: an answer is dropped");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fixtures::run_at;
+    use crate::tui::app::fixtures::shop;
+
+    #[test]
+    fn a_history_is_read_from_its_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::in_data_dir(dir.path());
+        store.append(&run_at("SELECT 1", 1)).unwrap();
+        assert_eq!(history_or_empty(Some(&store), &shop()).entries, [run_at("SELECT 1", 1)]);
+    }
+
+    #[test]
+    fn no_store_gives_an_empty_history() {
+        assert_eq!(history_or_empty(None, &shop()), History::default());
+    }
+
+    #[test]
+    fn an_unreadable_history_comes_back_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("history/shop.jsonl")).unwrap();
+        assert_eq!(history_or_empty(Some(&Store::in_data_dir(dir.path())), &shop()), History::default());
     }
 }
