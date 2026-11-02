@@ -200,8 +200,8 @@ pub(in crate::tui) enum AskFailure {
 #[derive(Debug, PartialEq)]
 pub(in crate::tui) enum NoIdleGhost {
     Failed(AskFailure),
-    /// The answer does not start with the statement as typed, blanks, comments and the case of words aside.
-    NotContinued,
+    /// The answer holds no statement, or only what is typed already.
+    NothingToAdd,
 }
 
 /// The outcome of a change to the config.
@@ -317,7 +317,7 @@ impl fmt::Display for NoIdleGhost {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Failed(failure) => write!(f, "no idle ghost: {failure}"),
-            Self::NotContinued => f.write_str("no idle ghost: the answer does not continue the statement as typed"),
+            Self::NothingToAdd => f.write_str("no idle ghost: the answer adds nothing to the statement as typed"),
         }
     }
 }

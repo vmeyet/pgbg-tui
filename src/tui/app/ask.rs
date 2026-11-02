@@ -82,10 +82,15 @@ impl AskStep {
 }
 
 impl App {
-    /// Opens the instruction line, or says why asking is off; the schema is read meanwhile, for the prompt's slice.
+    /// Shows the rewrite the idle ask answered when one waits, with no new ask; else opens the instruction line, or says
+    /// why asking is off; the schema is read meanwhile, for the prompt's slice.
     pub(super) fn open_ask(&mut self) -> Vec<Action> {
         if let Some(why) = self.why_asking_is_off() {
             self.asks.failure = Some(why);
+            return vec![];
+        }
+        if let Some(rewrite) = self.sheet_mut().take_rewrite() {
+            self.overlay = Some(Overlay::Ask(AskStep::Answered(rewrite)));
             return vec![];
         }
         self.overlay = Some(Overlay::Ask(AskStep::Instruction(Field::default())));
@@ -171,7 +176,7 @@ impl App {
 
     /// Puts `suggestion` in the editor, unless the editor changed since it was asked about.
     fn take_suggestion(&mut self, suggestion: Suggestion) {
-        if suggestion.revision != self.sheet().editor.revision() {
+        if !self.sheet().fits(&suggestion) {
             self.asks.failure = Some(AskFailure::EditorChanged);
             return;
         }
@@ -214,12 +219,28 @@ impl Sheet {
         if revision != self.editor.revision() {
             return Err(AskFailure::EditorChanged);
         }
+        Ok(self.suggestion_now(statements))
+    }
+
+    /// `statements` against the statement under the cursor, which they would replace.
+    pub(super) fn suggestion_now(&self, statements: &[Statement]) -> Suggestion {
         let writes =
             statements.iter().filter_map(|statement| guard::write_in(statement.as_str(), &lex::tokens(statement.as_str()))).collect();
         let text = statements.iter().map(Statement::as_str).collect::<Vec<_>>().join(";\n");
         let replaces = self.range_under_cursor();
         let lines = diff::lines(replaces.clone().map_or("", |range| &self.editor.text()[range]), &text);
-        Ok(Suggestion { revision, replaces, text, lines, writes })
+        Suggestion { revision: self.editor.revision(), replaces, text, lines, writes }
+    }
+
+    /// The rewrite kept for `ctrl-g`, emptying its place; none when the editor changed since it was answered.
+    fn take_rewrite(&mut self) -> Option<Suggestion> {
+        let rewrite = self.rewrite.take()?;
+        self.fits(&rewrite).then_some(rewrite)
+    }
+
+    /// Whether the editor is still at the revision `suggestion` was asked about.
+    pub(super) fn fits(&self, suggestion: &Suggestion) -> bool {
+        suggestion.revision == self.editor.revision()
     }
 
     /// Puts the answer in the editor as one paste, in place of the statement it was asked about.
@@ -249,7 +270,7 @@ pub(in crate::tui) mod tests {
         app.handle_key(KeyEvent::from(code))
     }
 
-    fn ctrl_g(app: &mut App) -> Vec<Action> {
+    pub(in crate::tui) fn ctrl_g(app: &mut App) -> Vec<Action> {
         app.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL))
     }
 

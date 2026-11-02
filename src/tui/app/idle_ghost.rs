@@ -1,5 +1,6 @@
 //! The idle ghost: once the editor sat a second without a key, the `[ai] ghost_command`, else the `[ai] command`, asked
 //! for the rest of the statement under the cursor, shown faded after it as the completion ghost is, and taken with the same `→`.
+//! An answer that rewrites what is typed instead waits for `ctrl-g`, which shows it as any ask's answer.
 //! The `--` lines right above the statement are the instruction; under them, the statement may still be empty.
 //! The loop owns the second; the app only says whether one would ask.
 use super::editor::Revision;
@@ -110,6 +111,9 @@ impl App {
         };
         let ask = self.asks.take_id();
         self.asks.idle = IdleAsk::Waiting { ask, editor };
+        if let Some(why) = &left_out {
+            self.warning = Some(why.to_string());
+        }
         left_out.map(Action::LogCommentLeftOut).into_iter().chain([Action::Ask { ask, prompt, settings }]).collect()
     }
 
@@ -133,23 +137,19 @@ impl App {
         self.asks.idle.stop_waiting().map(Action::DropAsk)
     }
 
-    /// Shows the rest of the statement the idle ask's `answer` gives, while the editor is still the one it asked about;
-    /// when it gives none, says why for the log, since nobody asked for it and so nothing on screen says it.
+    /// Shows the rest of the statement the idle ask's `answer` gives, or keeps the rewrite it gives for `ctrl-g`, while the
+    /// editor is still the one it asked about; when it gives neither, says why for the log, since nobody asked for it and
+    /// so nothing on screen says it.
     pub(super) fn show_idle_ghost(&mut self, answer: Result<Vec<Statement>, AskFailure>) -> Option<Action> {
         self.asks.idle.stop_waiting()?;
         let is_current = self.asks.idle.covers(&self.editor_on_screen()) && self.shows_the_bare_editor() && self.idle_settings().is_some();
         if !is_current {
             return None;
         }
-        let why = match answer.map(|statements| self.sheet().rest_in(&statements)) {
-            Ok(Some(ghost)) => {
-                self.sheet_mut().ghost = Some(ghost);
-                return None;
-            }
-            Ok(None) => NoIdleGhost::NotContinued,
-            Err(failure) => NoIdleGhost::Failed(failure),
-        };
-        Some(Action::LogNoIdleGhost(why))
+        match answer {
+            Ok(statements) => self.sheet_mut().keep_idle_answer(&statements).map(Action::LogNoIdleGhost),
+            Err(failure) => Some(Action::LogNoIdleGhost(NoIdleGhost::Failed(failure))),
+        }
     }
 
     /// Whether `[ai] ghost` is on, the editor has the keys with no overlay over it, no completion ghost shows, and this
@@ -165,6 +165,12 @@ impl App {
     fn idle_settings(&self) -> Option<&AiSettings> {
         let settings = self.asks.settings().filter(|settings| settings.ghost)?;
         (self.sheet().connection.ai() != AiAsking::Off).then_some(settings)
+    }
+
+    /// Whether `ctrl-g` would show a rewrite the idle ask answered, for the footer to say so.
+    pub(in crate::tui) fn has_rewrite(&self) -> bool {
+        let sheet = self.sheet();
+        self.shows_the_bare_editor() && sheet.rewrite.as_ref().is_some_and(|rewrite| sheet.fits(rewrite))
     }
 
     fn shows_the_bare_editor(&self) -> bool {
@@ -206,13 +212,17 @@ impl Sheet {
         }
     }
 
-    /// The ghost of what the first of `statements` adds after the statement typed before the cursor, when it starts
-    /// with that statement's tokens.
-    fn rest_in(&self, statements: &[Statement]) -> Option<Ghost> {
-        let question = self.question()?;
-        let rest = rest_after(question.typed, statements.first()?.as_str())?;
+    /// Keeps the first of `statements` as the ghost of what it adds after the statement typed before the cursor, when it
+    /// starts with that statement's tokens, or else all of them as the rewrite of it; says why when it is neither.
+    fn keep_idle_answer(&mut self, statements: &[Statement]) -> Option<NoIdleGhost> {
+        let Some((question, first)) = self.question().zip(statements.first()) else { return Some(NoIdleGhost::NothingToAdd) };
+        let Some(rest) = rest_after(question.typed, first.as_str()) else {
+            self.rewrite = Some(self.suggestion_now(statements));
+            return None;
+        };
         let (before, _, _) = self.editor.split();
-        Ghost::at_cursor(before.len(), &rest)
+        self.ghost = Ghost::at_cursor(before.len(), &rest);
+        self.ghost.is_none().then_some(NoIdleGhost::NothingToAdd)
     }
 }
 
@@ -284,7 +294,7 @@ fn starts_with(text: &str, typed: &str, kind: &Token) -> bool {
 
 #[cfg(test)]
 pub(in crate::tui) mod tests {
-    use super::super::ask::tests::ai_settings;
+    use super::super::ask::tests::{ai_settings, ctrl_g};
     use super::super::fixtures::{app_on, connection, to_shop};
     use super::super::picker::tests::{ctrl, on_local, press};
     use super::super::{Answer, Incoming, Overlay};
@@ -513,9 +523,32 @@ pub(in crate::tui) mod tests {
         assert_eq!(app.ask_idle_ghost(), []);
     }
 
+    pub(in crate::tui) const UNMASKABLE_COMMENT: &str = "-- show 'nina\nSELECT * FROM orders WHERE ";
+
+    #[test]
+    fn a_comment_left_out_says_why_on_the_status_line_until_the_next_key() {
+        let mut app = idle_on(UNMASKABLE_COMMENT);
+        app.ask_idle_ghost();
+        assert_eq!(app.warning(), Some(NotSent::UnmaskableComment.to_string().as_str()));
+        app.handle_key(KeyEvent::from(KeyCode::Left));
+        assert_eq!(app.warning(), None);
+    }
+
+    #[test]
+    fn a_comment_with_an_apostrophe_inside_a_word_is_the_instruction() {
+        let text = prompt_text(&mut idle_on("-- what's the total\nSELECT * FROM orders WHERE "));
+        assert!(text.contains("Instruction:\nwhat's the total\n"), "{text}");
+    }
+
+    #[test]
+    fn a_value_quoted_after_an_apostrophe_inside_a_word_is_masked() {
+        let text = prompt_text(&mut idle_on("-- it's 'nina'\nSELECT * FROM orders WHERE "));
+        assert!(text.contains("Instruction:\nit's '<literal 1>'\n") && !text.contains("nina"), "{text}");
+    }
+
     #[test]
     fn a_comment_that_cannot_be_masked_is_left_out_and_logged() {
-        let sent = idle_on("-- don't show nina\nSELECT * FROM orders WHERE ").ask_idle_ghost();
+        let sent = idle_on(UNMASKABLE_COMMENT).ask_idle_ghost();
         let [Action::LogCommentLeftOut(NotSent::UnmaskableComment), Action::Ask { prompt, .. }] = &*sent else { panic!("{sent:?}") };
         assert!(prompt.text().contains(&format!("Instruction:\n{NO_COMMENT}\n")) && !prompt.text().contains("nina"), "{}", prompt.text());
     }
@@ -526,9 +559,65 @@ pub(in crate::tui) mod tests {
         assert_eq!(rest(&app), Some("customers c ON c.id = o.customer_id"));
     }
 
+    const REWRITE: &str = "SELECT id FROM orders WHERE total > 10";
+
     #[test]
-    fn an_answer_that_changes_what_is_typed_shows_nothing() {
-        assert_eq!(rest(&ghosted("SELECT * FROM orders WHERE ", "SELECT id FROM orders WHERE total > 10")), None);
+    fn an_answer_that_changes_what_is_typed_shows_no_ghost_and_is_kept_as_a_rewrite() {
+        let app = ghosted("SELECT * FROM orders WHERE ", REWRITE);
+        assert_eq!((rest(&app), app.has_rewrite()), (None, true));
+    }
+
+    #[test]
+    fn a_rewrite_is_nothing_to_log() {
+        let mut app = idle_on("SELECT * FROM orders WHERE ");
+        app.ask_idle_ghost();
+        assert_eq!(app.apply(Answer::Asked { ask: AskId::FIRST, answer: Ok(vec![Statement::new(REWRITE)]) }), []);
+    }
+
+    #[test]
+    fn ctrl_g_shows_the_rewrite_as_an_answer_and_asks_nothing() {
+        let mut app = ghosted("SELECT * FROM orders WHERE ", REWRITE);
+        assert_eq!(ctrl_g(&mut app), []);
+        assert!(matches!(app.overlay(), Some(Overlay::Ask(AskStep::Answered(_)))), "{:?}", app.overlay());
+    }
+
+    #[test]
+    fn tab_on_a_rewrite_shown_replaces_the_statement() {
+        let mut app = ghosted("SELECT * FROM orders WHERE ", REWRITE);
+        ctrl_g(&mut app);
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        assert_eq!(app.sheet().editor.text(), format!("{REWRITE} "));
+    }
+
+    #[test]
+    fn a_key_drops_the_rewrite_and_ctrl_g_then_opens_a_new_ask() {
+        let mut app = ghosted("SELECT * FROM orders WHERE ", REWRITE);
+        app.handle_key(KeyEvent::from(KeyCode::Char('x')));
+        assert!(!app.has_rewrite());
+        ctrl_g(&mut app);
+        assert!(matches!(app.overlay(), Some(Overlay::Ask(AskStep::Instruction(_)))), "{:?}", app.overlay());
+    }
+
+    #[test]
+    fn a_paste_drops_the_rewrite() {
+        let mut app = ghosted("SELECT * FROM orders WHERE ", REWRITE);
+        app.paste("id");
+        assert!(!app.has_rewrite());
+    }
+
+    #[test]
+    fn a_rewrite_of_another_revision_is_never_shown() {
+        let mut app = ghosted("SELECT * FROM orders WHERE ", REWRITE);
+        app.sheet_mut().editor.paste("id");
+        assert!(!app.has_rewrite());
+        ctrl_g(&mut app);
+        assert!(matches!(app.overlay(), Some(Overlay::Ask(AskStep::Instruction(_)))), "{:?}", app.overlay());
+    }
+
+    #[test]
+    fn an_answer_that_only_repeats_what_is_typed_is_no_rewrite() {
+        let app = ghosted("SELECT * FROM orders ", "SELECT * FROM orders");
+        assert_eq!((rest(&app), app.has_rewrite()), (None, false));
     }
 
     #[test]
@@ -606,11 +695,11 @@ pub(in crate::tui) mod tests {
     }
 
     #[test]
-    fn an_answer_that_does_not_fit_is_logged() {
+    fn an_answer_with_nothing_to_add_is_logged() {
         let mut app = idle_on("SELECT * FROM orders WHERE ");
         app.ask_idle_ghost();
-        let logged = app.apply(Answer::Asked { ask: AskId::FIRST, answer: Ok(vec![Statement::new("SELECT id FROM customers")]) });
-        assert_eq!(logged, [Action::LogNoIdleGhost(NoIdleGhost::NotContinued)]);
+        let logged = app.apply(Answer::Asked { ask: AskId::FIRST, answer: Ok(vec![]) });
+        assert_eq!(logged, [Action::LogNoIdleGhost(NoIdleGhost::NothingToAdd)]);
     }
 
     #[test]

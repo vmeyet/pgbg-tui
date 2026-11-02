@@ -17,6 +17,7 @@ const EDITOR_SHARE_PCT: u16 = 40;
 const SIDEBAR_COLUMNS: u16 = 30;
 /// The status takes at most half the footer, so the hints keep the other half.
 const STATUS_SHARE_OF_ROW: u16 = 2;
+const REWRITE_HINT: Hint = Hint { keys: "^g", does: "rewrite waiting" };
 /// A terminal narrower than this hides the sidebar, so the editor and the grid keep their room.
 const SIDEBAR_MIN_SCREEN_COLUMNS: u16 = 80;
 const CUT_SCHEMA: &str = "first 20 000 tables";
@@ -106,7 +107,9 @@ fn hints(app: &App, pane: Pane, columns: usize) -> Line<'static> {
     let key = Style::default().fg(app.theme().accent).add_modifier(Modifier::BOLD);
     let does = Style::default().fg(app.theme().muted);
     let width = |hint: Hint| hint_text(hint).iter().map(|text| text.chars().count()).sum();
-    let spans = act::footer_within(pane, columns, width).into_iter().flat_map(|hint| {
+    let rewrite = app.has_rewrite().then_some(REWRITE_HINT);
+    let room = columns.saturating_sub(rewrite.map_or(0, width));
+    let spans = rewrite.into_iter().chain(act::footer_within(pane, room, width)).flat_map(|hint| {
         let [keys, what] = hint_text(hint);
         [Span::styled(keys, key), Span::styled(what, does)]
     });

@@ -1,6 +1,6 @@
 //! The statement as a prompt shows it: each string and number literal a numbered marker, its comments gone; and the
-//! comment an idle ask reads as its instruction, its values masked the same way.
-use crate::db::lex::{self, Token};
+//! comment an idle ask reads as its instruction, its values masked the same way, an apostrophe inside a word no quote.
+use crate::db::lex::{self, Lexed, Placed, Token};
 use serde::Deserialize;
 use std::fmt;
 use std::ops::Range;
@@ -47,24 +47,58 @@ struct Marker {
     len: usize,
 }
 
+/// The letters whose apostrophe opens a string in SQL, as `E'nina'` does, even with a letter on its other side.
+const STRING_PREFIXES: [&str; 4] = ["e", "b", "x", "n"];
+
 /// `sql` with each comment a blank and, unless `policy` sends them, each string and number literal a marker; a
 /// `{{name}}` stays as it is.
 pub(super) fn masked(sql: &str, policy: LiteralPolicy) -> Masked {
-    masked_after(sql, policy, Literals(vec![]), &[])
+    masked_after(sql, &lex::tokens(sql), policy, Literals(vec![]), &[])
 }
 
 /// `comment`, the words of the `--` lines above a statement, masked as `masked` masks a statement, with each word
 /// holding an `@`, as an email does, a string marker too; its markers count on from the `before` literals, so one answer
-/// puts back the values of both.
-pub(super) fn masked_comment(comment: &str, before: Literals) -> Masked {
-    masked_after(comment, LiteralPolicy::Masked, before, &words_with_at(comment))
+/// puts back the values of both; none when a quote or a `{{` of it cannot be masked whole.
+pub(super) fn masked_comment(comment: &str, before: Literals) -> Option<Masked> {
+    let sql = comment_as_sql(comment);
+    let lexed = Lexed::of(&sql);
+    let is_maskable = !lexed.has_unreadable_param() && !lexed.ends_in_open_quote() && !has_string_touching_a_word(&sql, lexed.tokens());
+    is_maskable.then(|| masked_after(comment, lexed.tokens(), LiteralPolicy::Masked, before, &words_with_at(comment)))
 }
 
-fn masked_after(sql: &str, policy: LiteralPolicy, before: Literals, emails: &[Range<usize>]) -> Masked {
+/// `comment` as the lexer should read it, byte for byte: the apostrophe of a word like `what's` turned into a letter,
+/// since the words of a comment are no SQL; a word holding a second one inside, as `x'nina'y`, keeps its quotes.
+fn comment_as_sql(comment: &str) -> String {
+    let is_of_word = |c: char| c.is_alphabetic() || c == '\'';
+    let pieces = comment.split_inclusive(|c: char| !is_of_word(c)).map(|piece| {
+        let word = piece.trim_end_matches(|c: char| !is_of_word(c)).trim_matches('\'');
+        if holds_one_inner_apostrophe(word) { piece.replacen(word, &word.replacen('\'', "x", 1), 1) } else { piece.to_owned() }
+    });
+    pieces.collect()
+}
+
+fn holds_one_inner_apostrophe(word: &str) -> bool {
+    let Some((before, after)) = word.split_once('\'') else { return false };
+    !after.contains('\'') && !lex::is_one_of(before, &STRING_PREFIXES)
+}
+
+/// Whether a string of `sql`, a comment read by `comment_as_sql`, touches a letter on its outside: its quotes then paired
+/// wrongly, as in `note'nina' and 'bob' 'x`, whose values lie outside the strings the lexer reads.
+fn has_string_touching_a_word(sql: &str, tokens: &[Placed]) -> bool {
+    tokens.iter().any(|placed| {
+        let text = &sql[placed.range.clone()];
+        let is_quoted = text.ends_with('\'') && literal_kind(text, &placed.token).is_some();
+        let word_before = sql[..placed.range.start].rsplit(|c: char| !c.is_alphabetic()).next().unwrap_or_default();
+        let opens_after_word = !word_before.is_empty() && !lex::is_one_of(word_before, &STRING_PREFIXES);
+        is_quoted && (opens_after_word || sql[placed.range.end..].starts_with(char::is_alphabetic))
+    })
+}
+
+fn masked_after(sql: &str, tokens: &[Placed], policy: LiteralPolicy, before: Literals, emails: &[Range<usize>]) -> Masked {
     let Literals(mut literals) = before;
     let mut text = String::new();
     let mut end = 0;
-    for placed in lex::tokens(sql) {
+    for placed in tokens {
         if placed.range.start < end {
             continue;
         }
@@ -283,7 +317,7 @@ mod tests {
     }
 
     fn comment(text: &str) -> String {
-        masked_comment(text, Literals(vec![])).text
+        masked_comment(text, Literals(vec![])).unwrap().text
     }
 
     #[test]
@@ -293,15 +327,68 @@ mod tests {
 
     #[test]
     fn a_string_closing_after_an_email_is_masked_with_it() {
-        assert_eq!(comment("by nina@example.com'x y' then"), "by '<literal 1>' then");
+        assert_eq!(comment("by nina@example.com,'x y' then"), "by '<literal 1>' then");
     }
 
     #[test]
     fn the_markers_of_a_comment_count_on_from_the_statement() {
         let statement = masked("SELECT * FROM orders WHERE total > 10", LiteralPolicy::Masked);
-        let masked = masked_comment("for 'nina'", statement.literals);
+        let masked = masked_comment("for 'nina'", statement.literals).unwrap();
         assert_eq!(masked.text, "for '<literal 2>'");
         assert_eq!(masked.literals.put_back("SELECT <number 1>, '<literal 2>'").unwrap(), "SELECT 10, 'nina'");
+    }
+
+    #[test]
+    fn an_apostrophe_inside_a_word_stays_and_opens_no_quote() {
+        assert_eq!(comment("what's the total of l'été"), "what's the total of l'été");
+    }
+
+    #[test]
+    fn a_value_after_a_word_with_an_apostrophe_is_masked() {
+        assert_eq!(comment("it's 'nina'"), "it's '<literal 1>'");
+    }
+
+    #[test]
+    fn an_apostrophe_inside_a_word_of_a_string_is_part_of_its_value() {
+        let masked = masked_comment("for 'nina's order' only", Literals(vec![])).unwrap();
+        assert_eq!(masked.text, "for '<literal 1>' only");
+        assert_eq!(masked.literals.put_back("'<literal 1>'").unwrap(), "'nina's order'");
+    }
+
+    #[test]
+    fn a_string_prefix_still_opens_a_string() {
+        assert_eq!(comment("E'nina' and E'bob'"), "'<literal 1>' and '<literal 2>'");
+        assert_eq!(comment("x'ff' or N'nina'"), "x'<literal 1>' or N'<literal 2>'");
+    }
+
+    #[test]
+    fn a_word_with_two_apostrophes_keeps_its_quotes() {
+        assert_eq!(comment_as_sql("x'nina'y"), "x'nina'y");
+    }
+
+    #[test]
+    fn an_email_with_an_apostrophe_is_a_marker_whole() {
+        assert_eq!(comment("by o'neil@example.com"), "by '<literal 1>'");
+    }
+
+    #[test]
+    fn the_comment_as_sql_keeps_every_byte_position() {
+        let comment = "l'été, what's 'nina', don't";
+        assert_eq!(comment_as_sql(comment).len(), comment.len());
+    }
+
+    #[test]
+    fn a_comment_whose_quotes_cannot_be_paired_is_refused() {
+        for refused in ["'nina", "it's 'nina", "orders' of nina", "a 'nina'y", "note'nina' and 'bob' 'x", "x'nina'y", "{{ nina"] {
+            assert!(masked_comment(refused, Literals(vec![])).is_none(), "{refused}");
+        }
+    }
+
+    #[test]
+    fn a_comment_whose_quotes_pair_is_masked() {
+        for masked in ["it's 'nina'", "name='nina' and E'bob'", "x'ff'", "what's"] {
+            assert!(masked_comment(masked, Literals(vec![])).is_some(), "{masked}");
+        }
     }
 
     #[test]
