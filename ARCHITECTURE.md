@@ -28,7 +28,7 @@ The code is the contract; this page describes it, and changes in the MR that cha
 | `format/`, `chart/`, `keys.rs`, `export.rs` | Pure: cell formats under a `Clock`, chart series, a result's keys and lookups, copies as CSV, JSON or Markdown |
 | `history.rs` | Every statement run, per connection, in `<data folder>/history/<connection>.jsonl`; never a row nor a secret |
 | `syntax/` | SQL colours from tree-sitter, JSON colours by hand |
-| `act.rs` | Every action in one table: name, default keys, help line, pane |
+| `act.rs` | Every action in one table: name, default keys, help line, pane; the help, the footer and the command palette all read it |
 | `tui/mod.rs` | The event loop: keys, pastes, clicks, answers and timers in, frames out |
 | `tui/app/` | `App`, the pure state machine: keys in, `Action`s out, `Answer`s applied; `protocol.rs` what the app and the backend say; one `Overlay` at most takes the keys |
 | `tui/backend/` | `Backend::dispatch` hands each `Action` to its part without waiting: one session task per connection, queries, config, history, AI, clipboard |
@@ -69,6 +69,7 @@ These invariants hold across every flow; a change that breaks one is a bug.
 - The history only orders those tables: `tui/backend/schema.rs` counts the runs naming each table after a schema read and hands `TableUse` to the app, so within one reason the most used comes first; no history text, statement or count goes into a prompt, and a missing or unreadable history means catalog order.
 - An AI answer is a suggestion: taking it and running it are two keys, and the run goes through the guard.
 - `tui/app/` stays pure: the loop hands it the clock as a `Clock` and the timers as events.
+- The command palette runs an act through the path its key takes, and only an act whose row works in the pane it opened on, so a write still asks.
 
 ## Boundaries
 
@@ -162,6 +163,7 @@ One word per concept, in code, docs and UI.
 | version | A text of a saved query that a save replaced, kept apart from the queries |
 | schema | The schemas, tables, columns and indexes a session's role can read |
 | catalog | The schema as one read gave it, with its search path and whether the table cap cut it |
+| command palette | The `ctrl-l` popup over every act |
 | completion | A name the editor offers at the cursor |
 | parameter | A `{{name}}` in a statement, bound when it runs |
 | format | How a column's cells read: raw, or a readable form of its kind |

@@ -22,11 +22,14 @@ fn help_after(help: Help, key: KeyEvent, pane: Pane) -> Option<Help> {
 }
 
 impl App {
-    /// Takes one key; returns what the runner should do about it. Any key drops the editor's selection once it acted.
+    /// Takes one key; returns what the runner should do about it. Any key drops the editor's selection once it acted,
+    /// unless the command palette stays open, as the act it runs may copy that selection.
     pub(in crate::tui) fn handle_key(&mut self, key: KeyEvent) -> Vec<Action> {
         let dropped = self.drop_idle_ask();
         let actions = self.take_key(key);
-        self.sheet_mut().editor.deselect();
+        if !matches!(self.overlay, Some(Overlay::Commands(_))) {
+            self.sheet_mut().editor.deselect();
+        }
         let asked = self.ask_under_an_ended_comment();
         self.ask_for_hidden_write();
         self.and_the_schema_shown(dropped.into_iter().chain(actions).chain(asked).collect())
@@ -79,6 +82,7 @@ impl App {
             Some(Overlay::Form(form)) => form.paste(text),
             Some(Overlay::Finder(finder)) => finder.paste(text, &self.queries.all),
             Some(Overlay::TableFinder(finder)) => finder.search.paste(text, &finder.all),
+            Some(Overlay::Commands(_)) => self.paste_in_commands(text),
             Some(Overlay::Recall(recall)) => recall.search.paste(text, &recall.all),
             Some(Overlay::Versions(list)) => list.search.paste(text, &list.all),
             Some(Overlay::SchemaFilter) => self.schema_tab.filter.paste(text),
@@ -121,6 +125,7 @@ impl App {
             Overlay::Recall(recall) => self.recall_key(recall, key),
             Overlay::Versions(list) => self.versions_key(list, key),
             Overlay::TableFinder(finder) => self.table_finder_key(*finder, key),
+            Overlay::Commands(commands) => self.commands_key(*commands, key),
             Overlay::Form(form) => self.form_key(*form, key),
             Overlay::Prompt(prompt) => {
                 let (prompt, actions) = self.prompt_after(prompt, key);
@@ -138,7 +143,7 @@ impl App {
         }
     }
 
-    fn act(&mut self, act: Act) -> Vec<Action> {
+    pub(super) fn act(&mut self, act: Act) -> Vec<Action> {
         if self.pane() == Pane::Schema
             && let Some(actions) = self.schema_act(act)
         {
@@ -150,7 +155,7 @@ impl App {
             Act::Ask => return self.open_ask(),
             Act::Undo => self.sheet_mut().undo(),
             Act::Redo => self.sheet_mut().redo(),
-            Act::Cancel if self.focus == Focus::Params && !self.sheet().is_running() => self.focus = Focus::Editor,
+            Act::Cancel | Act::Close if self.focus == Focus::Params && !self.sheet().is_running() => self.focus = Focus::Editor,
             Act::Cancel => return self.sheet_mut().cancel(),
             Act::NewLine => return self.sheet_mut().edit(KeyEvent::from(KeyCode::Enter)),
             Act::SwitchPane => self.focus_on(self.pane_after(Toward::Next)),
@@ -192,6 +197,7 @@ impl App {
             Act::History => return self.recall(),
             Act::Versions => return self.list_versions(),
             Act::FindTable => return self.find_table(),
+            Act::Commands => self.open_commands(),
             Act::Detail => return self.open_detail(),
             Act::Filter => self.open_row_filter(),
             Act::Sort => self.step_sort(),

@@ -1,7 +1,7 @@
 //! Drawing: the frame in the tier's colour, the panes inside it, and the key hints under them.
 use super::app::{App, Fit, Overlay, Panes, SessionState, SidebarTab, TunnelState};
 use super::{
-    ask_view, column_stats_view, completion_view, detail_view, editor_view, finder_view, form_view, help_view, history_view,
+    ask_view, column_stats_view, commands_view, completion_view, detail_view, editor_view, finder_view, form_view, help_view, history_view,
     json_tree_view, param_bar_view, picker_view, prompt_view, result_view, sidebar_view, table_finder_view, versions_view,
 };
 use crate::act::{self, Hint, Pane};
@@ -44,6 +44,7 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> Fit {
     footer(f, app, footer_area);
     finder_view::draw(f, app);
     table_finder_view::draw(f, app);
+    commands_view::draw(f, app);
     picker_view::draw(f, app);
     history_view::draw(f, app);
     versions_view::draw(f, app);

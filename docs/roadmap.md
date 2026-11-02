@@ -119,6 +119,7 @@ The review of #214 to #231 found these, most severe first.
 - [x] The idle ghost reads an apostrophe inside a word as no quote, says on the status line when it leaves a comment out, and keeps a rewrite for `ctrl-g`
 - [x] A lost link reconnects by itself, a tunnel that carries nothing starts anew, and a read goes once more
 - [x] The editor underlines the token a server error points at and scrolls it into view, the cursor left where it was
+- [x] A command palette on `^l` and `:` lists every act of the action table, and runs those that work in the pane it opened on
 
 ## Later
 

@@ -6,10 +6,12 @@ use crossterm::event::KeyEvent;
 
 impl App {
     /// The act `key` does in the pane or overlay that has the keys; read before `handle_key` changes them.
-    /// `→` with no faded rest to take only moves the cursor, so it counts as nothing.
+    /// `→` with no faded rest to take only moves the cursor, so it counts as nothing; `⏎` in the command palette counts as
+    /// the act it runs.
     pub(in crate::tui) fn act_of(&self, key: KeyEvent) -> Option<Act> {
         match act::act_for(key, self.keys_pane()?)? {
             Act::TakeGhost if self.overlay.is_none() && self.sheet().ghost.is_none() => None,
+            Act::Open => Some(self.act_picked_in_commands().unwrap_or(Act::Open)),
             act => Some(act),
         }
     }
@@ -41,6 +43,7 @@ impl App {
             Some(Overlay::RowFilter(_)) => Pane::RowFilter,
             Some(Overlay::Completion(_)) => Pane::Completion,
             Some(Overlay::TableFinder(_)) => Pane::TableFinder,
+            Some(Overlay::Commands(_)) => Pane::Commands,
             Some(Overlay::Ask(step)) => step.pane(),
         };
         Some(pane)

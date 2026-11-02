@@ -37,6 +37,8 @@ Each entry says what changed, then where, then how to use it.
 - **The editor underlines where the server stopped**, in the TUI, when the server rejects a statement and says where: the failing token is underlined in the theme's `danger` colour, a `{{name}}` whole, and scrolled into view while the cursor stays where it was.
   It works out where the text sent falls in the editor, so comments, `{{name}}` parameters, other statements and multi-byte text never shift it.
   The underline goes when the text changes or the next run starts; an error without a position shows as before, with none.
+- **Command palette**: `^l` anywhere in the TUI, or `:` on the result and in the sidebar, lists every command with its keys, filtered as you type.
+  What runs from the pane you are on comes first, and `⏎` runs it as its key does; the others name the pane they work in.
 
 ## 0.2.0 - 2026-10-30
 
