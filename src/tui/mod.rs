@@ -4,6 +4,7 @@ mod ask_view;
 mod backend;
 mod chart_view;
 mod column_stats_view;
+mod commands_view;
 mod completion_view;
 mod detail_view;
 mod editor_view;

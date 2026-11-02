@@ -15,6 +15,7 @@ use vtui::help::Help;
 pub(super) use ask::{AskStep, Suggestion};
 pub(super) use colouring::Colouring;
 pub(super) use column_stats::ColumnStats;
+pub(super) use commands::Commands;
 pub(super) use completion::Completions;
 pub(super) use confirm::{Confirmed, WriteToSend};
 pub(super) use detail::{Count, Counted, Detail, DetailFit, DetailScroll, DrawnDetail, DrawnRow, RowOf, ShownRow};
@@ -41,6 +42,7 @@ pub(super) use versions::{Listed, VersionList};
 pub(super) mod ask;
 mod colouring;
 mod column_stats;
+mod commands;
 mod completion;
 mod condition;
 mod confirm;
@@ -147,6 +149,8 @@ pub(super) enum Overlay {
     Completion(Completions),
     /// The `ctrl-t` finder of the schema's tables.
     TableFinder(Box<TableFinder>),
+    /// The `ctrl-l` command palette.
+    Commands(Box<Commands>),
     /// The `ctrl-g` instruction on the footer line, then the ask waiting on the `[ai] command`, then its answer.
     Ask(AskStep),
 }

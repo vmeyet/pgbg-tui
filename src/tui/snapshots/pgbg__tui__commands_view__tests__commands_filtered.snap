@@ -1,0 +1,28 @@
+---
+source: src/tui/commands_view.rs
+expression: render(&app).backend()
+---
+"╭ ● shop · local ──────────────────────────────────────────────────────────────────────────────────╮"
+"│╭ [Queries] Schema ──────────╮╭ Editor ─ READ ONLY ──────────────────────────────────────────────╮│"
+"││ no saved query ye╭ Commands ────────────────────────────────────────────────╮                  ││"
+"││ saves one        │ › copy▌                                                  │                  ││"
+"││                  │                                                          │                  ││"
+"││                  │ ▎› copy the row as CSV  Y                                │                  ││"
+"││                  │  › copy the cell under the cursor  y                     │                  ││"
+"││                  │  › copy the result as CSV, JSON or Markdown  c           │                  ││"
+"││                  │  · copy it as JSON  j · copy as                          │──────────────────╯│"
+"││                  │  · copy the result as CSV  c · copy as                   │──────────────────╮│"
+"││                  │  · copy the path, as jq writes it  Y · json              │                  ││"
+"││                  │  · copy it as a Markdown table  m · copy as              │                  ││"
+"││                  │  · copy the statement under the cursor  ⌥c · editor      │                  ││"
+"││                  │  · copy the selection, else the statement  ⌘c · editor   │                  ││"
+"││                  │   ↑↓ pick · ⏎ runs · esc closes                          │                  ││"
+"││                  │                                                          │                  ││"
+"││                  │                                                          │                  ││"
+"││                  │                                                          │                  ││"
+"││                  ╰──────────────────────────────────────────────────────────╯                  ││"
+"││                            ││                                                                  ││"
+"││                            ││                                                                  ││"
+"│╰────────────────────────────╯╰──────────────────────────────────────────────────────────────────╯│"
+"│ j/k rows  h/l columns  ⏎ row  y copy  v chart  f format  / filter  F1 keys  ^c quit  connecting… │"
+"╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"

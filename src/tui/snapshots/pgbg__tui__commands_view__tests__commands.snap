@@ -1,0 +1,28 @@
+---
+source: src/tui/commands_view.rs
+expression: render(&app).backend()
+---
+"╭ ● shop · local ──────────────────────────────────────────────────────────────────────────────────╮"
+"│╭ [Queries] Schema ──────────╮╭ Editor ─ READ ONLY ──────────────────────────────────────────────╮│"
+"││ no saved query ye╭ Commands ────────────────────────────────────────────────╮                  ││"
+"││ saves one        │ › ▌                                                      │                  ││"
+"││                  │                                                          │                  ││"
+"││                  │ ▎› run the statement under the cursor  ⏎                 │                  ││"
+"││                  │  › break the line  ⌥⏎ ⇧⏎                                 │                  ││"
+"││                  │  › list the names that fit here  ^space ^n               │                  ││"
+"││                  │  › ask the [ai] command for SQL  ^g                      │──────────────────╯│"
+"││                  │  › undo the last change  ^z                              │──────────────────╮│"
+"││                  │  › redo the change undone  ⇧^z ^y                        │                  ││"
+"││                  │  › copy the statement under the cursor  ⌥c               │                  ││"
+"││                  │  › copy the selection, else the statement  ⌘c            │                  ││"
+"││                  │  › paste the clipboard  ⌘v                               │                  ││"
+"││                  │  › cancel the running statement  esc                     │                  ││"
+"││                  │  › these keys, from the editor too  F1                   │                  ││"
+"││                  │  › quit  ^c                                              │                  ││"
+"││                  │   ↑↓ pick · ⏎ runs · esc closes                          │                  ││"
+"││                  ╰──────────────────────────────────────────────────────────╯                  ││"
+"││                            ││                                                                  ││"
+"││                            ││                                                                  ││"
+"│╰────────────────────────────╯╰──────────────────────────────────────────────────────────────────╯│"
+"│ ⏎ run  ⌥⏎ new line  ^p find  ⇥ pane  F1 keys  ^s save  ^o connections  ^c quit       connecting… │"
+"╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"

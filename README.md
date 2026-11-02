@@ -222,6 +222,7 @@ In the TUI, a bar above the editor shows one field per parameter.
 | `^o` | Pick another connection; sessions stay open. |
 | `^p` | Find a saved query. |
 | `^t` | Find a table of the schema. |
+| `^l` `:` | The command palette: every command, filtered as you type; `:` where it types nothing, so not in the editor nor in a field. |
 | `⏎` `d` | In the schema tab: a table's first rows, written in the editor to refine, a click doing the same; its columns and indexes. |
 | `^r` | Search the history of this connection. |
 | `^s` | Save the query. |
@@ -233,6 +234,12 @@ In the TUI, a bar above the editor shows one field per parameter.
 | `^c` | Quit. |
 
 `pgbg tui <connection>` opens the TUI on another connection than the first.
+
+### Command palette
+
+`^l` opens it anywhere, and `:` on the result and in the sidebar.
+It lists every command with its keys, those that run from the pane you are on first; the others name the pane they work in, and `⏎` on one only says so.
+A command run from it does what its key does: a write still asks first.
 
 ### Theme
 

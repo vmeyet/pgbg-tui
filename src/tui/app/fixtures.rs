@@ -6,7 +6,7 @@ use crate::failure::Failure;
 use crate::fixtures::{self, keyed_catalog, keyed_orders, orders};
 use crate::query::params::ParamInput;
 use crate::tui::theme::Theme;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 use std::sync::Arc;
 use std::time::Duration;
@@ -109,6 +109,17 @@ pub(in crate::tui) fn with_result() -> App {
 
 pub(in crate::tui) fn press(app: &mut App, code: KeyCode) {
     app.handle_key(KeyEvent::from(code));
+}
+
+pub(in crate::tui) fn control(c: char) -> KeyEvent {
+    KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
+}
+
+/// `app` with the command palette open and `text` typed in it.
+pub(in crate::tui) fn opened_on(mut app: App, text: &str) -> App {
+    app.handle_key(control('l'));
+    text.chars().for_each(|c| press(&mut app, KeyCode::Char(c)));
+    app
 }
 
 pub(in crate::tui) fn view(app: &App) -> &View {

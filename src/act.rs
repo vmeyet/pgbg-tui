@@ -74,6 +74,7 @@ pub(crate) enum Act {
     FindTable,
     Ask,
     Back,
+    Commands,
 }
 
 impl Act {
@@ -145,6 +146,7 @@ impl Act {
             Self::FindTable => "find_table",
             Self::Ask => "ask",
             Self::Back => "back",
+            Self::Commands => "commands",
         }
     }
 
@@ -201,6 +203,8 @@ pub(crate) enum Pane {
     TableFinder,
     /// The `ctrl-p` finder over every saved query: while open it takes every key, and only its own work.
     Finder,
+    /// The `ctrl-l` command palette, a popup like the finder.
+    Commands,
     /// The `ctrl-o` connection picker, a popup like the finder.
     Picker,
     /// The form that adds or edits a connection, from the picker.
@@ -229,7 +233,7 @@ pub(crate) enum Pane {
 
 impl Pane {
     /// The order the `?` help lists the panes in.
-    const IN_HELP: [Self; 22] = [
+    const IN_HELP: [Self; 23] = [
         Self::Editor,
         Self::Params,
         Self::Result,
@@ -239,6 +243,7 @@ impl Pane {
         Self::RowFilter,
         Self::Finder,
         Self::TableFinder,
+        Self::Commands,
         Self::Picker,
         Self::Form,
         Self::Prompt,
@@ -266,6 +271,7 @@ impl Pane {
             Self::RowFilter => "row filter",
             Self::Finder => "finder",
             Self::TableFinder => "table finder",
+            Self::Commands => "commands",
             Self::Picker => "picker",
             Self::Form => "form",
             Self::Prompt => "prompt",
@@ -340,6 +346,9 @@ impl Row {
 
 /// The `?` help's line in the panes where `?` types nothing.
 const HELP_KEYS: &str = "these keys; again for every key";
+
+/// The command palette's line in the panes where `:` types nothing.
+const COMMANDS_KEY: &str = "every command, as ^l";
 
 /// The keys that switch the sidebar's tab: `←` `→` for keyboards where `[` `]` take a modifier, as AZERTY.
 const SWITCH_TAB: &[KeyEvent] = &[key(KeyCode::Left), key(KeyCode::Right), key(KeyCode::Char('[')), key(KeyCode::Char(']'))];
@@ -443,6 +452,15 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Up, Pane::TableFinder, &[key(KeyCode::Up), control('p')]),
     row(Act::Close, Pane::TableFinder, &[key(KeyCode::Esc)]).help("esc", "close the finder").footer("esc", "closes"),
     row(Act::Quit, Pane::TableFinder, &[control('c')]).help("^c", "quit"),
+    row(Act::Commands, Pane::Anywhere, &[control('l')]).help("^l", "every command, filtered as you type"),
+    row(Act::Commands, Pane::Result, &[key(KeyCode::Char(':'))]).help(":", COMMANDS_KEY),
+    row(Act::Commands, Pane::Queries, &[key(KeyCode::Char(':'))]).help(":", COMMANDS_KEY),
+    row(Act::Commands, Pane::Schema, &[key(KeyCode::Char(':'))]).help(":", COMMANDS_KEY),
+    row(Act::Down, Pane::Commands, &[key(KeyCode::Down), control('n')]).help("↓ ^n", "next, previous command").footer("↑↓", "pick"),
+    row(Act::Up, Pane::Commands, &[key(KeyCode::Up), control('p')]),
+    row(Act::Open, Pane::Commands, &[key(KeyCode::Enter)]).help("⏎", "run it").footer("⏎", "runs"),
+    row(Act::Close, Pane::Commands, &[key(KeyCode::Esc), control('l')]).help("esc ^l", "close it").footer("esc", "closes"),
+    row(Act::Quit, Pane::Commands, &[control('c')]).help("^c", "quit"),
     row(Act::Cancel, Pane::Anywhere, &[key(KeyCode::Esc)]).help("esc", "cancel the running statement"),
     row(Act::SwitchPane, Pane::Anywhere, &[key(KeyCode::Tab)]).help("⇥ ⇧⇥", "next, previous pane").footer("⇥", "pane"),
     row(Act::SwitchPaneBack, Pane::Anywhere, &[key(KeyCode::BackTab)]),
@@ -553,6 +571,7 @@ fn works_in(row: &Row, pane: Pane) -> bool {
             && !matches!(
                 pane,
                 Pane::Finder
+                    | Pane::Commands
                     | Pane::TableFinder
                     | Pane::Picker
                     | Pane::Form
@@ -616,10 +635,60 @@ pub(crate) fn sections(pane: Pane, every_key: bool) -> Vec<Section> {
 /// Every act's name, grouped under the pane of its first row, panes in the order of the help; what `pgbg usage` lists
 /// when unused.
 pub(crate) fn usage_groups() -> Vec<UsageGroup> {
-    let first_rows: Vec<&Row> =
-        ROWS.iter().enumerate().filter(|(at, row)| !ROWS[..*at].iter().any(|before| before.act == row.act)).map(|(_, row)| row).collect();
-    let names_in = |pane: Pane| first_rows.iter().filter(|row| row.pane == pane).map(|row| row.act.name()).collect();
+    let first: Vec<&Row> = first_rows().collect();
+    let names_in = |pane: Pane| first.iter().filter(|row| row.pane == pane).map(|row| row.act.name()).collect();
     Pane::IN_HELP.into_iter().map(|pane| UsageGroup { title: pane.title(), actions: names_in(pane) }).collect()
+}
+
+/// The first row of each act.
+fn first_rows() -> impl Iterator<Item = &'static Row> {
+    ROWS.iter().enumerate().filter(|(at, row)| !ROWS[..*at].iter().any(|before| before.act == row.act)).map(|(_, row)| row)
+}
+
+/// One act as the command palette lists it: from the row that works in the pane it opened on, else from its first row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Listing {
+    pub(crate) act: Act,
+    pub(crate) keys: String,
+    pub(crate) does: String,
+    /// The pane of that row.
+    pub(crate) pane: Pane,
+    /// Whether it works in the pane the palette opened on; a ghost act never does, as opening the palette drops the ghost.
+    pub(crate) runs: bool,
+}
+
+/// Every act once, as the palette opened on `pane` lists it.
+pub(crate) fn listings_from(pane: Pane) -> impl Iterator<Item = Listing> {
+    first_rows().map(move |first| listing_of(first, pane))
+}
+
+fn listing_of(first: &'static Row, pane: Pane) -> Listing {
+    let here = ROWS.iter().find(|row| row.act == first.act && works_in(row, pane)).filter(|row| !row.act.is_ghost());
+    let row = here.unwrap_or(first);
+    Listing {
+        act: row.act,
+        keys: row.help.map_or_else(|| row.keys.iter().map(key_written).collect::<Vec<_>>().join(" "), |help| help.keys.to_owned()),
+        does: row.help.map_or_else(|| row.act.name().replace('_', " "), |help| help.does.to_owned()),
+        pane: row.pane,
+        runs: here.is_some(),
+    }
+}
+
+/// `key` as the help writes it, for a row with no line of its own.
+fn key_written(key: &KeyEvent) -> String {
+    let held = [(KeyModifiers::CONTROL, "^"), (KeyModifiers::ALT, "⌥"), (KeyModifiers::SUPER, "⌘"), (KeyModifiers::SHIFT, "⇧")];
+    let marks: String = held.iter().filter(|(modifier, _)| key.modifiers.contains(*modifier)).map(|(_, mark)| *mark).collect();
+    let code = match key.code {
+        KeyCode::BackTab => "⇧⇥".to_owned(),
+        KeyCode::Left => "←".to_owned(),
+        KeyCode::Right => "→".to_owned(),
+        KeyCode::Up => "↑".to_owned(),
+        KeyCode::Down => "↓".to_owned(),
+        KeyCode::PageUp => "PgUp".to_owned(),
+        KeyCode::PageDown => "PgDn".to_owned(),
+        code => code.to_string(),
+    };
+    format!("{marks}{code}")
 }
 
 fn help_rows(pane: Pane) -> Vec<HelpRow> {
@@ -678,6 +747,7 @@ mod tests {
             Pane::SchemaFilter,
             Pane::RowFilter,
             Pane::Finder,
+            Pane::Commands,
             Pane::TableFinder,
             Pane::Picker,
             Pane::Form,
@@ -771,6 +841,53 @@ mod tests {
     }
 
     #[test]
+    fn a_colon_opens_the_palette_where_it_types_nothing_and_types_in_the_editor_and_the_bar() {
+        let colon = key(KeyCode::Char(':'));
+        assert_eq!([Pane::Editor, Pane::Params].map(|pane| act_for(colon, pane)), [None, None]);
+        for pane in [Pane::Result, Pane::Queries, Pane::Schema] {
+            assert_eq!(act_for(colon, pane), Some(Act::Commands), "{pane:?}");
+        }
+    }
+
+    #[test]
+    fn ctrl_l_opens_the_palette_from_every_pane_and_no_overlay_reads_it_as_that() {
+        for pane in [Pane::Editor, Pane::Params, Pane::Result, Pane::Queries, Pane::Schema] {
+            assert_eq!(act_for(control('l'), pane), Some(Act::Commands), "{pane:?}");
+        }
+        assert_eq!(act_for(control('l'), Pane::RowFilter), None);
+    }
+
+    #[test]
+    fn the_palette_lists_every_act_once_with_its_keys_and_what_it_does() {
+        let listings: Vec<Listing> = listings_from(Pane::Editor).collect();
+        for act in Act::iter() {
+            let found: Vec<&Listing> = listings.iter().filter(|listing| listing.act == act).collect();
+            assert_eq!(found.len(), 1, "{act:?}");
+            assert!(!found[0].keys.is_empty() && !found[0].does.is_empty(), "{act:?}");
+        }
+    }
+
+    #[test]
+    fn a_listing_takes_the_help_of_the_pane_it_opened_on() {
+        let down_from = |pane| listings_from(pane).find(|listing| listing.act == Act::Down).unwrap();
+        assert_eq!((down_from(Pane::Result).keys.as_str(), down_from(Pane::Result).does.as_str()), ("j k", "next, previous row"));
+        assert_eq!(down_from(Pane::Queries).does, "next, previous query");
+    }
+
+    #[test]
+    fn a_row_with_no_help_is_listed_by_its_name_and_written_keys() {
+        let listing = listings_from(Pane::Result).find(|listing| listing.act == Act::Up).unwrap();
+        assert_eq!((listing.keys.as_str(), listing.does.as_str()), ("k ↑", "up"));
+        let focus = listings_from(Pane::Editor).find(|listing| listing.act == Act::FocusUp).unwrap();
+        assert_eq!((focus.keys.as_str(), focus.does.as_str()), ("⇧↑", "focus up"));
+    }
+
+    #[test]
+    fn a_ghost_act_never_runs_from_the_palette() {
+        assert!(!listings_from(Pane::Editor).any(|listing| listing.act.is_ghost() && listing.runs));
+    }
+
+    #[test]
     fn shift_tab_reads_the_same_whether_the_terminal_says_shift_or_not() {
         assert_eq!(act_for(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT), Pane::Form), Some(Act::Up));
     }
@@ -779,6 +896,6 @@ mod tests {
     fn the_first_help_lists_the_focused_pane_and_what_works_anywhere() {
         let titles: Vec<&str> = sections(Pane::Result, false).iter().map(|section| section.title).collect();
         assert_eq!(titles, ["result", "anywhere"]);
-        assert_eq!(sections(Pane::Result, true).len(), 22);
+        assert_eq!(sections(Pane::Result, true).len(), 23);
     }
 }
