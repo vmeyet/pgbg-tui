@@ -4,6 +4,7 @@ use super::lex::{self, Lexed, Placed, Token};
 use super::model::words::{LOCKS, WRITES};
 use super::model::{Params, Statement};
 use crate::connection::{StatementTimeout, WritePolicy};
+use crate::format::counted;
 use std::fmt;
 use std::ops::Range;
 
@@ -501,10 +502,6 @@ impl fmt::Display for Change {
 }
 
 impl std::error::Error for Refusal {}
-
-fn counted(count: usize, noun: &str) -> String {
-    if count == 1 { format!("1 {noun}") } else { format!("{count} {noun}s") }
-}
 
 #[cfg(test)]
 mod tests {

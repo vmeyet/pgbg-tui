@@ -550,6 +550,14 @@ impl Sheet {
         vec![Action::NextPage { connection: self.connection.name().clone(), session: self.session_id, run: *run }]
     }
 
+    /// The grid on screen, when a result is.
+    pub(super) fn grid_mut(&mut self) -> Option<&mut Grid> {
+        match &mut self.run {
+            Run::Done { grid, .. } => Some(grid),
+            _ => None,
+        }
+    }
+
     /// Puts the column under the grid's cursor in its next format; when its kind has no other, returns its name.
     pub(super) fn step_format(&mut self, clock: &Clock) -> Option<ColumnName> {
         let Run::Done { result, grid, .. } = &mut self.run else { return None };

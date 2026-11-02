@@ -65,6 +65,8 @@ pub(crate) enum Act {
     SwitchTab,
     Filter,
     Sort,
+    SwitchFreeze,
+    FreezeThrough,
     ReadAgain,
     TakeGhost,
     DropGhost,
@@ -139,6 +141,8 @@ impl Act {
             Self::SwitchTab => "switch_tab",
             Self::Filter => "filter",
             Self::Sort => "sort",
+            Self::SwitchFreeze => "switch_freeze",
+            Self::FreezeThrough => "freeze_through",
             Self::ReadAgain => "read_again",
             Self::TakeGhost => "take_ghost",
             Self::DropGhost => "drop_ghost",
@@ -177,6 +181,8 @@ impl Act {
                 | Self::SwitchFormats
                 | Self::Filter
                 | Self::Sort
+                | Self::SwitchFreeze
+                | Self::FreezeThrough
         )
     }
 
@@ -418,6 +424,9 @@ pub(crate) const ROWS: &[Row] = &[
         .help("/", "keep the rows loaded with a cell holding what you type")
         .footer("/", "filter"),
     row(Act::Sort, Pane::Result, &[key(KeyCode::Char('s'))]).help("s", "sort the rows loaded by the column: up, down, then as read"),
+    row(Act::SwitchFreeze, Pane::Result, &[key(KeyCode::Char('z'))])
+        .help("z Z", "keep the leading primary key, or the first column, on the left while the grid scrolls, or nothing; keep the columns up to the cursor's"),
+    row(Act::FreezeThrough, Pane::Result, &[key(KeyCode::Char('Z'))]),
     row(Act::WhereEqual, Pane::Result, &[key(KeyCode::Char('='))])
         .help("= !", "add WHERE column = the cell's value, or <>, to the statement under the editor's cursor"),
     row(Act::WhereNotEqual, Pane::Result, &[key(KeyCode::Char('!'))]),

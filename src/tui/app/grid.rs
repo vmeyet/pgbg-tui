@@ -1,6 +1,7 @@
 //! The results grid's state: the cursor's cell, the first row and column in view, and each column's format, width and
 //! colouring.
 use super::colouring::{Colouring, colourings};
+use super::shown_columns::ShownColumns;
 use super::shown_rows::{Order, ShownRows, Sort};
 use crate::db::model::{ColumnName, ResultSet, Value};
 use crate::format::{self, Format, Mode};
@@ -16,8 +17,6 @@ const SAMPLE_ROWS: usize = 500;
 const POINTS_TO_MARK: &str = " →";
 /// How much of each cell `/` searches: more than the grid shows, without reading a long JSON value whole.
 const FILTER_CHARS: usize = 200;
-/// The space drawn before each column.
-pub(in crate::tui) const GAP: &str = "  ";
 
 /// What the frame just drawn had room for in the grid: the rows under its header and the terminal columns for cells.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -68,13 +67,15 @@ pub(in crate::tui) struct Grid {
     keys: Keys,
     /// The rows shown and their order, after `/` and `s`.
     shown: ShownRows,
+    /// The columns shown and their order, after `z` and `Z`.
+    columns: ShownColumns,
     /// The cursor's row, by its index in the result.
     pub(in crate::tui) row: usize,
-    /// The cursor's column.
+    /// The cursor's column, by its index in the result.
     pub(in crate::tui) column: usize,
     /// The place of the first row in view among the rows shown.
     pub(in crate::tui) top: usize,
-    /// The first column in view.
+    /// The place among the columns shown of the first one in view past those frozen.
     pub(in crate::tui) left: usize,
 }
 
@@ -82,6 +83,7 @@ impl Grid {
     /// The grid on `result` with each column in its format from `formats` and its key from `keys`, the cursor on the
     /// first row; `keys` is empty when the table the result was read from is unknown.
     pub(in crate::tui) fn new(result: &ResultSet, formats: Vec<Format>, keys: Keys, clock: &Clock) -> Self {
+        let columns = ShownColumns::new(&keys, result.columns().len());
         let mut grid = Self {
             formats: vec![],
             widths: vec![],
@@ -90,6 +92,7 @@ impl Grid {
             shown: ShownRows::default(),
             row: 0,
             column: 0,
+            columns,
             top: 0,
             left: 0,
         };
@@ -101,6 +104,42 @@ impl Grid {
     #[cfg(test)]
     pub(in crate::tui) fn raw(result: &ResultSet) -> Self {
         Self::new(result, vec![Format::Raw; result.columns().len()], Keys::default(), &clock_at_epoch())
+    }
+
+    /// This grid with nothing frozen.
+    #[cfg(test)]
+    pub(in crate::tui) fn unfrozen(mut self) -> Self {
+        self.switch_freeze(Room::default());
+        self
+    }
+
+    /// The columns shown and their order.
+    pub(in crate::tui) const fn columns(&self) -> &ShownColumns {
+        &self.columns
+    }
+
+    /// The columns to draw in `room` terminal columns, left to right.
+    pub(in crate::tui) fn columns_in_view(&self, room: usize) -> impl Iterator<Item = usize> {
+        self.columns.in_view(self.left, &self.widths, room)
+    }
+
+    /// Freezes nothing, or the key once nothing is frozen.
+    pub(super) fn switch_freeze(&mut self, room: Room) {
+        self.rearrange(room, ShownColumns::switch_freeze);
+    }
+
+    /// Freezes the columns drawn up to the cursor's.
+    pub(super) fn freeze_through_cursor(&mut self, room: Room) {
+        let cursor = self.column;
+        self.rearrange(room, |columns| columns.freeze_through(cursor));
+    }
+
+    /// Applies `change` to the columns: the first to scroll stays so while it shows, and the cursor stays in view.
+    fn rearrange(&mut self, room: Room, change: impl FnOnce(&mut ShownColumns)) {
+        let first = self.columns.first_scrolled(self.left, &self.widths, room.columns);
+        change(&mut self.columns);
+        self.left = first.and_then(|column| self.columns.place_of(column)).unwrap_or(self.left);
+        self.keep_column_in_view(room.columns);
     }
 
     /// Whether the column at `column` is part of the primary key of the table the result was read from.
@@ -212,8 +251,8 @@ impl Grid {
     pub(super) fn step(&mut self, step: Move, result: &ResultSet, room: Room) {
         let loaded = result.rows().len();
         match step {
-            Move::Left => self.column = self.column.saturating_sub(1),
-            Move::Right => self.column = (self.column + 1).min(self.widths.len().saturating_sub(1)),
+            Move::Left => self.column = self.columns.before(self.column),
+            Move::Right => self.column = self.columns.after(self.column),
             vertical => self.row = self.shown.row_at(self.place_after(vertical, loaded, room), loaded).unwrap_or(self.row),
         }
         self.keep_in_view(room);
@@ -253,15 +292,7 @@ impl Grid {
     }
 
     fn keep_column_in_view(&mut self, columns: usize) {
-        self.left = self.left.min(self.column);
-        while self.left < self.column && self.drawn_through_cursor() > columns {
-            self.left += 1;
-        }
-    }
-
-    /// The terminal columns from the first column in view through the cursor's, each after its gap.
-    fn drawn_through_cursor(&self) -> usize {
-        self.widths[self.left..=self.column].iter().map(|width| GAP.len() + width).sum()
+        self.left = self.columns.left_showing(self.column, self.left, &self.widths, columns);
     }
 
     fn column_widths(&self, result: &ResultSet, formats: &[Format], clock: &Clock) -> Vec<usize> {
@@ -301,7 +332,7 @@ mod tests {
 
     fn stepped_in(rows: usize, steps: &[Move], room: Room) -> Grid {
         let result = result(rows);
-        let mut grid = Grid::raw(&result);
+        let mut grid = Grid::raw(&result).unfrozen();
         for &step in steps {
             grid.step(step, &result, room);
         }

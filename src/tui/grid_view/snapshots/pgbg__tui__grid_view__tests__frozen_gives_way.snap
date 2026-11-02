@@ -1,0 +1,6 @@
+---
+source: src/tui/grid_view/mod.rs
+expression: "render(&result, &grid, 22, 2).backend()"
+---
+"    id  total         "
+"▶  103      3         "

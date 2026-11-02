@@ -3,7 +3,7 @@ use super::ghost::Ghost;
 use super::grid::Move;
 use super::panes::Side;
 use super::param_bar::Direction;
-use super::{Action, App, AskStep, Focus, Opening, Overlay};
+use super::{Action, App, AskStep, Focus, Grid, Opening, Overlay};
 use crate::act::{self, Act, Pane};
 use crate::query::condition::Comparison;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -203,6 +203,8 @@ impl App {
             Act::Detail => return self.open_detail(),
             Act::Filter => self.open_row_filter(),
             Act::Sort => self.step_sort(),
+            Act::SwitchFreeze => self.change_freeze(Grid::switch_freeze),
+            Act::FreezeThrough => self.change_freeze(Grid::freeze_through_cursor),
             Act::WhereEqual => self.add_condition(Comparison::Equal),
             Act::WhereNotEqual => self.add_condition(Comparison::NotEqual),
             Act::ColumnStats => self.open_column_stats(),

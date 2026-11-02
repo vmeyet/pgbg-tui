@@ -4,6 +4,11 @@
 const BINARY_UNITS: [&str; 7] = ["B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
 const BYTES_IN_KIBIBYTE: f64 = 1024.0;
 
+/// `1 column`, `2 columns`.
+pub(crate) fn counted(count: usize, noun: &str) -> String {
+    if count == 1 { format!("1 {noun}") } else { format!("{count} {noun}s") }
+}
+
 /// `digits`, a run of ASCII digits, grouped by thousands: `1 732`, `120 000`.
 pub(crate) fn grouped_digits(digits: &str) -> String {
     let first = digits.len() % 3;

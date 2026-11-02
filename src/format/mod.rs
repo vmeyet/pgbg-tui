@@ -1,7 +1,7 @@
 //! How a cell reads: for each column kind, the formats it allows, raw first, and the text of one cell in one of them.
 //! Pure: the clock and the time zone are passed in.
 pub(crate) use columns::{ColumnFormat, Mode, opening, parse_column_formats};
-pub(crate) use number::grouped_digits;
+pub(crate) use number::{counted, grouped_digits};
 pub(crate) use time::relative;
 
 use crate::db::model::{ColumnKind, Value};

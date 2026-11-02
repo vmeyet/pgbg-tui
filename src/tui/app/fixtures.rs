@@ -1,7 +1,7 @@
 //! Invented fixtures the app's tests and the views' tests share: the app on `shop`, typed text, and its answers.
-use super::{Action, Answer, App, Fit, Focus, Incoming, Panes, Run, RunId, SessionId, View};
+use super::{Action, Answer, App, Fit, Focus, Grid, Incoming, Panes, Room, Run, RunId, SessionId, View};
 use crate::connection::{Connection, ConnectionName};
-use crate::db::model::{ResultSet, Statement};
+use crate::db::model::{ColumnKind, ResultSet, Statement, Value};
 use crate::failure::Failure;
 use crate::fixtures::{self, keyed_catalog, keyed_orders, orders};
 use crate::query::params::ParamInput;
@@ -120,6 +120,42 @@ pub(in crate::tui) fn opened_on(mut app: App, text: &str) -> App {
     app.handle_key(control('l'));
     text.chars().for_each(|c| press(&mut app, KeyCode::Char(c)));
     app
+}
+
+pub(in crate::tui) fn grid(app: &App) -> &Grid {
+    let Run::Done { grid, .. } = &app.sheet().run else { panic!("no result") };
+    grid
+}
+
+/// `keys` pressed on `app`, a frame having given the grid its room.
+pub(in crate::tui) fn with_keys(mut app: App, keys: &str) -> App {
+    app.fit(Fit { grid: Room { rows: 10, columns: 80 }, ..Fit::default() });
+    keys.chars().for_each(|c| press(&mut app, KeyCode::Char(c)));
+    app
+}
+
+/// `keys` pressed on `result`.
+pub(in crate::tui) fn pressed(result: ResultSet, keys: &str) -> App {
+    with_keys(on_the_result(result), keys)
+}
+
+/// The name of the column under the grid's cursor.
+pub(in crate::tui) fn cursor_name(app: &App) -> String {
+    let Run::Done { grid, result, .. } = &app.sheet().run else { panic!("no result") };
+    result.columns()[grid.column].name.to_string()
+}
+
+/// `total`, `id`, `customer_id` of `orders`: a result that does not start with its primary key.
+pub(in crate::tui) fn key_in_the_middle() -> App {
+    let column = |name: &str, kind| fixtures::shop_column("orders", name, kind);
+    let columns = vec![column("total", ColumnKind::Numeric), column("id", ColumnKind::Int), column("customer_id", ColumnKind::Int)];
+    let row = vec![Value::Numeric("12.50".into()), Value::Int(7), Value::Int(3)];
+    on_keyed("SELECT total, id, customer_id FROM orders", ResultSet::whole(columns, vec![row]))
+}
+
+/// The columns the grid draws with room for all, left to right.
+pub(in crate::tui) fn drawn(app: &App) -> Vec<usize> {
+    grid(app).columns_in_view(80).collect()
 }
 
 pub(in crate::tui) fn view(app: &App) -> &View {
