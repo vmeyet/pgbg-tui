@@ -61,6 +61,7 @@ pub(super) mod form;
 mod ghost;
 mod grid;
 pub(super) mod history;
+mod history_ghost;
 pub(super) mod idle_ghost;
 mod json_tree;
 mod keys;
@@ -324,10 +325,14 @@ impl App {
         &mut self.sheets[self.shown]
     }
 
-    /// What the runner should do as the TUI starts: open the first sheet's session, list its queries.
+    /// What the runner should do as the TUI starts: open the first sheet's session, read its history, list its queries.
     pub(super) fn start(&self) -> Vec<Action> {
         let first = &self.sheets[0];
-        vec![Action::Open { connection: first.connection.clone(), session: first.session_id }, self.list_queries()]
+        vec![
+            Action::Open { connection: first.connection.clone(), session: first.session_id },
+            first.read_history_index(),
+            self.list_queries(),
+        ]
     }
 
     /// Whether the editor on screen changed since its colours were built, so it needs `recolour`.
@@ -444,6 +449,11 @@ impl App {
             Answer::Config { id, answer: ConfigAnswer::Failed { why, password } } => self.config_failed(id, why, password),
             Answer::Config { answer: ConfigAnswer::ThemeSaved(name), .. } => self.note = Some(format!("theme {name} saved")),
             Answer::History { connection, entries } => self.history_read(&connection, entries),
+            Answer::HistoryIndex { connection, index } => {
+                if let Some(sheet) = self.sheet_of_mut(&connection) {
+                    sheet.take_history_index(index);
+                }
+            }
             Answer::Versions { query, versions } => self.versions_read(&query, versions),
             Answer::Copied(note) => self.copied(note),
             Answer::Exported { text, done } => return vec![Action::Copy { text, done }],

@@ -34,6 +34,7 @@ pub(crate) struct Candidate {
 pub(crate) struct Ghosted {
     pub(crate) rest: String,
     pub(crate) insert: String,
+    pub(crate) kind: Kind,
 }
 
 /// Names of one kind an ask draws from, and whether they are columns of a table the statement names.
@@ -64,8 +65,8 @@ impl Index {
     }
 
     fn join_ghost(&self, ask: &Ask) -> Option<Ghosted> {
-        let Candidate { name, insert, .. } = self.joins(ask).next()?;
-        Some(Ghosted { rest: name.get(ask.prefix.len()..)?.to_owned(), insert })
+        let Candidate { name, insert, kind } = self.joins(ask).next()?;
+        Some(Ghosted { rest: name.get(ask.prefix.len()..)?.to_owned(), insert, kind })
     }
 
     fn name_ghost(&self, ask: &Ask) -> Option<Ghosted> {
@@ -78,7 +79,7 @@ impl Index {
         let (kind, Ghost { rest, name }) = best(true).or_else(|| best(false))?;
         let insert = self.candidate(kind, &name, &ask.prefix).insert;
         let rest = if kind == Kind::Keyword { cased_as(&rest, &ask.prefix) } else { rest };
-        Some(Ghosted { rest, insert })
+        Some(Ghosted { rest, insert, kind })
     }
 
     /// The best names for `ask`, at most `MAX_LISTED`, the joins first, each name once: a column of a table the statement

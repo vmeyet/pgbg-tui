@@ -11,6 +11,8 @@ Each entry says what changed, then where, then how to use it.
 - **Plans as a tree**: in the TUI editor, `⌥e` shows the plan of the read under the cursor as a tree in the result pane, without running it, and `⌥a` shows it as it ran, with `ANALYZE` and `BUFFERS`.
   Your own `EXPLAIN (FORMAT JSON …)` opens the same way: `⏎` folds a node, `v` shows the JSON, the costliest node is lit, and `est off ×80` flags an estimate far from the rows counted.
   `⌥a` runs the statement read only and rolled back under the connection's timeout, whatever the connection allows, and refuses a write.
+- **Past statements as you type**: in the TUI editor, the read you ran most on this connection that starts with what you typed shows faded after the cursor, from three characters on; `→` or `tab` takes it.
+  A table or column name shows first and a past read beats a keyword; only reads that succeeded count, never a write, and a match saves an AI completion ask; nothing leaves your machine and there is nothing to set.
 - **Save as**: in the TUI, `⌥s` saves the editor's text under a new path and leaves the open query as it is.
   The prompt starts from the open query's path, or empty with none open; once saved, the editor stands for the new query, and a path that holds other text is refused.
 - **A separate command for the AI completion**: `[ai] ghost_command` in `config.toml` names the program the idle ghost asks, as a quicker model, given as `command` is.

@@ -1,19 +1,22 @@
-//! The ghost: the rest of the best name for the word before the cursor, dimmed after the cursor until the next key.
+//! The ghost: the rest of the best name for the word before the cursor, or of a past statement, dimmed after the cursor
+//! until the next key.
 //! `→` takes it.
 use super::{Action, SessionState, Sheet};
-use crate::complete::{Ask, Index};
+use crate::complete::{Ask, Index, Kind};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::ops::Range;
 use vtui::field::Field;
 
-/// The name the ghost offers: what the editor shows, and the bytes it replaces when taken.
+/// What the ghost offers: what the editor shows, and the bytes it replaces when taken.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::tui) struct Ghost {
-    /// The editor bytes the taken name replaces, up to the cursor.
+    /// The editor bytes the taken text replaces, up to the cursor.
     typed: Range<usize>,
     insert: String,
     /// What shows after the cursor.
     pub(in crate::tui) rest: String,
+    /// It names only a keyword, which any past statement that matches holds anyway.
+    is_keyword: bool,
 }
 
 impl Ghost {
@@ -23,7 +26,7 @@ impl Ghost {
         let mut cleaned = Field::default();
         cleaned.paste(rest);
         let rest = cleaned.text().trim_end();
-        (!rest.trim_start().is_empty()).then(|| Self { typed: at..at, insert: rest.to_owned(), rest: rest.to_owned() })
+        (!rest.trim_start().is_empty()).then(|| Self { typed: at..at, insert: rest.to_owned(), rest: rest.to_owned(), is_keyword: false })
     }
 }
 
@@ -38,9 +41,18 @@ fn is_name_char(c: char) -> bool {
 }
 
 impl Sheet {
+    /// Offers a ghost once `key` changed the text: a name of the schema it types, or else a past statement, or else a keyword.
+    pub(super) fn offer_ghost(&mut self, key: KeyEvent) -> Vec<Action> {
+        let actions = if is_name_key(key) { self.ask_ghost() } else { vec![] };
+        if self.ghost.as_ref().is_none_or(|ghost| ghost.is_keyword) {
+            self.ghost = self.history_ghost().or(self.ghost.take());
+        }
+        actions
+    }
+
     /// Offers the ghost of the word before the cursor when the cursor is at its end, from the index once there is one,
     /// or else from the keywords; the first ask reads the schema.
-    pub(super) fn ask_ghost(&mut self) -> Vec<Action> {
+    fn ask_ghost(&mut self) -> Vec<Action> {
         let actions = self.want_schema_while_open();
         let (_, under, _) = self.editor.split();
         if under.starts_with(is_name_char) {
@@ -69,12 +81,13 @@ impl Sheet {
 
 fn ghost_of(index: &Index, ask: &Ask) -> Option<Ghost> {
     let ghosted = index.ghost(ask)?;
-    (!ghosted.rest.is_empty()).then(|| Ghost { typed: ask.typed.clone(), rest: ghosted.rest, insert: ghosted.insert })
+    let is_keyword = ghosted.kind == Kind::Keyword;
+    (!ghosted.rest.is_empty()).then(|| Ghost { typed: ask.typed.clone(), rest: ghosted.rest, insert: ghosted.insert, is_keyword })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::fixtures::{shop, to_shop, typed};
+    use super::super::fixtures::{rest, shop, to_shop, typed};
     use super::super::{Incoming, SchemaState};
     use super::*;
     use crate::db::model::Catalog;
@@ -96,10 +109,6 @@ mod tests {
             app.handle_key(KeyEvent::from(KeyCode::Char(c)));
         }
         app
-    }
-
-    fn rest(app: &super::super::App) -> Option<&str> {
-        app.sheet().ghost.as_ref().map(|ghost| ghost.rest.as_str())
     }
 
     #[test]

@@ -133,7 +133,7 @@ impl App {
             let session = self.new_session();
             self.sheets.push(Sheet::new(&connection, session));
             self.shown = self.sheets.len() - 1;
-            return vec![Action::Open { connection, session }];
+            return vec![Action::Open { connection, session }, self.sheet().read_history_index()];
         };
         self.shown = open;
         match self.sheet().session {
@@ -307,7 +307,10 @@ pub(in crate::tui) mod tests {
     fn picking_a_connection_not_yet_open_shows_it_and_opens_its_session() {
         let mut app = on_local();
         let actions = switch_to(&mut app, "prod");
-        assert!(matches!(&*actions, [Action::Open { connection: prod, .. }, _] if prod.name() == &name("prod")), "{actions:?}");
+        assert!(
+            matches!(&*actions, [Action::Open { connection: prod, .. }, Action::ReadHistoryIndex(_), _] if prod.name() == &name("prod")),
+            "{actions:?}"
+        );
         assert_eq!((app.sheet().name(), &app.sheet().session, app.overlay.is_none()), (&name("prod"), &SessionState::Opening, true));
     }
 
@@ -373,7 +376,7 @@ pub(in crate::tui) mod tests {
         let mut app = App::new(vec![local.clone(), replica], &local, Theme::default());
         listed_on_local(&mut app);
         let actions = switch_to(&mut app, "replica");
-        assert!(matches!(&*actions, [Action::Open { .. }]), "{actions:?}");
+        assert!(matches!(&*actions, [Action::Open { .. }, Action::ReadHistoryIndex(_)]), "{actions:?}");
         assert_eq!(app.queries.all.len(), 1);
     }
 

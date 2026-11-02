@@ -17,7 +17,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::task::JoinHandle;
 
-#[cfg_attr(not(test), expect(dead_code, reason = "the ghost that reads it comes in the next MR"))]
+pub(crate) use index::HistoryIndex;
+
 mod index;
 
 const MAX_BYTES: u64 = 4 * 1024 * 1024;

@@ -2,6 +2,7 @@
 //! whether the connection takes writes.
 use super::app::{App, Focus};
 use crate::connection::{ConnectionName, Tier, WritePolicy};
+use crate::render;
 use crate::syntax::{Painted, Spans};
 use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
@@ -142,7 +143,7 @@ fn coloured<'a>(text: &'a str, paint: &Paint<'_>, window: Window) -> Text<'a> {
 fn with_lines_below<'a>(line: Line<'a>, below: &[&str], room: usize, style: Style) -> Vec<Line<'a>> {
     let shown = below.len().min(room);
     let more = below.len() - shown;
-    let below = below[..shown].iter().map(|text| Line::from(Span::styled((*text).to_owned(), style)));
+    let below = below[..shown].iter().map(|text| Line::from(Span::styled(render::printable(text).into_owned(), style)));
     let mut lines: Vec<Line<'a>> = std::iter::once(line).chain(below).collect();
     if more > 0
         && let Some(last) = lines.last_mut()
@@ -201,7 +202,7 @@ fn coloured_line<'a>(line: &'a str, spans: &[Painted], cuts: Cuts<'_>, paint: &P
             Some(*end)
         });
         let index = at.take_while(|&end| end <= ghost.at).count();
-        pieces.insert(index, Span::styled(ghost.rest.to_owned(), Style::default().fg(paint.theme.faded)));
+        pieces.insert(index, Span::styled(render::printable(ghost.rest).into_owned(), Style::default().fg(paint.theme.faded)));
     }
     if cuts.mark.is_some_and(|range| range.is_empty()) {
         pieces.push(Span::styled(" ", paint.mark_style));
@@ -388,6 +389,16 @@ mod tests {
     fn the_ghost_draws_faded_at_the_cursor_on_its_line_only() {
         assert_eq!(ghosted("SELECT *\nFROM cu\nLIMIT 1", 16, "stomers"), ["SELECT *", "FROM cu<stomers>", "LIMIT 1"]);
         assert_eq!(ghosted("SELECT o. FROM orders o", 9, "id"), ["SELECT o.<id> FROM orders o"]);
+    }
+
+    #[test]
+    fn a_ghost_draws_its_control_characters_escaped() {
+        assert_eq!(ghosted("SELECT ", 7, "'\u{1b}[31m'"), ["SELECT <'\\u{1b}[31m'>"]);
+    }
+
+    #[test]
+    fn a_ghost_draws_the_control_characters_of_its_later_lines_escaped() {
+        assert_eq!(ghosted("SELECT ", 7, "*\nFROM \u{202e}orders"), ["SELECT <*>", "<FROM \\u{202e}orders>"]);
     }
 
     #[test]

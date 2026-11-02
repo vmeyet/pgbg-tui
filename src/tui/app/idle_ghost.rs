@@ -20,8 +20,8 @@ const KEEP_TYPED: &str = "Answer with the statement under the cursor whole, the 
 
 /// What the idle ask is about: the statement typed before the cursor, empty under a comment, and the text of each `--`
 /// line right above it, none when there is none.
-struct Question<'a> {
-    typed: &'a str,
+pub(super) struct Question<'a> {
+    pub(super) typed: &'a str,
     comment: Vec<&'a str>,
 }
 
@@ -89,7 +89,7 @@ impl IdleAsk {
 
 impl App {
     /// Whether the editor sitting idle now would ask for the rest of the statement under the cursor: `[ai] ghost` is on,
-    /// the editor has the keys with no overlay over it, no completion ghost shows, and this text was not asked about.
+    /// the editor has the keys with no overlay over it, no ghost shows, and this text was not asked about.
     pub(in crate::tui) fn wants_idle_ghost(&self) -> bool {
         self.may_ask_idle() && self.sheet().question().is_some()
     }
@@ -152,7 +152,7 @@ impl App {
         }
     }
 
-    /// Whether `[ai] ghost` is on, the editor has the keys with no overlay over it, no completion ghost shows, and this
+    /// Whether `[ai] ghost` is on, the editor has the keys with no overlay over it, no ghost shows, and this
     /// text was not asked about; the question under the cursor decides the rest.
     fn may_ask_idle(&self) -> bool {
         self.idle_settings().is_some() && self.shows_the_bare_editor() && !self.asks.idle.covers(&self.editor_on_screen())
@@ -181,7 +181,7 @@ impl App {
 impl Sheet {
     /// What the idle ask is about: the statement under the cursor when the cursor ends it, or else an empty one when
     /// the cursor sits on a blank line right under a `--` line; none when it would not ask.
-    fn question(&self) -> Option<Question<'_>> {
+    pub(super) fn question(&self) -> Option<Question<'_>> {
         let text = self.editor.text();
         let tokens = self.editor.lexed().tokens();
         let (before, _, _) = self.editor.split();
@@ -258,7 +258,7 @@ fn is_blank(text: &str) -> bool {
 /// aside, so a reformatted answer still fits, and the last typed token may be the start of a longer one.
 /// A rest after a typed token begins with one space where the answer has blanks; after typed blanks, with none.
 /// When nothing is typed, the rest is the whole answer from its first token.
-fn rest_after(typed: &str, answer: &str) -> Option<String> {
+pub(super) fn rest_after(typed: &str, answer: &str) -> Option<String> {
     let (typed_tokens, answer_tokens) = (lex::tokens(typed), lex::tokens(answer));
     let Some((last, before)) = typed_tokens.split_last() else {
         return answer_tokens.first().map(|first| answer[first.range.start..].to_owned());
@@ -295,7 +295,7 @@ fn starts_with(text: &str, typed: &str, kind: &Token) -> bool {
 #[cfg(test)]
 pub(in crate::tui) mod tests {
     use super::super::ask::tests::{ai_settings, ctrl_g};
-    use super::super::fixtures::{app_on, connection, to_shop};
+    use super::super::fixtures::{app_on, connection, rest, to_shop};
     use super::super::picker::tests::{ctrl, on_local, press};
     use super::super::{Answer, Incoming, Overlay};
     use super::*;
@@ -312,7 +312,7 @@ pub(in crate::tui) mod tests {
         text.chars().for_each(|c| drop(app.handle_key(key(c))));
     }
 
-    fn prompt_text(app: &mut App) -> String {
+    pub(in crate::tui) fn prompt_text(app: &mut App) -> String {
         let sent = app.ask_idle_ghost();
         let [Action::Ask { prompt, .. }] = &*sent else { panic!("{sent:?}") };
         prompt.text().to_owned()
@@ -340,10 +340,6 @@ pub(in crate::tui) mod tests {
         app.ask_idle_ghost();
         app.apply(Answer::Asked { ask: AskId::FIRST, answer: Ok(vec![Statement::new(answer)]) });
         app
-    }
-
-    fn rest(app: &App) -> Option<&str> {
-        app.sheet().ghost.as_ref().map(|ghost| ghost.rest.as_str())
     }
 
     #[test]

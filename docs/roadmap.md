@@ -129,6 +129,7 @@ The review of #214 to #231 found these, most severe first.
 - [x] The grid keeps the primary key it starts with, or else its first column, on the left while it scrolls, `z` `Z`, and gives way past half its width
 - [x] The grid hides columns, `x` `X`, and keeps what was hidden and frozen while a result has the same columns
 - [x] `⌥e` and `⌥a` show `EXPLAIN` as a tree that folds, the costliest node lit and an estimate far off flagged; `⌥a` runs a read only, rolled back whatever the connection allows
+- [x] The ghost offers the rest of the past read run most on this connection, from three typed characters, after a schema name and before a keyword or an idle ask
 
 ## Later
 

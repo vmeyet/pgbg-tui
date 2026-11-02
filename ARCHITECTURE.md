@@ -28,7 +28,7 @@ The code is the contract; this page describes it, and changes in the MR that cha
 | `ai/` | Asking a command for SQL: the prompt and its masking, the schema slice, the answer read back, all pure; `command.rs` runs the command |
 | `format/`, `chart/`, `keys.rs`, `export.rs` | Pure: cell formats under a `Clock`, chart series and, in one file per `ChartKind`, what each draws; a result's keys and lookups, copies as CSV, JSON or Markdown |
 | `plan.rs` | Pure: the plan an `EXPLAIN (FORMAT JSON)` result holds, its nodes, what each costs on its own and the costliest; any other shape gives none |
-| `history.rs` | Every statement run, per connection, in `<data folder>/history/<connection>.jsonl`; never a row nor a secret |
+| `history/` | Every statement run, per connection, in `<data folder>/history/<connection>.jsonl`; never a row nor a secret; `index.rs` the successful reads the ghost offers from, pure |
 | `syntax/` | SQL colours from tree-sitter, JSON colours by hand |
 | `act.rs` | Every action in one table: name, default keys, help line, pane; the help, the footer and the command palette all read it |
 | `tui/mod.rs` | The event loop: keys, pastes, clicks, answers and timers in, frames out |
@@ -71,6 +71,8 @@ These invariants hold across every flow; a change that breaks one is a bug.
 - The tables it points to come in detail, then every other table by name alone, in search-path order, until the 16 KiB cap; the whole schema in detail is never sent.
 - The history only orders those tables: `tui/backend/schema.rs` counts the runs naming each table after a schema read and hands `TableUse` to the app, so within one reason the most used comes first; no history text, statement or count goes into a prompt, and a missing or unreadable history means catalog order.
 - An AI answer is a suggestion: taking it and running it are two keys, and the run goes through the guard.
+- The ghost shows one thing: a name of the schema first, else a past read from the `HistoryIndex` of that sheet's connection, else a keyword, and the idle ask only when none shows.
+- A sheet's `HistoryIndex` is read once off the loop as the sheet opens, and each result adds its statement; what `db::guard` reads as no read, or what holds a secret, stays out, and the index never goes into a prompt.
 - `tui/app/` stays pure: the loop hands it the clock as a `Clock` and the timers as events.
 - The command palette runs an act through the path its key takes, and only an act whose row works in the pane it opened on, so a write still asks; a theme shows while highlighted, and only `⏎` sends the `Action` that writes `[tui] theme`.
 - The grid's cursor and every act on it name a column by its index in the result, never a hidden one; only `tui/app/shown_columns.rs` knows where a column is drawn.
@@ -78,7 +80,7 @@ These invariants hold across every flow; a change that breaks one is a bug.
 ## Boundaries
 
 - Only `src/db/` sees a `tokio_postgres` type; everything else uses `db/model/`.
-- Side effects live at the edges: `main.rs`, `signal.rs`, `commands/`, `tui/mod.rs`, `tui/backend/`, `tunnel/`, `secret/`, `ai/command.rs`, `config/` when it rewrites the file, `query/` when it touches files, `history.rs`, `usage.rs`, `files.rs`, `lock.rs`, `tui/usage.rs` when it reads the clock.
+- Side effects live at the edges: `main.rs`, `signal.rs`, `commands/`, `tui/mod.rs`, `tui/backend/`, `tunnel/`, `secret/`, `ai/command.rs`, `config/` when it rewrites the file, `query/` when it touches files, `history/` when it touches files, `usage.rs`, `files.rs`, `lock.rs`, `tui/usage.rs` when it reads the clock.
 - `tui/app/` is pure: no clock, no I/O; its tests drive it with keys and `Answer` values.
 - `chart/` and `format/` are pure; drawing lives in `tui/`.
 - A program that takes the terminal (`$EDITOR`) runs from the loop through `Screen::lend`.
@@ -142,7 +144,7 @@ A write's count is a read of its own `FROM` and `WHERE`, joined tables included,
 - Values are decoded once, at the boundary, into `Value`; drawing formats only what is on screen.
 - Syntax colours rebuild once the text stayed still for 40 ms, so a key never waits on tree-sitter.
 - Text from the database or the server is drawn through `render::printable`, its control characters and text-reversing marks escaped.
-- Speed budgets live in `budget` modules, release only and `#[ignore]`d: completion on 20 000 tables and 200 000 columns stays under 2.5 ms a key.
+- Speed budgets live in `budget` modules, release only and `#[ignore]`d: completion on 20 000 tables and 200 000 columns stays under 2.5 ms a key, and the history ghost on 100 000 lines under 7 ms.
 
 ## Glossary
 
