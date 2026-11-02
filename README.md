@@ -200,9 +200,12 @@ ORDER BY 1;
 | --- | --- |
 | `-- name:` | A readable name for the query. |
 | `-- connection:` | The connection it was written for; the query still runs on the one on screen. |
-| `-- chart:` | `bar` or `line`, with optional `x=` and `y=` columns (`y=orders,refunds`). |
+| `-- chart:` | `grouped`, `bar` or `line`, with optional `x=` and `y=` columns (`y=orders,refunds`), and `horizontal` or `vertical` on all but `line`. |
 | `-- param:` | A parameter: `name type = default`, or `name type optional` for NULL when empty. |
 | `-- format:` | How columns open: `raw`, `local`, `relative`, `grouped`, `bytes`, `short`, `check` or `duration`. |
+
+`grouped` stands upright unless the header says `horizontal`: `-- chart: grouped x=day y=orders,refunds horizontal`.
+`bar` is `grouped horizontal`.
 
 `{{name}}` in a statement is a parameter.
 Its value is always bound, never pasted into the SQL text.

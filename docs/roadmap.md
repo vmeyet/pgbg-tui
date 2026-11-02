@@ -124,6 +124,7 @@ The review of #214 to #231 found these, most severe first.
 - [x] The palette lists every theme: each shows live while highlighted, `esc` restores the old one, and `⏎` writes `[tui] theme`
 - [x] Several series on a chart: colours that stay apart on every palette, and a legend that names each in its colour
 - [x] Bars draw from one model, so a negative value runs the other way from zero and a small pane says what it left out
+- [x] Grouped charts upright or on their side, from the `-- chart:` header
 
 ## Later
 
