@@ -42,7 +42,7 @@ Each entry says what changed, then where, then how to use it.
 - **Pick a theme live**: type `theme` in the command palette and move over a name to see it on the whole TUI.
   `esc` brings the old one back, and `⏎` keeps it and writes `[tui] theme` in `config.toml`, comments untouched.
 - **Stacked charts, and keys to reach every kind**, in the TUI's chart view and the `-- chart:` header: `-- chart: stacked x=day y=orders,refunds`, with `horizontal` to lay it on its side.
-  On a chart, `t` steps through grouped, stacked and line, `r` turns the bars, and `v` comes back to the kind and orientation you left.
+  On a chart, `t` steps through grouped, stacked and line, `r` turns the bars, and `v` comes back to the kind and orientation you left; the footer names them while a chart shows.
 - **Grouped charts, upright or on their side**, in the `-- chart:` header: `-- chart: grouped x=day y=orders,refunds`, or with `horizontal` at the end.
   `bar` stays valid and means `grouped horizontal`.
 - **A bar chart says what did not fit**, in the TUI's chart view: a pane too small says `+3 more` for the points it leaves out.
