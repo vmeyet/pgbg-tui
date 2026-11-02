@@ -284,6 +284,7 @@ Name the command in the `[ai]` table of `config.toml`:
 command = ["claude", "-p", "--model", "haiku"]  # reads the prompt on stdin, prints SQL; never run through a shell
 env = ["USER"]                                  # claude finds its login through USER
 ghost = true                                    # the AI completion; off by default
+ghost_command = ["llm", "-m", "fast"]           # what the AI completion asks; command by default
 literals = "masked"                             # or "sent"; masked by default
 timeout = 60                                    # seconds; 60 by default
 ```
@@ -293,6 +294,7 @@ timeout = 60                                    # seconds; 60 by default
 | `command` | The program and its arguments; it runs from an empty folder. |
 | `env` | The variables it gets besides `PATH`, `HOME`, `LANG` and `TERM`; one a password names is never passed. |
 | `ghost` | The AI completion: asks for the rest of the statement after 1 s without a key, when no completion shows, and shows it as a suggestion; `→` takes it. |
+| `ghost_command` | The program and its arguments for the AI completion alone, as a quicker model; it gets the same `env`, `timeout` and `literals`, `ghost` still turns it on, and `ctrl-g` keeps `command`. |
 | `literals` | `masked` replaces the statement's values with markers, `sent` sends them as typed. |
 | `timeout` | How long the command has before it is stopped. |
 

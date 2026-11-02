@@ -1,5 +1,5 @@
-//! The idle ghost: once the editor sat a second without a key, the `[ai] command` asked for the rest of the statement
-//! under the cursor, shown faded after it as the completion ghost is, and taken with the same `→`.
+//! The idle ghost: once the editor sat a second without a key, the `[ai] ghost_command`, else the `[ai] command`, asked
+//! for the rest of the statement under the cursor, shown faded after it as the completion ghost is, and taken with the same `→`.
 //! The `--` lines right above the statement are the instruction; under them, the statement may still be empty.
 //! The loop owns the second; the app only says whether one would ask.
 use super::editor::Revision;
@@ -102,7 +102,7 @@ impl App {
     fn ask_idle_when(&mut self, wanted: impl Fn(&Question<'_>) -> bool) -> Vec<Action> {
         let Some(settings) = self.idle_settings().filter(|_| self.may_ask_idle()) else { return vec![] };
         let Some(question) = self.sheet().question().filter(|question| wanted(question)) else { return vec![] };
-        let settings = settings.without_passwords_of(&self.connections);
+        let settings = settings.without_passwords_of(&self.connections).for_idle_ghost();
         let editor = self.editor_on_screen();
         let Some(IdlePrompt { prompt, left_out }) = self.sheet().idle_prompt(&question, settings.literals) else {
             self.asks.idle = IdleAsk::Asked(editor);
@@ -342,6 +342,54 @@ pub(in crate::tui) mod tests {
         let sent = app.ask_idle_ghost();
         let [Action::Ask { ask: AskId::FIRST, prompt, .. }] = &*sent else { panic!("{sent:?}") };
         assert!(prompt.text().contains("SELECT * FROM orders WHERE"), "{}", prompt.text());
+    }
+
+    fn with_ghost_command(app: App) -> App {
+        let command = vec!["/opt/bin/fast".to_owned()];
+        app.with_ai(Some(AiSettings { ghost: true, ghost_command: Some(command), ..ai_settings() }))
+    }
+
+    #[test]
+    fn the_idle_ask_runs_the_ghost_command_and_names_it_in_the_footer() {
+        let mut app = with_ghost_command(idle_on("SELECT * FROM orders WHERE "));
+        let sent = app.ask_idle_ghost();
+        let [Action::Ask { settings, .. }] = &*sent else { panic!("{sent:?}") };
+        assert_eq!(settings.command, ["/opt/bin/fast"]);
+        assert_eq!(app.ai_program(), Some("fast"));
+    }
+
+    #[test]
+    fn the_idle_ask_keeps_passwords_out_of_the_ghost_command() {
+        let shop =
+            fixtures::connection("tier = \"local\"\nurl = \"postgres://nina@localhost/shop\"\npassword = { env = \"SHOP_PGPASSWORD\" }\n");
+        let sent = with_ghost_command(with_ghost_on(&shop, "SELECT * FROM orders WHERE ")).ask_idle_ghost();
+        let [Action::Ask { settings, .. }] = &*sent else { panic!("{sent:?}") };
+        assert_eq!(settings.env, ["PATH"]);
+    }
+
+    #[test]
+    fn with_no_ghost_command_the_idle_ask_runs_the_command() {
+        let sent = idle_on("SELECT * FROM orders WHERE ").ask_idle_ghost();
+        let [Action::Ask { settings, .. }] = &*sent else { panic!("{sent:?}") };
+        assert_eq!(settings.command, ["llm"]);
+    }
+
+    #[test]
+    fn ctrl_g_runs_the_command_and_names_it_in_the_footer_whatever_the_ghost_command() {
+        let mut app = with_ghost_command(idle_on("SELECT * FROM orders WHERE "));
+        ctrl(&mut app, 'g');
+        press(&mut app, "only the ids");
+        let sent = app.handle_key(KeyEvent::from(KeyCode::Enter));
+        let [Action::Ask { settings, .. }] = &*sent else { panic!("{sent:?}") };
+        assert_eq!(settings.command, ["llm"]);
+        assert_eq!(app.ai_program(), Some("llm"));
+    }
+
+    #[test]
+    fn a_ghost_command_does_not_turn_the_idle_ghost_on() {
+        let settings = AiSettings { ghost_command: Some(vec!["fast".to_owned()]), ..ai_settings() };
+        let mut app = idle_on("SELECT * FROM orders WHERE ").with_ai(Some(settings));
+        assert_eq!((app.wants_idle_ghost(), app.ask_idle_ghost()), (false, vec![]));
     }
 
     #[test]

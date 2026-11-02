@@ -1,4 +1,4 @@
-//! The `[ai]` table: the command `ctrl-g` asks for SQL, and what reaches it.
+//! The `[ai]` table: the command `ctrl-g` asks for SQL, the one the idle ghost asks, and what reaches them.
 use crate::ai::LiteralPolicy;
 use crate::connection::{Connection, TunnelSpec};
 use crate::secret::SecretSource;
@@ -17,6 +17,8 @@ const DEFAULT_TIMEOUT_SECONDS: u64 = 60;
 pub(super) struct AiTable {
     #[serde(default)]
     command: Option<Vec<String>>,
+    #[serde(default)]
+    ghost_command: Option<Vec<String>>,
     #[serde(default)]
     env: Vec<String>,
     #[serde(default)]
@@ -38,6 +40,8 @@ pub(crate) struct AiSettings {
     pub(crate) literals: LiteralPolicy,
     /// Whether a second without a key asks for the rest of the statement under the cursor: off unless `ghost = true`.
     pub(crate) ghost: bool,
+    /// What the idle ghost runs in place of `command`, when set; `ghost` alone decides whether it runs.
+    pub(crate) ghost_command: Option<Vec<String>>,
 }
 
 /// The `[ai]` table checked, with a warning for each variable it lists that a password names.
@@ -49,11 +53,9 @@ pub(super) struct ReadAi {
 
 /// The settings `table` gives, given `connections`, whose password variables never reach the command.
 pub(super) fn read(table: AiTable, connections: &[Connection]) -> Result<ReadAi> {
-    let AiTable { command, env, timeout, literals, ghost } = table;
-    let Some(command) = command else { return Ok(ReadAi { settings: None, warnings: vec![] }) };
-    if command.first().is_none_or(String::is_empty) {
-        bail!("`[ai] command` names no program: give it as a list, such as [\"llm\", \"-m\", \"local\"]");
-    }
+    let AiTable { command, ghost_command, env, timeout, literals, ghost } = table;
+    let ghost_command = checked_command(ghost_command, "ghost_command")?;
+    let Some(command) = checked_command(command, "command")? else { return Ok(ReadAi { settings: None, warnings: vec![] }) };
     let timeout = match timeout {
         Some(0) => bail!("`[ai] timeout` is a number of seconds above 0"),
         seconds => Duration::from_secs(seconds.unwrap_or(DEFAULT_TIMEOUT_SECONDS)),
@@ -62,7 +64,17 @@ pub(super) fn read(table: AiTable, connections: &[Connection]) -> Result<ReadAi>
     let arguments = command_arguments(connections);
     let warnings = env.iter().filter_map(|name| warning(name, &passwords, &arguments)).collect();
     let env = passed_variables(env, &passwords);
-    Ok(ReadAi { settings: Some(AiSettings { command, env, timeout, literals, ghost }), warnings })
+    Ok(ReadAi { settings: Some(AiSettings { command, env, timeout, literals, ghost, ghost_command }), warnings })
+}
+
+/// `command` as the `[ai]` table's `key` gives it, refused when it names no program.
+fn checked_command(command: Option<Vec<String>>, key: &str) -> Result<Option<Vec<String>>> {
+    match command {
+        Some(argv) if argv.first().is_none_or(String::is_empty) => {
+            bail!("`[ai] {key}` names no program: give it as a list, such as [\"llm\", \"-m\", \"local\"]")
+        }
+        checked => Ok(checked),
+    }
 }
 
 impl AiSettings {
@@ -74,11 +86,29 @@ impl AiSettings {
         Self { env, ..self.clone() }
     }
 
+    /// These settings with the command the idle ghost asks in place of `command`.
+    pub(crate) fn for_idle_ghost(&self) -> Self {
+        Self { command: self.idle_ghost_command().to_vec(), ..self.clone() }
+    }
+
     /// The program's file name, `claude` for `/opt/bin/claude`, as the footer names it while it runs.
     pub(crate) fn program_name(&self) -> &str {
-        let program = self.command.first().map_or("", String::as_str);
-        Path::new(program).file_name().and_then(|name| name.to_str()).unwrap_or(program)
+        file_name_of(&self.command)
     }
+
+    /// As [`Self::program_name`], for the program the idle ghost asks.
+    pub(crate) fn idle_ghost_program_name(&self) -> &str {
+        file_name_of(self.idle_ghost_command())
+    }
+
+    fn idle_ghost_command(&self) -> &[String] {
+        self.ghost_command.as_deref().unwrap_or(&self.command)
+    }
+}
+
+fn file_name_of(command: &[String]) -> &str {
+    let program = command.first().map_or("", String::as_str);
+    Path::new(program).file_name().and_then(|name| name.to_str()).unwrap_or(program)
 }
 
 fn password_variables(connections: &[Connection]) -> BTreeSet<&str> {
@@ -162,6 +192,7 @@ mod tests {
             timeout: Duration::from_secs(60),
             literals: LiteralPolicy::Masked,
             ghost: false,
+            ghost_command: None,
         };
         assert_eq!((read.settings, read.warnings.len()), (Some(expected), 0));
     }
@@ -181,6 +212,41 @@ mod tests {
     #[test]
     fn the_idle_ghost_may_be_turned_on() {
         assert!(settings("command = [\"llm\"]\nghost = true", &[]).unwrap().settings.unwrap().ghost);
+    }
+
+    #[test]
+    fn with_no_ghost_command_the_idle_ghost_asks_the_command() {
+        let read = settings("command = [\"/opt/bin/llm\"]", &[]).unwrap().settings.unwrap();
+        assert_eq!(read.for_idle_ghost(), read);
+        assert_eq!(read.idle_ghost_program_name(), "llm");
+    }
+
+    #[test]
+    fn a_ghost_command_is_what_the_idle_ghost_asks_and_only_it() {
+        let read = settings("command = [\"llm\"]\nghost_command = [\"/opt/bin/fast\", \"-q\"]", &[]).unwrap().settings.unwrap();
+        assert_eq!(read.for_idle_ghost().command, ["/opt/bin/fast", "-q"]);
+        assert_eq!((read.idle_ghost_program_name(), read.program_name()), ("fast", "llm"));
+    }
+
+    #[test]
+    fn a_ghost_command_with_no_program_is_refused() {
+        assert!(settings("command = [\"llm\"]\nghost_command = []", &[]).is_err());
+        assert!(settings("command = [\"llm\"]\nghost_command = [\"\"]", &[]).is_err());
+    }
+
+    #[test]
+    fn a_ghost_command_with_no_program_is_refused_without_a_command_too() {
+        assert!(settings("ghost_command = []", &[]).is_err());
+    }
+
+    #[test]
+    fn a_ghost_command_as_one_string_is_refused() {
+        assert!(settings("command = [\"llm\"]\nghost_command = \"fast -q\"", &[]).is_err());
+    }
+
+    #[test]
+    fn a_ghost_command_alone_leaves_asking_off() {
+        assert_eq!(settings("ghost_command = [\"fast\"]\nghost = true", &[]).unwrap().settings, None);
     }
 
     #[test]

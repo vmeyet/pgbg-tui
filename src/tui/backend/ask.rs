@@ -71,6 +71,7 @@ mod tests {
             timeout: Duration::from_secs(60),
             literals: LiteralPolicy::Masked,
             ghost: false,
+            ghost_command: None,
         };
         let (sender, answers) = mpsc::unbounded_channel();
         (Asks::new(sender), settings, answers)

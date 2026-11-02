@@ -111,6 +111,7 @@ The review of #214 to #231 found these, most severe first.
 ## 24. After a week of use
 
 - [x] `⌥s` saves the editor's text under a new path, starting from the open query's, and the editor stands for the new query
+- [x] `[ai] ghost_command` names the command the idle ghost asks; `ctrl-g` keeps `command`
 
 ## Later
 
