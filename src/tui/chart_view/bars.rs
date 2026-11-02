@@ -268,6 +268,13 @@ mod tests {
     }
 
     #[test]
+    fn a_negative_grouped_value_runs_the_other_way_from_zero() {
+        let daily = daily_orders_and_refunds().with_cell(0, 2, Value::Int(-40));
+        insta::assert_snapshot!("bars_negative", render(&series(&daily, "grouped horizontal"), 48, 10).backend());
+        insta::assert_snapshot!("bars_negative_upright", render(&series(&daily, "grouped"), 48, 10).backend());
+    }
+
+    #[test]
     fn stacked_columns_pile_their_values() {
         insta::assert_snapshot!("stacked_vertical", render(&series(&daily_orders_and_refunds(), "stacked"), 48, 10).backend());
     }
@@ -278,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn a_negative_value_runs_the_other_way_from_zero() {
+    fn a_negative_stacked_value_runs_the_other_way_from_zero() {
         let daily = daily_orders_and_refunds().with_cell(0, 2, Value::Int(-40));
         insta::assert_snapshot!("stacked_negative", render(&series(&daily, "stacked"), 48, 10).backend());
         insta::assert_snapshot!("stacked_negative_horizontal", render(&series(&daily, "stacked horizontal"), 48, 8).backend());
