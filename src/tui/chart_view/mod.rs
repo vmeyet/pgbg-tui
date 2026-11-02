@@ -12,6 +12,11 @@ mod bar;
 mod line;
 
 const UNITS: [(f64, &str); 4] = [(1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "k")];
+/// The order series take vtui's user colours in: neighbours, which touch in a stack, stay apart on every palette, where the
+/// palette's own order puts the two blues of Nord or Tokyo Night side by side.
+const SERIES_ORDER: [usize; 6] = [0, 5, 1, 4, 2, 3];
+/// The legend takes at most one row in this many, so the plot keeps the pane.
+const PANE_ROWS_PER_LEGEND_ROW: u16 = 3;
 
 /// The chart of a result in `area`, or why it has none.
 pub(super) fn draw(f: &mut Frame<'_>, chart: &Result<Series, ChartError>, theme: &Theme, area: Rect) {
@@ -28,29 +33,32 @@ fn no_chart<'a>(error: &ChartError, theme: &Theme) -> Paragraph<'a> {
 }
 
 fn draw_series(f: &mut Frame<'_>, series: &Series, theme: &Theme, area: Rect) {
-    let legend_rows = u16::from(series.y.len() > 1);
+    let legend = if series.y.len() > 1 { legend(series, theme, area.width) } else { vec![] };
+    let legend_rows = u16::try_from(legend.len()).unwrap_or(u16::MAX).min(area.height / PANE_ROWS_PER_LEGEND_ROW);
     let [legend_area, plot] = Layout::vertical([Constraint::Length(legend_rows), Constraint::Fill(1)]).areas(area);
-    f.render_widget(Paragraph::new(legend(series, theme)), legend_area);
+    f.render_widget(Paragraph::new(legend), legend_area);
     match series.kind {
         ChartKind::Bar => bar::draw(f, series, theme, plot),
         ChartKind::Line => line::draw(f, series, theme, plot),
     }
 }
 
-/// `■ orders  ■ refunds`, each square in its column's colour.
-fn legend(series: &Series, theme: &Theme) -> Line<'static> {
-    let entries = series.y.iter().enumerate().flat_map(|(column, y)| {
-        [
-            Span::styled("■ ", Style::default().fg(colour(theme, column))),
-            Span::styled(format!("{}  ", printable(y.name.as_str())), Style::default().fg(theme.muted)),
-        ]
-    });
-    Line::from(entries.collect::<Vec<_>>())
+/// `■ orders  ■ refunds`, each name in its series' colour, going on to the next row when `width` is full.
+fn legend(series: &Series, theme: &Theme, width: u16) -> Vec<Line<'static>> {
+    let mut rows: Vec<Line<'static>> = vec![];
+    for (column, y) in series.y.iter().enumerate() {
+        let entry = Span::styled(format!("■ {}  ", printable(y.name.as_str())), Style::default().fg(colour(theme, column)));
+        match rows.last_mut() {
+            Some(row) if row.width() + entry.width() <= usize::from(width) => row.spans.push(entry),
+            _ => rows.push(Line::from(entry)),
+        }
+    }
+    rows
 }
 
-/// Each y column takes the next of vtui's user colours, starting over after the last one.
+/// The colour of the series in y column `column`: the seventh takes the colour of the first, and so on.
 fn colour(theme: &Theme, column: usize) -> Color {
-    theme.users[column % theme.users.len()]
+    theme.users[SERIES_ORDER[column % SERIES_ORDER.len()]]
 }
 
 /// A number in a few characters: `12.5`, `1.2k`, `3.4M`.
@@ -98,6 +106,72 @@ mod tests {
     #[test]
     fn several_y_columns_get_a_legend() {
         insta::assert_snapshot!("legend", render(&series(&sales(), "bar"), 40, 8).backend());
+    }
+
+    /// A customer and `columns` numeric columns, `series_0` first.
+    fn wide(columns: usize) -> ResultSet {
+        let names = (0..columns).map(|at| column(&format!("series_{at}"), ColumnKind::Int));
+        let values = (0..columns).map(|at| Value::Int(at as i64 + 1));
+        ResultSet::whole(
+            std::iter::once(column("customer", ColumnKind::Text)).chain(names).collect(),
+            vec![std::iter::once(Value::Text("nina".into())).chain(values).collect()],
+        )
+    }
+
+    #[test]
+    fn a_legend_too_wide_for_one_row_goes_on_to_the_next() {
+        insta::assert_snapshot!("legend_rows", render(&series(&wide(5), "bar"), 28, 12).backend());
+    }
+
+    #[test]
+    fn the_legend_never_takes_the_pane_from_the_plot() {
+        let drawn = render(&series(&wide(6), "bar"), 12, 2).backend().to_string();
+        assert_eq!(drawn.matches('■').count(), 0, "{drawn}");
+    }
+
+    #[test]
+    fn a_legend_name_is_drawn_in_the_colour_of_its_series() {
+        let terminal = render(&series(&sales(), "bar"), 40, 8);
+        let buffer = terminal.backend().buffer();
+        let theme = Theme::default();
+        assert_eq!([buffer[(2, 0)].fg, buffer[(12, 0)].fg], [colour(&theme, 0), colour(&theme, 1)]);
+    }
+
+    fn every_palette() -> impl Iterator<Item = Theme> {
+        Theme::NAMES.into_iter().map(|name| Theme::named(name).unwrap())
+    }
+
+    fn distance(left: Color, right: Color) -> Option<f64> {
+        let (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) = (left, right) else { return None };
+        let squares = [(r1, r2), (g1, g2), (b1, b2)].map(|(one, other)| f64::from(one.abs_diff(other)).powi(2));
+        Some(squares.iter().sum::<f64>().sqrt())
+    }
+
+    #[test]
+    fn six_series_get_six_colours_none_of_them_the_ground_on_every_palette() {
+        for theme in every_palette() {
+            let colours: Vec<Color> = (0..SERIES_ORDER.len()).map(|at| colour(&theme, at)).collect();
+            let distinct: std::collections::HashSet<String> = colours.iter().map(|colour| format!("{colour:?}")).collect();
+            assert_eq!(distinct.len(), colours.len(), "{}", theme.name);
+            assert!(!colours.contains(&theme.base), "{}", theme.name);
+        }
+    }
+
+    #[test]
+    fn neighbouring_series_stay_far_apart_on_every_rgb_palette() {
+        const FAR_APART: f64 = 60.0;
+        for theme in every_palette() {
+            for at in 0..SERIES_ORDER.len() {
+                let apart = distance(colour(&theme, at), colour(&theme, at + 1));
+                assert!(apart.is_none_or(|apart| apart >= FAR_APART), "{} {at}: {apart:?}", theme.name);
+            }
+        }
+    }
+
+    #[test]
+    fn colours_start_over_past_the_palette() {
+        let theme = Theme::default();
+        assert_eq!(colour(&theme, SERIES_ORDER.len() + 2), colour(&theme, 2));
     }
 
     #[test]

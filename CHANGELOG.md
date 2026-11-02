@@ -41,6 +41,11 @@ Each entry says what changed, then where, then how to use it.
   What runs from the pane you are on comes first, and `⏎` runs it as its key does; the others name the pane they work in.
 - **Pick a theme live**: type `theme` in the command palette and move over a name to see it on the whole TUI.
   `esc` brings the old one back, and `⏎` keeps it and writes `[tui] theme` in `config.toml`, comments untouched.
+- **A legend names each series in its colour**, on a chart of several `y=` columns: it goes on to more rows in a narrow pane, and the colours keep neighbours apart on every `[tui] theme`, starting over past the sixth.
+
+### Fixed
+
+- **A point with a gap on each side shows**, on a line chart: a value between two NULLs drew nothing.
 
 ## 0.2.0 - 2026-10-30
 

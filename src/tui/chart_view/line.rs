@@ -21,7 +21,7 @@ pub(super) fn draw(f: &mut Frame<'_>, series: &Series, theme: &Theme, area: Rect
     let segments: Vec<Vec<Vec<(f64, f64)>>> = series.y.iter().map(|y| segments(&series.positions, y)).collect();
     let datasets = segments.iter().enumerate().flat_map(|(column, runs)| {
         let style = Style::default().fg(colour(theme, column));
-        runs.iter().map(move |run| Dataset::default().marker(Marker::Braille).graph_type(GraphType::Line).style(style).data(run))
+        runs.iter().map(move |run| Dataset::default().marker(Marker::Braille).graph_type(run_shape(run)).style(style).data(run))
     });
     let x = bounds(series.positions.iter().copied());
     let y = bounds(series.y.iter().flat_map(|column| column.values.iter().flatten().copied()));
@@ -37,6 +37,11 @@ fn segments(positions: &[f64], y: &YColumn) -> Vec<Vec<(f64, f64)>> {
     let points = positions.iter().zip(&y.values).map(|(&x, value)| value.map(|value| (x, value)));
     let runs = points.collect::<Vec<_>>();
     runs.split(Option::is_none).map(|run| run.iter().flatten().copied().collect::<Vec<_>>()).filter(|run| !run.is_empty()).collect()
+}
+
+/// A line joins two points at least, so a point with a gap on each side is drawn as a dot, or it would not show.
+const fn run_shape(run: &[(f64, f64)]) -> GraphType {
+    if run.len() == 1 { GraphType::Scatter } else { GraphType::Line }
 }
 
 /// The lowest and highest value, each moved out by one when they are equal.
@@ -76,6 +81,14 @@ mod tests {
     fn a_missing_value_breaks_the_line() {
         let y = YColumn { name: ColumnName::new("orders"), values: vec![Some(1.0), None, Some(3.0), Some(4.0)] };
         assert_eq!(segments(&[0.0, 1.0, 2.0, 3.0], &y), [vec![(0.0, 1.0)], vec![(2.0, 3.0), (3.0, 4.0)]]);
+    }
+
+    #[test]
+    fn a_point_with_a_gap_on_each_side_still_shows() {
+        let orders = [Some(5), None, Some(1), None, Some(9)];
+        let drawn = render(&series(&daily(&orders), "line"), 40, 8).backend().to_string();
+        let dots = drawn.chars().filter(|symbol| ('\u{2801}'..='\u{28ff}').contains(symbol)).count();
+        assert_eq!(dots, 3, "{drawn}");
     }
 
     #[test]
