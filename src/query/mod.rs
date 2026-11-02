@@ -51,6 +51,11 @@ impl QueryPath {
         Ok(Self(text.to_owned()))
     }
 
+    /// The path as it is on disk, unlike its `Display`, which escapes it for the screen.
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+
     fn parts(&self) -> impl Iterator<Item = &str> {
         self.0.split('/')
     }

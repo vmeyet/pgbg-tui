@@ -40,6 +40,7 @@ pub(crate) enum Act {
     Add,
     Edit,
     Save,
+    SaveAs,
     NewQuery,
     EditOutside,
     History,
@@ -110,6 +111,7 @@ impl Act {
             Self::Add => "add",
             Self::Edit => "edit",
             Self::Save => "save",
+            Self::SaveAs => "save_as",
             Self::NewQuery => "new_query",
             Self::EditOutside => "edit_outside",
             Self::History => "history",
@@ -517,6 +519,7 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Quit, Pane::CopyAs, &[control('c')]).help("^c", "quit"),
     row(Act::EditOutside, Pane::Editor, &[control('x')]).help("^x", "edit the saved query in $EDITOR"),
     row(Act::Save, Pane::Anywhere, &[control('s')]).help("^s", "save the query, naming a new one").footer("^s", "save"),
+    row(Act::SaveAs, Pane::Anywhere, &[alt('s')]).help("⌥s", "save the text under a new path, the open query left as it is"),
     row(Act::NewQuery, Pane::Anywhere, &[control('q')]).help("^q", "a new, empty query"),
     row(Act::History, Pane::Anywhere, &[control('r')]).help("^r", "search the statements run on this connection"),
     row(Act::Versions, Pane::Anywhere, &[control('v')]).help("^v", "the versions of the saved query its saves replaced"),
@@ -726,6 +729,11 @@ mod tests {
     fn command_k_finds_a_query_as_ctrl_p_does() {
         assert_eq!(act_for(command('k'), Pane::Editor), Some(Act::Find));
         assert_eq!(act_for(key(KeyCode::Char('k')), Pane::Editor), None);
+    }
+
+    #[test]
+    fn option_s_saves_under_a_new_path_from_the_editor_and_the_result() {
+        assert_eq!([Pane::Editor, Pane::Result].map(|pane| act_for(alt('s'), pane)), [Some(Act::SaveAs); 2]);
     }
 
     #[test]

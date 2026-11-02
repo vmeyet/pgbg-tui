@@ -15,10 +15,9 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, prompt: &Prompt, area: Rect) {
     let theme = app.theme();
     let spans = match prompt {
         Prompt::SaveAs { path, error } => {
-            let (before, under, after) = path.split();
             let mut spans = vec![
                 Span::styled(" save as › ", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
-                Span::raw(format!("{before}{under}{after}")),
+                Span::raw(render::printable(path.text()).into_owned()),
                 Span::styled("▌ ", Style::default().fg(theme.accent)),
             ];
             spans.extend(error.iter().map(|error| Span::styled(format!("{error} "), Style::default().fg(theme.danger))));
@@ -67,9 +66,19 @@ mod tests {
     use super::super::ui;
     use crate::db::model::{ColumnKind, ResultSet, Value};
     use crate::fixtures::column;
-    use crossterm::event::{KeyCode, KeyEvent};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+
+    #[test]
+    fn the_save_as_prompt_escapes_a_control_character_of_the_open_querys_path() {
+        let mut app = app_on(&connection("local", "read-only"));
+        app.apply(Answer::Queries(QueryAnswer::Opened { connection: shop(), query: query("da\x1b[2Kily.sql"), text: "SELECT 1".into() }));
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::ALT));
+        let mut terminal = Terminal::new(TestBackend::new(80, 6)).unwrap();
+        terminal.draw(|f| _ = ui::draw(f, &app)).unwrap();
+        insta::assert_snapshot!("save_as_escaped", terminal.backend());
+    }
 
     #[test]
     fn the_question_escapes_a_control_character_and_a_reversing_mark_in_a_name() {

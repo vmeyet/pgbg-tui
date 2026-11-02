@@ -182,6 +182,7 @@ impl App {
             }
             Act::Open => return self.open_in_sidebar(),
             Act::Save => return self.save(),
+            Act::SaveAs => self.ask_save_as(),
             Act::NewQuery => return self.ask_open(Opening::New),
             Act::EditOutside => return self.edit_outside(),
             Act::History => return self.recall(),
