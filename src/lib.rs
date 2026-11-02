@@ -19,6 +19,8 @@ mod history;
 mod keys;
 mod lock;
 pub mod log;
+#[cfg_attr(not(test), expect(dead_code, reason = "the tree of the next change reads it"))]
+mod plan;
 mod program;
 mod query;
 mod release;

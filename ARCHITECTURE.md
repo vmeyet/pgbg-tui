@@ -26,6 +26,7 @@ The code is the contract; this page describes it, and changes in the MR that cha
 | `complete/` | Completion, pure: the `Index` built from a `Catalog`, the `Ask` at the cursor, ranked candidates, joins on foreign keys |
 | `ai/` | Asking a command for SQL: the prompt and its masking, the schema slice, the answer read back, all pure; `command.rs` runs the command |
 | `format/`, `chart/`, `keys.rs`, `export.rs` | Pure: cell formats under a `Clock`, chart series and, in one file per `ChartKind`, what each draws; a result's keys and lookups, copies as CSV, JSON or Markdown |
+| `plan.rs` | Pure: the plan an `EXPLAIN (FORMAT JSON)` result holds, its nodes, what each costs on its own and the costliest; any other shape gives none |
 | `history.rs` | Every statement run, per connection, in `<data folder>/history/<connection>.jsonl`; never a row nor a secret |
 | `syntax/` | SQL colours from tree-sitter, JSON colours by hand |
 | `act.rs` | Every action in one table: name, default keys, help line, pane; the help, the footer and the command palette all read it |
@@ -158,6 +159,7 @@ One word per concept, in code, docs and UI.
 | statement | One SQL statement, the unit pgbg runs |
 | query | A saved `.sql` file in a connection's queries folder |
 | result | The columns and rows a statement returned, page by page |
+| plan | The nodes an `EXPLAIN (FORMAT JSON)` returned, as a tree |
 | page | One batch of rows fetched from the portal |
 | chart | A grouped, stacked or line drawing of a result |
 | orientation | Which way a chart's bars run: `vertical`, upright, or `horizontal`, on their side |
