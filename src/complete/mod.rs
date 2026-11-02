@@ -3,6 +3,7 @@
 pub(crate) use context::Ask;
 pub(crate) use index::Index;
 pub(crate) use join::alias_of;
+pub(crate) use keyword::rest_of_keyword;
 pub(crate) use rank::{Candidate, Kind};
 
 mod context;

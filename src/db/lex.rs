@@ -197,7 +197,7 @@ fn is_word_start(c: char) -> bool {
     c.is_ascii_alphabetic() || c == '_' || !c.is_ascii()
 }
 
-fn is_word_char(c: char) -> bool {
+pub(crate) fn is_word_char(c: char) -> bool {
     is_word_start(c) || c.is_ascii_digit() || c == '$'
 }
 
