@@ -234,6 +234,7 @@ In the TUI, a bar above the editor shows one field per parameter.
 | `v` | Show the result as a chart, or as a grid again. |
 | `t` `r` | On a chart: its next kind, grouped, stacked or line; its bars upright or on their side. |
 | `z` `Z` | Keep the primary key the result starts with, or else its first column, on the left while the grid scrolls, or nothing: on by default; keep the columns up to the cursor's. |
+| `x` `X` | Hide the column under the cursor from the grid; show every column again. |
 | `y` `Y` `c` | Copy the cell; the row as CSV; the result as CSV, JSON or Markdown. |
 | `o` | A JSON cell as a tree: `⏎` folds, `y` copies the value, `Y` its path as `.items[0].sku`. |
 | `F1` `?` | Every key of the pane you are in: filter, sort, formats, mouse, undo and the rest. |

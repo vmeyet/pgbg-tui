@@ -1,7 +1,7 @@
 //! The results grid's state: the cursor's cell, the first row and column in view, and each column's format, width and
 //! colouring.
 use super::colouring::{Colouring, colourings};
-use super::shown_columns::ShownColumns;
+use super::shown_columns::{KeptColumns, ShownColumns};
 use super::shown_rows::{Order, ShownRows, Sort};
 use crate::db::model::{ColumnName, ResultSet, Value};
 use crate::format::{self, Format, Mode};
@@ -67,11 +67,11 @@ pub(in crate::tui) struct Grid {
     keys: Keys,
     /// The rows shown and their order, after `/` and `s`.
     shown: ShownRows,
-    /// The columns shown and their order, after `z` and `Z`.
+    /// The columns shown and their order, after `z`, `Z`, `x` and `X`.
     columns: ShownColumns,
     /// The cursor's row, by its index in the result.
     pub(in crate::tui) row: usize,
-    /// The cursor's column, by its index in the result.
+    /// The cursor's column, by its index in the result: never a hidden one.
     pub(in crate::tui) column: usize,
     /// The place of the first row in view among the rows shown.
     pub(in crate::tui) top: usize,
@@ -91,7 +91,7 @@ impl Grid {
             keys,
             shown: ShownRows::default(),
             row: 0,
-            column: 0,
+            column: columns.first(),
             columns,
             top: 0,
             left: 0,
@@ -113,6 +113,17 @@ impl Grid {
         self
     }
 
+    /// What was chosen for the columns of `result`, to keep past it.
+    pub(super) fn keep_columns(&self, result: &ResultSet) -> KeptColumns {
+        self.columns.keep(result.columns())
+    }
+
+    /// Takes on `kept` when it was chosen for the columns of `result`; the cursor goes on the first column drawn.
+    pub(super) fn take_kept_columns(&mut self, kept: &KeptColumns, result: &ResultSet) {
+        self.columns.take_kept(kept, result.columns());
+        self.column = self.columns.first();
+    }
+
     /// The columns shown and their order.
     pub(in crate::tui) const fn columns(&self) -> &ShownColumns {
         &self.columns
@@ -132,6 +143,19 @@ impl Grid {
     pub(super) fn freeze_through_cursor(&mut self, room: Room) {
         let cursor = self.column;
         self.rearrange(room, |columns| columns.freeze_through(cursor));
+    }
+
+    /// Hides the cursor's column and moves the cursor next to it; false, and nothing done, on the last column shown.
+    pub(super) fn hide_cursor_column(&mut self, room: Room) -> bool {
+        let hidden = self.column;
+        let Some(next) = self.columns.neighbour_of(hidden) else { return false };
+        self.column = next;
+        self.rearrange(room, |columns| columns.hide(hidden));
+        true
+    }
+
+    pub(super) fn show_every_column(&mut self, room: Room) {
+        self.rearrange(room, ShownColumns::show_all);
     }
 
     /// Applies `change` to the columns: the first to scroll stays so while it shows, and the cursor stays in view.

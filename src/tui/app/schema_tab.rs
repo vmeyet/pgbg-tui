@@ -286,7 +286,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::super::fixtures::{app, app_on, every_pane, shop, to_shop};
+    use super::super::fixtures::{app, app_on, click_at, every_pane, shop, to_shop};
     use super::super::sheet::{SchemaState, SessionState};
     use super::super::{Answer, Fit, Incoming, Run, RunId, SessionId};
     use super::*;
@@ -296,10 +296,10 @@ mod tests {
     use crate::failure::Failure;
     use crate::fixtures::{self, shop_catalog};
     use crate::query::params::ParamInput;
-    use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use crossterm::event::KeyCode;
     use ratatui::layout::Rect;
     use std::sync::Arc;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
     use vtui::help::Help;
 
     fn press(app: &mut App, code: KeyCode) -> Vec<Action> {
@@ -519,11 +519,6 @@ mod tests {
         press(&mut app, KeyCode::Char('j'));
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.sheet().editor.text(), "SELECT * FROM public.orders LIMIT 100");
-    }
-
-    fn click_at(app: &mut App, column: u16, row: u16) -> Vec<Action> {
-        let mouse = MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column, row, modifiers: KeyModifiers::NONE };
-        app.handle_mouse(mouse, Instant::now())
     }
 
     /// The schema tab with its rows drawn from row 1, `first` the row drawn there.

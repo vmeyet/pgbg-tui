@@ -6,10 +6,10 @@ use crate::failure::Failure;
 use crate::fixtures::{self, keyed_catalog, keyed_orders, orders};
 use crate::query::params::ParamInput;
 use crate::tui::theme::Theme;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub(in crate::tui) fn connection(tier: &str, writes: &str) -> Connection {
     fixtures::connection(&format!("tier = \"{tier}\"\nurl = \"postgres://nina@localhost/shop\"\nwrites = \"{writes}\"\n"))
@@ -127,6 +127,12 @@ pub(in crate::tui) fn grid(app: &App) -> &Grid {
     grid
 }
 
+/// A left click at `column` and `row`, now.
+pub(in crate::tui) fn click_at(app: &mut App, column: u16, row: u16) -> Vec<Action> {
+    let mouse = MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column, row, modifiers: KeyModifiers::NONE };
+    app.handle_mouse(mouse, Instant::now())
+}
+
 /// `keys` pressed on `app`, a frame having given the grid its room.
 pub(in crate::tui) fn with_keys(mut app: App, keys: &str) -> App {
     app.fit(Fit { grid: Room { rows: 10, columns: 80 }, ..Fit::default() });
@@ -156,6 +162,24 @@ pub(in crate::tui) fn key_in_the_middle() -> App {
 /// The columns the grid draws with room for all, left to right.
 pub(in crate::tui) fn drawn(app: &App) -> Vec<usize> {
     grid(app).columns_in_view(80).collect()
+}
+
+/// What the character `c` asks of the backend on `app`.
+pub(in crate::tui) fn key(mut app: App, c: char) -> Vec<Action> {
+    app.handle_key(KeyEvent::from(KeyCode::Char(c)))
+}
+
+/// [`keyed_orders`] with `id` hidden and `total` under the cursor: the third column, drawn second.
+pub(in crate::tui) fn past_a_hidden_key() -> App {
+    with_keys(on_the_keyed_orders(), "xl")
+}
+
+/// Runs the editor's statement again as the run `run`, and answers with `result`.
+pub(in crate::tui) fn run_again(mut app: App, run: RunId, result: ResultSet) -> App {
+    press(&mut app, KeyCode::Tab);
+    press(&mut app, KeyCode::Enter);
+    app.apply(to_shop(Incoming::Result { run, result, took: Duration::from_millis(38) }));
+    app
 }
 
 pub(in crate::tui) fn view(app: &App) -> &View {

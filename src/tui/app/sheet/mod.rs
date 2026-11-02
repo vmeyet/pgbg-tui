@@ -4,6 +4,7 @@ use super::editor::{Editor, below};
 use super::ghost::Ghost;
 use super::grid::{Clock, Move, Reading, Room};
 use super::param_bar::{Direction, ParamBar};
+use super::shown_columns::KeptColumns;
 use super::{Action, Confirmed, Grid, Incoming, RunId, SessionId, TunnelState};
 use crate::ai::TableUse;
 use crate::chart::{self, ChartColumns, ChartError, Series};
@@ -152,6 +153,8 @@ pub(in crate::tui) struct Sheet {
     browsed: Option<Browsed>,
     /// The chart last left for the grid, so `v` comes back to the kind and orientation it had, until the next result.
     left_chart: Option<ChartColumns>,
+    /// What was chosen for the columns of the last statement's result, kept while the next one runs.
+    kept_columns: Option<KeptColumns>,
 }
 
 /// The editor's text before a table was browsed, and the text browsing wrote.
@@ -188,6 +191,7 @@ impl Sheet {
             tried_to_write: None,
             browsed: None,
             left_chart: None,
+            kept_columns: None,
         }
     }
 
@@ -410,6 +414,16 @@ impl Sheet {
         vec![Action::Run { connection: self.name().clone(), run, statement, input, confirmed }]
     }
 
+    /// The grid on a new `result`, under what was chosen for the last one when it has the same columns.
+    fn grid_on(&self, result: &ResultSet, reading: &Reading) -> Grid {
+        let formats = format::opening(result.columns(), &self.header.formats, reading.mode);
+        let mut grid = Grid::new(result, formats, self.keys_of(result), &reading.clock);
+        if let Some(kept) = &self.kept_columns {
+            grid.take_kept_columns(kept, result);
+        }
+        grid
+    }
+
     /// Shows `result` in the result pane as if a run returned it, titled `title`.
     /// Does nothing while a statement runs, since it would drop that statement's answer.
     pub(super) fn show(&mut self, title: String, result: ResultSet, reading: &Reading) {
@@ -422,8 +436,12 @@ impl Sheet {
         self.run = Run::Done { run, grid, result, took: Duration::ZERO, view: View::Grid, is_page_asked: false };
     }
 
-    /// A new run's id; the marks of the last run are dropped.
+    /// A new run's id; the marks of the last run are dropped, and what was chosen for the columns of a statement's result
+    /// kept, unless a table's columns show in its place.
     fn next_run(&mut self) -> RunId {
+        if let (Run::Done { result, grid, .. }, None) = (&self.run, &self.shown) {
+            self.kept_columns = Some(grid.keep_columns(result));
+        }
         let run = self.last_run.map_or(RunId::FIRST, RunId::next);
         self.last_run = Some(run);
         self.error_mark = None;
@@ -497,8 +515,7 @@ impl Sheet {
             Incoming::Result { run, result, took } => {
                 self.left_chart = None;
                 let view = Series::asked(self.header.chart.as_ref(), &result).map_or(View::Grid, |series| View::Chart(Ok(series)));
-                let formats = format::opening(result.columns(), &self.header.formats, reading.mode);
-                let grid = Box::new(Grid::new(&result, formats, self.keys_of(&result), &reading.clock));
+                let grid = Box::new(self.grid_on(&result, reading));
                 self.run = Run::Done { run, grid, result, took, view, is_page_asked: false };
             }
             Incoming::Page { run, .. } | Incoming::PageFailed { run, .. } if !self.is_waiting_on_page(run) => {}
