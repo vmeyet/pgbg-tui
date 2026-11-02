@@ -108,6 +108,10 @@ The review of #214 to #231 found these, most severe first.
 - [x] The question before a write says how many rows an `UPDATE` or `DELETE` would touch, counted by a read of its `WHERE`, in the TUI
 - [x] `pgbg run` says the same count in its `y/N` question
 
+## 24. After a week of use
+
+- [x] `⌥s` saves the editor's text under a new path, starting from the open query's, and the editor stands for the new query
+
 ## Later
 
 - revu and slack run `update` and the brew check through `vtui::update`, as pgbg does

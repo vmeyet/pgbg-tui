@@ -6,6 +6,11 @@ Each entry says what changed, then where, then how to use it.
 
 ## Unreleased
 
+### New
+
+- **Save as**: in the TUI, `⌥s` saves the editor's text under a new path and leaves the open query as it is.
+  The prompt starts from the open query's path, or empty with none open; once saved, the editor stands for the new query, and a path that holds other text is refused.
+
 ## 0.2.0 - 2026-10-30
 
 ### New

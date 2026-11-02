@@ -177,6 +177,7 @@ pgbg never reads nor writes a query in the folder you start it in, so a query ne
 The sidebar and `ctrl-p` show the queries of the connection on screen.
 `queries = "prod"` on another connection, as a replica, makes it use the folder of `prod` instead of its own.
 `ctrl-s` on a new query saves it in that folder, and `ctrl-x` opens the query in `$EDITOR`.
+`⌥s` saves the editor's text under a new path, leaves the open query as it is, and the editor then stands for the new query; a path that holds other text is refused.
 
 Each save over a query, from `ctrl-s` or `$EDITOR`, keeps the text it replaced under `versions/` in pgbg's data folder: the newest 50 of each query.
 `ctrl-v` lists them, and `⏎` puts one back in the editor, unsaved until you press `ctrl-s`.
@@ -224,6 +225,7 @@ In the TUI, a bar above the editor shows one field per parameter.
 | `⏎` `d` | In the schema tab: a table's first rows, written in the editor to refine, a click doing the same; its columns and indexes. |
 | `^r` | Search the history of this connection. |
 | `^s` | Save the query. |
+| `⌥s` | Save the text under a new path, starting from the open query's. On macOS, the terminal must send option as meta. |
 | `v` | Show the result as a chart, or as a grid again. |
 | `y` `Y` `c` | Copy the cell; the row as CSV; the result as CSV, JSON or Markdown. |
 | `o` | A JSON cell as a tree: `⏎` folds, `y` copies the value, `Y` its path as `.items[0].sku`. |

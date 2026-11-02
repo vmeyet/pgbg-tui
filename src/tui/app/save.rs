@@ -13,7 +13,7 @@ const SAVE_FIRST: &str = "save the query with ^s before editing it in $EDITOR";
 /// A question on the footer line; while it is open it takes every key.
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::tui) enum Prompt {
-    /// The path to save a new query at, as typed so far, and why the last path was refused.
+    /// The path to save the editor's text at as a new query, as typed so far, and why the last path was refused.
     SaveAs { path: Field, error: Option<String> },
     /// What to open once the user agrees to drop the editor's unsaved text.
     OpenOverUnsaved(Opening),
@@ -60,10 +60,16 @@ impl App {
     pub(super) fn save(&mut self) -> Vec<Action> {
         let sheet = self.sheet();
         let Some(query) = sheet.opened.clone() else {
-            self.overlay = Some(Overlay::Prompt(Prompt::SaveAs { path: Field::default(), error: None }));
+            self.ask_save_as();
             return vec![];
         };
         vec![Action::SaveQuery { connection: sheet.name().clone(), query, text: sheet.editor.text().to_owned() }]
+    }
+
+    /// Asks for the path of a new query, starting from the path of the query the editor stands for, if any.
+    pub(super) fn ask_save_as(&mut self) {
+        let path = self.sheet().opened.as_ref().map_or_else(Field::default, |query| Field::new(query.path.as_str()));
+        self.overlay = Some(Overlay::Prompt(Prompt::SaveAs { path, error: None }));
     }
 
     /// Opens the saved query in the user's editor; unsaved text would be lost, so it asks for a save first.
@@ -153,6 +159,15 @@ mod tests {
         press(app, KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL))
     }
 
+    fn alt_s(app: &mut App) -> Vec<Action> {
+        press(app, KeyEvent::new(KeyCode::Char('s'), KeyModifiers::ALT))
+    }
+
+    fn prompted_path(app: &App) -> &str {
+        let Some(Overlay::Prompt(Prompt::SaveAs { path, .. })) = &app.overlay else { panic!("{:?}", app.overlay) };
+        path.text()
+    }
+
     fn opened(text: &str) -> App {
         let mut app = with_queries();
         app.apply(Answer::Queries(QueryAnswer::Opened { connection: shop(), query: query("daily.sql"), text: text.into() }));
@@ -176,6 +191,62 @@ mod tests {
             [Action::SaveNewQuery { connection: shop(), folder: shop(), path, text: "SELECT 2".into() }]
         );
         assert_eq!(app.overlay, None);
+    }
+
+    #[test]
+    fn alt_s_starts_from_the_open_querys_path_and_typing_goes_on_at_its_end() {
+        let mut app = opened("SELECT 1");
+        assert_eq!(alt_s(&mut app), []);
+        assert_eq!(prompted_path(&app), "daily.sql");
+        press(&mut app, KeyCode::Char('x'));
+        assert_eq!(prompted_path(&app), "daily.sqlx");
+    }
+
+    #[test]
+    fn alt_s_with_no_query_open_starts_from_an_empty_path() {
+        let mut app = typed("SELECT 2");
+        alt_s(&mut app);
+        assert_eq!(prompted_path(&app), "");
+    }
+
+    #[test]
+    fn alt_s_starts_from_the_path_on_disk_not_its_escaped_form() {
+        let mut app = with_queries();
+        app.apply(Answer::Queries(QueryAnswer::Opened { connection: shop(), query: query("da\x1bily.sql"), text: "SELECT 1".into() }));
+        alt_s(&mut app);
+        assert_eq!(prompted_path(&app), "da\x1bily.sql");
+    }
+
+    #[test]
+    fn alt_s_sends_the_edited_text_to_the_new_path_and_nothing_to_the_open_query() {
+        let mut app = opened("SELECT 1");
+        press(&mut app, KeyCode::Char(';'));
+        alt_s(&mut app);
+        (0.."daily.sql".len()).for_each(|_| _ = press(&mut app, KeyCode::Backspace));
+        "weekly".chars().for_each(|c| _ = press(&mut app, KeyCode::Char(c)));
+        let path = QueryPath::parse("weekly.sql").unwrap();
+        assert_eq!(
+            press(&mut app, KeyCode::Enter),
+            [Action::SaveNewQuery { connection: shop(), folder: shop(), path, text: "SELECT 1;".into() }]
+        );
+    }
+
+    #[test]
+    fn once_saved_under_the_new_path_the_editor_stands_for_the_new_query() {
+        let mut app = opened("SELECT 1");
+        press(&mut app, KeyCode::Char(';'));
+        app.apply(Answer::Queries(QueryAnswer::Saved { connection: shop(), query: query("weekly.sql"), text: "SELECT 1;".into() }));
+        assert_eq!((app.sheet().opened.as_ref(), app.sheet().is_dirty), (Some(&query("weekly.sql")), false));
+        assert_eq!(ctrl_s(&mut app), [Action::SaveQuery { connection: shop(), query: query("weekly.sql"), text: "SELECT 1;".into() }]);
+    }
+
+    #[test]
+    fn a_refused_save_as_leaves_the_editor_on_the_open_query_and_unsaved() {
+        let mut app = opened("SELECT 1");
+        press(&mut app, KeyCode::Char(';'));
+        let path = QueryPath::parse("customers.sql").unwrap();
+        app.apply(Answer::Queries(QueryAnswer::NotSaved { connection: shop(), path, error: "a query is already there".into() }));
+        assert_eq!((app.sheet().opened.as_ref(), app.sheet().is_dirty), (Some(&query("daily.sql")), true));
     }
 
     #[test]
