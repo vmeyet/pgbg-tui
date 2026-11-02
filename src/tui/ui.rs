@@ -110,7 +110,9 @@ fn hints(app: &App, pane: Pane, columns: usize) -> Line<'static> {
     let width = |hint: Hint| hint_text(hint).iter().map(|text| text.chars().count()).sum();
     let rewrite = app.has_rewrite().then_some(REWRITE_HINT);
     let room = columns.saturating_sub(rewrite.map_or(0, width));
-    let spans = rewrite.into_iter().chain(act::footer_within(pane, room, width)).flat_map(|hint| {
+    let is_on_chart = pane == Pane::Result && app.sheet().is_chart_shown();
+    let shown = if is_on_chart { act::chart_footer_within(room, width) } else { act::footer_within(pane, room, width) };
+    let spans = rewrite.into_iter().chain(shown).flat_map(|hint| {
         let [keys, what] = hint_text(hint);
         [Span::styled(keys, key), Span::styled(what, does)]
     });
@@ -290,6 +292,16 @@ mod tests {
             let terminal_colours: Vec<Color> = painted.filter(|fg| !matches!(fg, Color::Rgb(..))).collect();
             assert_eq!(terminal_colours, vec![], "a colour that bypasses the theme");
         }
+    }
+
+    #[test]
+    fn the_footer_of_a_chart_names_its_keys_at_sixty_columns() {
+        let mut app = a_result_in(dracula());
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        assert!(!footer_of(&render(&app, 60, 14)).contains("t kind"));
+        app.handle_key(KeyEvent::from(KeyCode::Char('v')));
+        let footer = footer_of(&render(&app, 60, 14));
+        assert!(footer.contains("t kind") && footer.contains("r flip"), "{footer}");
     }
 
     #[test]

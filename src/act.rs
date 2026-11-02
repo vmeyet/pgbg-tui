@@ -180,6 +180,11 @@ impl Act {
         )
     }
 
+    /// Whether this act works on the chart, so its hint shows only while the result pane shows one.
+    const fn is_chart(self) -> bool {
+        matches!(self, Self::ChartKind | Self::ChartFlip)
+    }
+
     /// Whether this act works on the ghost, so its key does what it does around the editor while no ghost shows.
     pub(crate) const fn is_ghost(self) -> bool {
         matches!(self, Self::TakeGhost | Self::DropGhost)
@@ -399,8 +404,12 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::CopyRow, Pane::Result, &[key(KeyCode::Char('Y'))]).help("Y", "copy the row as CSV"),
     row(Act::CopyResult, Pane::Result, &[key(KeyCode::Char('c'))]).help("c", "copy the result as CSV, JSON or Markdown"),
     row(Act::Chart, Pane::Result, &[key(KeyCode::Char('v'))]).help("v", "the result as a grid or a chart").footer("v", "chart"),
-    row(Act::ChartKind, Pane::Result, &[key(KeyCode::Char('t'))]).help("t", "on a chart: its next kind, grouped, stacked or line"),
-    row(Act::ChartFlip, Pane::Result, &[key(KeyCode::Char('r'))]).help("r", "on a chart: its bars upright, or on their side"),
+    row(Act::ChartKind, Pane::Result, &[key(KeyCode::Char('t'))])
+        .help("t", "on a chart: its next kind, grouped, stacked or line")
+        .footer("t", "kind"),
+    row(Act::ChartFlip, Pane::Result, &[key(KeyCode::Char('r'))])
+        .help("r", "on a chart: its bars upright, or on their side")
+        .footer("r", "flip"),
     row(Act::StepFormat, Pane::Result, &[key(KeyCode::Char('f'))])
         .help("f", "the column in its next format: raw, then readable ones")
         .footer("f", "format"),
@@ -609,6 +618,10 @@ pub(crate) fn footer(pane: Pane) -> impl Iterator<Item = Hint> {
 }
 
 fn footer_rows(pane: Pane) -> impl Iterator<Item = &'static Row> {
+    rows_with_a_hint(pane).filter(|row| !row.act.is_chart())
+}
+
+fn rows_with_a_hint(pane: Pane) -> impl Iterator<Item = &'static Row> {
     let own = ROWS.iter().filter(move |row| row.pane == pane);
     let anywhere = ROWS.iter().filter(move |row| row.pane == Pane::Anywhere && works_in(row, pane));
     own.chain(anywhere).filter(|row| row.footer.is_some())
@@ -617,7 +630,15 @@ fn footer_rows(pane: Pane) -> impl Iterator<Item = &'static Row> {
 /// The footer's hints for `pane` that fit in `columns`, in the footer's order; `width` says what each hint takes.
 /// The way out and the way to every other key are the last to go; the others go from the end.
 pub(crate) fn footer_within(pane: Pane, columns: usize, width: impl Fn(Hint) -> usize) -> Vec<Hint> {
-    let rows: Vec<&Row> = footer_rows(pane).collect();
+    fit_hints(&footer_rows(pane).collect::<Vec<_>>(), columns, width)
+}
+
+/// The footer's hints while the result pane has the keys and shows a chart: the chart's keys, without those of the hidden grid.
+pub(crate) fn chart_footer_within(columns: usize, width: impl Fn(Hint) -> usize) -> Vec<Hint> {
+    fit_hints(&rows_with_a_hint(Pane::Result).filter(|row| !row.act.is_grid()).collect::<Vec<_>>(), columns, width)
+}
+
+fn fit_hints(rows: &[&Row], columns: usize, width: impl Fn(Hint) -> usize) -> Vec<Hint> {
     let mut by_priority: Vec<usize> = (0..rows.len()).collect();
     by_priority
         .sort_by_key(|&index| FOOTER_KEPT_LONGEST.iter().position(|&act| act == rows[index].act).unwrap_or(FOOTER_KEPT_LONGEST.len()));
@@ -725,6 +746,15 @@ mod tests {
     #[test]
     fn a_wide_footer_keeps_every_hint_in_order() {
         assert_eq!(footer_within(Pane::Editor, 500, hint_width), footer(Pane::Editor).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn the_chart_keys_are_hinted_on_a_chart_and_not_on_the_grid() {
+        let does = |hints: Vec<Hint>| hints.iter().map(|hint| hint.does).collect::<Vec<_>>();
+        let on_chart = does(chart_footer_within(500, hint_width));
+        let on_grid = does(footer_within(Pane::Result, 500, hint_width));
+        assert!(on_chart.contains(&"kind") && on_chart.contains(&"flip") && !on_chart.contains(&"rows"), "{on_chart:?}");
+        assert!(!on_grid.contains(&"kind") && !on_grid.contains(&"flip") && on_grid.contains(&"rows"), "{on_grid:?}");
     }
 
     #[test]

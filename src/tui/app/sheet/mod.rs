@@ -269,7 +269,7 @@ impl Sheet {
     }
 
     /// Whether the result pane shows a chart instead of the grid that the cursor keys move.
-    pub(super) fn is_chart_shown(&self) -> bool {
+    pub(in crate::tui) fn is_chart_shown(&self) -> bool {
         matches!(self.run, Run::Done { view: View::Chart(_), .. })
     }
 
