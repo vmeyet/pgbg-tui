@@ -83,7 +83,7 @@ mod tests {
     use super::*;
     use crate::chart::ChartError;
     use crate::db::model::ColumnKind;
-    use crate::fixtures::{column, orders, page};
+    use crate::fixtures::{column, orders, page, wide_orders};
     use crossterm::event::KeyCode;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -139,6 +139,16 @@ mod tests {
     #[test]
     fn a_sorted_column_says_which_way_in_its_header() {
         insta::assert_snapshot!("sorted_down", pressed(orders(), "lss"));
+    }
+
+    #[test]
+    fn the_first_column_stays_on_screen_while_the_grid_scrolls_right() {
+        insta::assert_snapshot!("frozen_scrolled", pressed(wide_orders(), "lllllll"));
+    }
+
+    #[test]
+    fn the_columns_up_to_the_cursor_stay_on_screen_once_frozen() {
+        insta::assert_snapshot!("frozen_through", pressed(wide_orders(), "lZlllll"));
     }
 
     #[test]

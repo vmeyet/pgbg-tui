@@ -1,0 +1,16 @@
+---
+source: src/tui/result_view.rs
+expression: "pressed(wide_orders(), \"lZlllll\")"
+---
+"╭ ● shop · local ──────────────────────────────────────────╮"
+"│╭ Editor ─ READ ONLY ────────────────────────────────────╮│"
+"││ SELECT 1                                               ││"
+"││                                                        ││"
+"│╰────────────────────────────────────────────────────────╯│"
+"│╭ Result ─ 2 rows · 38 ms ─ [grid] chart ────────────────╮│"
+"││    id  customer_a  customer_d  customer_e  customer_f  ││"
+"││ ▶  7   value 1     value 4     value 5     value 6     ││"
+"││    12  value 1     value 4     value 5     value 6     ││"
+"│╰────────────────────────────────────────────────────────╯│"
+"│ j/k rows  h/l columns  F1 keys  ^c quit      connecting… │"
+"╰──────────────────────────────────────────────────────────╯"

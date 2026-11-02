@@ -210,6 +210,14 @@ pub(crate) fn orders() -> ResultSet {
     )
 }
 
+/// `SELECT *` on a table too wide for a pane: `id` then eight columns of ten characters.
+pub(crate) fn wide_orders() -> ResultSet {
+    let names = ["id", "customer_a", "customer_b", "customer_c", "customer_d", "customer_e", "customer_f", "customer_g", "customer_h"];
+    let row =
+        |id: i64| std::iter::once(Value::Int(id)).chain((1..names.len()).map(|at| Value::Text(format!("value {at}").into()))).collect();
+    ResultSet::whole(names.iter().map(|name| column(name, ColumnKind::Text)).collect(), vec![row(7), row(12)])
+}
+
 /// Two rows of one column of a type pgbg does not decode, `shape`.
 pub(crate) fn undecoded() -> ResultSet {
     ResultSet::whole(vec![column("shape", ColumnKind::Other)], vec![vec![Value::Unsupported]; 2])

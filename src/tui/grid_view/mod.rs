@@ -37,18 +37,18 @@ struct Shown {
     width: u16,
 }
 
-/// The columns from `first` onward that fit between terminal columns `left` and `end`, each after its gap; the last one
-/// is cut to the space left.
-fn in_view(widths: &[usize], first: usize, left: u16, end: u16) -> Vec<Shown> {
+/// Those of `columns` that fit between terminal columns `left` and `end`, each after its gap; the last one is cut to the
+/// space left.
+fn in_view(widths: &[usize], columns: impl Iterator<Item = usize>, left: u16, end: u16) -> Vec<Shown> {
     let gap = GAP.len() as u16;
     let mut x = left;
     let mut shown = vec![];
-    for (index, &width) in widths.iter().enumerate().skip(first) {
+    for index in columns {
         if end - x <= gap {
             break;
         }
         x += gap;
-        let drawn = u16::try_from(width).unwrap_or(u16::MAX).min(end - x);
+        let drawn = u16::try_from(widths[index]).unwrap_or(u16::MAX).min(end - x);
         shown.push(Shown { index, x, width: drawn });
         x += drawn;
     }
@@ -58,7 +58,8 @@ fn in_view(widths: &[usize], first: usize, left: u16, end: u16) -> Vec<Shown> {
 /// The grid in `area`; returns the room it had below its header and next to the cursor's mark.
 pub(super) fn draw(f: &mut Frame<'_>, view: GridView<'_>, area: Rect) -> Room {
     let room = area.width.saturating_sub(MARK_WIDTH);
-    let shown = in_view(&view.grid.widths, view.grid.left, area.x + MARK_WIDTH, area.right().max(area.x + MARK_WIDTH));
+    let columns = view.grid.columns_in_view(usize::from(room));
+    let shown = in_view(&view.grid.widths, columns, area.x + MARK_WIDTH, area.right().max(area.x + MARK_WIDTH));
     let body_rows = usize::from(area.height).saturating_sub(1);
     let buffer = f.buffer_mut();
     if area.height > 0 {
@@ -210,7 +211,7 @@ mod tests {
     #[test]
     fn a_scrolled_grid_starts_at_its_first_column_in_view() {
         let result = orders();
-        let mut grid = Grid::raw(&result);
+        let mut grid = Grid::raw(&result).unfrozen();
         (grid.column, grid.left) = (1, 1);
         insta::assert_snapshot!("scrolled_right", render(&result, &grid, 40, 3).backend());
     }
@@ -241,6 +242,15 @@ mod tests {
     fn a_narrow_grid_cuts_its_last_column() {
         let result = orders();
         insta::assert_snapshot!("narrow", render(&result, &Grid::raw(&result), 22, 5).backend());
+    }
+
+    #[test]
+    fn a_frozen_column_past_half_a_narrow_grid_scrolls_away_with_the_others() {
+        let columns = vec![column("customer", ColumnKind::Text), column("id", ColumnKind::Int), column("total", ColumnKind::Int)];
+        let result = ResultSet::whole(columns, vec![vec![Value::Text("Zoë Nakamura".into()), Value::Int(103), Value::Int(3)]]);
+        let mut grid = Grid::raw(&result);
+        (grid.column, grid.left) = (1, 1);
+        insta::assert_snapshot!("frozen_gives_way", render(&result, &grid, 22, 2).backend());
     }
 
     /// The styled runs of `rows` of one column of `kind`, each column raw, the cursor off them on a row beyond.

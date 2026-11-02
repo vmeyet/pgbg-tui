@@ -126,6 +126,7 @@ The review of #214 to #231 found these, most severe first.
 - [x] Bars draw from one model, so a negative value runs the other way from zero and a small pane says what it left out
 - [x] Grouped charts upright or on their side, from the `-- chart:` header
 - [x] Stacked charts, and `t` and `r` on a chart, so a result with no header reaches every kind
+- [x] The grid keeps the primary key it starts with, or else its first column, on the left while it scrolls, `z` `Z`, and gives way past half its width
 
 ## Later
 
