@@ -178,9 +178,10 @@ impl App {
         self.sheet_mut().take_suggestion(suggestion);
     }
 
-    /// The program the `[ai] command` runs, as the footer names it while an ask waits.
+    /// The program the waiting ask runs, as the footer names it.
     pub(in crate::tui) fn ai_program(&self) -> Option<&str> {
-        self.asks.settings.as_ref().map(AiSettings::program_name)
+        let settings = self.asks.settings.as_ref()?;
+        Some(if self.is_asking_idle() { settings.idle_ghost_program_name() } else { settings.program_name() })
     }
 
     pub(in crate::tui) fn ask_failure(&self) -> Option<&AskFailure> {
@@ -258,7 +259,14 @@ pub(in crate::tui) mod tests {
 
     pub(in crate::tui) fn ai_settings() -> AiSettings {
         let env = ["PATH", "SHOP_PGPASSWORD"].map(str::to_owned).to_vec();
-        AiSettings { command: vec!["llm".to_owned()], env, timeout: Duration::from_secs(60), literals: LiteralPolicy::Masked, ghost: false }
+        AiSettings {
+            command: vec!["llm".to_owned()],
+            env,
+            timeout: Duration::from_secs(60),
+            literals: LiteralPolicy::Masked,
+            ghost: false,
+            ghost_command: None,
+        }
     }
 
     /// The app on `shop` with an `[ai] command`, its schema read, `text` in the editor.

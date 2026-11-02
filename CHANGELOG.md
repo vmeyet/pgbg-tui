@@ -10,6 +10,8 @@ Each entry says what changed, then where, then how to use it.
 
 - **Save as**: in the TUI, `⌥s` saves the editor's text under a new path and leaves the open query as it is.
   The prompt starts from the open query's path, or empty with none open; once saved, the editor stands for the new query, and a path that holds other text is refused.
+- **A separate command for the AI completion**: `[ai] ghost_command` in `config.toml` names the program the idle ghost asks, as a quicker model, given as `command` is.
+  `ctrl-g` keeps `command`, `ghost = true` still turns the ghost on, and with no `ghost_command` the ghost asks `command` as before.
 
 ## 0.2.0 - 2026-10-30
 

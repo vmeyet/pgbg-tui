@@ -160,4 +160,4 @@ One word per concept, in code, docs and UI.
 | lookup | A read that follows a foreign key, read only and out of the history, named by its `LookId` |
 | trail | The tables of the rows a detail followed |
 | origin | The table column a result's column holds as is; a computed column has none |
-| ask | One sending of an instruction to the `[ai] command`, named by its `AskId`; its answer is a suggestion, never a run |
+| ask | One sending of an instruction to the `[ai] command`, or the `ghost_command` for the idle ghost, named by its `AskId`; its answer is a suggestion, never a run |
