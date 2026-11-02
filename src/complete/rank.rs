@@ -3,6 +3,7 @@
 //! after `JOIN`, the joins a foreign key gives come before them all.
 use super::context::{Ask, Want};
 use super::index::{Index, Names};
+use super::keyword::cased_as;
 use std::collections::HashSet;
 use vtui::complete::Ghost;
 
@@ -135,11 +136,6 @@ impl Match {
         let prefix_length = if self.is_fuzzy { 0 } else { self.name.chars().count() };
         (self.is_fuzzy, !self.is_in_scope, prefix_length)
     }
-}
-
-/// A keyword in lower case once what was typed of it holds a lower-case letter.
-fn cased_as(keyword: &str, typed: &str) -> String {
-    if typed.chars().any(char::is_lowercase) { keyword.to_lowercase() } else { keyword.to_owned() }
 }
 
 #[cfg(test)]

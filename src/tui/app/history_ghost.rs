@@ -5,7 +5,8 @@
 use super::ghost::Ghost;
 use super::idle_ghost::rest_after;
 use super::{Action, Sheet};
-use crate::db::lex::Span;
+use crate::complete::rest_of_keyword;
+use crate::db::lex::{self, Span};
 use crate::history::HistoryIndex;
 
 impl Sheet {
@@ -28,8 +29,24 @@ impl Sheet {
         }
         let typed = self.question()?.typed;
         let statement = self.history_index.best_after(typed)?;
-        Ghost::at_cursor(before.len(), &rest_after(typed, statement.as_str())?)
+        let rest = rest_after(typed, statement.as_str())?;
+        Ghost::at_cursor(before.len(), &keyword_cased_as_typed(typed, rest))
     }
+}
+
+/// `rest` with the end of the keyword `typed` stops inside in the case typed; what follows stays as the past statement wrote it.
+fn keyword_cased_as_typed(typed: &str, rest: String) -> String {
+    let word_end = rest.find(|c| !lex::is_word_char(c)).unwrap_or(rest.len());
+    let (end_of_word, after) = rest.split_at(word_end);
+    match word_in_progress(typed).and_then(|word| rest_of_keyword(word, end_of_word)) {
+        Some(cased) => format!("{cased}{after}"),
+        None => rest,
+    }
+}
+
+/// The word the end of `typed` is part of; none after a blank, or in a literal or a quoted name.
+fn word_in_progress(typed: &str) -> Option<&str> {
+    lex::tokens(typed).last().filter(|last| last.range.end == typed.len())?.word(typed)
 }
 
 #[cfg(test)]
@@ -127,7 +144,40 @@ mod tests {
 
     #[test]
     fn three_typed_characters_show_the_rest() {
-        assert_eq!(rest(&typed_over(&[ORDERS], "sel")), Some("ECT * FROM orders"));
+        assert_eq!(rest(&typed_over(&[ORDERS], "sel")), Some("ect * FROM orders"));
+    }
+
+    #[test]
+    fn taking_the_rest_of_a_keyword_keeps_the_case_typed_and_the_statement_as_written() {
+        let mut app = typed_over(&[ORDERS], "sel");
+        app.handle_key(KeyEvent::from(KeyCode::Right));
+        assert_eq!(app.sheet().editor.split(), ("select * FROM orders", "", ""));
+    }
+
+    #[test]
+    fn upper_case_typed_ends_a_keyword_a_past_statement_wrote_in_lower_case() {
+        assert_eq!(rest(&typed_over(&["select * from orders"], "SEL")), Some("ECT * from orders"));
+    }
+
+    #[test]
+    fn a_keyword_further_on_ends_in_the_case_typed() {
+        assert_eq!(rest(&typed_over(&[ORDERS], "SELECT * fr")), Some("om orders"));
+    }
+
+    #[test]
+    fn the_rest_of_a_name_stays_as_the_past_statement_wrote_it() {
+        assert_eq!(rest(&typed_over(&["SELECT TOTAL FROM orders"], "select tot")), Some("AL FROM orders"));
+    }
+
+    #[test]
+    fn a_longer_word_that_starts_like_a_keyword_stays_as_written() {
+        assert_eq!(rest(&typed_over(&["SELECT * FROM\u{20ac} orders"], "SELECT * fr")), Some("OM\u{20ac} orders"));
+    }
+
+    #[test]
+    fn the_rest_of_a_literal_that_starts_like_a_keyword_stays_as_written() {
+        let past = "SELECT * FROM orders WHERE note = 'selECT'";
+        assert_eq!(rest(&typed_over(&[past], "SELECT * FROM orders WHERE note = 'sel")), Some("ECT'"));
     }
 
     #[test]
