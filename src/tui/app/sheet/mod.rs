@@ -1,4 +1,5 @@
 //! One connection's sheet: its editor, the last statement run and its outcome, and the state of its session.
+use super::ask::Suggestion;
 use super::editor::{Editor, below};
 use super::ghost::Ghost;
 use super::grid::{Clock, Move, Reading, Room};
@@ -139,6 +140,8 @@ pub(in crate::tui) struct Sheet {
     /// How much the history uses each table of the schema read, which orders what an ask shows of it.
     pub(in crate::tui) table_use: TableUse,
     pub(in crate::tui) ghost: Option<Ghost>,
+    /// An idle answer that rewrites what is typed, until `ctrl-g` shows it or the next key drops it.
+    pub(super) rewrite: Option<Suggestion>,
     pub(in crate::tui) bar: ParamBar,
     /// The statement that tried to write while the sheet was off screen or under an overlay, asked about once it shows.
     tried_to_write: Option<ToRun>,
@@ -175,6 +178,7 @@ impl Sheet {
             index: None,
             table_use: TableUse::default(),
             ghost: None,
+            rewrite: None,
             bar: ParamBar::default(),
             tried_to_write: None,
             browsed: None,

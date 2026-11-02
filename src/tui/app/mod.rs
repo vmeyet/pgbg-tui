@@ -178,8 +178,8 @@ pub(super) struct App {
     next_session: SessionId,
     /// Why a change to the config failed when no form waits on it; the status line says it until the next key.
     config_failure: Option<String>,
-    /// What pgbg warned of as it started, as a file left where it no longer reads it; the status line says it until the
-    /// next key.
+    /// What pgbg warned of as it started, as a file left where it no longer reads it, or the comment an idle ask left out;
+    /// the status line says it until the next key.
     warning: Option<String>,
     /// What the last key did when it shows nowhere else, as a copy's outcome; the status line says it until the next key.
     note: Option<String>,

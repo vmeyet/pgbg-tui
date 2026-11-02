@@ -41,7 +41,11 @@ impl App {
             return self.overlay_key(overlay, key);
         }
         let ghost = self.sheet_mut().ghost.take();
-        match act::act_for(key, self.pane()) {
+        let act = act::act_for(key, self.pane());
+        if act != Some(Act::Ask) {
+            self.sheet_mut().rewrite = None;
+        }
+        match act {
             Some(act) if act.is_ghost() => self.ghost_act(act, ghost, key),
             Some(act) => self.act(act),
             None => self.key_in_focus(key),

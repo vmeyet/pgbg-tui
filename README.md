@@ -293,7 +293,7 @@ timeout = 60                                    # seconds; 60 by default
 | --- | --- |
 | `command` | The program and its arguments; it runs from an empty folder. |
 | `env` | The variables it gets besides `PATH`, `HOME`, `LANG` and `TERM`; one a password names is never passed. |
-| `ghost` | The AI completion: asks for the rest of the statement after 1 s without a key, when no completion shows, and shows it as a suggestion; `→` takes it. |
+| `ghost` | The AI completion: asks for the rest of the statement after 1 s without a key, when no completion shows, and shows it as a suggestion; `→` takes it. An answer that rewrites what you typed instead waits: the footer says `^g rewrite waiting`, and `ctrl-g` shows its diff. |
 | `ghost_command` | The program and its arguments for the AI completion alone, as a quicker model; it gets the same `env`, `timeout` and `literals`, `ghost` still turns it on, and `ctrl-g` keeps `command`. |
 | `literals` | `masked` replaces the statement's values with markers, `sent` sends them as typed. |
 | `timeout` | How long the command has before it is stopped. |

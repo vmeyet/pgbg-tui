@@ -39,6 +39,7 @@ impl App {
             let place = self.editor_place(at);
             let sheet = self.sheet_mut();
             sheet.ghost = None;
+            sheet.rewrite = None;
             sheet.editor.click(place, click);
         }
         let picked = if self.pane() == Pane::Schema { self.click_schema_row(at) } else { vec![] };

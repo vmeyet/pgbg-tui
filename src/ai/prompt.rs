@@ -3,7 +3,7 @@ use super::answer::{self, AnswerError};
 use super::mask::{LiteralPolicy, Literals, Masked, masked, masked_comment};
 use super::slice::{Line, TableUse, slice};
 use crate::connection::Tier;
-use crate::db::lex::{Lexed, Span, Token};
+use crate::db::lex::Lexed;
 use crate::db::model::{Catalog, Statement};
 use crate::secret;
 use std::fmt;
@@ -52,7 +52,8 @@ pub(crate) enum NotSent {
     UnclosedQuote,
     /// The instruction and the statement alone pass the cap.
     TooLong,
-    /// The comment read as the instruction opens a quote or a `{{` it never closes, so its values cannot be masked.
+    /// The comment read as the instruction opens a quote or a `{{` it never closes, or holds a quote it cannot pair, so
+    /// its values cannot be masked; an apostrophe inside a word is no quote.
     UnmaskableComment,
 }
 
@@ -75,9 +76,11 @@ impl Instruction {
     /// counted on from the statement's `before` literals; the literals of both come back.
     fn masked(&self, before: Literals, policy: LiteralPolicy) -> Result<Masked, NotSent> {
         let Some(comment) = &self.comment else { return Ok(Masked { text: self.text.clone(), literals: before }) };
-        refuse_unsafe_comment(comment, policy)?;
+        if secret::holds_secret(comment) {
+            return Err(NotSent::HoldsSecret);
+        }
         let comment = match policy {
-            LiteralPolicy::Masked => masked_comment(comment, before),
+            LiteralPolicy::Masked => masked_comment(comment, before).ok_or(NotSent::UnmaskableComment)?,
             LiteralPolicy::Sent => Masked { text: comment.clone(), literals: before },
         };
         Ok(Masked { text: format!("{}\n{}", comment.text, self.text), literals: comment.literals })
@@ -96,23 +99,12 @@ pub(crate) fn prompt(input: &PromptInput<'_>) -> Result<Prompt, NotSent> {
     Ok(Prompt { text: head + &schema, literals: instruction.literals })
 }
 
-/// A comment holding a secret is never sent; with literals masked, nor is one whose values no marker masks whole.
-fn refuse_unsafe_comment(comment: &str, policy: LiteralPolicy) -> Result<(), NotSent> {
-    match (refuse_unsafe(comment), policy) {
-        (Err(NotSent::HoldsSecret), _) => Err(NotSent::HoldsSecret),
-        (Err(_), LiteralPolicy::Masked) => Err(NotSent::UnmaskableComment),
-        _ => Ok(()),
-    }
-}
-
 fn refuse_unsafe(sql: &str) -> Result<(), NotSent> {
     let lexed = Lexed::of(sql);
-    let is_unreadable = lexed.tokens().iter().any(|placed| placed.token == Token::Unreadable);
-    let is_unclosed = matches!(lexed.span_at(sql.len()), Span::String | Span::QuotedName);
     match () {
         () if secret::holds_secret(sql) => Err(NotSent::HoldsSecret),
-        () if is_unreadable => Err(NotSent::UnreadableParam),
-        () if is_unclosed => Err(NotSent::UnclosedQuote),
+        () if lexed.has_unreadable_param() => Err(NotSent::UnreadableParam),
+        () if lexed.ends_in_open_quote() => Err(NotSent::UnclosedQuote),
         () => Ok(()),
     }
 }
@@ -179,9 +171,7 @@ impl fmt::Display for NotSent {
             Self::UnreadableParam => "the statement holds a `{{` that opens no parameter: close it as `{{name}}` first",
             Self::UnclosedQuote => "the statement opens a quote it never closes: close it first",
             Self::TooLong => "the instruction and the statement pass 16 KiB: shorten one of them",
-            Self::UnmaskableComment => {
-                "the comment above the statement opens a quote or a `{{` it never closes, so its values cannot be masked"
-            }
+            Self::UnmaskableComment => "comment left out: it has an unclosed quote or `{{`",
         })
     }
 }
@@ -372,8 +362,27 @@ mod tests {
     }
 
     #[test]
+    fn a_comment_instruction_with_an_apostrophe_inside_a_word_is_sent() {
+        let text = under_comment("what's the total", LiteralPolicy::Masked).unwrap().text().to_owned();
+        assert!(text.contains("Instruction:\nwhat's the total\nfinish it\n"), "{text}");
+    }
+
+    #[test]
+    fn a_value_after_an_apostrophe_inside_a_word_never_reaches_the_prompt() {
+        let text = under_comment("it's 'nina'", LiteralPolicy::Masked).unwrap().text().to_owned();
+        assert!(text.contains("Instruction:\nit's '<literal 1>'\n") && !text.contains("nina"), "{text}");
+    }
+
+    #[test]
     fn a_comment_instruction_opening_a_quote_is_unmaskable() {
-        assert_eq!(under_comment("don't show nina", LiteralPolicy::Masked).unwrap_err(), NotSent::UnmaskableComment);
+        for comment in ["'nina", "it's 'nina", "orders' of nina", "note'nina' and 'bob' 'x", "a 'nina'y"] {
+            assert_eq!(under_comment(comment, LiteralPolicy::Masked).unwrap_err(), NotSent::UnmaskableComment, "{comment}");
+        }
+    }
+
+    #[test]
+    fn a_comment_instruction_holding_a_secret_after_an_apostrophe_is_never_sent() {
+        assert_eq!(under_comment("what's the password", LiteralPolicy::Masked).unwrap_err(), NotSent::HoldsSecret);
     }
 
     #[test]

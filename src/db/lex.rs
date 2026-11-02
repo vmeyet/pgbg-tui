@@ -109,6 +109,16 @@ impl Lexed {
         &self.tokens[start..end.max(start)]
     }
 
+    /// Whether it holds a `{{` that opens no parameter.
+    pub(crate) fn has_unreadable_param(&self) -> bool {
+        self.tokens.iter().any(|placed| placed.token == Token::Unreadable)
+    }
+
+    /// Whether it ends inside a string or a quoted name it never closes.
+    pub(crate) fn ends_in_open_quote(&self) -> bool {
+        self.not_code.last().is_some_and(|run| run.is_open && matches!(run.span, Span::String | Span::QuotedName))
+    }
+
     /// What kind of text a character typed at byte `at` would fall in.
     pub(crate) fn span_at(&self, at: usize) -> Span {
         let before = self.not_code.partition_point(|run| run.range.start < at);

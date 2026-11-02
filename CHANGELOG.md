@@ -20,6 +20,13 @@ Each entry says what changed, then where, then how to use it.
 ### Fixed
 
 - **Common words no longer pull tables into the AI prompt**: `for` does not bring a table `forms`, and a column such as `name` or `created_at` does not bring every table holding one.
+- **A rewrite waits for `ctrl-g`**, in the TUI with `[ai] ghost = true`: when the answer rewrites what you typed instead of continuing it, the footer reads `^g rewrite waiting`.
+  `ctrl-g` then shows it as a diff, with no new ask, and `tab` takes it; any other key drops it.
+
+### Fixed
+
+- **An apostrophe inside a word no longer loses the comment**, in the AI completion with literals masked: `-- what's the total` is now the instruction, and a quoted value after it is still masked.
+- **A comment left out of the AI completion says why**, on the status line until the next key, and not only in the log.
 
 ## 0.2.0 - 2026-10-30
 

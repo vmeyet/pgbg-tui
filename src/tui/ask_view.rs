@@ -79,8 +79,8 @@ fn cut_to(mut lines: Vec<Line<'static>>, height: usize, style: Style) -> Vec<Lin
 
 #[cfg(test)]
 mod tests {
-    use super::super::app::ask::tests::{answered, asking_on, waiting};
-    use super::super::app::idle_ghost::tests::idle_on;
+    use super::super::app::ask::tests::{answered, asking_on, ctrl_g, waiting};
+    use super::super::app::idle_ghost::tests::{UNMASKABLE_COMMENT, ghosted, idle_on};
     use super::super::app::{Answer, AskFailure, AskId};
     use super::super::{styled, ui};
     use crate::ai::CommandError;
@@ -130,6 +130,26 @@ mod tests {
     fn an_answer_taller_than_its_pane_says_how_many_lines_are_not_shown() {
         let answer = (1..=20).map(|n| format!("SELECT {n}")).collect::<Vec<_>>().join("\n");
         insta::assert_snapshot!("ask_cut", render(&answered("SELECT 1", &answer), 60, 14).backend());
+    }
+
+    #[test]
+    fn the_footer_says_a_rewrite_is_waiting() {
+        let app = ghosted("SELECT * FROM orders WHERE ", "SELECT id FROM orders");
+        insta::assert_snapshot!("rewrite_waiting", render(&app, 60, 6).backend());
+    }
+
+    #[test]
+    fn ctrl_g_shows_the_waiting_rewrite_as_a_diff() {
+        let mut app = ghosted("SELECT * FROM orders WHERE ", "SELECT id FROM orders");
+        ctrl_g(&mut app);
+        insta::assert_snapshot!("rewrite_diff", render(&app, 60, 14).backend());
+    }
+
+    #[test]
+    fn a_comment_left_out_says_why_in_the_status_line() {
+        let mut app = idle_on(UNMASKABLE_COMMENT);
+        app.ask_idle_ghost();
+        insta::assert_snapshot!("comment_left_out", render(&app, 120, 6).backend());
     }
 
     #[test]

@@ -94,7 +94,7 @@ impl Backend {
             Action::Ask { ask, prompt, settings } => self.asks.ask(ask, prompt, &settings),
             Action::DropAsk(ask) => self.asks.drop_ask(ask),
             Action::LogNoIdleGhost(why) => tracing::warn!("{why}"),
-            Action::LogCommentLeftOut(why) => tracing::warn!("the idle ask left out its comment: {why}"),
+            Action::LogCommentLeftOut(why) => tracing::warn!("idle ask: {why}"),
         }
     }
 
