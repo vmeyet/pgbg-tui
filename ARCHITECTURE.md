@@ -69,7 +69,7 @@ These invariants hold across every flow; a change that breaks one is a bug.
 - The history only orders those tables: `tui/backend/schema.rs` counts the runs naming each table after a schema read and hands `TableUse` to the app, so within one reason the most used comes first; no history text, statement or count goes into a prompt, and a missing or unreadable history means catalog order.
 - An AI answer is a suggestion: taking it and running it are two keys, and the run goes through the guard.
 - `tui/app/` stays pure: the loop hands it the clock as a `Clock` and the timers as events.
-- The command palette runs an act through the path its key takes, and only an act whose row works in the pane it opened on, so a write still asks.
+- The command palette runs an act through the path its key takes, and only an act whose row works in the pane it opened on, so a write still asks; a theme shows while highlighted, and only `⏎` sends the `Action` that writes `[tui] theme`.
 
 ## Boundaries
 
@@ -163,7 +163,7 @@ One word per concept, in code, docs and UI.
 | version | A text of a saved query that a save replaced, kept apart from the queries |
 | schema | The schemas, tables, columns and indexes a session's role can read |
 | catalog | The schema as one read gave it, with its search path and whether the table cap cut it |
-| command palette | The `ctrl-l` popup over every act |
+| command palette | The `ctrl-l` popup over every act and theme |
 | completion | A name the editor offers at the cursor |
 | parameter | A `{{name}}` in a statement, bound when it runs |
 | format | How a column's cells read: raw, or a readable form of its kind |

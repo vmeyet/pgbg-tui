@@ -367,3 +367,8 @@ pub(crate) fn capped() -> ResultSet {
     let rows = (0..10_000).map(|n| cells(n).into_iter().cycle().take(50).collect()).collect();
     ResultSet::new(columns, Page { rows, extent: Extent::Cut })
 }
+
+/// A theme other than the default one.
+pub(crate) fn nord() -> vtui::theme::Theme {
+    vtui::theme::Theme::named("nord").unwrap()
+}

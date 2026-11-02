@@ -121,6 +121,7 @@ The review of #214 to #231 found these, most severe first.
 - [x] The editor underlines the token a server error points at and scrolls it into view, the cursor left where it was
 - [x] A command palette on `^l` and `:` lists every act of the action table, and runs those that work in the pane it opened on
 - [x] Plain `cargo test` needs no database for the schema tests, and a tunnel that just died is never taken for ready, whatever the timing of its watching thread
+- [x] The palette lists every theme: each shows live while highlighted, `esc` restores the old one, and `⏎` writes `[tui] theme`
 
 ## Later
 

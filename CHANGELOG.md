@@ -39,6 +39,8 @@ Each entry says what changed, then where, then how to use it.
   The underline goes when the text changes or the next run starts; an error without a position shows as before, with none.
 - **Command palette**: `^l` anywhere in the TUI, or `:` on the result and in the sidebar, lists every command with its keys, filtered as you type.
   What runs from the pane you are on comes first, and `⏎` runs it as its key does; the others name the pane they work in.
+- **Pick a theme live**: type `theme` in the command palette and move over a name to see it on the whole TUI.
+  `esc` brings the old one back, and `⏎` keeps it and writes `[tui] theme` in `config.toml`, comments untouched.
 
 ## 0.2.0 - 2026-10-30
 
