@@ -171,6 +171,7 @@ fn tunnel_text(tunnel: &TunnelState) -> String {
 fn session_text(session: &SessionState) -> &'static str {
     match session {
         SessionState::Opening => "connecting…",
+        SessionState::Reconnecting => "reconnecting…",
         SessionState::Open => "connected",
         SessionState::Failed(_) => "failed",
         SessionState::Closed => "closed",
@@ -504,6 +505,15 @@ mod tests {
             let footer = footer_of(&render(&connected_through_a_tunnel(), width, 8));
             assert!(footer.contains("^c quit") && footer.contains("F1 keys") && footer.contains("connected"), "{width}: {footer}");
         }
+    }
+
+    #[test]
+    fn a_session_being_opened_again_says_it_is_reconnecting() {
+        let mut app = app();
+        app.apply(to_shop(Incoming::Closed(Lost::LinkFailed("connection closed".into()))));
+        app.apply(to_shop(Incoming::Reconnecting));
+        let footer = footer_of(&render(&app, 100, 8));
+        assert!(footer.contains("reconnecting…") && !footer.contains('✗'), "{footer}");
     }
 
     #[test]

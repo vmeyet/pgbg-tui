@@ -6,6 +6,7 @@ use std::fmt;
 
 const CANCELLED_BEFORE_SENT: &str = "cancelled before it was sent";
 const STOPPED_WITH_ITS_SESSION: &str = "cancelled: its session stopped";
+const CANCELLED_RECONNECTING: &str = "cancelled while reconnecting";
 
 /// Why a session can run no more statements.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -47,6 +48,8 @@ pub(crate) enum Failure {
     /// The server refused a write in a statement the guard read as a read; what the statement did before it already ran.
     TriedToWrite,
     CancelledBeforeSent,
+    /// `esc` stopped the reconnect a run was waiting on, so the run was not sent on a new session.
+    CancelledReconnecting,
     StoppedWithItsSession,
     /// The server failed the statement, in its words; it may say where.
     Server {
@@ -91,6 +94,7 @@ impl fmt::Display for Failure {
             Self::Refused(why) => write!(f, "not sent: {why}"),
             Self::TriedToWrite => write!(f, "{TriedToWrite}"),
             Self::CancelledBeforeSent => f.write_str(CANCELLED_BEFORE_SENT),
+            Self::CancelledReconnecting => f.write_str(CANCELLED_RECONNECTING),
             Self::StoppedWithItsSession => f.write_str(STOPPED_WITH_ITS_SESSION),
         }
     }

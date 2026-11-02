@@ -65,6 +65,8 @@ impl ToRun {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::tui) enum SessionState {
     Opening,
+    /// A run or a lookup opens a new session after the last one was lost.
+    Reconnecting,
     Open,
     Failed(String),
     /// Closed from the picker; the sheet stays, and picking it again opens a new session.
@@ -428,6 +430,7 @@ impl Sheet {
             Incoming::Opened
             | Incoming::NotOpened(_)
             | Incoming::Closed(_)
+            | Incoming::Reconnecting
             | Incoming::Tunnel(_)
             | Incoming::Schema(_)
             | Incoming::Index { .. }
@@ -444,6 +447,7 @@ impl Sheet {
                 self.fail_schema_read(&why);
                 self.session = SessionState::Failed(format!("{LOST_SESSION}: {why}"));
             }
+            Incoming::Reconnecting => self.session = SessionState::Reconnecting,
             Incoming::Tunnel(state) => self.tunnel = Some(state),
             Incoming::Schema(read) => self.take_schema(read),
             Incoming::Index { catalog, index } => self.take_index(&catalog, index),

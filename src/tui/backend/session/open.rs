@@ -46,12 +46,14 @@ impl Opener {
         Ok(())
     }
 
-    /// The open session, taken out for a run, or one opened for it.
+    /// The open session, taken out for a run, or one opened for it, said as reconnecting.
+    /// Dropped while it opens, it stops the tunnel it holds, and the next open starts another.
     pub(super) async fn take_or_open(&mut self, answers: &SessionAnswers) -> Result<Session, Failure> {
-        match self.session.take() {
-            Some(session) => Ok(session),
-            None => self.opened(answers).await,
+        if let Some(session) = self.session.take() {
+            return Ok(session);
         }
+        answers.say(Incoming::Reconnecting);
+        self.opened(answers).await
     }
 
     /// Keeps `session` for the next run.
@@ -154,8 +156,8 @@ pub(in crate::tui::backend) async fn ended(tunnel: Option<&mut Tunnel>) -> Died 
 #[cfg(test)]
 mod tests {
     use super::super::super::fixtures::{
-        answer_to, answers_until, backend_pid, connection, empty_table, incoming, is_answer_to, next_answer, on_a_side_session, shop,
-        started, started_on,
+        answer_to, answers_until, backend_pid, connection, empty_table, incoming, is_answer_to, kill_tunnel_marked, next_answer,
+        on_a_side_session, shop, started, started_on,
     };
     use super::*;
     use crate::connection::WritePolicy;
@@ -188,10 +190,6 @@ mod tests {
 
     fn is_tunnel_death(answer: &Incoming) -> bool {
         matches!(answer, Incoming::Tunnel(TunnelState::Died(_)))
-    }
-
-    async fn kill_tunnel_marked(marker: &str) {
-        tokio::process::Command::new("pkill").args(["-f", marker]).status().await.unwrap();
     }
 
     #[tokio::test]
@@ -268,7 +266,8 @@ mod tests {
         answers_until(&mut answers, is_tunnel_death).await;
         backend.run(&shop(), RunId::FIRST, Statement::new("SELECT 1"), ParamInput::default(), None);
         let seen = answers_until(&mut answers, |answer| matches!(answer, Incoming::Result { .. })).await;
-        let seen: Vec<Incoming> = seen.into_iter().filter(|answer| !matches!(answer, Incoming::Closed(_))).collect();
+        let seen: Vec<Incoming> =
+            seen.into_iter().filter(|answer| !matches!(answer, Incoming::Closed(_) | Incoming::Reconnecting)).collect();
         assert_eq!(seen[0], Incoming::Tunnel(TunnelState::Starting));
         assert!(matches!(seen[1], Incoming::Tunnel(TunnelState::Up(_))), "{seen:?}");
         assert_eq!(seen[2], Incoming::Opened);

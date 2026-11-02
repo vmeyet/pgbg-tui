@@ -254,6 +254,8 @@ pub(in crate::tui) enum Incoming {
     NotOpened(Failure),
     /// The open session was lost, and why; the next run opens a new one.
     Closed(Lost),
+    /// A run or a lookup found no open session and opens a new one for itself.
+    Reconnecting,
     Tunnel(TunnelState),
     /// The schema a second session read, or why it could not read it.
     Schema(Result<Arc<Catalog>, Failure>),

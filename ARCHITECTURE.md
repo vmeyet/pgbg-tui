@@ -55,6 +55,9 @@ These invariants hold across every flow; a change that breaks one is a bug.
 - Inside the user's own `BEGIN`, pgbg sends no `BEGIN`, `COMMIT` or `ROLLBACK` and never uses the driver's transaction handle: the user's `COMMIT` or `ROLLBACK` decides.
 - A parameter is always bound as `$n`, never pasted into the text; the history keeps the `{{name}}`, never the value.
 - A result streams a page of 500 rows at a time through a portal; the portal closes on a new run, a cancel, the session closing or lost, its tunnel dying, or 5 minutes idle (a tenth before a stricter server timeout), and the result then stays cut.
+- A run or a lookup that finds no open session reconnects first, and `esc` stops a run's reconnect.
+- A read that fails on a lost link before any row shows goes once more on a new session, in the same transaction shape; a write, a read inside the user's `BEGIN`, a failure in the server's words, and a result already showing never go again.
+- Each sending is one history entry with its own time and outcome; a run whose session did not open is one too, but going again sends nothing until the session opens, so a failure there adds none to the first sending's.
 - A writable connection and `pgbg run` keep the first 10 000 rows and say the result is cut.
 - Every stop goes through `CancelToken::unless_stopped`: a cancel within 1 s, then the work is dropped, so no further round trip is sent.
 - A lookup that follows a key runs as on a read-only connection whatever the connection allows, beside an open portal behind a savepoint, and never goes to the history.
@@ -112,6 +115,7 @@ A write's count is a read of its own `FROM` and `WHERE`, joined tables included,
 - pgbg cannot make a tunnel bind `127.0.0.1` only: a tunnelled connection needs TLS or `tls = "off"` on purpose, and the session connects to `hostaddr=127.0.0.1` while TLS checks the URL's host.
 - `SIGINT`, `SIGTERM` and `SIGHUP` cancel running statements, stop tunnels, and exit with `128 + n`; only `SIGKILL` leaves a tunnel behind.
 - The session task owns its tunnel: a tunnel that dies closes its session, and the next statement starts both.
+- A tunnel whose process runs but whose forward carries nothing, as an ssh whose far side is gone, is stopped and started anew when the link fails through it; a login the server answered keeps it.
 
 ## Saved queries
 

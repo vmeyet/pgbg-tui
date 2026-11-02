@@ -52,7 +52,7 @@ impl Outcome {
 impl From<&Failure> for Outcome {
     fn from(failure: &Failure) -> Self {
         match failure {
-            Failure::Refused(_) | Failure::TriedToWrite | Failure::CancelledBeforeSent => Self::Refused,
+            Failure::Refused(_) | Failure::TriedToWrite | Failure::CancelledBeforeSent | Failure::CancelledReconnecting => Self::Refused,
             Failure::Server { .. } => Self::ServerError,
             Failure::TunnelNotStarted(_) | Failure::Login(_) | Failure::Link(_) | Failure::StoppedWithItsSession => Self::LinkError,
         }
