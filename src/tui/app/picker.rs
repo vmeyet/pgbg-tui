@@ -142,7 +142,7 @@ impl App {
                 let session = self.new_session();
                 self.sheet_mut().reopen(connection.clone(), session);
             }
-            SessionState::Opening | SessionState::Open => return vec![],
+            SessionState::Opening | SessionState::Reconnecting | SessionState::Open => return vec![],
         }
         vec![Action::Open { connection, session: self.sheet().session_id }]
     }

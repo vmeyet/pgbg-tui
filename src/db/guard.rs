@@ -106,6 +106,11 @@ impl Admitted {
         self.write.as_ref()
     }
 
+    /// Whether it runs as a read: what the guard read as a read and the user did not then confirm as a write.
+    pub(crate) fn is_read(&self) -> bool {
+        self.mode != Mode::Writes
+    }
+
     /// The statement once the user said yes to it: a read that tried to write runs as a write; a read-only
     /// connection stays read only.
     pub(crate) fn confirmed(self) -> Self {

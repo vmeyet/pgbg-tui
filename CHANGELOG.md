@@ -27,6 +27,13 @@ Each entry says what changed, then where, then how to use it.
 
 - **An apostrophe inside a word no longer loses the comment**, in the AI completion with literals masked: `-- what's the total` is now the instruction, and a quoted value after it is still masked.
 - **A comment left out of the AI completion says why**, on the status line until the next key, and not only in the log.
+- **pgbg reconnects by itself when the link is lost**, in the TUI: a read that fails on the link before any row shows goes once more on a new session, and the status line says `reconnecting…` until the result shows.
+  A write, a read inside your own `BEGIN` and a result already on screen never go again, `esc` stops the reconnect, and the history keeps one entry per sending.
+
+### Fixed
+
+- **A tunnel that still runs but no longer forwards is started anew**, on every connection with a tunnel: a run after a lost link no longer fails over and over until the connection is closed.
+- **The history gives the real time of a run whose session did not open**, in `ctrl-r`: it said `0 ms` whatever the wait.
 
 ## 0.2.0 - 2026-10-30
 

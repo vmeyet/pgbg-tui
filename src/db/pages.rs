@@ -57,7 +57,7 @@ impl Session {
         let Bound { columns, portal } = match bound {
             Ok(bound) => bound,
             Err(err) => {
-                roll_back(transaction, marks).await?;
+                roll_back_after_failure(transaction, marks).await;
                 return Err(err);
             }
         };
@@ -75,7 +75,7 @@ impl<'s> Pages<'s> {
             Ok(page) if page.extent == Extent::More => Ok(Fetched { page, rest: Some(self) }),
             Ok(page) => self.close().await.map(|()| Fetched { page, rest: None }),
             Err(err) => {
-                self.close().await?;
+                roll_back_after_failure(self.transaction, self.marks).await;
                 Err(err)
             }
         }
@@ -119,6 +119,14 @@ impl Marks {
         let done = work.await;
         self.is_mid_statement = false;
         done
+    }
+}
+
+/// Rolls back after a failure, which stays the one to report: on a lost link the rollback fails too, in lesser words.
+/// The session is marked when it fails.
+async fn roll_back_after_failure(transaction: Transaction<'_>, marks: &mut Marks) {
+    if let Err(err) = roll_back(transaction, marks).await {
+        tracing::warn!("rolling back after a failure failed: {err:#}");
     }
 }
 

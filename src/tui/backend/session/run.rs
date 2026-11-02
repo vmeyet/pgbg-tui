@@ -84,6 +84,11 @@ impl Cancels {
     pub(super) async fn until_stopping(&mut self) {
         while self.recv().await.is_some() {}
     }
+
+    /// Ends once `run` is cancelled or the session is stopping, keeping the latest cancel heard meanwhile.
+    pub(super) async fn until_cancelled(&mut self, run: RunId) {
+        while !self.is_latest(run) && self.recv().await.is_some() {}
+    }
 }
 
 /// A run's answer for the app, its outcome for the history, and its portal while more pages wait in it.
@@ -91,6 +96,8 @@ pub(super) struct Answered<'s> {
     pub(super) incoming: Incoming,
     pub(super) outcome: Outcome,
     pub(super) rest: Option<Pages<'s>>,
+    /// A read failed on its link with no row shown yet: it may go once more should its session turn out lost.
+    pub(super) may_go_again: bool,
 }
 
 impl Answered<'_> {
@@ -101,7 +108,7 @@ impl Answered<'_> {
     }
 
     fn failed(run: RunId, failure: Failure) -> Self {
-        Self { outcome: Outcome::from(&failure), incoming: Incoming::Failed { run, failure }, rest: None }
+        Self { outcome: Outcome::from(&failure), incoming: Incoming::Failed { run, failure }, rest: None, may_go_again: false }
     }
 }
 
@@ -111,7 +118,7 @@ impl Answered<'_> {
 pub(super) async fn run_until_answered<'s>(
     session: &'s mut Session,
     writes: WritePolicy,
-    queued: Queued,
+    queued: &Queued,
     cancelled: &mut Cancels,
     on_server: &OnServer,
 ) -> Answered<'s> {
@@ -137,19 +144,28 @@ async fn cancel(token: &CancelToken) {
     }
 }
 
-async fn answer_to(session: &mut Session, writes: WritePolicy, queued: Queued) -> Answered<'_> {
+async fn answer_to<'s>(session: &'s mut Session, writes: WritePolicy, queued: &Queued) -> Answered<'s> {
     let run = queued.run;
-    let admitted = match admit(&queued, writes) {
+    let admitted = match admit(queued, writes) {
         Ok(admitted) => admitted,
         Err(refusal) => return Answered::failed(run, Failure::Refused(refusal.to_string())),
     };
     let started = Instant::now();
     match session.start(&admitted).await {
         Ok(Started { result, rest }) => {
-            Answered { outcome: Outcome::rows(&result), incoming: Incoming::Result { run, result, took: started.elapsed() }, rest }
+            let outcome = Outcome::rows(&result);
+            Answered { outcome, incoming: Incoming::Result { run, result, took: started.elapsed() }, rest, may_go_again: false }
         }
-        Err(err) => Answered::failed(run, Failure::from(&err)),
+        Err(err) => {
+            let failure = Failure::from(&err);
+            Answered { may_go_again: may_go_again(&admitted, &failure), ..Answered::failed(run, failure) }
+        }
     }
+}
+
+/// Only a read that failed on its link may go again: a write may have landed, and a server's answer stands.
+fn may_go_again(admitted: &Admitted, failure: &Failure) -> bool {
+    admitted.is_read() && matches!(failure, Failure::Link(_))
 }
 
 /// `queued` with its parameters filled in and checked against the connection's `writes` policy; a write the user did
@@ -190,6 +206,68 @@ mod tests {
     #[test]
     fn an_unconfirmed_read_is_admitted() {
         assert!(admit(&queued("SELECT * FROM orders", None), WritePolicy::Allowed).is_ok());
+    }
+
+    fn lost_link() -> Failure {
+        Failure::Link("connection closed".into())
+    }
+
+    fn may_go_again_after(sql: &str, confirmed: Option<Confirmed>, writes: WritePolicy, failure: &Failure) -> bool {
+        may_go_again(&admit(&queued(sql, confirmed), writes).unwrap(), failure)
+    }
+
+    #[test]
+    fn a_read_on_a_read_only_connection_may_go_again_after_a_lost_link() {
+        assert!(may_go_again_after("SELECT * FROM orders", None, WritePolicy::ReadOnly, &lost_link()));
+    }
+
+    #[test]
+    fn a_read_on_a_writable_connection_may_go_again_after_a_lost_link() {
+        assert!(may_go_again_after("SELECT * FROM orders", None, WritePolicy::Allowed, &lost_link()));
+    }
+
+    #[test]
+    fn a_confirmed_write_never_goes_again() {
+        assert!(!may_go_again_after("DELETE FROM orders", Some(Confirmed::FOR_TESTS), WritePolicy::Allowed, &lost_link()));
+    }
+
+    #[test]
+    fn a_read_confirmed_as_a_write_never_goes_again() {
+        assert!(!may_go_again_after("SELECT add_order()", Some(Confirmed::FOR_TESTS), WritePolicy::Allowed, &lost_link()));
+    }
+
+    #[test]
+    fn a_read_the_server_failed_does_not_go_again() {
+        let failure = Failure::Server { message: "FATAL: terminating connection".into(), position: None };
+        assert!(!may_go_again_after("SELECT * FROM orders", None, WritePolicy::ReadOnly, &failure));
+    }
+
+    fn cancels() -> (mpsc::UnboundedSender<RunId>, Cancels) {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        (sender, Cancels::new(receiver))
+    }
+
+    #[tokio::test]
+    async fn waiting_for_a_cancel_ends_at_the_cancel_of_its_run() {
+        let (sender, mut cancels) = cancels();
+        sender.send(RunId::FIRST).unwrap();
+        cancels.until_cancelled(RunId::FIRST).await;
+        assert!(cancels.is_latest(RunId::FIRST));
+    }
+
+    #[tokio::test]
+    async fn waiting_for_a_cancel_ends_once_the_session_is_stopping() {
+        let (sender, mut cancels) = cancels();
+        drop(sender);
+        cancels.until_cancelled(RunId::FIRST).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn waiting_for_a_cancel_goes_on_past_the_cancel_of_another_run() {
+        let (sender, mut cancels) = cancels();
+        sender.send(RunId::FIRST).unwrap();
+        let waited = tokio::time::timeout(std::time::Duration::from_secs(1), cancels.until_cancelled(RunId::FIRST.next())).await;
+        assert!(waited.is_err());
     }
 
     #[tokio::test]

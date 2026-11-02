@@ -4,7 +4,6 @@ use crate::connection::ConnectionName;
 use crate::db::model::Statement;
 use crate::history::{Entry, Outcome, Store};
 use chrono::{DateTime, Utc};
-use std::time::Duration;
 use tokio::time::Instant;
 
 /// A run's history entry before its answer comes: what was sent, and when.
@@ -18,10 +17,6 @@ impl RunStart {
     pub(super) fn now(queued: &Queued) -> Self {
         Self { statement: queued.statement.clone(), started_at: Utc::now(), clock: Instant::now() }
     }
-
-    pub(super) fn elapsed(&self) -> Duration {
-        self.clock.elapsed()
-    }
 }
 
 /// Where the session task records its runs: the history of its connection, when pgbg keeps one.
@@ -31,10 +26,10 @@ pub(super) struct Recorder {
 }
 
 impl Recorder {
-    /// Records the run that `start` began; the next statement never waits on the disk.
-    pub(super) fn record(&self, start: RunStart, took: Duration, outcome: Outcome) {
+    /// Records the run that `start` began, ended now; the next statement never waits on the disk.
+    pub(super) fn record(&self, start: RunStart, outcome: Outcome) {
         let Some(store) = self.store.as_ref() else { return };
-        let entry = Entry::of_run(start.statement, self.connection.clone(), start.started_at, took, outcome);
+        let entry = Entry::of_run(start.statement, self.connection.clone(), start.started_at, start.clock.elapsed(), outcome);
         drop(store.record(entry));
     }
 }

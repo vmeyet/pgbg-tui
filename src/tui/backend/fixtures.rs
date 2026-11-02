@@ -70,7 +70,7 @@ pub(super) async fn answers_until(answers: &mut UnboundedReceiver<Answer>, last:
 pub(super) async fn next_answer(answers: &mut UnboundedReceiver<Answer>) -> Incoming {
     loop {
         match incoming(answers.recv().await.unwrap()) {
-            Incoming::Opened => {}
+            Incoming::Opened | Incoming::Reconnecting => {}
             answer => return answer,
         }
     }
@@ -91,6 +91,10 @@ pub(super) async fn backend_pid(backend: &Backend, answers: &mut UnboundedReceiv
         panic!("no pid")
     };
     result.rows()[0][0].clone()
+}
+
+pub(super) async fn kill_tunnel_marked(marker: &str) {
+    tokio::process::Command::new("pkill").args(["-f", marker]).status().await.unwrap();
 }
 
 pub(super) async fn until_sleeping() {

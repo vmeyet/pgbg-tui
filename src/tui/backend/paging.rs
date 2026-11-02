@@ -5,12 +5,15 @@ use crate::db::{Fetched, Pages};
 use crate::failure::{Failure, Lost};
 use crate::tui::app::{Incoming, RunId};
 use crate::tunnel::{Died, Tunnel};
+use std::fmt;
 use std::time::Duration;
 use tokio::time::{Instant, sleep_until};
 
 /// How long a portal waits for the grid to ask for its next page before it is closed.
 /// Its transaction holds a snapshot, which stops the server from cleaning up the rows that snapshot can still see.
 pub(super) const PAGES_IDLE_LIMIT: Duration = Duration::from_mins(5);
+/// A portal has no safe resume: the rows it would send next are gone with its transaction.
+const NO_RESUME: &str = "a result cannot resume, run it again";
 
 /// What serving the pages of `run` borrows from the session task while the portal stays open.
 pub(super) struct Paging<'a, 's> {
@@ -54,7 +57,7 @@ impl Outbox<'_> {
         self.say(Incoming::Page { run: self.run, page });
     }
 
-    /// Reports that the server failed the next page, so the result is cut.
+    /// Reports that the next page failed or the link under it ended, so the result is cut.
     fn send_failure(&self, failure: Failure) {
         self.say(Incoming::PageFailed { run: self.run, failure });
     }
@@ -76,7 +79,7 @@ fn idle_limit_before_the_server(idle_limit: Duration, on_server: Duration) -> Du
 
 /// Serves the pages of `paging.run` until its portal closes: after its last page, a cancel of the run, a new run, the
 /// idle limit, the session closing, or the end of its link or tunnel.
-/// A close before the last page sends an empty `Cut` page.
+/// A close before the last page sends an empty `Cut` page; the end of the link or the tunnel says so as a failed page.
 /// Returns what the session task does next.
 pub(super) async fn serve_pages(paging: Paging<'_, '_>) -> Next {
     let Paging { mut pages, run, token, mailbox, mut tunnel, idle_limit } = paging;
@@ -125,8 +128,8 @@ pub(super) async fn serve_pages(paging: Paging<'_, '_>) -> Next {
             }
             Held::Queued(Some(Job::NextPage { .. } | Job::Open)) if !is_queue_closed => {}
             Held::Cancelled(Some(of)) if of != run => {}
-            Held::Closed(why) => return gone(pages, &outbox, Woken::Closed(why)),
-            Held::TunnelEnded(died) => return gone(pages, &outbox, Woken::TunnelEnded(died)),
+            Held::Closed(why) => return gone(pages, &outbox, &cannot_resume(&why), Woken::Closed(why)),
+            Held::TunnelEnded(died) => return gone(pages, &outbox, &cannot_resume(&died), Woken::TunnelEnded(died)),
             held => {
                 close(pages).await;
                 outbox.send_cut();
@@ -136,11 +139,24 @@ pub(super) async fn serve_pages(paging: Paging<'_, '_>) -> Next {
     }
 }
 
-/// Drops the portal and cuts the result without a rollback: the link or the tunnel ended, and the transaction with it.
-fn gone(pages: Pages<'_>, outbox: &Outbox<'_>, woken: Woken) -> Next {
+/// Drops the portal and fails the result without a rollback: the link or the tunnel ended, and the transaction with it.
+fn gone(pages: Pages<'_>, outbox: &Outbox<'_>, failure: &Failure, woken: Woken) -> Next {
     drop(pages);
-    outbox.send_cut();
+    outbox.send_failure(failure.clone());
     Next::Act(woken)
+}
+
+/// The failure of a result whose portal went with its link: only a run from the start gets the rest.
+fn cannot_resume(why: &impl fmt::Display) -> Failure {
+    Failure::Link(format!("{why}: {NO_RESUME}"))
+}
+
+/// `failure` of a result's next page, saying so when it was not in the server's words.
+fn without_resume(failure: Failure) -> Failure {
+    match failure {
+        Failure::Link(words) => cannot_resume(&words),
+        failure => failure,
+    }
 }
 
 /// What to do once the portal is closed: run a queued job, stop when the queue is closed, or else wait.
@@ -168,7 +184,7 @@ async fn next_page<'s>(pages: Pages<'s>, run: RunId, token: &CancelToken, cancel
         Ok(Ok(Fetched { page, rest: Some(rest) })) => Fetch::More(page, rest),
         Ok(Ok(Fetched { page, rest: None })) => Fetch::Last(page),
         Ok(Err(_)) if is_cancelled => Fetch::Cancelled,
-        Ok(Err(err)) => Fetch::Failed(Failure::from(&err)),
+        Ok(Err(err)) => Fetch::Failed(without_resume(Failure::from(&err))),
     }
 }
 
@@ -194,6 +210,12 @@ mod tests {
     use tokio::sync::mpsc::{self, UnboundedReceiver};
 
     const SLOW_AFTER_THE_FIRST_PAGE: &str = "SELECT n, pg_sleep(CASE WHEN n > 500 THEN 30 ELSE 0 END) FROM generate_series(1, 1000) AS n";
+
+    #[test]
+    fn a_page_lost_on_the_link_says_a_result_cannot_resume() {
+        let failure = without_resume(Failure::Link("connection closed".into()));
+        assert_eq!(failure.to_string(), format!("connection closed: {NO_RESUME}"));
+    }
 
     #[test]
     fn a_server_stricter_than_the_idle_limit_has_the_portal_close_before_it() {

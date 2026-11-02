@@ -75,6 +75,13 @@ impl Session {
         lost.or_else(|| self.marks.has_failed_rollback.then_some(Lost::RollbackFailed))
     }
 
+    /// Whether only the link went: it ended with no transaction of the user's on it, so a read sent again on a new
+    /// session sees the same database.
+    pub(crate) fn lost_only_its_link(&self) -> bool {
+        let is_link_gone = self.lost().is_some_and(|lost| lost != Lost::RollbackFailed);
+        is_link_gone && self.marks.user_transaction == UserTransaction::None
+    }
+
     /// What cancels the statement this session is running, usable while `run` waits.
     pub(crate) fn cancel_token(&self) -> CancelToken {
         CancelToken { token: self.client.cancel_token(), tls: self.tls }

@@ -117,6 +117,7 @@ The review of #214 to #231 found these, most severe first.
 - [x] The slice shows the labels of an enum column, one holding a secret left out
 - [x] Within one reason, the slice puts first the tables the connection's history runs most, and only the order changes
 - [x] The idle ghost reads an apostrophe inside a word as no quote, says on the status line when it leaves a comment out, and keeps a rewrite for `ctrl-g`
+- [x] A lost link reconnects by itself, a tunnel that carries nothing starts anew, and a read goes once more
 
 ## Later
 
