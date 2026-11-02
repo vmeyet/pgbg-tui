@@ -1,0 +1,12 @@
+---
+source: src/tui/chart_view/bars.rs
+expression: "render(&series(&daily_orders_and_refunds(), \"stacked horizontal\"), 48,\n8).backend()"
+---
+"■ orders  ■ refunds                             "
+"2026-01-01 150███████████████████████           "
+"2026-01-02 210██████████████████████████████████"
+"2026-01-03 140██████████████████████            "
+"2026-01-04 180█████████████████████████████     "
+"                                                "
+"                                                "
+"                                                "

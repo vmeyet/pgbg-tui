@@ -39,6 +39,7 @@ fn draw_series(f: &mut Frame<'_>, series: &Series, theme: &Theme, area: Rect) {
     f.render_widget(Paragraph::new(legend), legend_area);
     match series.columns.kind {
         ChartKind::Grouped => bars::draw(f, &chart::grouped_bars(&series.y), series, theme, plot),
+        ChartKind::Stacked => bars::draw(f, &chart::stacked_bars(&series.y), series, theme, plot),
         ChartKind::Line => line::draw(f, series, theme, plot),
     }
 }
