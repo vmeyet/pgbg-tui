@@ -70,7 +70,7 @@ These invariants hold across every flow; a change that breaks one is a bug.
 - An AI answer is a suggestion: taking it and running it are two keys, and the run goes through the guard.
 - `tui/app/` stays pure: the loop hands it the clock as a `Clock` and the timers as events.
 - The command palette runs an act through the path its key takes, and only an act whose row works in the pane it opened on, so a write still asks; a theme shows while highlighted, and only `⏎` sends the `Action` that writes `[tui] theme`.
-- The grid's cursor and every act on it name a column by its index in the result; only `tui/app/shown_columns.rs` knows where a column is drawn.
+- The grid's cursor and every act on it name a column by its index in the result, never a hidden one; only `tui/app/shown_columns.rs` knows where a column is drawn.
 
 ## Boundaries
 
@@ -162,6 +162,7 @@ One word per concept, in code, docs and UI.
 | chart | A grouped, stacked or line drawing of a result |
 | orientation | Which way a chart's bars run: `vertical`, upright, or `horizontal`, on their side |
 | frozen | A column the grid keeps on the left while the others scroll |
+| hidden | A column left out of the grid, still in copies, filters, charts and the row's detail |
 | history | Every statement run on a connection |
 | version | A text of a saved query that a save replaced, kept apart from the queries |
 | schema | The schemas, tables, columns and indexes a session's role can read |

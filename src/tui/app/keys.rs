@@ -205,6 +205,8 @@ impl App {
             Act::Sort => self.step_sort(),
             Act::SwitchFreeze => self.change_freeze(Grid::switch_freeze),
             Act::FreezeThrough => self.change_freeze(Grid::freeze_through_cursor),
+            Act::HideColumn => self.hide_column(),
+            Act::ShowColumns => self.show_every_column(),
             Act::WhereEqual => self.add_condition(Comparison::Equal),
             Act::WhereNotEqual => self.add_condition(Comparison::NotEqual),
             Act::ColumnStats => self.open_column_stats(),

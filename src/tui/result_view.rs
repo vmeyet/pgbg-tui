@@ -1,8 +1,9 @@
 //! The result pane: its row count and time in the title, and the grid, the chart or the statement's outcome inside.
-use super::app::{App, Focus, Room, Run, ShownRows, View};
+use super::app::{App, Focus, Grid, Room, Run, ShownRows, View};
 use super::chart_view;
 use super::grid_view::{self, GridView};
 use crate::db::model::{Extent, ResultSet};
+use crate::format;
 use crate::render;
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -43,11 +44,20 @@ fn printable_lines(text: &str) -> Text<'static> {
 /// What the result is, `orders · 3 columns · 1 index` for a table's columns, else its rows and time.
 fn title(run: &Run, shown: Option<&str>) -> String {
     match (run, shown) {
-        (Run::Done { .. }, Some(shown)) => format!("Result ─ {}", render::printable(shown)),
+        (Run::Done { grid, .. }, Some(shown)) => format!("Result ─ {}{}", render::printable(shown), hidden_part(grid)),
         (Run::Done { result, grid, took, view, .. }, None) => {
-            format!("Result ─ {} · {} ms ─ {}", row_count(result, grid.shown()), took.as_millis(), view_switch(view))
+            let (rows, hidden) = (row_count(result, grid.shown()), hidden_part(grid));
+            format!("Result ─ {rows} · {} ms{hidden} ─ {}", took.as_millis(), view_switch(view))
         }
         _ => "Result".to_owned(),
+    }
+}
+
+/// ` · 2 columns hidden` when some are, so a grid never looks whole while it is not.
+fn hidden_part(grid: &Grid) -> String {
+    match grid.columns().hidden_count() {
+        0 => String::new(),
+        hidden => format!(" · {} hidden", format::counted(hidden, "column")),
     }
 }
 
@@ -149,6 +159,11 @@ mod tests {
     #[test]
     fn the_columns_up_to_the_cursor_stay_on_screen_once_frozen() {
         insta::assert_snapshot!("frozen_through", pressed(wide_orders(), "lZlllll"));
+    }
+
+    #[test]
+    fn a_hidden_column_leaves_the_grid_and_the_title_counts_it() {
+        insta::assert_snapshot!("hidden", pressed(orders(), "lx"));
     }
 
     #[test]

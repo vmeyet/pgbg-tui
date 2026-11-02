@@ -55,6 +55,8 @@ Each entry says what changed, then where, then how to use it.
 - **A point with a gap on each side shows**, on a line chart: a value between two NULLs drew nothing.
 - **Frozen columns**: in the TUI's result grid, the primary key's columns a result starts with, or else its first column, stay on the left while the grid scrolls right, in the order the statement asked for.
   `z` switches that off and on, `Z` freezes the columns up to the cursor's; on a narrow terminal the frozen columns give way past half the width.
+- **Hidden columns**: in the TUI's result grid, `x` hides the column under the cursor and `X` shows them all again; the title counts those hidden.
+  Copies, `/`, the row detail and charts still hold every column, and what you hid or froze stays when a statement returns the same columns.
 
 ## 0.2.0 - 2026-10-30
 

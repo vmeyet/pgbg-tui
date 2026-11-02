@@ -67,6 +67,8 @@ pub(crate) enum Act {
     Sort,
     SwitchFreeze,
     FreezeThrough,
+    HideColumn,
+    ShowColumns,
     ReadAgain,
     TakeGhost,
     DropGhost,
@@ -143,6 +145,8 @@ impl Act {
             Self::Sort => "sort",
             Self::SwitchFreeze => "switch_freeze",
             Self::FreezeThrough => "freeze_through",
+            Self::HideColumn => "hide_column",
+            Self::ShowColumns => "show_columns",
             Self::ReadAgain => "read_again",
             Self::TakeGhost => "take_ghost",
             Self::DropGhost => "drop_ghost",
@@ -183,6 +187,8 @@ impl Act {
                 | Self::Sort
                 | Self::SwitchFreeze
                 | Self::FreezeThrough
+                | Self::HideColumn
+                | Self::ShowColumns
         )
     }
 
@@ -427,6 +433,8 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::SwitchFreeze, Pane::Result, &[key(KeyCode::Char('z'))])
         .help("z Z", "keep the leading primary key, or the first column, on the left while the grid scrolls, or nothing; keep the columns up to the cursor's"),
     row(Act::FreezeThrough, Pane::Result, &[key(KeyCode::Char('Z'))]),
+    row(Act::HideColumn, Pane::Result, &[key(KeyCode::Char('x'))]).help("x X", "hide the column from the grid; show every column again"),
+    row(Act::ShowColumns, Pane::Result, &[key(KeyCode::Char('X'))]),
     row(Act::WhereEqual, Pane::Result, &[key(KeyCode::Char('='))])
         .help("= !", "add WHERE column = the cell's value, or <>, to the statement under the editor's cursor"),
     row(Act::WhereNotEqual, Pane::Result, &[key(KeyCode::Char('!'))]),
