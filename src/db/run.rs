@@ -187,13 +187,17 @@ impl Session {
     /// Runs `read` inside `BEGIN READ ONLY` at `isolation`, always rolled back; the session is mid-statement meanwhile,
     /// so dropping it then cuts its link. Refused inside the user's transaction, which its `ROLLBACK` would end.
     pub(super) async fn read_only<T>(&mut self, isolation: Isolation, read: impl AsyncFnOnce(&Transaction<'_>) -> Result<T>) -> Result<T> {
-        if self.is_in_user_transaction().await? {
-            return Err(InsideUserTransaction.into());
-        }
+        self.refuse_inside_user_transaction().await?;
         let was_mid_statement = std::mem::replace(&mut self.marks.is_mid_statement, true);
         let result = self.read_only_marked(isolation, read).await;
         self.marks.is_mid_statement = was_mid_statement;
         result
+    }
+
+    /// Stands before every `BEGIN READ ONLY`: inside the user's transaction it would change nothing, and its `ROLLBACK`
+    /// would end theirs.
+    pub(super) async fn refuse_inside_user_transaction(&mut self) -> Result<()> {
+        if self.is_in_user_transaction().await? { Err(InsideUserTransaction.into()) } else { Ok(()) }
     }
 
     async fn read_only_marked<T>(&mut self, isolation: Isolation, read: impl AsyncFnOnce(&Transaction<'_>) -> Result<T>) -> Result<T> {

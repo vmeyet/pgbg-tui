@@ -85,6 +85,9 @@ pub(in crate::tui) enum Action {
     Open { connection: Connection, session: SessionId },
     /// Run this statement on the connection's session; a write runs only when `confirmed`.
     Run { connection: ConnectionName, run: RunId, statement: Statement, input: ParamInput, confirmed: Option<Confirmed> },
+    /// Run this `EXPLAIN ANALYZE` read only and rolled back, whatever the connection allows: a write in it fails, and
+    /// nothing offers to run it again.
+    Analyze { connection: ConnectionName, run: RunId, statement: Statement, input: ParamInput },
     /// Fetch the next page of this run's result, if its portal is still open on the session `session`.
     NextPage { connection: ConnectionName, session: SessionId, run: RunId },
     /// Read the connection's schema on a second session that takes the same route as `session`, once that one is open.

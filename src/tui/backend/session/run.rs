@@ -1,5 +1,5 @@
 //! One statement on the server: its cancels, the token an abort uses to reach it, and its answer.
-use super::link::Queued;
+use super::link::{Policy, Queued};
 use crate::connection::WritePolicy;
 use crate::db::guard::Admitted;
 use crate::db::model::CancelToken;
@@ -168,9 +168,14 @@ fn may_go_again(admitted: &Admitted, failure: &Failure) -> bool {
     admitted.is_read() && matches!(failure, Failure::Link(_))
 }
 
-/// `queued` with its parameters filled in and checked against the connection's `writes` policy; a write the user did
-/// not confirm is refused here too, and one confirmed runs as a write even when the guard reads it as a read.
+/// `queued` with its parameters filled in and checked against the connection's `writes` policy, unless it runs read only
+/// whatever that says; a write the user did not confirm is refused here too, and one confirmed runs as a write even when
+/// the guard reads it as a read.
 fn admit(queued: &Queued, writes: WritePolicy) -> anyhow::Result<Admitted> {
+    let writes = match queued.policy {
+        Policy::OfTheConnection => writes,
+        Policy::ReadOnly => WritePolicy::ReadOnly,
+    };
     let admitted = params::admit(&queued.statement, &queued.input.given, &queued.input.specs, writes)?;
     match queued.confirmed {
         Some(_) => Ok(admitted.confirmed()),
@@ -181,14 +186,41 @@ fn admit(queued: &Queued, writes: WritePolicy) -> anyhow::Result<Admitted> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::super::fixtures::{empty_table, next_answer, on_a_side_session, on_a_side_session_writing, shop, started_on};
     use super::*;
-    use crate::db::model::Statement;
-    use crate::query::params::ParamInput;
-    use crate::tui::app::Confirmed;
+    use crate::db::explain::Explain;
+    use crate::db::guard::Refusal;
+    use crate::db::model::{ParamValue, Statement, Value};
+    use crate::fixtures;
+    use crate::plan::Plan;
+    use crate::query::params::{Given, ParamInput, ParamName};
+    use crate::tui::app::{Action, Confirmed};
     use tokio::sync::mpsc;
 
     fn queued(sql: &str, confirmed: Option<Confirmed>) -> Queued {
-        Queued { run: RunId::FIRST, statement: Statement::new(sql), input: ParamInput::default(), confirmed }
+        Queued {
+            run: RunId::FIRST,
+            statement: Statement::new(sql),
+            input: ParamInput::default(),
+            confirmed,
+            policy: Policy::OfTheConnection,
+        }
+    }
+
+    fn analyzed(sql: &str) -> Queued {
+        Queued { policy: Policy::ReadOnly, ..queued(sql, None) }
+    }
+
+    #[test]
+    fn an_explain_analyze_of_a_write_from_a_key_is_refused_where_writes_are_allowed() {
+        let refused = admit(&analyzed("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) DELETE FROM orders"), WritePolicy::Allowed).unwrap_err();
+        assert!(matches!(refused.downcast_ref(), Some(Refusal::Write(word)) if word == "DELETE"), "{refused}");
+    }
+
+    #[test]
+    fn an_explain_analyze_of_a_read_from_a_key_never_counts_as_a_write_to_confirm() {
+        let admitted = admit(&analyzed("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) SELECT 1"), WritePolicy::Allowed).unwrap();
+        assert!(admitted.is_read_only());
     }
 
     #[test]
@@ -288,5 +320,71 @@ mod tests {
         cancels.recv().await;
         cancels.recv().await;
         assert!(cancels.is_latest(RunId::FIRST.next()));
+    }
+
+    fn writing_connection() -> crate::connection::Connection {
+        fixtures::test_database("local", "writes = \"allowed\"\n")
+    }
+
+    /// A fresh `table` and a function `add_to_<table>()` that inserts a row into it, called by the `SELECT` it gives.
+    async fn call_of_a_function_that_writes(table: &str) -> String {
+        empty_table(table).await;
+        on_a_side_session_writing(&format!(
+            "CREATE OR REPLACE FUNCTION add_to_{table}() RETURNS int LANGUAGE sql AS $$ INSERT INTO {table} VALUES (1) RETURNING n $$"
+        ))
+        .await;
+        format!("SELECT add_to_{table}()")
+    }
+
+    fn analyze(sql: &str, input: ParamInput) -> Action {
+        let statement = Explain::Analyze.of(&Statement::new(sql)).unwrap();
+        Action::Analyze { connection: shop(), run: RunId::FIRST, statement, input }
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn an_analyze_from_a_key_binds_its_parameters_and_returns_a_plan_the_tree_reads() {
+        let (mut backend, mut answers) = started_on(writing_connection());
+        let given = Given::typed([(ParamName::for_column("top", &[]), ParamValue::new("3"))].into());
+        backend.dispatch(analyze("SELECT n FROM generate_series(1, {{top}}::int) AS n", ParamInput { given, specs: vec![] }));
+        let Incoming::Result { result, .. } = next_answer(&mut answers).await else { panic!("no result") };
+        let plan = Plan::of(&result).unwrap();
+        assert_eq!((plan.nodes[0].kind.as_str(), plan.nodes[0].actual.as_ref().map(|actual| actual.rows)), ("Function Scan", Some(3.0)));
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn an_analyze_from_a_key_of_a_function_that_writes_fails_keeps_nothing_and_asks_nothing() {
+        let call = call_of_a_function_that_writes("orders_analyzed").await;
+        let (mut backend, mut answers) = started_on(writing_connection());
+        backend.dispatch(analyze(&call, ParamInput::default()));
+        let answer = next_answer(&mut answers).await;
+        assert!(matches!(&answer, Incoming::Failed { failure: Failure::Server { .. }, .. }), "{answer:?}");
+        assert_eq!(on_a_side_session("SELECT n FROM orders_analyzed").await, Vec::<Vec<Value>>::new());
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn an_analyze_from_a_key_runs_under_the_timeout_of_the_connection() {
+        let connection = fixtures::test_database("local", "statement_timeout = \"50ms\"\n");
+        let (mut backend, mut answers) = started_on(connection);
+        backend.dispatch(analyze("SELECT pg_sleep(30)", ParamInput::default()));
+        let answer = next_answer(&mut answers).await;
+        assert!(
+            matches!(&answer, Incoming::Failed { failure: Failure::Server { message, .. }, .. } if message.contains("statement timeout")),
+            "{answer:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn an_explain_from_a_key_does_not_run_the_statement() {
+        let call = call_of_a_function_that_writes("orders_explained").await;
+        let (backend, mut answers) = started_on(writing_connection());
+        let statement = Explain::Plan.of(&Statement::new(call)).unwrap();
+        backend.run(&shop(), RunId::FIRST, statement, ParamInput::default(), None);
+        let Incoming::Result { result, .. } = next_answer(&mut answers).await else { panic!("no result") };
+        assert!(Plan::of(&result).is_some_and(|plan| plan.nodes[0].actual.is_none()));
+        assert_eq!(on_a_side_session("SELECT n FROM orders_explained").await, Vec::<Vec<Value>>::new());
     }
 }

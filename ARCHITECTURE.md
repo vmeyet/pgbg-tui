@@ -19,6 +19,7 @@ The code is the contract; this page describes it, and changes in the MR that cha
 | `db/model/` | The neutral model every other module uses: `ResultSet`, `Column` and its `Origin`, `Value`, `Catalog`, `Schema`, `ServerError`, `Route`, `Params`, `CancelToken` |
 | `db/lex.rs` | The tokenizer the guard, parameters, completion and AI share; strings, comments and quoted names hide what they hold |
 | `db/guard.rs` | Classifies a statement before it is sent; `admit` builds the `Admitted`, the only kind a session runs; `write_in` names a write for the confirmation |
+| `db/explain.rs` | The `EXPLAIN` a key puts before a statement, pure: only a query the guard reads as changing nothing goes under it |
 | `db/preview.rs` | What a write would touch, pure: `count_of` rewrites an `UPDATE` or `DELETE` into a read that counts the rows its `WHERE` picks, capped at 10 001; `Touched` reads the count back |
 | `db/run.rs`, `db/read_first.rs`, `db/pages.rs` | Running one statement in its transaction, a read with writes refused on a writable connection, and the portal kept open for its next pages |
 | `db/limits.rs`, `db/server.rs`, `db/schema.rs` | The timeouts a session runs with, what the server and the role allow, and the schema read in one snapshot |
@@ -49,6 +50,7 @@ These invariants hold across every flow; a change that breaks one is a bug.
 - Every `Action` and every answer carries its connection and its `RunId`, `SessionId`, `LookId` or `AskId`: a late answer never lands on another connection, session, run or ask, and is dropped.
 - `db::guard` runs before the server: nothing reaches a session but an `Admitted`, and a write on a read-only connection comes back refused, unsent.
 - A read runs alone in `BEGIN READ ONLY`, always rolled back, with its `statement_timeout`, idle timeout and `standard_conforming_strings` set by `SET LOCAL`, so they follow a transaction pooler.
+- `⌥e` runs its `EXPLAIN` as a run does; `⌥a` is admitted read only whatever the connection allows, so its `ANALYZE` runs in `BEGIN READ ONLY`, always rolled back under the connection's timeout, is refused inside the user's transaction, and never asks to run again; both go to the history as sent, `EXPLAIN` included.
 - A write on a connection that allows writes runs only with a `Confirmed`, built only by `tui/app/confirm.rs` after `y`, or by `--yes`; the session task refuses one without it.
 - While a write waits for `y`, its count of rows runs as a lookup under 2 s, its values bound by `params::fill_cut`; `y` does not wait for it, and the write itself never runs to count.
 - `pgbg run` asks `y/N` after the same count, on the session it then runs the write on; with no terminal and no `--yes` it refuses the write before connecting, and `--yes` sends it uncounted.
@@ -96,6 +98,7 @@ The guard reads strings and blanks as PostgreSQL does with `standard_conforming_
 Inside the user's transaction, a row-returning read goes through a `DECLARE CURSOR` named `pgbg_result_<n>`, free in `pg_cursors`, then `CLOSE`; a `CALL` or `DO` runs as is.
 The session tracks the user's transaction from each statement's first words and, when unsure, asks once with a `SAVEPOINT` probe.
 `Session::read_only` is refused while the user's transaction is open, since its `ROLLBACK` would end it.
+`Session::start` refuses a statement admitted read only inside the user's transaction too: there `BEGIN READ ONLY` would change nothing, and its `ROLLBACK` would end theirs.
 Transaction control and cursor statements never ask for confirmation, save `COMMIT PREPARED` and `ROLLBACK PREPARED`.
 A write's count is a read of its own `FROM` and `WHERE`, joined tables included, so no trigger fires, no sequence moves, a function that writes there is refused, and no lock outlives the count; it can still differ from the write (rows changing, a volatile `WHERE`, a rule), and reads nothing inside the user's transaction.
 

@@ -8,6 +8,8 @@ Each entry says what changed, then where, then how to use it.
 
 ### New
 
+- **Explain from the editor**: in the TUI editor, `⌥e` shows the plan of the read under the cursor as JSON in the result pane, without running it, and `⌥a` shows it as it ran, with `ANALYZE` and `BUFFERS`.
+  `⌥a` runs the statement read only and rolled back under the connection's timeout, whatever the connection allows, and refuses a write.
 - **Save as**: in the TUI, `⌥s` saves the editor's text under a new path and leaves the open query as it is.
   The prompt starts from the open query's path, or empty with none open; once saved, the editor stands for the new query, and a path that holds other text is refused.
 - **A separate command for the AI completion**: `[ai] ghost_command` in `config.toml` names the program the idle ghost asks, as a quicker model, given as `command` is.

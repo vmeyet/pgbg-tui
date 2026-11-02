@@ -219,6 +219,8 @@ In the TUI, a bar above the editor shows one field per parameter.
 | Key | Does |
 | --- | --- |
 | `⏎` | Run the statement under the cursor. |
+| `⌥e` | The plan of the read under the cursor as JSON in the result pane, without running it. |
+| `⌥a` | The same plan as it ran, with `ANALYZE` and `BUFFERS`: the read runs, read only and rolled back, under the connection's timeout, and a write is never offered. |
 | `esc` | Drop the suggestion after the cursor while one shows; else cancel the running statement. |
 | `tab` `⇧tab` | Next, previous pane: editor, parameters, result, sidebar. |
 | `→` `tab` | In the editor: take the suggestion after the cursor, a completion or the AI completion. |

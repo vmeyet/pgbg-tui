@@ -19,7 +19,7 @@ mod open;
 mod record;
 mod run;
 
-pub(super) use link::{Job, Queued, SessionAnswers, SessionLink};
+pub(super) use link::{Job, Policy, Queued, SessionAnswers, SessionLink};
 pub(super) use look_up::{OnSession, QueuedLookup, look_up};
 pub(super) use open::ended;
 pub(super) use run::{Cancels, OnServer, warn_if_still_running};

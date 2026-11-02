@@ -10,7 +10,7 @@ use config::ConfigFile;
 use futures_util::future;
 use paging::PAGES_IDLE_LIMIT;
 use queries::QueryFiles;
-use session::{Job, Queued, QueuedLookup, SessionAnswers, SessionLink};
+use session::{Job, Policy, Queued, QueuedLookup, SessionAnswers, SessionLink};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -68,6 +68,9 @@ impl Backend {
         match action {
             Action::Open { connection, session } => self.open(connection, session),
             Action::Run { connection, run, statement, input, confirmed } => self.run(&connection, run, statement, input, confirmed),
+            Action::Analyze { connection, run, statement, input } => {
+                self.queue_run(&connection, Queued { run, statement, input, confirmed: None, policy: Policy::ReadOnly });
+            }
             Action::NextPage { connection, session, run } => self.next_page(&connection, session, run),
             Action::ReadSchema { connection, session } => self.read_schema(&connection, session),
             Action::LookUp { connection, look, lookup } => self.look_up(&connection, QueuedLookup { look, lookup }),
@@ -137,11 +140,15 @@ impl Backend {
     /// Queues `statement` on the session of `connection`, a write only when `confirmed`; its answer comes back as an
     /// `Answer`.
     fn run(&self, connection: &ConnectionName, run: RunId, statement: Statement, input: ParamInput, confirmed: Option<Confirmed>) {
+        self.queue_run(connection, Queued { run, statement, input, confirmed, policy: Policy::OfTheConnection });
+    }
+
+    fn queue_run(&self, connection: &ConnectionName, queued: Queued) {
         let Some(session) = self.sessions.get(connection) else {
             tracing::warn!("no session for `{connection}`: the statement is dropped");
             return;
         };
-        session.send(Job::Run(Queued { run, statement, input, confirmed }));
+        session.send(Job::Run(queued));
     }
 
     /// Queues `queued` on the session of `connection`; its rows come back as an `Answer`.

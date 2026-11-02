@@ -10,6 +10,8 @@ use vtui::usage::Group as UsageGroup;
 #[cfg_attr(test, derive(strum::EnumIter))]
 pub(crate) enum Act {
     Run,
+    Explain,
+    ExplainAnalyze,
     NewLine,
     Cancel,
     SwitchPane,
@@ -88,6 +90,8 @@ impl Act {
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::Run => "run",
+            Self::Explain => "explain",
+            Self::ExplainAnalyze => "explain_analyze",
             Self::NewLine => "new_line",
             Self::Cancel => "cancel",
             Self::SwitchPane => "switch_pane",
@@ -380,6 +384,8 @@ const FOOTER_KEPT_LONGEST: [Act; 3] = [Act::Quit, Act::Help, Act::Close];
 /// Every action, in the order the help and the footer list them; where two rows share a key in a pane, the first wins.
 pub(crate) const ROWS: &[Row] = &[
     row(Act::Run, Pane::Editor, &[key(KeyCode::Enter)]).help("⏎", "run the statement under the cursor").footer("⏎", "run"),
+    row(Act::Explain, Pane::Editor, &[alt('e')]).help("⌥e", "the plan of the statement under the cursor, without running it"),
+    row(Act::ExplainAnalyze, Pane::Editor, &[alt('a')]).help("⌥a", "the plan as it ran: a read runs, read only and rolled back"),
     row(
         Act::NewLine,
         Pane::Editor,
@@ -859,6 +865,12 @@ mod tests {
     #[test]
     fn option_s_saves_under_a_new_path_from_the_editor_and_the_result() {
         assert_eq!([Pane::Editor, Pane::Result].map(|pane| act_for(alt('s'), pane)), [Some(Act::SaveAs); 2]);
+    }
+
+    #[test]
+    fn option_e_and_option_a_explain_in_the_editor_alone() {
+        assert_eq!([alt('e'), alt('a')].map(|key| act_for(key, Pane::Editor)), [Some(Act::Explain), Some(Act::ExplainAnalyze)]);
+        assert_eq!([alt('e'), alt('a')].map(|key| act_for(key, Pane::Result)), [None, None]);
     }
 
     #[test]
