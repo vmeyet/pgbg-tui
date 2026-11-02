@@ -65,6 +65,9 @@ pub(crate) struct SchemaColumn {
     pub(crate) type_name: TypeName,
     pub(crate) is_nullable: bool,
     pub(crate) default: Option<String>,
+    /// The labels of its enum type in their sort order, for a column of an enum, an array of one or a domain over one.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) enum_labels: Vec<String>,
     /// What `COMMENT ON COLUMN` says of it, when anything.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) comment: Option<String>,

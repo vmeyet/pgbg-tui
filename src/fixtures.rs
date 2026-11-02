@@ -222,6 +222,7 @@ pub(crate) fn schema_column(name: &str, type_name: &str, default: Option<&str>) 
         type_name: TypeName::new(type_name),
         is_nullable: default.is_some(),
         default: default.map(str::to_owned),
+        enum_labels: vec![],
         comment: None,
     }
 }

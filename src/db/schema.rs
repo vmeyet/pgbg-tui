@@ -59,6 +59,13 @@ const COMMENTS: &str = "SELECT d.objoid, a.attname, d.description
     FROM pg_description d JOIN visible v ON v.oid = d.objoid
     LEFT JOIN pg_attribute a ON a.attrelid = d.objoid AND a.attnum = d.objsubid AND d.objsubid > 0
     WHERE d.classoid = 'pg_class'::regclass";
+/// The labels of the enum behind each column of the visible tables, whether of that enum, an array of it or a domain over it.
+/// Its own query, as `COMMENTS` is: most columns are of no enum, and a read of 20 000 tables should not pay for them.
+const ENUM_LABELS: &str = "SELECT a.attrelid, a.attname, e.labels
+    FROM pg_attribute a JOIN visible v ON v.oid = a.attrelid
+    JOIN pg_type t ON t.oid = a.atttypid
+    JOIN (SELECT enumtypid, array_agg(enumlabel::text ORDER BY enumsortorder) AS labels FROM pg_enum GROUP BY enumtypid) e
+        ON e.enumtypid IN (t.oid, t.typelem, t.typbasetype)";
 const SEARCH_PATH: &str = "SELECT current_schemas(false)::text[]";
 const DROPPED_RELATION: &str = "could not open relation with OID";
 
@@ -79,6 +86,12 @@ struct Listed {
 struct Comment {
     column: Option<String>,
     text: String,
+}
+
+/// The labels of the enum behind a column of a table.
+struct ColumnLabels {
+    column: String,
+    labels: Vec<String>,
 }
 
 /// The comments of one table: on itself, and on its columns by name.
@@ -138,10 +151,11 @@ impl Session {
             let indexes = rows(transaction, INDEXES, limit, filter).await?.iter().map(index).collect::<Result<Vec<_>>>()?;
             let keys = rows(transaction, FOREIGN_KEYS, limit, filter).await?.iter().map(foreign_key).collect::<Result<Vec<_>>>()?;
             let comments = rows(transaction, COMMENTS, limit, filter).await?.iter().map(comment).collect::<Result<Vec<_>>>()?;
+            let labels = rows(transaction, ENUM_LABELS, limit, filter).await?.iter().map(column_labels).collect::<Result<Vec<_>>>()?;
             let search_path = transaction.query_one(SEARCH_PATH, &[]).await.map_err(server_error)?.try_get(0)?;
             let is_cut = tables.len() > cap.0;
             let kept = tables.into_iter().take(cap.0).collect();
-            Ok(Catalog { schema: assembled(kept, columns, indexes, keys, comments), search_path, is_cut })
+            Ok(Catalog { schema: assembled(kept, columns, indexes, keys, comments, labels), search_path, is_cut })
         })
         .await
     }
@@ -212,6 +226,7 @@ fn column(row: &Row) -> Result<(u32, SchemaColumn)> {
         type_name: TypeName::new(row.try_get::<_, String>(2)?),
         is_nullable: row.try_get(3)?,
         default: row.try_get(4)?,
+        enum_labels: vec![],
         comment: None,
     };
     Ok((row.try_get(0)?, column))
@@ -236,24 +251,31 @@ fn comment(row: &Row) -> Result<(u32, Comment)> {
     Ok((row.try_get(0)?, Comment { column: row.try_get(1)?, text: row.try_get(2)? }))
 }
 
-/// The tables, in order, each with its columns, indexes, foreign keys and comments, grouped by schema.
+fn column_labels(row: &Row) -> Result<(u32, ColumnLabels)> {
+    Ok((row.try_get(0)?, ColumnLabels { column: row.try_get(1)?, labels: row.try_get(2)? }))
+}
+
+/// The tables, in order, each with its columns, indexes, foreign keys, comments and enum labels, grouped by schema.
 fn assembled(
     tables: Vec<Listed>,
     columns: Vec<(u32, SchemaColumn)>,
     indexes: Vec<(u32, Index)>,
     keys: Vec<(u32, ForeignKey)>,
     comments: Vec<(u32, Comment)>,
+    labels: Vec<(u32, ColumnLabels)>,
 ) -> Schema {
     let mut columns_by_table = grouped(columns);
     let mut indexes_by_table = grouped(indexes);
     let mut keys_by_table = grouped(keys);
     let mut comments_by_table = comments_by_table(comments);
+    let mut labels_by_table = grouped(labels);
     let mut schemas: Vec<SchemaNode> = vec![];
     for Listed { schema, table } in tables {
         let oid = table.oid.get();
         let comments = comments_by_table.remove(&oid).unwrap_or_default();
+        let columns = commented(columns_by_table.remove(&oid).unwrap_or_default(), comments.columns);
         let table = Table {
-            columns: commented(columns_by_table.remove(&oid).unwrap_or_default(), comments.columns),
+            columns: labelled(columns, labels_by_table.remove(&oid).unwrap_or_default()),
             indexes: indexes_by_table.remove(&oid).unwrap_or_default(),
             foreign_keys: keys_by_table.remove(&oid).unwrap_or_default(),
             comment: comments.table,
@@ -281,6 +303,11 @@ fn comments_by_table(comments: Vec<(u32, Comment)>) -> HashMap<u32, TableComment
 
 fn commented(columns: Vec<SchemaColumn>, mut comments: HashMap<String, String>) -> Vec<SchemaColumn> {
     columns.into_iter().map(|column| SchemaColumn { comment: comments.remove(&column.name), ..column }).collect()
+}
+
+fn labelled(columns: Vec<SchemaColumn>, labels: Vec<ColumnLabels>) -> Vec<SchemaColumn> {
+    let mut by_column: HashMap<String, Vec<String>> = labels.into_iter().map(|labels| (labels.column, labels.labels)).collect();
+    columns.into_iter().map(|column| SchemaColumn { enum_labels: by_column.remove(&column.name).unwrap_or_default(), ..column }).collect()
 }
 
 fn grouped<T>(items: Vec<(u32, T)>) -> HashMap<u32, Vec<T>> {
@@ -456,6 +483,27 @@ mod tests {
         let [orders] = tables_of(&schema, "shop_comments") else { panic!("{schema:?}") };
         let comments: Vec<Option<&str>> = orders.columns.iter().map(|column| column.comment.as_deref()).collect();
         assert_eq!((orders.comment.as_deref(), comments), (Some("one row a checkout"), vec![None, Some("in cents")]));
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn the_schema_gives_the_enum_labels_of_a_column_in_their_sort_order() {
+        let mut session = session_on(
+            "shop_enums",
+            &[
+                "CREATE TYPE shop_enums.order_status AS ENUM ('paid', 'new')",
+                "ALTER TYPE shop_enums.order_status ADD VALUE 'draft' BEFORE 'paid'",
+                "CREATE DOMAIN shop_enums.open_status AS shop_enums.order_status",
+                "CREATE TABLE shop_enums.orders (id int, status shop_enums.order_status,
+                    history shop_enums.order_status[], open shop_enums.open_status)",
+            ],
+        )
+        .await;
+        let schema = read(&mut session).await.schema;
+        let [orders] = tables_of(&schema, "shop_enums") else { panic!("{schema:?}") };
+        let labels = ["draft", "paid", "new"].map(str::to_owned).to_vec();
+        let by_column: Vec<&[String]> = orders.columns.iter().map(|column| column.enum_labels.as_slice()).collect();
+        assert_eq!(by_column, [&[], labels.as_slice(), labels.as_slice(), labels.as_slice()]);
     }
 
     #[tokio::test]
