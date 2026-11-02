@@ -200,7 +200,7 @@ ORDER BY 1;
 | --- | --- |
 | `-- name:` | A readable name for the query. |
 | `-- connection:` | The connection it was written for; the query still runs on the one on screen. |
-| `-- chart:` | `grouped`, `stacked`, `bar` or `line`, with optional `x=` and `y=` columns (`y=orders,refunds`), and `horizontal` or `vertical` on all but `line`. |
+| `-- chart:` | `grouped`, `stacked`, `bar` or `line`, with optional `x=` and `y=` columns (`y=orders,refunds`), and `horizontal` or `vertical` on all but `line`. Above a later statement, it draws that statement alone. |
 | `-- param:` | A parameter: `name type = default`, or `name type optional` for NULL when empty. |
 | `-- format:` | How columns open: `raw`, `local`, `relative`, `grouped`, `bytes`, `short`, `check` or `duration`. |
 
@@ -327,6 +327,13 @@ timeout = 60                                    # seconds; 60 by default
 | `timeout` | How long the command has before it is stopped. |
 
 `ai = "off"` on a connection keeps both from asking there.
+
+Ask for a chart in your own words, as `orders per week as a line`: the answer starts with a `-- chart:` line and aliases its columns to match.
+`⇥` takes it into the editor and `⏎` runs it, and the result opens as that chart; `v` still goes back to the grid.
+A `-- chart:` line goes right above its statement, so each statement of a file can have its own; a statement without one uses the file's header.
+
+`ctrl-g` on the result pane asks about the statement that gave the result, for instructions like `chart this by week`.
+It adds the names and types of the result's columns, never a row or a value.
 
 The statement under the cursor goes along with the tables it needs: those it or your words name, then those one foreign key away, each with its columns, types, enum labels, foreign keys and comments, then the name alone of every other table, within 16 KiB.
 A comment holding a password is left out.

@@ -281,8 +281,8 @@ fn header_notes(app: &App) -> Line<'static> {
     let sheet = app.sheet();
     let elsewhere = sheet.header.connection.as_ref().filter(|&named| named != sheet.name());
     let suggestion = elsewhere.map(|named| suggested(app, named));
-    let warning =
-        sheet.header.warnings.first().map(|warning| Span::styled(format!(" ⚠ {warning} "), Style::default().fg(app.theme().warn)));
+    let warning = sheet.header.warnings.first().map(String::as_str).or_else(|| sheet.sent_chart_warning());
+    let warning = warning.map(|warning| Span::styled(format!(" ⚠ {warning} "), Style::default().fg(app.theme().warn)));
     Line::from(suggestion.into_iter().chain(warning).collect::<Vec<_>>())
 }
 

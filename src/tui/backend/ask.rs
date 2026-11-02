@@ -83,6 +83,7 @@ mod tests {
         let ask = ai::PromptInput {
             instruction: &instruction,
             statement: Some(&statement),
+            columns: &[],
             catalog: &catalog,
             table_use: &ai::TableUse::default(),
             tier: Tier::Local,

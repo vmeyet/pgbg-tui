@@ -108,6 +108,12 @@ mod tests {
     }
 
     #[test]
+    fn a_chart_line_stays_above_each_statement_it_leads() {
+        let reply = "```sql\n-- chart: line x=week y=total\nSELECT 1;\n-- chart: stacked\nSELECT 2\n```";
+        assert_eq!(statements("", reply).unwrap(), ["-- chart: line x=week y=total\nSELECT 1", "-- chart: stacked\nSELECT 2"]);
+    }
+
+    #[test]
     fn an_answer_of_comments_alone_gives_no_statement() {
         assert_eq!(statements("", "```sql\n-- nothing to do\n```"), Err(AnswerError::NoStatement));
     }

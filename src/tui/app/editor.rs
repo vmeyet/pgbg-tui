@@ -98,6 +98,11 @@ impl Editor {
         }
     }
 
+    /// Puts the cursor at byte `at`, as a click there would.
+    pub(super) fn move_cursor_to(&mut self, at: usize) {
+        self.click(place_of(self.field.text(), at), Click::Single);
+    }
+
     /// Selects the letters, digits and `_` around the cursor, the cursor at their end; nothing when there are none.
     fn select_sql_word(&mut self) {
         let text = self.field.text();

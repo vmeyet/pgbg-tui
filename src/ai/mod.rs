@@ -2,6 +2,7 @@
 //! command run on it (`command.rs`).
 //! A prompt holds no comment or password of the statement, no literal unless `[ai] literals = "sent"`, and no value of
 //! the schema but names, types, enum labels, foreign keys and comments; the history only orders the tables it shows.
+//! Asked from the result pane, it adds the names and types of the result's columns, never a row.
 mod answer;
 mod command;
 mod mask;
