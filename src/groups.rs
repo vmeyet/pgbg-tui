@@ -118,6 +118,7 @@ async fn leader_exited(leader: Option<u32>) {
 /// A thread of its own waits, so neither the runtime nor a paused test clock is held.
 #[derive(Debug)]
 pub(crate) struct ExitWatch {
+    leader: Pid,
     /// Closed once the leader exited; nothing is ever sent.
     exited: watch::Receiver<()>,
 }
@@ -129,11 +130,13 @@ impl ExitWatch {
             wait_unreaped(leader);
             drop(exiting);
         })?;
-        Ok(Self { exited })
+        Ok(Self { leader, exited })
     }
 
+    /// Whether the leader exited by now: the system answers before the watching thread wakes, and the thread's word
+    /// still holds once a reaped leader's id may be reused.
     pub(crate) fn has_exited(&self) -> bool {
-        self.exited.has_changed().is_err()
+        self.exited.has_changed().is_err() || exited_by_now(self.leader)
     }
 
     /// Resolves once the leader exited; safe to drop halfway and to await again.
@@ -144,6 +147,11 @@ impl ExitWatch {
 
 fn wait_unreaped(leader: Pid) {
     while matches!(waitid(WaitId::Pid(leader), WaitIdOptions::EXITED | WaitIdOptions::NOWAIT), Err(Errno::INTR)) {}
+}
+
+/// Whether the system says `leader` exited, leaving it unreaped; a leader already reaped is no longer a child, an error.
+fn exited_by_now(leader: Pid) -> bool {
+    !matches!(waitid(WaitId::Pid(leader), WaitIdOptions::EXITED | WaitIdOptions::NOWAIT | WaitIdOptions::NOHANG), Ok(None))
 }
 
 /// Runs `command` to its end as `Command::output` does, in a group of its own: dropped halfway (a timeout, a stop), it
@@ -398,6 +406,43 @@ mod tests {
         let killed = kill(group);
         child.wait().unwrap();
         assert_eq!(killed, Ok(()));
+    }
+
+    /// A watch on `child` whose thread never wakes, so only the system can tell; the sender keeps it asleep.
+    fn watch_with_its_thread_asleep(child: &std::process::Child) -> (ExitWatch, watch::Sender<()>) {
+        let (asleep, exited) = watch::channel(());
+        (ExitWatch { leader: Pid::from_raw(child.id() as i32).unwrap(), exited }, asleep)
+    }
+
+    #[test]
+    #[ignore = "starts a process"]
+    fn a_leader_that_runs_has_not_exited() {
+        let mut child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+        let (watch, _asleep) = watch_with_its_thread_asleep(&child);
+        let has_exited = watch.has_exited();
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(!has_exited);
+    }
+
+    #[test]
+    #[ignore = "starts a process"]
+    fn a_leader_that_exited_unreaped_is_seen_before_its_watching_thread_wakes() {
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let (watch, _asleep) = watch_with_its_thread_asleep(&child);
+        wait_unreaped(watch.leader);
+        let has_exited = watch.has_exited();
+        child.wait().unwrap();
+        assert!(has_exited);
+    }
+
+    #[test]
+    #[ignore = "starts a process"]
+    fn a_leader_already_reaped_is_seen_before_its_watching_thread_wakes() {
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let (watch, _asleep) = watch_with_its_thread_asleep(&child);
+        child.wait().unwrap();
+        assert!(watch.has_exited());
     }
 
     #[test]
