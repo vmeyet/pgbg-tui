@@ -112,6 +112,9 @@ The review of #214 to #231 found these, most severe first.
 
 - [x] `⌥s` saves the editor's text under a new path, starting from the open query's, and the editor stands for the new query
 - [x] `[ai] ghost_command` names the command the idle ghost asks; `ctrl-g` keeps `command`
+- [x] The AI's schema slice always names the other tables after the detailed ones, within the cap
+- [x] A common word or a generic column name (`for`, `name`, `created_at`) no longer brings a table into the slice
+- [x] The slice shows the labels of an enum column, one holding a secret left out
 
 ## Later
 

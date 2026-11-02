@@ -1,5 +1,6 @@
 //! The part of a catalog a prompt shows, the tables most likely wanted first: each as the body of a `CREATE TABLE`, its
-//! columns with their types, foreign keys and comments; or, when nothing points to a table, every table's name alone.
+//! columns with their types, enum labels, foreign keys and comments; then the name alone of every other table, so the
+//! model can name a table nothing pointed to.
 use crate::db::lex::{self, Token};
 use crate::db::model::{Catalog, ForeignKey, SchemaColumn, SchemaNode, Table, qualified, sql_name};
 use crate::secret;
@@ -7,9 +8,18 @@ use std::collections::{HashMap, HashSet};
 
 /// The shortest instruction word that may name a table or a column, so `a` or `of` pulls in nothing.
 const MIN_WORD: usize = 3;
+/// Instruction words too common to point to anything: `for` would name a table `forms`.
+const STOP_WORDS: [&str; 44] = [
+    "about", "after", "all", "and", "any", "are", "before", "between", "but", "can", "each", "every", "find", "for", "from", "get", "give",
+    "has", "have", "how", "into", "join", "list", "many", "not", "only", "per", "select", "show", "than", "that", "the", "their", "them",
+    "then", "this", "those", "was", "what", "when", "where", "which", "who", "with",
+];
+/// Columns so many tables hold that naming one says nothing of the table wanted.
+const GENERIC_COLUMNS: [&str; 10] =
+    ["id", "uuid", "name", "title", "description", "type", "status", "created_at", "updated_at", "deleted_at"];
 /// How much of a comment a line keeps, so one long comment never takes the room of other tables.
 const MAX_COMMENT_BYTES: usize = 300;
-/// What ends a comment cut short.
+/// What ends a comment or a list of enum labels cut short.
 const CUT_MARK: &str = "…";
 
 /// Why a table is in the slice, the most likely wanted first.
@@ -27,13 +37,14 @@ type Entry<'a> = (&'a SchemaNode, &'a Table);
 /// `schema.table(column type references schema.table(column), ...)`: first the tables the statement names, then those
 /// the instruction names, then those holding a column it names, then those a foreign key links to one of them, the
 /// links of the first kept first.
-/// When none is kept, one line per table naming it alone, in the order of the search path, then the other schemas.
+/// Then one line per other table naming it alone, in the order of the search path, then the other schemas.
 /// Each line is written only once asked for, so a caller that stops at a cap writes no more.
 pub(super) fn slice<'a>(catalog: &'a Catalog, statement: &str, instruction: &str) -> impl Iterator<Item = String> + 'a {
     let kept = kept(catalog, &statement_names(statement), &instruction_words(instruction));
-    let names = kept.is_empty().then(|| names(catalog)).into_iter().flatten();
     let linked = linked(catalog, &kept);
-    kept.into_iter().chain(linked).map(|(node, table)| line(node, table)).chain(names)
+    let detailed: Vec<Entry<'a>> = kept.into_iter().chain(linked).collect();
+    let others = names_other_than(catalog, &detailed);
+    detailed.into_iter().map(|(node, table)| line(node, table)).chain(others)
 }
 
 fn kept<'a>(catalog: &'a Catalog, named: &[String], asked: &[String]) -> Vec<Entry<'a>> {
@@ -50,13 +61,17 @@ fn reason(table: &Table, named: &[String], asked: &[String]) -> Option<Reason> {
     let name = table.name.to_lowercase();
     let is_long_name = name.chars().count() >= MIN_WORD;
     let is_asked = |word: &String| name.starts_with(word.as_str()) || (is_long_name && word.starts_with(name.as_str()));
-    let has_asked_column = table.columns.iter().any(|column| asked.contains(&column.name.to_lowercase()));
+    let has_asked_column = table.columns.iter().map(|column| column.name.to_lowercase()).any(|column| is_asked_column(&column, asked));
     match () {
         () if named.contains(&name) => Some(Reason::NamedByStatement),
         () if asked.iter().any(is_asked) => Some(Reason::NamedByInstruction),
         () if has_asked_column => Some(Reason::ColumnNamedByInstruction),
         () => None,
     }
+}
+
+fn is_asked_column(column: &str, asked: &[String]) -> bool {
+    !GENERIC_COLUMNS.contains(&column) && asked.iter().any(|word| word == column)
 }
 
 /// The tables one foreign key away from those `kept`, none kept already: for each kept table in order, those it points
@@ -90,9 +105,10 @@ fn target_name(key: &ForeignKey) -> (&str, &str) {
     (key.target_schema.as_str(), key.target_table.as_str())
 }
 
-/// Every table's `schema.table`, in the order of the search path, then the other schemas.
-fn names(catalog: &Catalog) -> impl Iterator<Item = String> {
-    let mut entries: Vec<Entry<'_>> = tables(catalog).collect();
+/// The `schema.table` of every table but those `shown`, in the order of the search path, then the other schemas.
+fn names_other_than<'a>(catalog: &'a Catalog, shown: &[Entry<'a>]) -> impl Iterator<Item = String> + use<'a> {
+    let shown: HashSet<(&str, &str)> = shown.iter().copied().map(name_of).collect();
+    let mut entries: Vec<Entry<'a>> = tables(catalog).filter(|&entry| !shown.contains(&name_of(entry))).collect();
     entries.sort_by_key(|(node, _)| catalog.search_path.iter().position(|schema| *schema == node.name).unwrap_or(usize::MAX));
     entries.into_iter().map(|(node, table)| qualified(&node.name, &table.name))
 }
@@ -107,7 +123,8 @@ fn statement_names(statement: &str) -> Vec<String> {
 
 fn instruction_words(instruction: &str) -> Vec<String> {
     let words = instruction.split(|c: char| !(c.is_alphanumeric() || c == '_'));
-    words.filter(|word| word.chars().count() >= MIN_WORD).map(str::to_lowercase).collect()
+    let lowercase = words.filter(|word| word.chars().count() >= MIN_WORD).map(str::to_lowercase);
+    lowercase.filter(|word| !STOP_WORDS.contains(&word.as_str())).collect()
 }
 
 /// `schema.table(...)` with each column, then each foreign key no single column carries, then the table's comment.
@@ -118,12 +135,29 @@ fn line(node: &SchemaNode, table: &Table) -> String {
     format!("{}({}){}", qualified(&node.name, &table.name), parts.join(", "), comment_part(table.comment.as_deref()))
 }
 
-/// `name type`, each foreign key it carries alone as `references schema.table(column)`, then its comment.
+/// `name type`, its enum labels, each foreign key it carries alone as `references schema.table(column)`, then its comment.
 fn column_part(column: &SchemaColumn, keys: &[ForeignKey]) -> String {
     let references: String =
         keys.iter().filter(|key| key.columns == [column.name.as_str()]).map(|key| format!(" references {}", target(key))).collect();
+    let labels = labels_part(&column.enum_labels);
     let comment = comment_part(column.comment.as_deref());
-    format!("{} {}{references}{comment}", sql_name(&column.name), column.type_name.as_str())
+    format!("{} {}{labels}{references}{comment}", sql_name(&column.name), column.type_name.as_str())
+}
+
+/// ` one of ('label', ...)` on one line and cut to [`MAX_COMMENT_BYTES`], a label holding a secret left out as a comment
+/// holding one is, and [`CUT_MARK`] saying so; nothing when no label is left.
+fn labels_part(labels: &[String]) -> String {
+    let shown: Vec<String> = labels.iter().filter(|label| !secret::holds_secret(label)).map(|label| label_literal(label)).collect();
+    if shown.is_empty() {
+        return String::new();
+    }
+    let left_out = if shown.len() < labels.len() { format!(", {CUT_MARK}") } else { String::new() };
+    format!(" one of ({}{left_out})", cut(&shown.join(", ")))
+}
+
+/// `label` as a string literal on one line.
+fn label_literal(label: &str) -> String {
+    format!("'{}'", on_one_line(label).replace('\'', "''"))
 }
 
 /// Whether `key` is made of one column of `table`, which then carries it.
@@ -147,8 +181,11 @@ fn column_list(columns: &[String]) -> String {
 /// the rule the history keeps.
 fn comment_part(comment: Option<&str>) -> String {
     let Some(comment) = comment.filter(|comment| !secret::holds_secret(comment)) else { return String::new() };
-    let one_line = comment.split_whitespace().collect::<Vec<_>>().join(" ");
-    format!(" /* {} */", cut(&one_line).replace("*/", "* /"))
+    format!(" /* {} */", cut(&on_one_line(comment)).replace("*/", "* /"))
+}
+
+fn on_one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// `text` whole when it fits in [`MAX_COMMENT_BYTES`], else its first characters that do and [`CUT_MARK`].
@@ -238,6 +275,38 @@ mod tests {
         assert_eq!(line_of(&catalog, "customers"), "public.customers(id integer, name text)");
     }
 
+    fn customers_with_labels(labels: &[&str]) -> String {
+        let mut catalog = shop_catalog();
+        catalog.schema.schemas[1].tables[1].columns[1].enum_labels = labels.iter().map(|label| (*label).to_owned()).collect();
+        line_of(&catalog, "customers")
+    }
+
+    #[test]
+    fn the_labels_of_an_enum_follow_the_type_of_their_column() {
+        assert_eq!(customers_with_labels(&["new", "won't pay"]), "public.customers(id integer, name text one of ('new', 'won''t pay'))");
+    }
+
+    #[test]
+    fn a_label_holding_a_secret_is_left_out_and_the_list_says_it_is_not_whole() {
+        assert_eq!(customers_with_labels(&["new", "password"]), "public.customers(id integer, name text one of ('new', …))");
+    }
+
+    #[test]
+    fn labels_all_holding_a_secret_show_nothing() {
+        assert_eq!(customers_with_labels(&["password"]), "public.customers(id integer, name text)");
+    }
+
+    #[test]
+    fn a_long_list_of_labels_is_cut_to_a_few_hundred_bytes() {
+        let line = customers_with_labels(&["some quite long label"; 100]);
+        assert!(line.len() < 400 && line.ends_with("…))"), "{line}");
+    }
+
+    #[test]
+    fn a_label_on_several_lines_shows_on_one() {
+        assert_eq!(customers_with_labels(&["on\nhold"]), "public.customers(id integer, name text one of ('on hold'))");
+    }
+
     #[test]
     fn the_tables_the_statement_names_come_first() {
         let kept = tables_in(&shop_catalog(), "SELECT * FROM billing.invoices", "join the customers");
@@ -285,6 +354,26 @@ mod tests {
     }
 
     #[test]
+    fn the_other_tables_follow_by_name_alone_the_search_path_first() {
+        let lines: Vec<String> = slice(&shop_with_users(), "SELECT * FROM users", "").collect();
+        assert_eq!(
+            lines,
+            [
+                "public.users(id integer)",
+                "public.customers(id integer, name text, user_id integer references public.users(id))",
+                "public.orders",
+                "billing.invoices",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_table_shown_in_detail_is_not_named_again() {
+        let lines: Vec<String> = slice(&shop_catalog(), "SELECT * FROM orders", "").collect();
+        assert!(!lines.iter().any(|line| line == "public.orders"), "{lines:?}");
+    }
+
+    #[test]
     fn with_no_table_named_every_table_shows_by_name_alone_the_search_path_first() {
         assert_eq!(
             slice(&shop_catalog(), "SELECT * FROM ", "").collect::<Vec<_>>(),
@@ -300,5 +389,35 @@ mod tests {
     #[test]
     fn a_short_instruction_word_names_nothing() {
         assert!(slice(&shop_catalog(), "", "an id of it").eq(slice(&shop_catalog(), "", "")));
+    }
+
+    #[test]
+    fn a_common_word_names_no_table_it_starts() {
+        let mut catalog = shop_catalog();
+        catalog.schema.schemas[1].tables.push(schema_table("forms", vec![schema_column("title", "text", None)]));
+        assert!(slice(&catalog, "", "for the last week").eq(slice(&catalog, "", "")));
+    }
+
+    #[test]
+    fn a_common_word_names_no_column() {
+        let mut catalog = shop_catalog();
+        catalog.schema.schemas[1].tables[0].columns.push(schema_column("from", "date", None));
+        assert!(slice(&catalog, "", "from last week").eq(slice(&catalog, "", "")));
+    }
+
+    #[test]
+    fn a_generic_column_name_brings_no_table() {
+        for generic in GENERIC_COLUMNS {
+            let mut catalog = shop_catalog();
+            catalog.schema.schemas[1].tables[0].columns.push(schema_column(generic, "text", None));
+            assert!(slice(&catalog, "", &format!("sorted by {generic}")).eq(slice(&catalog, "", "")), "{generic}");
+        }
+    }
+
+    #[test]
+    fn a_generic_word_still_names_a_table_called_so() {
+        let mut catalog = shop_catalog();
+        catalog.schema.schemas[1].tables.push(schema_table("statuses", vec![]));
+        assert_eq!(tables_in(&catalog, "", "the status of it")[0], "public.statuses");
     }
 }

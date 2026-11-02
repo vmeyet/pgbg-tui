@@ -12,6 +12,12 @@ Each entry says what changed, then where, then how to use it.
   The prompt starts from the open query's path, or empty with none open; once saved, the editor stands for the new query, and a path that holds other text is refused.
 - **A separate command for the AI completion**: `[ai] ghost_command` in `config.toml` names the program the idle ghost asks, as a quicker model, given as `command` is.
   `ctrl-g` keeps `command`, `ghost = true` still turns the ghost on, and with no `ghost_command` the ghost asks `command` as before.
+- **The AI sees more of your schema**, in the prompt `[ai] command` gets: the labels of enum columns, and the name of every table beyond those it shows in detail, so it can reach a table your words did not name.
+  Nothing to set; a label holding a secret is left out, as a comment holding one is.
+
+### Fixed
+
+- **Common words no longer pull tables into the AI prompt**: `for` does not bring a table `forms`, and a column such as `name` or `created_at` does not bring every table holding one.
 
 ## 0.2.0 - 2026-10-30
 

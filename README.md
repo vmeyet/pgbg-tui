@@ -300,7 +300,7 @@ timeout = 60                                    # seconds; 60 by default
 
 `ai = "off"` on a connection keeps both from asking there.
 
-The statement under the cursor goes along with the tables it needs: those it or your words name, then those one foreign key away, each with its columns, types, foreign keys and comments, within 16 KiB.
+The statement under the cursor goes along with the tables it needs: those it or your words name, then those one foreign key away, each with its columns, types, enum labels, foreign keys and comments, then the name alone of every other table, within 16 KiB.
 A comment holding a password is left out.
 When nothing names a table, as in `SELECT * FROM `, the names of the tables go alone.
 

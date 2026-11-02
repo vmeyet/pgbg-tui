@@ -129,7 +129,7 @@ fn head(input: &PromptInput<'_>, instruction: &str, statement: &str) -> String {
          The database is a {} one.\n\n\
          Instruction:\n{instruction}\n\n\
          Statement under the cursor:\n{statement}\n\n\
-         Schema:\n",
+         Schema, where a line with a name alone is a table whose columns are left out:\n",
         input.tier
     )
 }
@@ -293,6 +293,22 @@ mod tests {
         let text = prompt_for("SELECT * FROM orders", "orders", &wide_catalog()).unwrap().text().to_owned();
         assert!(text.len() <= MAX_BYTES && text.ends_with(CUT_NOTE));
         assert!(text.contains("public.orders(id integer, customer_id integer references public.customers(id), total numeric(10,2))\n"));
+    }
+
+    #[test]
+    fn past_the_cap_the_names_alone_go_first_and_the_detailed_lines_stay() {
+        let table = |n: usize| schema_table(&format!("archived_{n}"), vec![]);
+        let mut catalog = shop_catalog();
+        catalog.schema.schemas.push(SchemaNode { name: "archive".into(), tables: (0..2000).map(table).collect() });
+        let text = prompt_for("SELECT * FROM customers", "", &catalog).unwrap().text().to_owned();
+        assert!(text.len() <= MAX_BYTES && text.ends_with(CUT_NOTE));
+        assert!(text.contains("public.customers(id integer, name text)\n") && text.contains("archive.archived_0\n"), "{text}");
+    }
+
+    #[test]
+    fn a_table_nothing_points_to_is_still_named() {
+        let text = text("SELECT * FROM customers", "");
+        assert!(text.contains("name alone is a table whose columns are left out:\n") && text.contains("\nbilling.invoices\n"), "{text}");
     }
 
     #[test]
