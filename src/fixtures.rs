@@ -1,8 +1,8 @@
 //! Invented fixtures the tests share: the connection `shop`, the test database, tunnels to it, and results of `orders`.
 use crate::connection::{Connection, Entry, WritePolicy};
 use crate::db::model::{
-    Catalog, Column, ColumnKind, ColumnName, ColumnNumber, Extent, ForeignKey, Index, Origin, Page, Params, ResultSet, Route, Schema,
-    SchemaColumn, SchemaNode, Statement, Table, TableKind, TableOid, TypeName, Value,
+    Catalog, Column, ColumnKind, ColumnName, ColumnNumber, Extent, ForeignKey, Index, JsonText, Origin, Page, Params, ResultSet, Route,
+    Schema, SchemaColumn, SchemaNode, Statement, Table, TableKind, TableOid, TypeName, Value,
 };
 use crate::db::{Session, guard};
 use rustix::process::{Pid, test_kill_process};
@@ -175,6 +175,24 @@ fn through_forwarder(program: &str, marker: &str, writes: WritePolicy, hop: Dura
 }
 
 /// A computed column of a result: read from no table.
+/// A plan of estimates alone, as `EXPLAIN (FORMAT JSON)` writes it; the scan of `orders` costs most on its own.
+pub(crate) const ESTIMATED_PLAN: &str = r#"[{"Plan":{"Node Type":"Hash Join","Join Type":"Inner","Startup Cost":12.5,"Total Cost":100.0,"Plan Rows":40,"Plan Width":16,"Plans":[
+    {"Node Type":"Seq Scan","Relation Name":"orders","Alias":"o","Total Cost":70.0,"Plan Rows":500},
+    {"Node Type":"Hash","Total Cost":20.0,"Plan Rows":10,"Plans":[
+        {"Node Type":"Seq Scan","Relation Name":"customers","Total Cost":20.0,"Plan Rows":10}]}]},"Planning Time":0.2}]"#;
+
+/// A plan as `EXPLAIN (ANALYZE, FORMAT JSON)` writes it; the index scan takes most time, over its five loops, and the
+/// join's estimate of its rows is far off.
+pub(crate) const ANALYZED_PLAN: &str = r#"[{"Plan":{"Node Type":"Nested Loop","Total Cost":90.0,"Plan Rows":5,"Actual Total Time":30.0,"Actual Rows":400,"Actual Loops":1,"Plans":[
+    {"Node Type":"Seq Scan","Relation Name":"customers","Total Cost":60.0,"Plan Rows":5,"Actual Total Time":6.0,"Actual Rows":5,"Actual Loops":1},
+    {"Node Type":"Index Scan","Relation Name":"orders","Total Cost":5.0,"Plan Rows":1,"Actual Total Time":4.0,"Actual Rows":80,"Actual Loops":5}]}}]"#;
+
+/// The result of an `EXPLAIN (FORMAT JSON)` whose plan is `json`.
+pub(crate) fn explain_result(json: &str) -> ResultSet {
+    let cell = Value::Json(JsonText::compacted(json).unwrap());
+    ResultSet::whole(vec![column("QUERY PLAN", ColumnKind::Json)], vec![vec![cell]])
+}
+
 pub(crate) fn column(name: &str, kind: ColumnKind) -> Column {
     Column { name: ColumnName::new(name), kind, type_name: TypeName::new(""), origin: None }
 }
