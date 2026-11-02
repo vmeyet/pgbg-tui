@@ -86,8 +86,13 @@ impl SessionLink {
         let (on_server, running) = watch::channel(None);
         let (route, open_route) = watch::channel(None);
         let session = answers.session;
-        let reader =
-            SchemaReader { connection: connection.clone(), answers: answers.clone(), asks: Arc::clone(&schema_asks), route: open_route };
+        let reader = SchemaReader {
+            connection: connection.clone(),
+            answers: answers.clone(),
+            asks: Arc::clone(&schema_asks),
+            route: open_route,
+            history: history.clone(),
+        };
         let (cancelled, on_server) = (Cancels::new(cancelled), OnServer::new(on_server));
         let mailbox = Mailbox { queue, cancelled, on_server, answers };
         let recorder = Recorder { store: history, connection: connection.name().clone() };

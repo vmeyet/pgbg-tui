@@ -205,7 +205,7 @@ impl Sheet {
     ) -> Result<Prompt, NotSent> {
         let unread = Catalog::default();
         let catalog = self.catalog().unwrap_or(&unread);
-        ai::prompt(&ai::PromptInput { instruction, statement, catalog, tier: self.connection.tier(), literals })
+        ai::prompt(&ai::PromptInput { instruction, statement, catalog, table_use: &self.table_use, tier: self.connection.tier(), literals })
     }
 
     /// `statements` against the statement under the cursor, which they would replace, unless the editor is no longer

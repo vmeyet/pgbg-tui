@@ -14,6 +14,8 @@ Each entry says what changed, then where, then how to use it.
   `ctrl-g` keeps `command`, `ghost = true` still turns the ghost on, and with no `ghost_command` the ghost asks `command` as before.
 - **The AI sees more of your schema**, in the prompt `[ai] command` gets: the labels of enum columns, and the name of every table beyond those it shows in detail, so it can reach a table your words did not name.
   Nothing to set; a label holding a secret is left out, as a comment holding one is.
+- **The AI sees the tables you use first**, in the prompt `[ai] command` gets: among tables your words point to equally, those you run most on that connection come first, so they survive the 16 KiB cap.
+  Nothing to set; your history only changes the order and is never sent.
 
 ### Fixed
 

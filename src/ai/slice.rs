@@ -4,6 +4,7 @@
 use crate::db::lex::{self, Token};
 use crate::db::model::{Catalog, ForeignKey, SchemaColumn, SchemaNode, Table, qualified, sql_name};
 use crate::secret;
+use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 
 /// The shortest instruction word that may name a table or a column, so `a` or `of` pulls in nothing.
@@ -15,12 +16,25 @@ const STOP_WORDS: [&str; 44] = [
     "then", "this", "those", "was", "what", "when", "where", "which", "who", "with",
 ];
 /// Columns so many tables hold that naming one says nothing of the table wanted.
-const GENERIC_COLUMNS: [&str; 10] =
-    ["id", "uuid", "name", "title", "description", "type", "status", "created_at", "updated_at", "deleted_at"];
+const GENERIC_COLUMNS: [&str; 9] = ["uuid", "name", "title", "description", "type", "status", "created_at", "updated_at", "deleted_at"];
 /// How much of a comment a line keeps, so one long comment never takes the room of other tables.
 const MAX_COMMENT_BYTES: usize = 300;
 /// What ends a comment or a list of enum labels cut short.
 const CUT_MARK: &str = "…";
+
+/// One line of a slice: a table in detail, or its name alone, which matters less and goes first past a cap.
+pub(super) enum Line {
+    Detailed(String),
+    NameAlone(String),
+}
+
+impl Line {
+    pub(super) fn text(&self) -> &str {
+        match self {
+            Self::Detailed(text) | Self::NameAlone(text) => text,
+        }
+    }
+}
 
 /// Why a table is in the slice, the most likely wanted first.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -33,45 +47,73 @@ enum Reason {
 /// A table of the catalog and the schema holding it.
 type Entry<'a> = (&'a SchemaNode, &'a Table);
 
+/// How many statements of a connection's history name each table of a catalog, by its lowercase name: it orders a slice
+/// and goes no further, so no count or statement reaches a prompt.
+/// The default, of no history, leaves the tables in catalog order.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TableUse(HashMap<String, usize>);
+
+impl TableUse {
+    pub(crate) fn counted<'a>(catalog: &Catalog, statements: impl Iterator<Item = &'a str>) -> Self {
+        let mut counts: HashMap<String, usize> = tables(catalog).map(|(_, table)| (table.name.to_lowercase(), 0)).collect();
+        let named_once = statements.flat_map(|statement| statement_names(statement).into_iter().collect::<HashSet<_>>());
+        for name in named_once {
+            if let Some(count) = counts.get_mut(&name) {
+                *count += 1;
+            }
+        }
+        counts.retain(|_, count| *count > 0);
+        Self(counts)
+    }
+
+    fn of(&self, table: &Table) -> usize {
+        self.0.get(&table.name.to_lowercase()).copied().unwrap_or_default()
+    }
+}
+
 /// One line per table of `catalog` the `statement` names or the `instruction`'s words point to, as
 /// `schema.table(column type references schema.table(column), ...)`: first the tables the statement names, then those
 /// the instruction names, then those holding a column it names, then those a foreign key links to one of them, the
-/// links of the first kept first.
+/// links of the first kept first; among those with the same reason, the tables `table_use` counts most come first.
 /// Then one line per other table naming it alone, in the order of the search path, then the other schemas.
 /// Each line is written only once asked for, so a caller that stops at a cap writes no more.
-pub(super) fn slice<'a>(catalog: &'a Catalog, statement: &str, instruction: &str) -> impl Iterator<Item = String> + 'a {
-    let kept = kept(catalog, &statement_names(statement), &instruction_words(instruction));
+pub(super) fn slice<'a>(
+    catalog: &'a Catalog,
+    statement: &str,
+    instruction: &str,
+    table_use: &TableUse,
+) -> impl Iterator<Item = Line> + use<'a> {
+    let kept = kept(catalog, &statement_names(statement), &instruction_words(instruction), table_use);
     let linked = linked(catalog, &kept);
     let detailed: Vec<Entry<'a>> = kept.into_iter().chain(linked).collect();
     let others = names_other_than(catalog, &detailed);
-    detailed.into_iter().map(|(node, table)| line(node, table)).chain(others)
+    detailed.into_iter().map(|(node, table)| Line::Detailed(line(node, table))).chain(others.map(Line::NameAlone))
 }
 
-fn kept<'a>(catalog: &'a Catalog, named: &[String], asked: &[String]) -> Vec<Entry<'a>> {
-    let mut kept: Vec<(Reason, Entry<'a>)> = tables(catalog).filter_map(|entry| Some((reason(entry.1, named, asked)?, entry))).collect();
-    kept.sort_by_key(|(reason, _)| *reason);
-    kept.into_iter().map(|(_, entry)| entry).collect()
+fn kept<'a>(catalog: &'a Catalog, named: &[String], asked: &[String], table_use: &TableUse) -> Vec<Entry<'a>> {
+    let column_words: Vec<&str> = asked.iter().map(String::as_str).filter(|word| !GENERIC_COLUMNS.contains(word)).collect();
+    let ranked = |entry: Entry<'a>| Some((reason(entry.1, named, asked, &column_words)?, Reverse(table_use.of(entry.1)), entry));
+    let mut kept: Vec<_> = tables(catalog).filter_map(ranked).collect();
+    kept.sort_by_key(|&(reason, used, _)| (reason, used));
+    kept.into_iter().map(|(_, _, entry)| entry).collect()
 }
 
 fn tables(catalog: &Catalog) -> impl Iterator<Item = Entry<'_>> {
     catalog.schema.schemas.iter().flat_map(|node| node.tables.iter().map(move |table| (node, table)))
 }
 
-fn reason(table: &Table, named: &[String], asked: &[String]) -> Option<Reason> {
+fn reason(table: &Table, named: &[String], asked: &[String], column_words: &[&str]) -> Option<Reason> {
     let name = table.name.to_lowercase();
     let is_long_name = name.chars().count() >= MIN_WORD;
     let is_asked = |word: &String| name.starts_with(word.as_str()) || (is_long_name && word.starts_with(name.as_str()));
-    let has_asked_column = table.columns.iter().map(|column| column.name.to_lowercase()).any(|column| is_asked_column(&column, asked));
+    let is_asked_column = |column: &SchemaColumn| column_words.contains(&column.name.to_lowercase().as_str());
+    let has_asked_column = !column_words.is_empty() && table.columns.iter().any(is_asked_column);
     match () {
         () if named.contains(&name) => Some(Reason::NamedByStatement),
         () if asked.iter().any(is_asked) => Some(Reason::NamedByInstruction),
         () if has_asked_column => Some(Reason::ColumnNamedByInstruction),
         () => None,
     }
-}
-
-fn is_asked_column(column: &str, asked: &[String]) -> bool {
-    !GENERIC_COLUMNS.contains(&column) && asked.iter().any(|word| word == column)
 }
 
 /// The tables one foreign key away from those `kept`, none kept already: for each kept table in order, those it points
@@ -202,8 +244,25 @@ mod tests {
     use super::*;
     use crate::fixtures::{key_to_id, schema_column, schema_table, shop_catalog};
 
+    fn lines_used<'a>(
+        catalog: &'a Catalog,
+        statement: &str,
+        instruction: &str,
+        table_use: &TableUse,
+    ) -> impl Iterator<Item = String> + use<'a> {
+        slice(catalog, statement, instruction, table_use).map(|line| line.text().to_owned())
+    }
+
+    fn lines_of<'a>(catalog: &'a Catalog, statement: &str, instruction: &str) -> impl Iterator<Item = String> + use<'a> {
+        lines_used(catalog, statement, instruction, &TableUse::default())
+    }
+
+    fn names_in(lines: impl Iterator<Item = String>) -> Vec<String> {
+        lines.map(|line| line.split('(').next().unwrap_or_default().to_owned()).collect()
+    }
+
     fn tables_in(catalog: &Catalog, statement: &str, instruction: &str) -> Vec<String> {
-        slice(catalog, statement, instruction).map(|line| line.split('(').next().unwrap_or_default().to_owned()).collect()
+        names_in(lines_of(catalog, statement, instruction))
     }
 
     fn line_of(catalog: &Catalog, name: &str) -> String {
@@ -346,6 +405,52 @@ mod tests {
         assert!(kept.contains(&"public.users".to_owned()), "{kept:?}");
     }
 
+    fn used(catalog: &Catalog, statements: &[&str]) -> TableUse {
+        TableUse::counted(catalog, statements.iter().copied())
+    }
+
+    #[test]
+    fn with_the_same_reason_the_table_run_most_comes_first() {
+        let catalog = shop_catalog();
+        let table_use = used(&catalog, &["SELECT * FROM public.customers", "SELECT name FROM CUSTOMERS", "SELECT * FROM orders"]);
+        assert_eq!(names_in(lines_used(&catalog, "", "orders of customers", &table_use))[..2], ["public.customers", "public.orders"]);
+    }
+
+    #[test]
+    fn use_does_not_pass_a_table_of_a_stronger_reason() {
+        let catalog = shop_catalog();
+        let table_use = used(&catalog, &["SELECT * FROM customers", "SELECT * FROM customers"]);
+        let lines = lines_used(&catalog, "SELECT * FROM orders", "the customers", &table_use);
+        assert_eq!(names_in(lines)[..2], ["public.orders", "public.customers"]);
+    }
+
+    #[test]
+    fn with_no_use_tables_of_the_same_reason_stay_in_catalog_order() {
+        assert_eq!(tables_in(&shop_catalog(), "", "orders of customers")[..2], ["public.orders", "public.customers"]);
+    }
+
+    #[test]
+    fn a_table_named_twice_in_a_statement_counts_once() {
+        let catalog = shop_catalog();
+        let table_use = used(&catalog, &["SELECT * FROM orders a, orders b", "SELECT * FROM customers", "SELECT * FROM customers"]);
+        assert_eq!(names_in(lines_used(&catalog, "", "orders of customers", &table_use))[..2], ["public.customers", "public.orders"]);
+    }
+
+    #[test]
+    fn a_table_named_only_in_a_literal_or_a_comment_is_not_counted() {
+        let catalog = shop_catalog();
+        let table_use = used(&catalog, &["SELECT 'customers' -- customers"]);
+        assert_eq!(table_use, used(&catalog, &[]));
+    }
+
+    #[test]
+    fn no_statement_or_count_of_the_history_reaches_a_line() {
+        let catalog = shop_catalog();
+        let table_use = used(&catalog, &["SELECT 'nina' FROM customers"]);
+        let lines: Vec<String> = lines_used(&catalog, "", "customers", &table_use).collect();
+        assert_eq!(lines, lines_of(&catalog, "", "customers").collect::<Vec<_>>());
+    }
+
     #[test]
     fn a_table_with_a_short_name_is_not_named_by_every_word_it_starts() {
         let mut catalog = shop_catalog();
@@ -355,7 +460,7 @@ mod tests {
 
     #[test]
     fn the_other_tables_follow_by_name_alone_the_search_path_first() {
-        let lines: Vec<String> = slice(&shop_with_users(), "SELECT * FROM users", "").collect();
+        let lines: Vec<String> = lines_of(&shop_with_users(), "SELECT * FROM users", "").collect();
         assert_eq!(
             lines,
             [
@@ -368,41 +473,35 @@ mod tests {
     }
 
     #[test]
-    fn a_table_shown_in_detail_is_not_named_again() {
-        let lines: Vec<String> = slice(&shop_catalog(), "SELECT * FROM orders", "").collect();
-        assert!(!lines.iter().any(|line| line == "public.orders"), "{lines:?}");
-    }
-
-    #[test]
     fn with_no_table_named_every_table_shows_by_name_alone_the_search_path_first() {
         assert_eq!(
-            slice(&shop_catalog(), "SELECT * FROM ", "").collect::<Vec<_>>(),
+            lines_of(&shop_catalog(), "SELECT * FROM ", "").collect::<Vec<_>>(),
             ["public.orders", "public.customers", "billing.invoices"]
         );
     }
 
     #[test]
     fn a_word_inside_a_literal_names_no_table() {
-        assert!(slice(&shop_catalog(), "SELECT 'orders'", "").eq(slice(&shop_catalog(), "", "")));
+        assert!(lines_of(&shop_catalog(), "SELECT 'orders'", "").eq(lines_of(&shop_catalog(), "", "")));
     }
 
     #[test]
     fn a_short_instruction_word_names_nothing() {
-        assert!(slice(&shop_catalog(), "", "an id of it").eq(slice(&shop_catalog(), "", "")));
+        assert!(lines_of(&shop_catalog(), "", "an id of it").eq(lines_of(&shop_catalog(), "", "")));
     }
 
     #[test]
     fn a_common_word_names_no_table_it_starts() {
         let mut catalog = shop_catalog();
         catalog.schema.schemas[1].tables.push(schema_table("forms", vec![schema_column("title", "text", None)]));
-        assert!(slice(&catalog, "", "for the last week").eq(slice(&catalog, "", "")));
+        assert!(lines_of(&catalog, "", "for the last week").eq(lines_of(&catalog, "", "")));
     }
 
     #[test]
     fn a_common_word_names_no_column() {
         let mut catalog = shop_catalog();
         catalog.schema.schemas[1].tables[0].columns.push(schema_column("from", "date", None));
-        assert!(slice(&catalog, "", "from last week").eq(slice(&catalog, "", "")));
+        assert!(lines_of(&catalog, "", "from last week").eq(lines_of(&catalog, "", "")));
     }
 
     #[test]
@@ -410,7 +509,7 @@ mod tests {
         for generic in GENERIC_COLUMNS {
             let mut catalog = shop_catalog();
             catalog.schema.schemas[1].tables[0].columns.push(schema_column(generic, "text", None));
-            assert!(slice(&catalog, "", &format!("sorted by {generic}")).eq(slice(&catalog, "", "")), "{generic}");
+            assert!(lines_of(&catalog, "", &format!("sorted by {generic}")).eq(lines_of(&catalog, "", "")), "{generic}");
         }
     }
 

@@ -115,6 +115,7 @@ The review of #214 to #231 found these, most severe first.
 - [x] The AI's schema slice always names the other tables after the detailed ones, within the cap
 - [x] A common word or a generic column name (`for`, `name`, `created_at`) no longer brings a table into the slice
 - [x] The slice shows the labels of an enum column, one holding a secret left out
+- [x] Within one reason, the slice puts first the tables the connection's history runs most, and only the order changes
 
 ## Later
 

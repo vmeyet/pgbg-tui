@@ -84,6 +84,7 @@ mod tests {
             instruction: &instruction,
             statement: Some(&statement),
             catalog: &catalog,
+            table_use: &ai::TableUse::default(),
             tier: Tier::Local,
             literals: LiteralPolicy::Masked,
         };

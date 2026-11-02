@@ -62,6 +62,7 @@ These invariants hold across every flow; a change that breaks one is a bug.
 - An AI prompt never holds a row, a value, a default, the history, a server's words, nor the connection's name, host or URL; literals are masked unless `literals = "sent"`, and a statement or comment holding a secret is never sent.
 - Of the schema, an AI prompt holds names, types, enum labels, foreign keys and comments; a label goes through the same secret check and cut as a comment, since a label is written by whoever made the type, not read from a row.
 - The tables it points to come in detail, then every other table by name alone, in search-path order, until the 16 KiB cap; the whole schema in detail is never sent.
+- The history only orders those tables: `tui/backend/schema.rs` counts the runs naming each table after a schema read and hands `TableUse` to the app, so within one reason the most used comes first; no history text, statement or count goes into a prompt, and a missing or unreadable history means catalog order.
 - An AI answer is a suggestion: taking it and running it are two keys, and the run goes through the guard.
 - `tui/app/` stays pure: the loop hands it the clock as a `Clock` and the timers as events.
 

@@ -1,7 +1,7 @@
 //! The text sent on a command's stdin: the instruction, the masked statement, a slice of the schema and the tier.
 use super::answer::{self, AnswerError};
 use super::mask::{LiteralPolicy, Literals, Masked, masked, masked_comment};
-use super::slice::slice;
+use super::slice::{Line, TableUse, slice};
 use crate::connection::Tier;
 use crate::db::lex::{Lexed, Span, Token};
 use crate::db::model::{Catalog, Statement};
@@ -29,6 +29,7 @@ pub(crate) struct PromptInput<'a> {
     /// The statement under the cursor, none when the editor holds none there.
     pub(crate) statement: Option<&'a Statement>,
     pub(crate) catalog: &'a Catalog,
+    pub(crate) table_use: &'a TableUse,
     pub(crate) tier: Tier,
     pub(crate) literals: LiteralPolicy,
 }
@@ -91,7 +92,7 @@ pub(crate) fn prompt(input: &PromptInput<'_>) -> Result<Prompt, NotSent> {
     let instruction = input.instruction.masked(statement.literals, input.literals)?;
     let head = head(input, &instruction.text, &statement.text);
     let room = MAX_BYTES.checked_sub(head.len() + CUT_NOTE.len()).ok_or(NotSent::TooLong)?;
-    let schema = fitted(slice(input.catalog, sql, &input.instruction.whole()), room);
+    let schema = fitted(slice(input.catalog, sql, &input.instruction.whole(), input.table_use), room);
     Ok(Prompt { text: head + &schema, literals: instruction.literals })
 }
 
@@ -134,17 +135,20 @@ fn head(input: &PromptInput<'_>, instruction: &str, statement: &str) -> String {
     )
 }
 
-/// The `lines` that fit in `room` bytes, one a line, in order, each too long for the room left skipped, and a note when
-/// some were.
-fn fitted(lines: impl Iterator<Item = String>, room: usize) -> String {
+/// The `lines` that fit in `room` bytes, one a line, in order, and a note when some did not: a detailed line too long
+/// for the room left is skipped, and the first name alone too long ends the text, so a big schema writes no more names.
+fn fitted(lines: impl Iterator<Item = Line>, room: usize) -> String {
     let mut text = String::new();
     let mut is_cut = false;
     for line in lines {
-        if text.len() + line.len() + 1 > room {
+        if text.len() + line.text().len() + 1 > room {
             is_cut = true;
+            if matches!(line, Line::NameAlone(_)) {
+                break;
+            }
             continue;
         }
-        text += &line;
+        text += line.text();
         text.push('\n');
     }
     if is_cut { text + CUT_NOTE } else { text }
@@ -193,7 +197,14 @@ mod tests {
     fn prompt_with(statement: &str, instruction: &str, catalog: &Catalog, literals: LiteralPolicy) -> Result<Prompt, NotSent> {
         let instruction = Instruction::new(instruction);
         let statement = Statement::new(statement);
-        prompt(&PromptInput { instruction: &instruction, statement: Some(&statement), catalog, tier: Tier::Production, literals })
+        prompt(&PromptInput {
+            instruction: &instruction,
+            statement: Some(&statement),
+            catalog,
+            table_use: &TableUse::default(),
+            tier: Tier::Production,
+            literals,
+        })
     }
 
     fn prompt_for(statement: &str, instruction: &str, catalog: &Catalog) -> Result<Prompt, NotSent> {
@@ -313,8 +324,14 @@ mod tests {
 
     #[test]
     fn a_line_too_long_for_the_room_is_skipped_and_the_lines_after_it_still_fit() {
-        let lines = ["a".repeat(10), "b".repeat(100), "c".to_owned()].into_iter();
+        let lines = ["a".repeat(10), "b".repeat(100), "c".to_owned()].map(Line::Detailed).into_iter();
         assert_eq!(fitted(lines, 20), format!("aaaaaaaaaa\nc\n{CUT_NOTE}"));
+    }
+
+    #[test]
+    fn the_first_name_too_long_for_the_room_ends_the_text() {
+        let lines = ["a".repeat(10), "b".repeat(100), "c".to_owned()].map(Line::NameAlone).into_iter();
+        assert_eq!(fitted(lines, 20), format!("aaaaaaaaaa\n{CUT_NOTE}"));
     }
 
     #[test]
@@ -336,6 +353,7 @@ mod tests {
             instruction: &instruction,
             statement: Some(&statement),
             catalog: &shop_catalog(),
+            table_use: &TableUse::default(),
             tier: Tier::Production,
             literals,
         })
