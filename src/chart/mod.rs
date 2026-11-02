@@ -1,33 +1,37 @@
 //! What to chart from a result, and the points to draw.
 //! Pure: the drawing lives in `tui/chart_view/`.
+pub(crate) use bars::{Bars, Lane};
+pub(crate) use grouped::bars as grouped_bars;
 pub(crate) use series::{ChartError, Series, YColumn};
 pub(crate) use spec::ChartSpec;
 
 use crate::db::model::{Column, ColumnKind, ResultSet, Value};
 
 mod axis;
-mod bar;
+mod bars;
+mod grouped;
 mod line;
 mod series;
 mod spec;
 
-/// A result with at most this many rows is drawn as bars, whatever its x.
+/// A result with at most this many rows is drawn as grouped bars, whatever its x.
 const FEW_POINTS: usize = 12;
 
-/// How a chart draws its points; each kind keeps its own cap in its own file.
+/// How a chart draws its points; each kind says what it draws in its own file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ChartKind {
-    Bar,
+    /// One bar per y column at each point, side by side.
+    Grouped,
     Line,
 }
 
 impl ChartKind {
-    const ALL: [Self; 2] = [Self::Bar, Self::Line];
+    const ALL: [Self; 2] = [Self::Grouped, Self::Line];
 
     /// The word a `-- chart:` header uses for it.
     pub(crate) const fn name(self) -> &'static str {
         match self {
-            Self::Bar => "bar",
+            Self::Grouped => "bar",
             Self::Line => "line",
         }
     }
@@ -35,7 +39,7 @@ impl ChartKind {
     /// The indexes of the points drawn out of `points`, in order: all of them when they fit the kind's cap.
     fn keep(self, points: usize) -> Vec<usize> {
         match self {
-            Self::Bar => bar::keep(points),
+            Self::Grouped => bars::keep(points),
             Self::Line => line::keep(points),
         }
     }
@@ -97,7 +101,7 @@ fn default_y(columns: &[Column], x: usize) -> Vec<usize> {
 
 fn suited_kind(x: &Column, rows: usize) -> ChartKind {
     let is_text = x.kind == ColumnKind::Text;
-    if is_text || rows <= FEW_POINTS { ChartKind::Bar } else { ChartKind::Line }
+    if is_text || rows <= FEW_POINTS { ChartKind::Grouped } else { ChartKind::Line }
 }
 
 const fn is_label(kind: &ColumnKind) -> bool {
@@ -129,7 +133,7 @@ mod tests {
             vec![column("id", ColumnKind::Int), column("customer", ColumnKind::Text), column("total", ColumnKind::Numeric)],
             vec![vec![Value::Int(7), Value::Text("nina".into()), Value::Numeric("12.50".into())]],
         );
-        assert_eq!(infer(&orders), Some(ChartColumns { kind: ChartKind::Bar, x: 1, y: vec![0, 2] }));
+        assert_eq!(infer(&orders), Some(ChartColumns { kind: ChartKind::Grouped, x: 1, y: vec![0, 2] }));
     }
 
     #[test]
@@ -163,7 +167,7 @@ mod tests {
     fn a_few_days_draw_bars() {
         let orders =
             result(vec![column("day", ColumnKind::Date), column("orders", ColumnKind::Int)], rows(12, |i| vec![day(i), Value::Int(3)]));
-        assert_eq!(infer(&orders).unwrap().kind, ChartKind::Bar);
+        assert_eq!(infer(&orders).unwrap().kind, ChartKind::Grouped);
     }
 
     #[test]
@@ -172,7 +176,7 @@ mod tests {
             vec![column("customer", ColumnKind::Text), column("orders", ColumnKind::Int)],
             rows(40, |i| vec![Value::Text(format!("c{i}").into()), Value::Int(1)]),
         );
-        assert_eq!(infer(&customers).unwrap().kind, ChartKind::Bar);
+        assert_eq!(infer(&customers).unwrap().kind, ChartKind::Grouped);
     }
 
     #[test]
@@ -198,7 +202,7 @@ mod tests {
             vec![column("year", ColumnKind::Int), column("orders", ColumnKind::Int)],
             rows(3, |i| vec![Value::Int(2024 + i as i64), Value::Int(9)]),
         );
-        assert_eq!(infer(&yearly), Some(ChartColumns { kind: ChartKind::Bar, x: 0, y: vec![1] }));
+        assert_eq!(infer(&yearly), Some(ChartColumns { kind: ChartKind::Grouped, x: 0, y: vec![1] }));
     }
 
     #[test]

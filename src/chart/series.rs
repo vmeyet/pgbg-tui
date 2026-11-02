@@ -181,7 +181,7 @@ fn number(value: &Value) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::super::tests::{column, result};
-    use super::super::{bar, line};
+    use super::super::{bars, line};
     use super::*;
     use crate::db::model::{ColumnKind, Extent, Page};
 
@@ -294,8 +294,8 @@ mod tests {
     fn bars_past_the_cap_keep_the_first_rows_and_say_they_are_cut() {
         let many = totals((0..100).map(Value::Int).collect(), ColumnKind::Int);
         let series = Series::from_result(&many, &spec("bar")).unwrap();
-        assert_eq!(values(&series).len(), bar::MAX_POINTS);
-        assert_eq!(values(&series)[bar::MAX_POINTS - 1], Some(63.0));
+        assert_eq!(values(&series).len(), bars::MAX_POINTS);
+        assert_eq!(values(&series)[bars::MAX_POINTS - 1], Some(63.0));
         assert!(series.is_cut);
     }
 
