@@ -5,6 +5,7 @@ use crate::db::model::{
     Schema, SchemaColumn, SchemaNode, Statement, Table, TableKind, TableOid, TypeName, Value,
 };
 use crate::db::{Session, guard};
+use crate::history;
 use rustix::process::{Pid, test_kill_process};
 use std::path::Path;
 use std::time::Duration;
@@ -345,6 +346,13 @@ pub(crate) fn keyed_customer() -> ResultSet {
     let column = |name: &str, kind| shop_column("customers", name, kind);
     let columns = vec![column("id", ColumnKind::Int), column("name", ColumnKind::Text), column("user_id", ColumnKind::Int)];
     ResultSet::whole(columns, vec![vec![Value::Int(3), Value::Text("nina".into()), Value::Int(5)]])
+}
+
+/// A run of `sql` on `shop`, `minute` minutes after the epoch, that gave rows.
+pub(crate) fn run_at(sql: &str, minute: u32) -> history::Entry {
+    let started_at = chrono::DateTime::UNIX_EPOCH + chrono::Duration::minutes(i64::from(minute));
+    let connection = "shop".parse().unwrap_or_else(|err| panic!("{err}"));
+    history::Entry::of_run(Statement::new(sql), connection, started_at, Duration::ZERO, history::Outcome::Rows { count: 4, is_cut: false })
 }
 
 /// The shortest of five runs of `step`, so a busy machine slows one run, not the measure.
