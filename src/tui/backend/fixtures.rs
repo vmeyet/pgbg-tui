@@ -1,12 +1,13 @@
 //! Invented fixtures the backend's tests share: a backend started on `shop`, its answers, and side sessions on the test
 //! database.
 use super::Backend;
-use crate::connection::{Connection, ConnectionName, WritePolicy};
+use crate::connection::{Connection, WritePolicy};
 use crate::db::model::{Params, Route, Statement, Value};
 use crate::db::{Session, guard};
 use crate::fixtures;
 use crate::query::Roots;
 use crate::query::params::ParamInput;
+pub(super) use crate::tui::app::fixtures::shop;
 use crate::tui::app::{Answer, Confirmed, Incoming, RunId, SessionId};
 use std::path::PathBuf;
 use tokio::sync::mpsc::{self, UnboundedReceiver};
@@ -15,10 +16,6 @@ pub(super) const SLEEP: &str = "SELECT pg_sleep(30)";
 
 pub(super) fn connection() -> Connection {
     fixtures::test_database_as("shop")
-}
-
-pub(super) fn shop() -> ConnectionName {
-    connection().name().clone()
 }
 
 pub(super) fn incoming(answer: Answer) -> Incoming {
