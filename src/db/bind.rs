@@ -1,7 +1,7 @@
 //! A statement's values as the driver binds them: each in text, so the server reads it with its parameter's own type.
 use super::guard::Admitted;
 use super::model::{ParamValue, Params, TypeName, UnknownType};
-use super::server_error;
+use super::{server_error, statement_error};
 use anyhow::Result;
 use bytes::BytesMut;
 use std::error::Error;
@@ -53,7 +53,7 @@ pub(super) async fn prepare(client: &impl GenericClient, admitted: &Admitted) ->
             None => inferred(),
         });
     }
-    client.prepare_typed(admitted.statement.as_str(), &types).await.map_err(server_error)
+    client.prepare_typed(admitted.statement.as_str(), &types).await.map_err(statement_error)
 }
 
 /// The server's type named `name`; one it does not know stops the run.

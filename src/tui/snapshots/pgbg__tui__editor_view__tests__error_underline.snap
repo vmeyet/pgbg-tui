@@ -1,0 +1,33 @@
+---
+source: src/tui/editor_view.rs
+expression: "styled::runs(drawn(&app, 30, 5).backend().buffer())"
+---
+Indexed(238)/NONE "╭"
+Cyan/BOLD " Editor "
+Indexed(238)/NONE "─"
+Indexed(245)/NONE " READ ONLY "
+Indexed(238)/NONE "────────╮"
+---
+Indexed(238)/NONE "│"
+Reset/NONE " "
+Magenta/NONE "SELECT"
+Reset/NONE " id                  "
+Indexed(238)/NONE "│"
+---
+Indexed(238)/NONE "│"
+Reset/NONE " "
+Magenta/NONE "FROM"
+Reset/NONE " "
+Red/UNDERLINED "ordrs"
+Reset/NONE "                 "
+Indexed(238)/NONE "│"
+---
+Indexed(238)/NONE "│"
+Reset/NONE " "
+Magenta/NONE "LIMIT"
+Reset/NONE " "
+Yellow/NONE "1"
+Reset/NONE "                    "
+Indexed(238)/NONE "│"
+---
+Indexed(238)/NONE "╰────────────────────────────╯"

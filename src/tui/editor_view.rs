@@ -22,12 +22,12 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) -> Rect {
     let sheet = app.sheet();
     let (before, _, _) = sheet.editor.split();
     let Place { row, column, scroll } = place(app, inside);
-    let mark = Style::default().fg(app.theme().danger).add_modifier(Modifier::REVERSED);
+    let mark = Style::default().fg(app.theme().danger).add_modifier(Modifier::UNDERLINED);
     let window = Window { first: scroll, rows: usize::from(inside.height) };
     let ghost = sheet.ghost.as_ref().filter(|_| focused).map(|ghost| Ghost { at: before.len(), rest: &ghost.rest });
     let paint = Paint {
         colours: sheet.editor.colours(),
-        mark: sheet.error_mark,
+        mark: sheet.error_mark.clone(),
         mark_style: mark,
         selection: sheet.editor.selection(),
         ghost,
@@ -35,14 +35,15 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) -> Rect {
     };
     let text = coloured(sheet.editor.text(), &paint, window);
     f.render_widget(Paragraph::new(text), inside);
-    if focused {
-        f.set_cursor_position(cursor_position(inside, column, row - scroll));
+    let row_in_view = row.checked_sub(scroll).filter(|&row| row < window.rows);
+    if focused && let Some(row) = row_in_view {
+        f.set_cursor_position(cursor_position(inside, column, row));
     }
     inside
 }
 
 /// The line and column of the cursor in the text, and the first line in view in `inside`, chosen so the cursor's line
-/// shows.
+/// shows, unless a server error's line takes its place.
 struct Place {
     row: usize,
     column: usize,
@@ -61,7 +62,7 @@ fn place(app: &App, inside: Rect) -> Place {
 pub(super) fn cursor_at(app: &App, area: Rect) -> Position {
     let inside = Block::bordered().inner(area);
     let Place { row, column, scroll } = place(app, inside);
-    cursor_position(inside, column, row - scroll)
+    cursor_position(inside, column, row.saturating_sub(scroll).min(usize::from(inside.height).saturating_sub(1)))
 }
 
 /// The screen position of the cursor at `column` of the `row`th line in view, kept inside `inside`.
@@ -78,11 +79,11 @@ struct Window {
     rows: usize,
 }
 
-/// How the text is painted: its colours per line, the bytes of `selection` reversed, the character at byte `mark` drawn
-/// on top in `mark_style`, and the ghost.
+/// How the text is painted: its colours per line, the bytes of `selection` reversed, the bytes of `mark` drawn on top in
+/// `mark_style`, and the ghost.
 struct Paint<'a> {
     colours: &'a [Spans],
-    mark: Option<usize>,
+    mark: Option<Range<usize>>,
     mark_style: Style,
     selection: Option<Range<usize>>,
     ghost: Option<Ghost<'a>>,
@@ -115,8 +116,7 @@ fn coloured<'a>(text: &'a str, paint: &Paint<'_>, window: Window) -> Text<'a> {
     let mut lines = Vec::new();
     for (index, line) in text.split('\n').enumerate().take(window.first + window.rows) {
         if index >= window.first {
-            let marked =
-                paint.mark.and_then(|at| at.checked_sub(line_start)).filter(|&at| at <= line.len()).map(|at| marked_range(line, at));
+            let marked = paint.mark.as_ref().and_then(|mark| mark_within_line(mark, line_start, line.len()));
             let spans = paint.colours.get(index).map_or(&[][..], Vec::as_slice);
             let ghost = paint
                 .ghost
@@ -153,9 +153,13 @@ fn with_lines_below<'a>(line: Line<'a>, below: &[&str], room: usize, style: Styl
     lines
 }
 
-/// The bytes of the character at `at`; empty at the line's end.
-fn marked_range(line: &str, at: usize) -> Range<usize> {
-    at..at + line[at..].chars().next().map_or(0, char::len_utf8)
+/// The part of `mark` that falls in the line starting at byte `line_start`; an empty mark stays empty, at the line's end.
+fn mark_within_line(mark: &Range<usize>, line_start: usize, line_len: usize) -> Option<Range<usize>> {
+    if mark.is_empty() {
+        let at = mark.start.checked_sub(line_start).filter(|&at| at <= line_len)?;
+        return Some(at..at);
+    }
+    within_line(mark, line_start, line_len)
 }
 
 /// The part of `range`, bytes of the whole text, that falls in the line starting at byte `line_start`, in bytes of that
@@ -182,7 +186,7 @@ fn coloured_line<'a>(line: &'a str, spans: &[Painted], cuts: Cuts<'_>, paint: &P
         None => runs,
     };
     let runs = match &cuts.mark {
-        Some(mark) => runs.iter().flat_map(|run| cut(run, mark, paint.mark_style)).collect(),
+        Some(mark) => runs.iter().flat_map(|run| cut(run, mark, run.style.patch(paint.mark_style))).collect(),
         None => runs,
     };
     let runs: Vec<Run> = match cuts.ghost {
@@ -296,7 +300,7 @@ fn badge(app: &App) -> Span<'static> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::app::fixtures::{typed, with_focus};
+    use super::super::app::fixtures::{failed_run, typed, with_focus};
     use super::super::app::idle_ghost::tests::ghosted as idle_ghosted;
     use super::super::styled;
     use super::*;
@@ -308,7 +312,7 @@ mod tests {
     const EVERY_LINE: Window = Window { first: 0, rows: usize::MAX / 2 };
 
     /// The lines drawn with each reversed run in brackets.
-    fn reversed_runs(text: &str, mark: Option<usize>, selection: Option<Range<usize>>) -> Vec<String> {
+    fn reversed_runs(text: &str, mark: Option<Range<usize>>, selection: Option<Range<usize>>) -> Vec<String> {
         let style = Style::default().add_modifier(Modifier::REVERSED);
         let shown = |span: &Span<'_>| if span.style == style { format!("[{}]", span.content) } else { span.content.to_string() };
         let theme = Theme::default();
@@ -316,7 +320,7 @@ mod tests {
         coloured(text, &paint, EVERY_LINE).lines.iter().map(|line| line.spans.iter().map(shown).collect()).collect()
     }
 
-    fn marked_text(text: &str, mark: usize) -> Vec<String> {
+    fn marked_text(text: &str, mark: Range<usize>) -> Vec<String> {
         reversed_runs(text, Some(mark), None)
     }
 
@@ -325,8 +329,8 @@ mod tests {
         assert_eq!(reversed_runs("SELECT id\nFROM orders", None, Some(7..14)), ["SELECT [id]", "[FROM] orders"]);
     }
 
-    fn painted(text: &str, mark: Option<usize>) -> String {
-        let mark_style = Style::default().fg(Theme::default().danger).add_modifier(Modifier::REVERSED);
+    fn painted(text: &str, mark: Option<Range<usize>>) -> String {
+        let mark_style = Style::default().fg(Theme::default().danger).add_modifier(Modifier::UNDERLINED);
         let (colours, theme) = (syntax::highlight(text), Theme::default());
         let text = coloured(text, &Paint { colours: &colours, mark, mark_style, selection: None, ghost: None, theme: &theme }, EVERY_LINE);
         let piece = |span: &Span<'_>| format!("{:?}/{:?} {:?}", span.style.fg, span.style.add_modifier, span.content);
@@ -334,14 +338,33 @@ mod tests {
     }
 
     #[test]
-    fn the_marked_character_is_drawn_in_the_mark_style() {
-        assert_eq!(marked_text("SELECT *\nFROM ordrs\nLIMIT 1", 14), ["SELECT *", "FROM [o]rdrs", "LIMIT 1"]);
+    fn the_marked_token_is_drawn_in_the_mark_style() {
+        assert_eq!(marked_text("SELECT *\nFROM ordrs\nLIMIT 1", 14..19), ["SELECT *", "FROM [ordrs]", "LIMIT 1"]);
+    }
+
+    #[test]
+    fn a_token_over_two_lines_is_marked_on_both() {
+        assert_eq!(marked_text("SELECT 'a\nb'::int", 7..12), ["SELECT ['a]", "[b']::int"]);
+    }
+
+    #[test]
+    fn a_selected_token_stays_reversed_under_the_mark() {
+        let theme = Theme::default();
+        let mark_style = Style::default().fg(theme.danger).add_modifier(Modifier::UNDERLINED);
+        let paint = Paint { colours: &[], mark: Some(7..12), mark_style, selection: Some(7..12), ghost: None, theme: &theme };
+        let text = coloured("SELECT ordrs", &paint, EVERY_LINE);
+        assert_eq!(text.lines[0].spans[1].style, mark_style.add_modifier(Modifier::REVERSED));
+    }
+
+    #[test]
+    fn a_marked_token_with_multi_byte_characters_is_cut_on_their_edges() {
+        assert_eq!(marked_text("SELECT prénom, id", 7..14), ["SELECT [prénom], id"]);
     }
 
     #[test]
     fn a_mark_at_the_end_of_a_line_or_the_text_draws_a_space() {
-        assert_eq!(marked_text("SELECT\nFROM", 6), ["SELECT[ ]", "FROM"]);
-        assert_eq!(marked_text("SELECT", 6), ["SELECT[ ]"]);
+        assert_eq!(marked_text("SELECT\nFROM", 6..6), ["SELECT[ ]", "FROM"]);
+        assert_eq!(marked_text("SELECT", 6..6), ["SELECT[ ]"]);
     }
 
     fn ghosted_in(text: &str, at: usize, rest: &str, window: Window) -> Vec<String> {
@@ -424,7 +447,65 @@ mod tests {
 
     #[test]
     fn the_error_mark_draws_over_a_coloured_token() {
-        insta::assert_snapshot!("coloured_marked", painted("SELECT id, 'paid', 10 -- recent\nFROM ordrs", Some(37)));
+        insta::assert_snapshot!("coloured_marked", painted("SELECT id, 'paid', 10 -- recent\nFROM ordrs", Some(37..42)));
+    }
+
+    fn drawn(app: &App, width: u16, height: u16) -> Terminal<TestBackend> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| _ = draw(f, app, f.area())).unwrap();
+        terminal
+    }
+
+    #[test]
+    fn the_failing_token_is_underlined_in_the_danger_colour() {
+        let mut app = failed_run("SELECT id\nFROM ordrs\nLIMIT 1", 16);
+        app.recolour();
+        insta::assert_snapshot!("error_underline", styled::runs(drawn(&app, 30, 5).backend().buffer()));
+    }
+
+    #[test]
+    fn a_failing_parameter_is_underlined_whole() {
+        let mut app = failed_run("SELECT {{since}}::dat", 8);
+        app.recolour();
+        insta::assert_snapshot!("error_underline_parameter", styled::runs(drawn(&app, 30, 3).backend().buffer()));
+    }
+
+    /// A statement of `lines` lines whose failing token is on the first, the cursor on the last.
+    fn failed_far_above_the_cursor(lines: usize) -> App {
+        let padding = "\n, id".repeat(lines - 2);
+        failed_run(&format!("SELECT ordrs{padding}\nFROM orders"), 8)
+    }
+
+    #[test]
+    fn a_failing_token_above_the_view_scrolls_into_it_with_the_cursor_left_out() {
+        let app = failed_far_above_the_cursor(8);
+        let mut terminal = drawn(&app, 30, 4);
+        assert_eq!(terminal.backend_mut().get_cursor_position().unwrap(), Position { x: 0, y: 0 });
+        insta::assert_snapshot!("error_underline_scrolled", styled::runs(terminal.backend().buffer()));
+    }
+
+    #[test]
+    fn revealing_the_failing_token_leaves_the_cursor_where_it_was() {
+        let text = "SELECT ordrs\n, id\n, total\nFROM orders";
+        let app = failed_run(text, 8);
+        assert_eq!(app.sheet().editor.split().0, text);
+    }
+
+    #[test]
+    fn a_failing_token_in_view_with_the_cursor_keeps_both_and_the_scroll() {
+        let app = failed_run("SELECT ordrs\nFROM orders", 8);
+        let mut terminal = drawn(&app, 30, 4);
+        assert_eq!(terminal.backend_mut().get_cursor_position().unwrap(), Position { x: 13, y: 2 });
+        assert_eq!(app.sheet().editor.first_line_in_view(2), 0);
+    }
+
+    #[test]
+    fn moving_the_cursor_scrolls_back_to_it_and_keeps_the_mark() {
+        let mut app = failed_far_above_the_cursor(8);
+        assert_eq!(app.sheet().editor.first_line_in_view(2), 0);
+        app.handle_key(KeyEvent::from(KeyCode::Left));
+        assert_eq!(app.sheet().editor.first_line_in_view(2), 6);
+        assert_eq!(app.sheet().error_mark, Some(7..12));
     }
 
     #[test]

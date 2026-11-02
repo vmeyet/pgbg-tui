@@ -146,7 +146,7 @@ impl App {
 }
 #[cfg(test)]
 mod tests {
-    use super::super::fixtures::{shop, typed};
+    use super::super::fixtures::{enter, failed_at, shop, typed};
     use super::super::queries::tests::{query, with_queries};
     use super::super::{Answer, Focus, QueryAnswer};
     use super::*;
@@ -178,6 +178,14 @@ mod tests {
     fn ctrl_s_saves_the_text_over_the_query_it_stands_for() {
         let mut app = opened("SELECT 1");
         assert_eq!(ctrl_s(&mut app), [Action::SaveQuery { connection: shop(), query: query("daily.sql"), text: "SELECT 1".into() }]);
+    }
+
+    #[test]
+    fn a_save_holds_the_text_alone_with_an_error_marked_in_it() {
+        let mut app = opened("SELECT x");
+        enter(&mut app);
+        failed_at(&mut app, 8);
+        assert_eq!(ctrl_s(&mut app), [Action::SaveQuery { connection: shop(), query: query("daily.sql"), text: "SELECT x".into() }]);
     }
 
     #[test]

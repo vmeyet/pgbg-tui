@@ -437,7 +437,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::fixtures::{app, enter, first_run, press, shop, to_shop, typed, view, with_result};
+    use super::fixtures::{app, enter, failed_at, failed_run, first_run, press, shop, to_shop, typed, view, with_result};
     use super::sheet::LOST_SESSION;
     use super::*;
     use crate::failure::{Failure, Lost};
@@ -532,11 +532,14 @@ mod tests {
         assert_eq!(app.sheet().run, Run::Failed("not sent: `DELETE` is not a read".into()));
     }
 
-    fn failed_at(app: &mut App, position: usize) {
-        app.apply(to_shop(Incoming::Failed {
-            run: RunId::FIRST,
-            failure: Failure::Server { message: "ERROR: syntax error".into(), position: Some(position) },
-        }));
+    /// The text of the error mark.
+    fn marked(app: &App) -> Option<&str> {
+        app.sheet().error_mark.clone().map(|mark| &app.sheet().editor.text()[mark])
+    }
+
+    /// The position the server gives for the start of `found` in `sent`, in characters from 1.
+    fn position_of(sent: &str, found: &str) -> usize {
+        sent[..sent.find(found).unwrap()].chars().count() + 1
     }
 
     #[test]
@@ -549,47 +552,165 @@ mod tests {
     }
 
     #[test]
-    fn a_server_error_marks_its_position_in_the_editor() {
-        let mut app = typed("SELECT 1;\nSELECT * FROM no_such_orders");
-        enter(&mut app);
-        failed_at(&mut app, 15);
-        assert_eq!(app.sheet().error_mark.map(|at| &app.sheet().editor.text()[at..]), Some("no_such_orders"));
+    fn a_server_error_marks_the_token_at_its_position() {
+        let app = failed_run("SELECT 1;\nSELECT * FROM no_such_orders", 15);
+        assert_eq!(marked(&app), Some("no_such_orders"));
     }
 
     #[test]
-    fn a_position_past_the_last_character_marks_the_end_of_the_statement() {
+    fn a_position_in_the_first_of_several_statements_marks_in_that_statement() {
+        let mut app = typed("SELECT nope;\nSELECT 2");
+        app.handle_key(KeyEvent::from(KeyCode::Up));
+        enter(&mut app);
+        failed_at(&mut app, 8);
+        assert_eq!(marked(&app), Some("nope"));
+    }
+
+    #[test]
+    fn a_position_past_the_last_character_marks_where_the_statement_ends() {
         let mut app = typed("SELECT ;");
         app.handle_key(KeyEvent::from(KeyCode::Left));
         enter(&mut app);
         failed_at(&mut app, 7);
-        assert_eq!(app.sheet().error_mark, Some(6));
+        assert_eq!(marked(&app), Some(" "));
+    }
+
+    #[test]
+    fn a_position_at_the_end_of_the_text_marks_an_empty_place() {
+        let app = failed_run("SELECT * FROM", 14);
+        assert_eq!(app.sheet().error_mark, Some(13..13));
+    }
+
+    #[test]
+    fn a_position_past_the_end_of_the_statement_sent_marks_nothing() {
+        let app = failed_run("SELECT x", 10);
+        assert_eq!(app.sheet().error_mark, None);
+    }
+
+    #[test]
+    fn a_position_of_zero_marks_nothing() {
+        let app = failed_run("SELECT x", 0);
+        assert_eq!(app.sheet().error_mark, None);
+    }
+
+    #[test]
+    fn an_error_without_a_position_marks_nothing_and_shows_as_it_did() {
+        let mut app = typed("SELECT x");
+        enter(&mut app);
+        let failure = Failure::Server { message: "ERROR: out of memory".into(), position: None };
+        app.apply(to_shop(Incoming::Failed { run: RunId::FIRST, failure }));
+        assert_eq!(app.sheet().error_mark, None);
+        assert_eq!(app.sheet().run, Run::Failed("ERROR: out of memory".into()));
     }
 
     #[test]
     fn the_mark_counts_characters_not_bytes() {
-        let mut app = typed("SELECT 'zoë', x");
-        enter(&mut app);
-        failed_at(&mut app, 15);
-        assert_eq!(app.sheet().error_mark.map(|at| &app.sheet().editor.text()[at..]), Some("x"));
+        let sql = "SELECT 'zoë', prénom FROM orders";
+        let app = failed_run(sql, position_of(sql, "prénom"));
+        assert_eq!(marked(&app), Some("prénom"));
+    }
+
+    #[test]
+    fn multi_byte_text_in_an_earlier_statement_does_not_shift_the_mark() {
+        let app = failed_run("SELECT 'zoë';\nSELECT 'é', x", position_of("SELECT 'é', x", "x"));
+        assert_eq!(marked(&app), Some("x"));
+    }
+
+    #[test]
+    fn a_comment_above_the_statement_counts_in_the_position() {
+        let sql = "-- zoë's orders, by {{day}}\nSELECT * FROM ordrs";
+        let app = failed_run(sql, position_of(sql, "ordrs"));
+        assert_eq!(marked(&app), Some("ordrs"));
+    }
+
+    #[test]
+    fn a_comment_above_the_second_statement_counts_from_where_that_statement_starts() {
+        let second = "/* zoë */ SELECT nope";
+        let app = failed_run(&format!("SELECT 1;\n\n{second}"), position_of(second, "nope"));
+        assert_eq!(marked(&app), Some("nope"));
     }
 
     #[test]
     fn the_mark_counts_in_the_text_the_server_got_and_lands_in_the_template() {
-        let mut app = typed("SELECT {{a}}, nope");
-        enter(&mut app);
-        failed_at(&mut app, 12);
-        assert_eq!(app.sheet().error_mark.map(|at| &app.sheet().editor.text()[at..]), Some("nope"));
+        let app = failed_run("SELECT {{a}}, nope", position_of("SELECT $1, nope", "nope"));
+        assert_eq!(marked(&app), Some("nope"));
+    }
+
+    #[test]
+    fn a_position_on_a_parameter_marks_its_whole_name() {
+        for position in [8, 9] {
+            let app = failed_run("SELECT {{since}}, 1", position);
+            assert_eq!(marked(&app), Some("{{since}}"), "at {position}");
+        }
+    }
+
+    #[test]
+    fn a_position_on_a_name_used_twice_marks_the_one_it_points_at() {
+        let app = failed_run("SELECT {{a}}, {{b}}, {{a}}", position_of("SELECT $1, $2, $1", ", $1") + 2);
+        assert_eq!(app.sheet().error_mark, Some(21..26));
+    }
+
+    #[test]
+    fn a_dollar_of_two_digits_keeps_the_text_after_it_in_place() {
+        let names = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"];
+        let template: Vec<String> = names.iter().map(|name| format!("{{{{{name}}}}}")).collect();
+        let sent: Vec<String> = (1..=names.len()).map(|number| format!("${number}")).collect();
+        let app =
+            failed_run(&format!("SELECT {}, nope", template.join(", ")), position_of(&format!("SELECT {}, nope", sent.join(", ")), "nope"));
+        assert_eq!(marked(&app), Some("nope"));
+    }
+
+    #[test]
+    fn a_position_on_a_comment_marks_the_one_character_there() {
+        let app = failed_run("SELECT 1 /* zoë", 10);
+        assert_eq!(marked(&app), Some("/"));
+    }
+
+    #[test]
+    fn a_string_over_two_lines_is_marked_whole() {
+        let app = failed_run("SELECT 'a\nb'::int", 8);
+        assert_eq!(marked(&app), Some("'a\nb'"));
     }
 
     #[test]
     fn editing_the_text_drops_the_mark() {
-        let mut app = typed("SELECT x");
-        enter(&mut app);
-        failed_at(&mut app, 8);
+        let mut app = failed_run("SELECT x", 8);
         app.handle_key(KeyEvent::from(KeyCode::Left));
-        assert_eq!(app.sheet().error_mark, Some(7));
+        assert_eq!(marked(&app), Some("x"));
         app.handle_key(KeyEvent::from(KeyCode::Char('y')));
         assert_eq!(app.sheet().error_mark, None);
+    }
+
+    #[test]
+    fn editing_the_text_stops_revealing_the_mark_even_when_the_cursor_stays() {
+        let mut app = typed("SELECT x\n, id\n, total\nFROM orders");
+        app.handle_key(KeyEvent::from(KeyCode::Left));
+        enter(&mut app);
+        failed_at(&mut app, 8);
+        app.handle_key(KeyEvent::from(KeyCode::Delete));
+        assert_eq!(app.sheet().editor.first_line_in_view(1), 3);
+    }
+
+    #[test]
+    fn the_next_run_drops_the_mark() {
+        let mut app = failed_run("SELECT x", 8);
+        enter(&mut app);
+        assert_eq!(app.sheet().error_mark, None);
+    }
+
+    #[test]
+    fn undo_brings_back_the_text_but_not_the_mark() {
+        let mut app = failed_run("SELECT x", 8);
+        app.paste(" -- paid");
+        app.sheet_mut().undo();
+        assert_eq!((app.sheet().editor.text(), app.sheet().error_mark.clone()), ("SELECT x", None));
+    }
+
+    #[test]
+    fn the_mark_never_reaches_the_text_the_next_run_sends() {
+        let mut app = failed_run("SELECT x", 8);
+        let Action::Run { statement, .. } = enter(&mut app).remove(0) else { panic!("no run") };
+        assert_eq!(statement.as_str(), "SELECT x");
     }
 
     #[test]

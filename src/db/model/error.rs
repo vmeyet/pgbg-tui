@@ -9,7 +9,8 @@ pub(crate) struct ServerError {
     pub(crate) message: String,
     pub(crate) detail: Option<String>,
     pub(crate) hint: Option<String>,
-    /// Where in the statement the server stopped: a character count from 1, as PostgreSQL counts.
+    /// Where in the statement the server stopped: a character count from 1, as PostgreSQL counts; none when the text that
+    /// failed was not the statement as admitted.
     pub(crate) position: Option<usize>,
     /// A read-only transaction refused a write the statement tried (SQLSTATE `25006`).
     pub(crate) is_refused_write: bool,
