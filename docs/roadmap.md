@@ -131,6 +131,7 @@ The review of #214 to #231 found these, most severe first.
 - [x] `⌥e` and `⌥a` show `EXPLAIN` as a tree that folds, the costliest node lit and an estimate far off flagged; `⌥a` runs a read only, rolled back whatever the connection allows
 - [x] The ghost offers the rest of the past read run most on this connection, from three typed characters, after a schema name and before a keyword or an idle ask
 - [x] The history ghost ends the keyword you are typing in your case, and leaves the rest as the past statement wrote it
+- [x] Snapshots pin negative grouped bars again, upright and on their side
 
 ## Later
 
