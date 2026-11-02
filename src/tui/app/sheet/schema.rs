@@ -1,6 +1,7 @@
 //! The sheet's schema: read the first time something needs it, again on demand, and the completion index built on it.
 use super::super::Action;
 use super::{SessionState, Sheet};
+use crate::ai::TableUse;
 use crate::complete::Index;
 use crate::connection::SchemaReading;
 use crate::db::model::Catalog;
@@ -66,10 +67,11 @@ impl Sheet {
         }
     }
 
-    /// Forgets the schema and its index, read on a connection the sheet no longer stands for.
+    /// Forgets the schema, its index and its use, read on a connection the sheet no longer stands for.
     pub(super) fn forget_schema(&mut self) {
         self.schema = SchemaState::NotRead;
         self.index = None;
+        self.table_use = TableUse::default();
     }
 
     /// Keeps the schema read, or why it failed; the index of the last one is dropped.
@@ -206,6 +208,25 @@ mod tests {
         let connection = app.sheet().connection.clone();
         app.sheet_mut().take_closed(connection);
         assert_eq!((&app.sheet().schema, app.sheet().index.is_none()), (&SchemaState::NotRead, true));
+    }
+
+    #[test]
+    fn a_closed_sheet_that_takes_a_changed_connection_forgets_the_use_of_the_old_one() {
+        let mut app = app();
+        let used = TableUse::counted(&catalog(), ["SELECT * FROM orders"].into_iter());
+        app.apply(to_shop(Incoming::TableUse(used)));
+        app.sheet_mut().close();
+        let connection = app.sheet().connection.clone();
+        app.sheet_mut().take_closed(connection);
+        assert_eq!(app.sheet().table_use, TableUse::default());
+    }
+
+    #[test]
+    fn the_use_of_the_tables_is_kept_on_the_sheet() {
+        let mut app = app();
+        let used = TableUse::counted(&catalog(), ["SELECT * FROM orders"].into_iter());
+        app.apply(to_shop(Incoming::TableUse(used.clone())));
+        assert_eq!(app.sheet().table_use, used);
     }
 
     #[test]

@@ -61,11 +61,13 @@ const COMMENTS: &str = "SELECT d.objoid, a.attname, d.description
     WHERE d.classoid = 'pg_class'::regclass";
 /// The labels of the enum behind each column of the visible tables, whether of that enum, an array of it or a domain over it.
 /// Its own query, as `COMMENTS` is: most columns are of no enum, and a read of 20 000 tables should not pay for them.
+/// One `CASE` names the enum, as an `IN` of the three would make every column try every enum.
 const ENUM_LABELS: &str = "SELECT a.attrelid, a.attname, e.labels
     FROM pg_attribute a JOIN visible v ON v.oid = a.attrelid
     JOIN pg_type t ON t.oid = a.atttypid
     JOIN (SELECT enumtypid, array_agg(enumlabel::text ORDER BY enumsortorder) AS labels FROM pg_enum GROUP BY enumtypid) e
-        ON e.enumtypid IN (t.oid, t.typelem, t.typbasetype)";
+        ON e.enumtypid = CASE t.typtype WHEN 'e' THEN t.oid WHEN 'd' THEN t.typbasetype ELSE t.typelem END
+    WHERE a.attnum > 0 AND NOT a.attisdropped";
 const SEARCH_PATH: &str = "SELECT current_schemas(false)::text[]";
 const DROPPED_RELATION: &str = "could not open relation with OID";
 

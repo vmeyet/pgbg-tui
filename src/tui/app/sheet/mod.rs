@@ -4,6 +4,7 @@ use super::ghost::Ghost;
 use super::grid::{Clock, Move, Reading, Room};
 use super::param_bar::{Direction, ParamBar};
 use super::{Action, Confirmed, Grid, Incoming, RunId, SessionId, TunnelState};
+use crate::ai::TableUse;
 use crate::chart::{self, ChartError, Series};
 use crate::complete::Index;
 use crate::connection::{Connection, ConnectionName, WritePolicy};
@@ -135,6 +136,8 @@ pub(in crate::tui) struct Sheet {
     pub(in crate::tui) schema: SchemaState,
     /// The completion index of the schema read, once the backend has built it.
     pub(in crate::tui) index: Option<Arc<Index>>,
+    /// How much the history uses each table of the schema read, which orders what an ask shows of it.
+    pub(in crate::tui) table_use: TableUse,
     pub(in crate::tui) ghost: Option<Ghost>,
     pub(in crate::tui) bar: ParamBar,
     /// The statement that tried to write while the sheet was off screen or under an overlay, asked about once it shows.
@@ -170,6 +173,7 @@ impl Sheet {
             shown: None,
             schema: SchemaState::NotRead,
             index: None,
+            table_use: TableUse::default(),
             ghost: None,
             bar: ParamBar::default(),
             tried_to_write: None,
@@ -423,6 +427,7 @@ impl Sheet {
             | Incoming::Tunnel(_)
             | Incoming::Schema(_)
             | Incoming::Index { .. }
+            | Incoming::TableUse(_)
                 if is_closed => {}
             Incoming::Opened => self.session = SessionState::Open,
             Incoming::NotOpened(failure) => {
@@ -438,6 +443,7 @@ impl Sheet {
             Incoming::Tunnel(state) => self.tunnel = Some(state),
             Incoming::Schema(read) => self.take_schema(read),
             Incoming::Index { catalog, index } => self.take_index(&catalog, index),
+            Incoming::TableUse(table_use) => self.table_use = table_use,
             Incoming::Result { run, .. } | Incoming::Failed { run, .. } if !self.is_answer_to_running(run) => {}
             Incoming::Result { run, result, took } => {
                 let header_chart = self.header.chart.as_ref().and_then(|spec| Series::from_result(&result, spec).ok());

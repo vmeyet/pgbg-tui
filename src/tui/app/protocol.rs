@@ -1,7 +1,7 @@
 //! The messages between the app and the backend: the actions the app asks for, and the answers that come back.
 use super::Confirmed;
 use super::versions::Listed;
-use crate::ai::{AnswerError, CommandError, NotSent, Prompt};
+use crate::ai::{AnswerError, CommandError, NotSent, Prompt, TableUse};
 use crate::complete::Index;
 use crate::config::{AiSettings, ConnectionChange};
 use crate::connection::{Connection, ConnectionName};
@@ -262,6 +262,8 @@ pub(in crate::tui) enum Incoming {
         catalog: Arc<Catalog>,
         index: Arc<Index>,
     },
+    /// How much the history uses each table of the schema just read.
+    TableUse(TableUse),
     Result {
         run: RunId,
         result: ResultSet,
