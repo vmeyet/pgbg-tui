@@ -203,7 +203,7 @@ impl Sheet {
     /// comment holds a secret.
     fn idle_prompt(&self, question: &Question<'_>, literals: LiteralPolicy) -> Option<IdlePrompt> {
         let statement = Statement::new(question.typed);
-        let ask = |instruction: &Instruction| self.prompt_about(instruction, Some(&statement), literals);
+        let ask = |instruction: &Instruction| self.prompt_about(instruction, Some(&statement), &[], literals);
         match ask(&question.instruction()) {
             Err(NotSent::UnmaskableComment) => {
                 ask(&no_comment()).ok().map(|prompt| IdlePrompt { prompt, left_out: Some(NotSent::UnmaskableComment) })
@@ -234,7 +234,7 @@ fn empty_question<'a>(text: &'a str, tokens: &[Placed], cursor: usize) -> Option
 }
 
 /// The text of each `--` line right above the line holding byte `at` of `text`, top first, below the last of `tokens`
-/// before it and without the `key:` lines of the file's header; none when that line holds more than blanks before `at`.
+/// before it, without the `key:` lines of the file's header and any `-- chart:`; none when that line holds more than blanks before `at`.
 fn comment_above<'a>(text: &'a str, tokens: &[Placed], at: usize) -> Vec<&'a str> {
     let line_start = text[..at].rfind('\n').map_or(0, |newline| newline + 1);
     if !is_blank(&text[line_start..at]) {
@@ -246,8 +246,8 @@ fn comment_above<'a>(text: &'a str, tokens: &[Placed], at: usize) -> Vec<&'a str
     let mut comments: Vec<&str> = above.lines().rev().map_while(Header::comment_in).collect();
     let is_header = floor == 0 && comments.len() == above.lines().count();
     comments.reverse();
-    let is_header_key = |comment: &&str| is_header && Header::is_key_line(comment);
-    comments.into_iter().map(str::trim).filter(|comment| !comment.is_empty() && !is_header_key(comment)).collect()
+    let is_pgbgs = |comment: &&str| Header::is_chart_line(comment) || (is_header && Header::is_key_line(comment));
+    comments.into_iter().map(str::trim).filter(|comment| !comment.is_empty() && !is_pgbgs(comment)).collect()
 }
 
 fn is_blank(text: &str) -> bool {
@@ -674,6 +674,11 @@ pub(in crate::tui) mod tests {
     #[test]
     fn a_key_line_out_of_the_file_header_is_a_comment_above() {
         assert_eq!(comment_at_end("SELECT 1;\n-- note: paid only\n"), ["note: paid only"]);
+    }
+
+    #[test]
+    fn a_chart_line_is_no_comment_above_wherever_it_sits() {
+        assert_eq!(comment_at_end("SELECT 1;\n-- chart: line x=week y=total\n-- paid only\n"), ["paid only"]);
     }
 
     #[test]

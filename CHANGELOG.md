@@ -8,6 +8,9 @@ Each entry says what changed, then where, then how to use it.
 
 ### New
 
+- **Ask for a chart**, in the TUI's `ctrl-g`: say `orders per week as a line`, take the answer with `⇥`, run it with `⏎`, and the result opens as that chart.
+  The answer leads with a `-- chart:` line right above its statement, so each statement of a file can have its own, and the comments above the statement stay.
+- **`ctrl-g` on the result pane**, in the TUI: asks about the statement that gave the result, for `chart this by week`, with its columns' names and types, never a row or a value.
 - **Plans as a tree**: in the TUI editor, `⌥e` shows the plan of the read under the cursor as a tree in the result pane, without running it, and `⌥a` shows it as it ran, with `ANALYZE` and `BUFFERS`.
   Your own `EXPLAIN (FORMAT JSON …)` opens the same way: `⏎` folds a node, `v` shows the JSON, the costliest node is lit, and `est off ×80` flags an estimate far from the rows counted.
   `⌥a` runs the statement read only and rolled back under the connection's timeout, whatever the connection allows, and refuses a write.

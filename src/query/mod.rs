@@ -16,7 +16,7 @@ use std::os::unix::fs::MetadataExt;
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 
-pub(crate) use header::Header;
+pub(crate) use header::{Header, StatementChart};
 pub(crate) use save::Write;
 pub(crate) use tree::{TreeRow, tree_rows};
 pub(crate) use versions::{Version, Versions};

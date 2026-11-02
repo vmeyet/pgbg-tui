@@ -1,10 +1,12 @@
 //! The header of a saved query: its leading `--` lines, `-- name:`, `-- connection:`, `-- chart:`, `-- format:` and
-//! `-- param:`.
+//! `-- param:`; a statement further down the file may lead with a `-- chart:` of its own.
 use super::params::ParamSpec;
 use crate::chart::ChartSpec;
 use crate::connection::ConnectionName;
 use crate::format::{self, ColumnFormat};
 use crate::render;
+
+const CHART_KEY: &str = "chart";
 
 /// What the header says. A query may come from a repository nobody checked, so a line it cannot read is a warning,
 /// never a failure, and every text kept is printable.
@@ -24,8 +26,22 @@ pub(crate) struct Header {
 impl Header {
     /// The header of `text`: every `--` line before the first other one; a comment that is no `key:` line is left alone.
     pub(crate) fn parse(text: &str) -> Self {
-        let comments = text.lines().map_while(Self::comment_in);
-        comments.filter_map(key_line).fold(Self::default(), Self::with)
+        key_lines(text).fold(Self::default(), Self::with)
+    }
+
+    /// `answer`, which takes the place of `replaced`, under the `--` lines leading `replaced`, but for the `key:` lines its
+    /// own lines set: a prompt holds no comment, so the answer cannot keep them, and a key never ends up twice.
+    pub(crate) fn kept_above(replaced: &str, answer: &str) -> String {
+        let set: Vec<&str> = key_lines(answer).map(|(key, _)| key).collect();
+        let is_replaced = |comment: &str| key_line(comment).is_some_and(|(key, _)| set.contains(&key));
+        let leading = replaced.lines().map_while(|line| Some((line, Self::comment_in(line)?)));
+        let kept = leading.filter(|(_, comment)| !is_replaced(comment));
+        kept.map(|(line, _)| format!("{line}\n")).chain([answer.to_owned()]).collect()
+    }
+
+    /// Whether a `key:` line leading `answer` also leads `text`.
+    pub(crate) fn shares_a_key(text: &str, answer: &str) -> bool {
+        key_lines(answer).any(|(key, _)| key_lines(text).any(|(own, _)| own == key))
     }
 
     /// What follows the `--` of `line`, when the line is a `--` comment.
@@ -38,6 +54,11 @@ impl Header {
         key_line(comment).is_some()
     }
 
+    /// Whether `comment`, the text of a line after its `--`, is a `chart:` line, which is pgbg's wherever it sits.
+    pub(crate) fn is_chart_line(comment: &str) -> bool {
+        key_line(comment).is_some_and(|(key, _)| key == CHART_KEY)
+    }
+
     fn with(self, (key, value): (&str, &str)) -> Self {
         match key {
             "name" => Self { name: Some(render::printable(value).into_owned()), ..self },
@@ -45,7 +66,7 @@ impl Header {
                 Ok(connection) => Self { connection: Some(connection), ..self },
                 Err(err) => self.warned(&format!("{err:#}")),
             },
-            "chart" => match value.parse() {
+            CHART_KEY => match value.parse() {
                 Ok(chart) => Self { chart: Some(chart), ..self },
                 Err(err) => self.warned(&format!("chart: {err}")),
             },
@@ -65,6 +86,26 @@ impl Header {
         self.warnings.push(render::printable(warning).into_owned());
         self
     }
+}
+
+/// The `-- chart:` leading one statement: below the top of a file, its other comments are the user's words.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct StatementChart {
+    pub(crate) spec: Option<ChartSpec>,
+    /// Why its line cannot be read.
+    pub(crate) warning: Option<String>,
+}
+
+impl StatementChart {
+    pub(crate) fn of(statement: &str) -> Self {
+        let read = key_lines(statement).filter(|(key, _)| *key == CHART_KEY).fold(Header::default(), Header::with);
+        Self { spec: read.chart, warning: read.warnings.into_iter().next() }
+    }
+}
+
+/// The key and value of each `key:` line among the leading `--` lines of `text`.
+fn key_lines(text: &str) -> impl Iterator<Item = (&str, &str)> {
+    text.lines().map_while(Header::comment_in).filter_map(key_line)
 }
 
 /// `name: daily orders` as its key and value, when the key is one word.
@@ -136,6 +177,35 @@ mod tests {
     #[test]
     fn a_comment_naming_a_key_is_a_key_line_and_one_in_plain_words_is_not() {
         assert_eq!([" param: since date", " owner: nina", " the open orders"].map(Header::is_key_line), [true, true, false]);
+    }
+
+    #[test]
+    fn the_chart_of_a_statement_reads_its_chart_and_warns_of_nothing_else() {
+        let chart = StatementChart::of("-- see: the docs\n-- chart: line x=week y=total\nSELECT 1");
+        assert_eq!((chart.spec.map(|spec| spec.kind), chart.warning), (Some(ChartKind::Line), None));
+    }
+
+    #[test]
+    fn the_chart_of_a_statement_warns_when_it_cannot_be_read() {
+        let chart = StatementChart::of("-- chart: pie\nSELECT 1");
+        assert!(chart.spec.is_none() && chart.warning.is_some());
+    }
+
+    #[test]
+    fn an_answer_keeps_the_comments_above_and_replaces_only_the_key_it_sets() {
+        let kept = Header::kept_above("-- name: daily\n-- chart: bar\n-- plain words\nSELECT 1", "-- chart: line\nSELECT 2");
+        assert_eq!(kept, "-- name: daily\n-- plain words\n-- chart: line\nSELECT 2");
+    }
+
+    #[test]
+    fn an_answer_with_no_chart_keeps_the_chart_above_it() {
+        assert_eq!(Header::kept_above("-- chart: bar\nSELECT 1", "SELECT 2"), "-- chart: bar\nSELECT 2");
+    }
+
+    #[test]
+    fn two_texts_share_a_key_when_both_lead_with_it() {
+        assert!(Header::shares_a_key("-- name: a\n-- chart: bar\n", "-- chart: line\nSELECT 1"));
+        assert!(!Header::shares_a_key("-- name: a\n", "-- chart: line\nSELECT 1"));
     }
 
     #[test]

@@ -1,17 +1,19 @@
 //! `ctrl-g`: an instruction typed on the footer line, the `[ai] command` asked about the statement under the cursor,
 //! and its answer, which `tab` puts in the editor; nothing of it ever runs by itself.
+//! From the result pane the ask is about the statement that gave the result, and adds its columns' names and types.
 use super::diff::{self, DiffLine};
 use super::editor::{Edited, Revision};
 use super::idle_ghost::IdleAsk;
 use super::save::typed_into;
-use super::{Action, App, AskFailure, AskId, Overlay, Sheet};
+use super::{Action, App, AskFailure, AskId, Focus, Overlay, Sheet};
 use crate::act::{self, Act, Pane};
 use crate::ai::{self, Instruction, LiteralPolicy, NotSent, Prompt};
 use crate::config::AiSettings;
 use crate::connection::AiAsking;
 use crate::db::guard::{self, Write};
 use crate::db::lex;
-use crate::db::model::{Catalog, Statement};
+use crate::db::model::{Catalog, Column, Statement};
+use crate::query::Header;
 use crossterm::event::KeyEvent;
 use std::ops::Range;
 use vtui::field::Field;
@@ -132,7 +134,13 @@ impl App {
             return vec![];
         };
         let settings = settings.without_passwords_of(&self.connections);
-        match self.sheet().prompt(&Instruction::new(instruction.text()), settings.literals) {
+        let columns = if self.focus == Focus::Result {
+            self.sheet_mut().go_to_sent();
+            self.sheet().result_columns()
+        } else {
+            &[]
+        };
+        match self.sheet().prompt(&Instruction::new(instruction.text()), columns, settings.literals) {
             Err(not_sent) => {
                 self.asks.failure = Some(AskFailure::NotSent(not_sent));
                 vec![]
@@ -174,13 +182,15 @@ impl App {
         self.asks.settings.is_none().then_some(AskFailure::NoCommand)
     }
 
-    /// Puts `suggestion` in the editor, unless the editor changed since it was asked about.
+    /// Puts `suggestion` in the editor and gives the editor the keys, so `⏎` runs it wherever it was asked from, unless the
+    /// editor changed since it was asked about.
     fn take_suggestion(&mut self, suggestion: Suggestion) {
         if !self.sheet().fits(&suggestion) {
             self.asks.failure = Some(AskFailure::EditorChanged);
             return;
         }
         self.sheet_mut().take_suggestion(suggestion);
+        self.focus = Focus::Editor;
     }
 
     /// The program the waiting ask runs, as the footer names it.
@@ -195,22 +205,32 @@ impl App {
 }
 
 impl Sheet {
-    /// The prompt for `instruction` about the statement under the cursor, with the schema read so far.
-    pub(super) fn prompt(&self, instruction: &Instruction, literals: LiteralPolicy) -> Result<Prompt, NotSent> {
+    /// The prompt for `instruction` about the statement under the cursor and its result's `columns`, with the schema read
+    /// so far.
+    fn prompt(&self, instruction: &Instruction, columns: &[Column], literals: LiteralPolicy) -> Result<Prompt, NotSent> {
         let statement = self.range_under_cursor().map(|range| Statement::new(&self.editor.text()[range]));
-        self.prompt_about(instruction, statement.as_ref(), literals)
+        self.prompt_about(instruction, statement.as_ref(), columns, literals)
     }
 
-    /// The prompt for `instruction` about `statement`, with the schema read so far.
+    /// The prompt for `instruction` about `statement` and its result's `columns`, with the schema read so far.
     pub(super) fn prompt_about(
         &self,
         instruction: &Instruction,
         statement: Option<&Statement>,
+        columns: &[Column],
         literals: LiteralPolicy,
     ) -> Result<Prompt, NotSent> {
         let unread = Catalog::default();
         let catalog = self.catalog().unwrap_or(&unread);
-        ai::prompt(&ai::PromptInput { instruction, statement, catalog, table_use: &self.table_use, tier: self.connection.tier(), literals })
+        ai::prompt(&ai::PromptInput {
+            instruction,
+            statement,
+            columns,
+            catalog,
+            table_use: &self.table_use,
+            tier: self.connection.tier(),
+            literals,
+        })
     }
 
     /// `statements` against the statement under the cursor, which they would replace, unless the editor is no longer
@@ -222,14 +242,22 @@ impl Sheet {
         Ok(self.suggestion_now(statements))
     }
 
-    /// `statements` against the statement under the cursor, which they would replace.
+    /// `statements` against the statement under the cursor, which they would replace, the `--` lines above it kept.
     pub(super) fn suggestion_now(&self, statements: &[Statement]) -> Suggestion {
         let writes =
             statements.iter().filter_map(|statement| guard::write_in(statement.as_str(), &lex::tokens(statement.as_str()))).collect();
-        let text = statements.iter().map(Statement::as_str).collect::<Vec<_>>().join(";\n");
-        let replaces = self.range_under_cursor();
-        let lines = diff::lines(replaces.clone().map_or("", |range| &self.editor.text()[range]), &text);
+        let answer = statements.iter().map(Statement::as_str).collect::<Vec<_>>().join(";\n");
+        let replaces = self.range_under_cursor().or_else(|| self.header_answer_replaces(&answer));
+        let replaced = replaces.clone().map_or("", |range| &self.editor.text()[range]);
+        let text = Header::kept_above(replaced, &answer);
+        let lines = diff::lines(replaced, &text);
         Suggestion { revision: self.editor.revision(), replaces, text, lines, writes }
+    }
+
+    /// The header before the cursor, when no statement is there to replace yet `answer` sets a key that header sets.
+    fn header_answer_replaces(&self, answer: &str) -> Option<Range<usize>> {
+        let (before, _, _) = self.editor.split();
+        Header::shares_a_key(before, answer).then_some(0..before.len())
     }
 
     /// The rewrite kept for `ctrl-g`, emptying its place; none when the editor changed since it was answered.
@@ -257,7 +285,7 @@ impl Sheet {
 
 #[cfg(test)]
 pub(in crate::tui) mod tests {
-    use super::super::fixtures::{app_on, connection, shop, to_shop};
+    use super::super::fixtures::{app_on, connection, grid, shop, to_shop};
     use super::super::queries::tests::query;
     use super::super::{Answer, Incoming, QueryAnswer, Run};
     use super::*;
@@ -481,6 +509,133 @@ pub(in crate::tui) mod tests {
         app.apply(Answer::Asked { ask: AskId::FIRST, answer: Ok(reads) });
         let Some(AskStep::Answered(suggestion)) = step(&app) else { panic!("no answer") };
         assert_eq!((suggestion.text.as_str(), suggestion.writes.is_empty()), ("SELECT 1;\nSELECT 2", true));
+    }
+
+    /// The app with `result` of the statement under the cursor of `text` on screen, the keys on it.
+    fn on_result_of(text: &str, result: crate::db::model::ResultSet) -> App {
+        let mut app = asking_on(text);
+        let sent = press(&mut app, KeyCode::Enter);
+        let [Action::Run { run, .. }] = &*sent else { panic!("{sent:?}") };
+        app.apply(to_shop(Incoming::Result { run: *run, result, took: Duration::ZERO }));
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.focus, Focus::Result);
+        app
+    }
+
+    fn prompt_sent(app: &mut App, instruction: &str) -> String {
+        ctrl_g(app);
+        type_in(app, instruction);
+        let sent = press(app, KeyCode::Enter);
+        let [Action::Ask { prompt, .. }] = &*sent else { panic!("{sent:?}") };
+        prompt.text().to_owned()
+    }
+
+    fn take_answer(app: &mut App, answer: &str) {
+        app.apply(Answer::Asked { ask: AskId::FIRST, answer: Ok(vec![Statement::new(answer)]) });
+        press(app, KeyCode::Tab);
+    }
+
+    #[test]
+    fn ctrl_g_on_the_result_sends_its_column_names_but_no_value_of_a_row() {
+        let mut app = on_result_of("SELECT * FROM orders", fixtures::orders());
+        let text = prompt_sent(&mut app, "chart this by week");
+        assert!(text.contains("Columns of its result, names and types:\nid \ntotal \ncustomer \n"), "{text}");
+        for value in ["nina", "1499.00", "Nakamura", "103"] {
+            assert!(!text.contains(value), "{value} in {text}");
+        }
+    }
+
+    #[test]
+    fn ctrl_g_on_the_result_still_sends_a_hidden_column() {
+        let mut app = on_result_of("SELECT * FROM orders", fixtures::orders());
+        press(&mut app, KeyCode::Char('x'));
+        assert_eq!(grid(&app).columns().hidden_count(), 1);
+        assert!(prompt_sent(&mut app, "by week").contains("names and types:\nid \ntotal \ncustomer \n"));
+    }
+
+    #[test]
+    fn ctrl_g_on_the_result_of_an_explain_is_about_the_statement_the_editor_holds() {
+        let mut app = asking_on("SELECT id FROM orders;\nSELECT * FROM customers WHERE name IS NULL");
+        app.sheet_mut().editor.move_cursor_to(0);
+        let sent = app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::ALT));
+        let [Action::Run { run, .. }] = &*sent else { panic!("{sent:?}") };
+        app.apply(to_shop(Incoming::Result { run: *run, result: fixtures::orders(), took: Duration::ZERO }));
+        press(&mut app, KeyCode::Tab);
+        assert!(prompt_sent(&mut app, "by week").contains("Statement under the cursor:\nSELECT id FROM orders\n"));
+    }
+
+    #[test]
+    fn ctrl_g_on_the_result_masks_the_statement_and_names_neither_connection_nor_host() {
+        let mut app = on_result_of("SELECT * FROM orders WHERE total > 4217", fixtures::orders());
+        let text = prompt_sent(&mut app, "by week");
+        assert!(text.contains("total > <number 1>") && !text.contains("4217"), "{text}");
+        assert!(!text.contains("shop") && !text.contains("localhost") && !text.contains("nina@"), "{text}");
+    }
+
+    #[test]
+    fn ctrl_g_in_the_editor_sends_no_columns_even_with_a_result_on_screen() {
+        let mut app = on_result_of("SELECT * FROM orders", fixtures::orders());
+        press(&mut app, KeyCode::BackTab);
+        assert_eq!(app.focus, Focus::Editor);
+        assert!(!prompt_sent(&mut app, "by week").contains("Columns of its result"));
+    }
+
+    #[test]
+    fn ctrl_g_on_the_result_sends_no_columns_once_the_statement_that_gave_it_changed() {
+        let mut app = on_result_of("SELECT * FROM orders", fixtures::orders());
+        app.sheet_mut().paste(" WHERE id = 1");
+        assert!(!prompt_sent(&mut app, "by week").contains("Columns of its result"));
+    }
+
+    #[test]
+    fn ctrl_g_on_the_result_is_about_the_statement_that_gave_it_wherever_the_cursor_went() {
+        let mut app = on_result_of("SELECT * FROM orders;\nSELECT * FROM customers", fixtures::orders());
+        app.sheet_mut().editor.move_cursor_to(0);
+        assert!(prompt_sent(&mut app, "by week").contains("Statement under the cursor:\nSELECT * FROM customers\n"));
+        take_answer(&mut app, "SELECT id FROM customers");
+        assert_eq!(app.sheet().editor.text(), "SELECT * FROM orders;\nSELECT id FROM customers");
+    }
+
+    #[test]
+    fn an_answer_taken_from_the_result_gives_the_editor_the_keys_and_runs_only_on_enter() {
+        let mut app = on_result_of("SELECT * FROM orders", fixtures::orders());
+        prompt_sent(&mut app, "by week");
+        app.apply(Answer::Asked { ask: AskId::FIRST, answer: Ok(vec![Statement::new("SELECT id FROM orders")]) });
+        assert_eq!(press(&mut app, KeyCode::Tab), []);
+        assert_eq!(app.focus, Focus::Editor);
+        assert!(matches!(&*press(&mut app, KeyCode::Enter), [Action::Run { .. }]));
+    }
+
+    #[test]
+    fn a_chart_answer_replaces_the_chart_above_the_statement_once_and_keeps_the_name() {
+        let mut app = waiting("-- name: weekly\n-- chart: grouped\nSELECT 1", "by week");
+        take_answer(&mut app, "-- chart: line x=week y=total\nSELECT 2");
+        assert_eq!(app.sheet().editor.text(), "-- name: weekly\n-- chart: line x=week y=total\nSELECT 2");
+    }
+
+    #[test]
+    fn a_chart_answer_on_a_later_statement_stays_above_it_and_leaves_the_file_header() {
+        let mut app = waiting("-- chart: grouped\nSELECT 1;\n-- chart: stacked\nSELECT 2", "by week");
+        take_answer(&mut app, "-- chart: line x=week y=total\nSELECT 3");
+        assert_eq!(app.sheet().editor.text(), "-- chart: grouped\nSELECT 1;\n-- chart: line x=week y=total\nSELECT 3");
+    }
+
+    #[test]
+    fn a_chart_answer_with_no_statement_to_replace_replaces_the_chart_before_the_cursor() {
+        let mut app = asking_on("");
+        app.sheet_mut().paste("-- chart: grouped\n");
+        ctrl_g(&mut app);
+        type_in(&mut app, "by week");
+        press(&mut app, KeyCode::Enter);
+        take_answer(&mut app, "-- chart: line\nSELECT 2");
+        assert_eq!(app.sheet().editor.text(), "-- chart: line\nSELECT 2");
+    }
+
+    #[test]
+    fn the_diff_shows_the_chart_line_the_answer_adds() {
+        let app = answered("SELECT 1", "-- chart: line\nSELECT 2");
+        let Some(AskStep::Answered(suggestion)) = step(&app) else { panic!("no answer") };
+        assert!(suggestion.lines.iter().any(|line| line.text == "-- chart: line"), "{:?}", suggestion.lines);
     }
 
     fn open_in_the_editor(app: &mut App, text: &str) {

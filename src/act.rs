@@ -411,6 +411,7 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Up, Pane::Params, &[key(KeyCode::BackTab)]),
     row(Act::Cancel, Pane::Params, &[key(KeyCode::Esc)]).help("esc", "cancel the running statement"),
     row(Act::Close, Pane::Params, &[key(KeyCode::Esc)]).help("esc", "back to the editor, when nothing runs").footer("esc", "editor"),
+    row(Act::Ask, Pane::Result, &[control('g')]).help("^g", "ask the [ai] command, with the columns of this result"),
     row(Act::Down, Pane::Result, &[key(KeyCode::Char('j')), key(KeyCode::Down)]).help("j k", "next, previous row").footer("j/k", "rows"),
     row(Act::Up, Pane::Result, &[key(KeyCode::Char('k')), key(KeyCode::Up)]),
     row(Act::PageDown, Pane::Result, &[key(KeyCode::PageDown)]).help("PgDn PgUp", "a page down, up"),

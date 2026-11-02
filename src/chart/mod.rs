@@ -31,7 +31,7 @@ pub(crate) enum ChartKind {
 
 impl ChartKind {
     /// The kinds in the order the chart view steps through them.
-    const ALL: [Self; 3] = [Self::Grouped, Self::Stacked, Self::Line];
+    pub(crate) const ALL: [Self; 3] = [Self::Grouped, Self::Stacked, Self::Line];
 
     /// The word a `-- chart:` header uses for it.
     pub(crate) const fn name(self) -> &'static str {

@@ -8,19 +8,19 @@ use super::plan_tree::PlanTree;
 use super::shown_columns::KeptColumns;
 use super::{Action, Confirmed, Grid, Incoming, RunId, SessionId, TunnelState};
 use crate::ai::TableUse;
-use crate::chart::{self, ChartColumns, ChartError, Series};
+use crate::chart::{self, ChartColumns, ChartError, ChartSpec, Series};
 use crate::complete::Index;
 use crate::connection::{Connection, ConnectionName, WritePolicy};
 use crate::db::explain::Explain;
 use crate::db::guard::{self, Write};
-use crate::db::model::{ColumnName, Extent, Page, ResultSet, Statement};
+use crate::db::model::{Column, ColumnName, Extent, Page, ResultSet, Statement};
 use crate::db::preview;
 use crate::failure::Failure;
 use crate::format::{self, Format};
 use crate::history::HistoryIndex;
 use crate::keys::{self, Keys, Lookup};
 use crate::query::params::{self, Filled, Numbering, ParamInput, ParamName};
-use crate::query::{Header, Query};
+use crate::query::{Header, Query, StatementChart};
 use chrono::{DateTime, Utc};
 use crossterm::event::KeyEvent;
 use std::ops::Range;
@@ -48,6 +48,8 @@ struct Sent {
     /// The `$n` the server got for each `{{name}}`, which the server's error position counts in.
     numbering: Numbering,
     input: ParamInput,
+    /// The `-- chart:` leading it, which draws its result rather than the file's.
+    chart: StatementChart,
 }
 
 /// A statement to run, the editor byte where it starts when it was cut from the editor, and the values of its parameters.
@@ -108,11 +110,12 @@ pub(in crate::tui) enum Run {
 }
 
 /// How the result pane shows a result; `v` switches.
-/// A new result starts on the grid, or on the chart its header asks for when that chart fits the result.
+/// A new result starts on the plan it holds, else on the chart its statement or the file's header asks for when that chart
+/// fits it, else on the grid.
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::tui) enum View {
     Grid,
-    /// The chart of the header's `-- chart:` when it fits, or the one `chart::infer` picks, or why there is none.
+    /// The chart of the `-- chart:` asked for when it fits, or the one `chart::infer` picks, or why there is none.
     Chart(Result<Series, ChartError>),
     /// The plan an `EXPLAIN (FORMAT JSON)` returned; boxed, so a run's other views stay small.
     Plan(Box<PlanTree>),
@@ -139,8 +142,8 @@ pub(in crate::tui) struct Sheet {
     pub(in crate::tui) opened: Option<Query>,
     /// Why the last query asked for could not be opened, until a query opens.
     pub(in crate::tui) query_error: Option<String>,
-    /// The header of the editor's text: its `-- chart:` sets how each result of the sheet is drawn, its `-- format:`
-    /// how its cells are shown.
+    /// The header of the editor's text: its `-- format:` sets how cells are shown, its `-- chart:` how each result of the
+    /// sheet is drawn, but for a statement leading with its own.
     pub(in crate::tui) header: Header,
     /// Whether the editor's text changed since it was opened or saved.
     pub(in crate::tui) is_dirty: bool,
@@ -216,12 +219,16 @@ impl Sheet {
             }
             *view = match (&*view, &self.left_chart) {
                 (View::Grid, Some(columns)) => View::Chart(Series::from_columns(result, columns.clone())),
-                (View::Grid, None) => {
-                    plan_view_of(result).unwrap_or_else(|| View::Chart(chart::asked_or_inferred_series(self.header.chart.as_ref(), result)))
-                }
+                (View::Grid, None) => plan_view_of(result)
+                    .unwrap_or_else(|| View::Chart(chart::asked_or_inferred_series(chart_asked(self.sent.as_ref(), &self.header), result))),
                 (View::Chart(_) | View::Plan(_), _) => View::Grid,
             };
         }
+    }
+
+    /// Why the `-- chart:` leading the statement sent cannot be read, which no header of the file says below its top.
+    pub(in crate::tui) fn sent_chart_warning(&self) -> Option<&str> {
+        self.sent.as_ref()?.chart.warning.as_deref()
     }
 
     /// Draws the chart on screen as its next kind, with the same columns.
@@ -439,7 +446,14 @@ impl Sheet {
         let ToRun { statement, start, lead, input } = to_run.clone();
         self.tried_to_write = None;
         self.run = Run::Running { run };
-        self.sent = Some(Sent { start, lead, numbering: params::numbering(&statement), statement, input });
+        self.sent = Some(Sent {
+            start,
+            lead,
+            numbering: params::numbering(&statement),
+            chart: StatementChart::of(statement.as_str()),
+            statement,
+            input,
+        });
         Some(run)
     }
 
@@ -544,7 +558,7 @@ impl Sheet {
             Incoming::Result { run, result, took } => {
                 self.add_sent_to_history_index(reading.clock.now);
                 self.left_chart = None;
-                let view = plan_view_of(&result).unwrap_or_else(|| self.header_view(&result));
+                let view = plan_view_of(&result).unwrap_or_else(|| self.asked_view(&result));
                 let grid = Box::new(self.grid_on(&result, reading));
                 self.run = Run::Done { run, grid, result, took, view, is_page_asked: false };
             }
@@ -562,9 +576,9 @@ impl Sheet {
         }
     }
 
-    /// How the header asks for `result` to open: as the chart it names, when that chart fits, else as the grid.
-    fn header_view(&self, result: &ResultSet) -> View {
-        Series::asked(self.header.chart.as_ref(), result).map_or(View::Grid, |series| View::Chart(Ok(series)))
+    /// How `result` opens as asked: as the chart its statement or else the file names, when that chart fits, else as the grid.
+    fn asked_view(&self, result: &ResultSet) -> View {
+        Series::asked(chart_asked(self.sent.as_ref(), &self.header), result).map_or(View::Grid, |series| View::Chart(Ok(series)))
     }
 
     fn add_sent_to_history_index(&mut self, at: DateTime<Utc>) {
@@ -673,6 +687,24 @@ impl Sheet {
         }
     }
 
+    /// Puts the cursor at the end of the statement last sent, while the editor still holds it, so an ask about its result
+    /// is about it, whichever statement the cursor moved to since.
+    pub(super) fn go_to_sent(&mut self) {
+        if let Some(Sent { start: Some(start), lead, statement, .. }) = &self.sent {
+            self.editor.move_cursor_to(start + statement.as_str().len() - lead);
+        }
+    }
+
+    /// The columns of the result on screen, while the editor still holds the statement that gave it; none for what the
+    /// schema tab shows, which no statement read.
+    pub(super) fn result_columns(&self) -> &[Column] {
+        let is_in_editor = self.sent.as_ref().is_some_and(|sent| sent.start.is_some());
+        match &self.run {
+            Run::Done { result, .. } if is_in_editor && self.shown.is_none() => result.columns(),
+            _ => &[],
+        }
+    }
+
     /// Forgets the position of the statement sent in the editor, once the text it was cut from has changed.
     pub(super) fn forget_sent_place(&mut self) {
         if let Some(sent) = &mut self.sent {
@@ -686,14 +718,20 @@ fn plan_view_of(result: &ResultSet) -> Option<View> {
     PlanTree::of(result).map(|tree| View::Plan(Box::new(tree)))
 }
 
+/// The `-- chart:` leading the statement sent, else the file's: a file of several statements draws each its own way.
+fn chart_asked<'a>(sent: Option<&'a Sent>, file: &'a Header) -> Option<&'a ChartSpec> {
+    sent.and_then(|sent| sent.chart.spec.as_ref()).or(file.chart.as_ref())
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::App;
-    use super::super::fixtures::{app, on_the_result, shop, to_shop};
+    use super::super::fixtures::{app, on_the_result, shop, to_shop, view};
     use super::*;
+    use crate::chart::ChartKind;
     use crate::db::model::{ColumnKind, Value};
     use crate::failure::Failure;
-    use crate::fixtures::{column, orders, page, shop_column};
+    use crate::fixtures::{ESTIMATED_PLAN, column, explain_result, orders, page, shop_column};
     use crate::format::Mode;
     use crossterm::event::{KeyCode, KeyEvent};
     use std::sync::Arc;
@@ -865,5 +903,87 @@ mod tests {
         }));
         let Run::Done { grid, .. } = &app.sheet().run else { panic!("no result") };
         assert_eq!(grid.points_to(1).map(|target| target.table.as_str()), Some("customers"));
+    }
+
+    /// The app with [`orders`] from the statement at the end of `text`, run from the editor.
+    fn ran(text: &str) -> App {
+        let mut app = app();
+        app.sheet_mut().paste(text);
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result: orders(), took: Duration::ZERO }));
+        app
+    }
+
+    fn drawn_kind(app: &App) -> Option<ChartKind> {
+        match view(app) {
+            View::Chart(Ok(series)) => Some(series.columns.kind),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_chart_line_above_a_later_statement_opens_its_result_as_that_chart() {
+        assert_eq!(drawn_kind(&ran("SELECT 1;\n-- chart: line x=id y=total\nSELECT * FROM orders")), Some(ChartKind::Line));
+    }
+
+    #[test]
+    fn a_statement_s_own_chart_line_wins_over_the_file_header() {
+        let text = "-- chart: grouped x=id y=total\nSELECT 1;\n-- chart: stacked x=id y=total\nSELECT * FROM orders";
+        assert_eq!(drawn_kind(&ran(text)), Some(ChartKind::Stacked));
+    }
+
+    #[test]
+    fn a_statement_with_no_chart_line_of_its_own_takes_the_file_header() {
+        assert_eq!(drawn_kind(&ran("-- chart: line x=id y=total\nSELECT 1;\nSELECT * FROM orders")), Some(ChartKind::Line));
+    }
+
+    #[test]
+    fn a_result_holding_a_plan_opens_as_the_plan_under_a_chart_line() {
+        let mut app = app();
+        app.sheet_mut().paste("-- chart: line x=id y=total\nEXPLAIN (FORMAT JSON) SELECT 1");
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result: explain_result(ESTIMATED_PLAN), took: Duration::ZERO }));
+        assert!(matches!(view(&app), View::Plan(_)));
+    }
+
+    #[test]
+    fn a_chart_line_above_one_statement_leaves_the_others_on_the_grid() {
+        let mut app = app();
+        app.sheet_mut().paste("-- comment only\nSELECT 1;\n-- chart: line x=id y=total\nSELECT 2");
+        app.sheet_mut().editor.move_cursor_to(0);
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result: orders(), took: Duration::ZERO }));
+        assert_eq!(drawn_kind(&app), None);
+    }
+
+    #[test]
+    fn v_on_a_chart_opened_on_its_own_goes_to_the_grid_and_back() {
+        let mut app = ran("SELECT 1;\n-- chart: line x=id y=total\nSELECT * FROM orders");
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        app.handle_key(KeyEvent::from(KeyCode::Char('v')));
+        assert_eq!(drawn_kind(&app), None);
+        app.handle_key(KeyEvent::from(KeyCode::Char('v')));
+        assert_eq!(drawn_kind(&app), Some(ChartKind::Line));
+    }
+
+    #[test]
+    fn a_chart_line_that_cannot_be_read_warns_once_its_statement_runs() {
+        let app = ran("SELECT 1;\n-- chart: pie\nSELECT * FROM orders");
+        assert_eq!(drawn_kind(&app), None);
+        assert!(app.sheet().sent_chart_warning().is_some_and(|warning| warning.contains("pie")));
+    }
+
+    #[test]
+    fn a_server_error_marks_its_place_below_a_chart_line_sent_with_the_statement() {
+        let mut app = app();
+        app.sheet_mut().paste("SELECT 1;\n-- chart: line x=id y=total\nSELECT nope");
+        let sent = app.handle_key(KeyEvent::from(KeyCode::Enter));
+        let [Action::Run { statement, .. }] = &*sent else { panic!("{sent:?}") };
+        let position = statement.as_str().find("nope").unwrap() + 1;
+        app.apply(to_shop(Incoming::Failed {
+            run: RunId::FIRST,
+            failure: Failure::Server { message: "ERROR: column does not exist".into(), position: Some(position) },
+        }));
+        assert_eq!(app.sheet().error_mark.clone().map(|mark| &app.sheet().editor.text()[mark]), Some("nope"));
     }
 }
