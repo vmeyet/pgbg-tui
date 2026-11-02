@@ -19,6 +19,7 @@ mod outside;
 mod palette_footer;
 mod param_bar_view;
 mod picker_view;
+mod plan_view;
 mod prompt_view;
 mod result_view;
 mod sidebar_view;

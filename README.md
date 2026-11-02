@@ -219,7 +219,7 @@ In the TUI, a bar above the editor shows one field per parameter.
 | Key | Does |
 | --- | --- |
 | `⏎` | Run the statement under the cursor. |
-| `⌥e` | The plan of the read under the cursor as JSON in the result pane, without running it. |
+| `⌥e` | The plan of the read under the cursor as a tree, without running it: `⏎` folds a node, `v` shows the JSON. |
 | `⌥a` | The same plan as it ran, with `ANALYZE` and `BUFFERS`: the read runs, read only and rolled back, under the connection's timeout, and a write is never offered. |
 | `esc` | Drop the suggestion after the cursor while one shows; else cancel the running statement. |
 | `tab` `⇧tab` | Next, previous pane: editor, parameters, result, sidebar. |
@@ -283,6 +283,15 @@ The grid colours each value by its kind, so a column reads at a glance.
 | JSON | Keys, strings and numbers each in their colour. |
 
 The header names a primary-key column in bold and ends a column with a foreign key with `→`, whatever the statement calls it and in a join too: pgbg asks the server which table column each result column holds, so a computed column has no key.
+
+### Reading a plan
+
+`⌥e` and `⌥a` show the plan of the statement under the cursor in the result pane, and so does your own `EXPLAIN (FORMAT JSON …)`.
+Each node says its type, its table, the estimated rows and cost, and with `ANALYZE` the rows counted, the loops and its own time.
+The node that took most time on its own is lit and marked `← costliest`, by its own estimated cost when nothing timed it.
+`est off ×80` flags a node whose rows are ten times or more away from the estimate.
+A time adds up every loop and every parallel worker, so it can pass the wall clock.
+`⌥a` runs the statement, so it takes a read only, and not while a transaction you began is open; a statement that writes in a function fails there and is never run again.
 
 ### Following keys
 

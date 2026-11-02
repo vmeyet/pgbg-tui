@@ -2,8 +2,10 @@
 use super::app::{App, Focus, Grid, Room, Run, ShownRows, View};
 use super::chart_view;
 use super::grid_view::{self, GridView};
+use super::plan_view;
 use crate::db::model::{Extent, ResultSet};
 use crate::format;
+use crate::plan;
 use crate::render;
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -27,6 +29,10 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) -> Room {
             chart_view::draw(f, chart, app.theme(), inside);
             return Room::default();
         }
+        Run::Done { view: View::Plan(tree), .. } => {
+            plan_view::draw(f, tree, app.theme(), focused, inside);
+            return Room::default();
+        }
         Run::Idle => Text::styled("⏎ runs the statement under the cursor", Style::default().fg(app.theme().faded)),
         Run::Running { .. } => Text::styled("running… esc cancels it", Style::default().fg(app.theme().muted)),
         Run::Cancelling { .. } => Text::styled("cancelling…", Style::default().fg(app.theme().muted)),
@@ -46,8 +52,9 @@ fn title(run: &Run, shown: Option<&str>) -> String {
     match (run, shown) {
         (Run::Done { grid, .. }, Some(shown)) => format!("Result ─ {}{}", render::printable(shown), hidden_part(grid)),
         (Run::Done { result, grid, took, view, .. }, None) => {
-            let (rows, hidden) = (row_count(result, grid.shown()), hidden_part(grid));
-            format!("Result ─ {rows} · {} ms{hidden} ─ {}", took.as_millis(), view_switch(view))
+            let what = if matches!(view, View::Plan(_)) { "plan".to_owned() } else { row_count(result, grid.shown()) };
+            let hidden = hidden_part(grid);
+            format!("Result ─ {what} · {} ms{hidden} ─ {}", took.as_millis(), view_switch(view, result))
         }
         _ => "Result".to_owned(),
     }
@@ -78,11 +85,14 @@ fn filtered_count(result: &ResultSet, shown: &ShownRows) -> String {
     }
 }
 
-/// `[grid] chart` or `grid [chart]`: the view shown is in brackets, the other is the one `v` switches to.
-const fn view_switch(view: &View) -> &'static str {
+/// `[grid] chart` or `grid [chart]`: the view shown is in brackets, the other is the one `v` switches to, a plan's tree
+/// for a result that holds one.
+fn view_switch(view: &View, result: &ResultSet) -> &'static str {
     match view {
+        View::Grid if plan::holds_a_plan(result) => "[grid] plan",
         View::Grid => "[grid] chart",
         View::Chart(_) => "grid [chart]",
+        View::Plan(_) => "[plan] grid",
     }
 }
 
@@ -93,7 +103,7 @@ mod tests {
     use super::*;
     use crate::chart::ChartError;
     use crate::db::model::ColumnKind;
-    use crate::fixtures::{column, orders, page, wide_orders};
+    use crate::fixtures::{ESTIMATED_PLAN, column, explain_result, orders, page, wide_orders};
     use crossterm::event::KeyCode;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -168,6 +178,12 @@ mod tests {
 
     #[test]
     fn the_title_brackets_the_view_shown() {
-        assert_eq!([view_switch(&View::Grid), view_switch(&View::Chart(Err(ChartError::NoX)))], ["[grid] chart", "grid [chart]"]);
+        let shown = [view_switch(&View::Grid, &orders()), view_switch(&View::Chart(Err(ChartError::NoX)), &orders())];
+        assert_eq!(shown, ["[grid] chart", "grid [chart]"]);
+    }
+
+    #[test]
+    fn the_grid_of_a_plan_says_v_goes_back_to_the_plan() {
+        assert_eq!(view_switch(&View::Grid, &explain_result(ESTIMATED_PLAN)), "[grid] plan");
     }
 }

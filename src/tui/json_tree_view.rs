@@ -24,9 +24,9 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) {
     let block = pane::framed(theme, &title, true);
     let [body, footer] = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(block.inner(area));
     let height = usize::from(body.height);
-    let first = tree.at.saturating_sub(height.saturating_sub(1));
+    let first = tree.folds.first_line_in(height);
     let window = tree.lines_in(first, height);
-    let lines: Vec<Line<'static>> = window.iter().zip(first..).map(|(line, at)| drawn(theme, line, at == tree.at)).collect();
+    let lines: Vec<Line<'static>> = window.iter().zip(first..).map(|(line, at)| drawn(theme, line, at == tree.folds.at)).collect();
     f.render_widget(Clear, area);
     f.render_widget(block.style(Style::default().bg(theme.surface)), area);
     f.render_widget(Paragraph::new(lines), body);
@@ -37,16 +37,24 @@ fn hints() -> String {
     act::footer(Pane::JsonTree).map(|hint| format!("{} {}", hint.keys, hint.does)).collect::<Vec<_>>().join(" · ")
 }
 
-fn drawn(theme: &Theme, line: &TreeLine, is_cursor: bool) -> Line<'static> {
-    let mark = match line.mark {
+/// What goes before a line of a tree: its indent and its mark.
+pub(super) fn lead(theme: &Theme, depth: usize, mark: Mark) -> Span<'static> {
+    let mark = match mark {
         Mark::Open => "▾ ",
         Mark::Folded => "▸ ",
         Mark::Leaf => "  ",
     };
-    let lead = Span::styled(format!("{}{mark}", INDENT.repeat(line.depth)), Style::default().fg(theme.accent));
+    Span::styled(format!("{}{mark}", INDENT.repeat(depth)), Style::default().fg(theme.accent))
+}
+
+/// `line`, lit when the cursor is on it.
+pub(super) fn lit(line: Line<'static>, is_cursor: bool) -> Line<'static> {
+    if is_cursor { line.patch_style(Style::default().add_modifier(Modifier::REVERSED)) } else { line }
+}
+
+fn drawn(theme: &Theme, line: &TreeLine, is_cursor: bool) -> Line<'static> {
     let text = painted_spans(theme, &line.text, &syntax::highlight_json_line(&line.text));
-    let drawn = Line::from(std::iter::once(lead).chain(text).collect::<Vec<_>>());
-    if is_cursor { drawn.patch_style(Style::default().add_modifier(Modifier::REVERSED)) } else { drawn }
+    lit(Line::from(std::iter::once(lead(theme, line.depth, line.mark)).chain(text).collect::<Vec<_>>()), is_cursor)
 }
 
 #[cfg(test)]
