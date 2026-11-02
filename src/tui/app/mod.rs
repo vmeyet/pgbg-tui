@@ -20,12 +20,14 @@ pub(super) use completion::Completions;
 pub(super) use confirm::{Confirmed, WriteToSend};
 pub(super) use detail::{Count, Counted, Detail, DetailFit, DetailScroll, DrawnDetail, DrawnRow, RowOf, ShownRow};
 pub(super) use diff::Change;
+pub(super) use folds::Mark;
 pub(super) use form::{Form, PasswordFrom, Slot};
 pub(super) use grid::{Clock, Grid, Reading, Room};
 pub(super) use history::Recall;
-pub(super) use json_tree::{JsonTree, Mark, TreeLine};
+pub(super) use json_tree::{JsonTree, TreeLine};
 pub(super) use panes::Panes;
 pub(super) use picker::{Note, Picker};
+pub(super) use plan_tree::{PlanLine, PlanTree};
 pub(super) use protocol::{
     Action, Answer, AskFailure, AskId, ConfigAnswer, ConfigChangeId, Incoming, KeychainPassword, LookId, NoIdleGhost, QueryAnswer, RunId,
     SaveConnection, Saving, SessionId, TunnelState,
@@ -54,6 +56,7 @@ mod editor;
 mod explain;
 #[cfg(test)]
 pub(super) mod fixtures;
+mod folds;
 pub(super) mod form;
 mod ghost;
 mod grid;
@@ -65,6 +68,7 @@ mod mouse;
 mod panes;
 mod param_bar;
 pub(super) mod picker;
+mod plan_tree;
 mod protocol;
 pub(super) mod queries;
 mod save;

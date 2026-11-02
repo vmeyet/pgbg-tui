@@ -4,6 +4,7 @@ use super::editor::{Editor, below};
 use super::ghost::Ghost;
 use super::grid::{Clock, Move, Reading, Room};
 use super::param_bar::{Direction, ParamBar};
+use super::plan_tree::PlanTree;
 use super::shown_columns::KeptColumns;
 use super::{Action, Confirmed, Grid, Incoming, RunId, SessionId, TunnelState};
 use crate::ai::TableUse;
@@ -111,6 +112,8 @@ pub(in crate::tui) enum View {
     Grid,
     /// The chart of the header's `-- chart:` when it fits, or the one `chart::infer` picks, or why there is none.
     Chart(Result<Series, ChartError>),
+    /// The plan an `EXPLAIN (FORMAT JSON)` returned; boxed, so a run's other views stay small.
+    Plan(Box<PlanTree>),
 }
 
 /// One connection in the TUI: its editor text, its last run and its session's state, kept while another one is shown.
@@ -200,7 +203,7 @@ impl Sheet {
         }
     }
 
-    /// Shows the result as a chart, or as the grid again.
+    /// Shows the result as its plan or a chart, or as the grid again.
     pub(super) fn switch_view(&mut self) {
         if let Run::Done { result, view, .. } = &mut self.run {
             if let View::Chart(Ok(series)) = view {
@@ -208,8 +211,10 @@ impl Sheet {
             }
             *view = match (&*view, &self.left_chart) {
                 (View::Grid, Some(columns)) => View::Chart(Series::from_columns(result, columns.clone())),
-                (View::Grid, None) => View::Chart(chart::asked_or_inferred_series(self.header.chart.as_ref(), result)),
-                (View::Chart(_), _) => View::Grid,
+                (View::Grid, None) => {
+                    plan_view_of(result).unwrap_or_else(|| View::Chart(chart::asked_or_inferred_series(self.header.chart.as_ref(), result)))
+                }
+                (View::Chart(_) | View::Plan(_), _) => View::Grid,
             };
         }
     }
@@ -280,6 +285,11 @@ impl Sheet {
     /// Whether the result pane shows a chart instead of the grid that the cursor keys move.
     pub(in crate::tui) fn is_chart_shown(&self) -> bool {
         matches!(self.run, Run::Done { view: View::Chart(_), .. })
+    }
+
+    /// Whether the result pane shows a plan, whose keys then take over from the grid's.
+    pub(super) fn is_plan_shown(&self) -> bool {
+        matches!(self.run, Run::Done { view: View::Plan(_), .. })
     }
 
     pub(super) fn cancel(&mut self) -> Vec<Action> {
@@ -528,7 +538,7 @@ impl Sheet {
             Incoming::Result { run, .. } | Incoming::Failed { run, .. } if !self.is_answer_to_running(run) => {}
             Incoming::Result { run, result, took } => {
                 self.left_chart = None;
-                let view = Series::asked(self.header.chart.as_ref(), &result).map_or(View::Grid, |series| View::Chart(Ok(series)));
+                let view = plan_view_of(&result).unwrap_or_else(|| self.header_view(&result));
                 let grid = Box::new(self.grid_on(&result, reading));
                 self.run = Run::Done { run, grid, result, took, view, is_page_asked: false };
             }
@@ -544,6 +554,11 @@ impl Sheet {
                 self.run = Run::Failed(failure.to_string());
             }
         }
+    }
+
+    /// How the header asks for `result` to open: as the chart it names, when that chart fits, else as the grid.
+    fn header_view(&self, result: &ResultSet) -> View {
+        Series::asked(self.header.chart.as_ref(), result).map_or(View::Grid, |series| View::Chart(Ok(series)))
     }
 
     /// The keys of the columns of `result` in the tables they were read from, once the schema is read.
@@ -652,6 +667,11 @@ impl Sheet {
             sent.start = None;
         }
     }
+}
+
+/// The view of the plan `result` holds, when it holds one.
+fn plan_view_of(result: &ResultSet) -> Option<View> {
+    PlanTree::of(result).map(|tree| View::Plan(Box::new(tree)))
 }
 
 #[cfg(test)]

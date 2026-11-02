@@ -1,7 +1,7 @@
 //! How a cell reads: for each column kind, the formats it allows, raw first, and the text of one cell in one of them.
 //! Pure: the clock and the time zone are passed in.
 pub(crate) use columns::{ColumnFormat, Mode, opening, parse_column_formats};
-pub(crate) use number::{counted, grouped_digits};
+pub(crate) use number::{counted, grouped_decimal, grouped_digits};
 pub(crate) use time::relative;
 
 use crate::db::model::{ColumnKind, Value};
@@ -150,8 +150,8 @@ pub(crate) fn formatted<Tz: TimeZone>(value: &Value, format: Format, clock: &Clo
         (Format::Relative, Value::Timestamp(at)) => Some(relative(at.and_utc(), clock.now)),
         (Format::Relative, Value::Date(day)) => Some(time::relative_day(*day, clock.today())),
         (Format::Grouped, Value::Int(int)) => Some(number::grouped_int(*int)),
-        (Format::Grouped, Value::Float(float)) => number::grouped_decimal(&float.to_string()),
-        (Format::Grouped, Value::Numeric(text)) => number::grouped_decimal(text),
+        (Format::Grouped, Value::Float(float)) => grouped_decimal(&float.to_string()),
+        (Format::Grouped, Value::Numeric(text)) => grouped_decimal(text),
         (Format::Bytes, Value::Int(int)) => Some(number::size(*int as f64)),
         (Format::Bytes, Value::Numeric(text)) => text.parse().ok().filter(|bytes: &f64| bytes.is_finite()).map(number::size),
         (Format::Bytes, Value::Bytes(bytes)) => Some(number::size(bytes.len() as f64)),

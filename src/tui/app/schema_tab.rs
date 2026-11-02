@@ -156,6 +156,7 @@ impl App {
     pub(in crate::tui) fn pane(&self) -> Pane {
         match (self.focus, self.sidebar) {
             (Focus::Queries, SidebarTab::Schema) => Pane::Schema,
+            (Focus::Result, _) if self.sheet().is_plan_shown() => Pane::Plan,
             (focus, _) => focus.pane(),
         }
     }

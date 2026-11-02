@@ -216,6 +216,8 @@ pub(crate) enum Pane {
     /// The parameter bar above the editor.
     Params,
     Result,
+    /// The result pane while it shows a plan: its nodes fold, and the grid's keys have no cell to work on.
+    Plan,
     /// The saved queries in the sidebar.
     Queries,
     /// The schema in the sidebar, its other tab.
@@ -258,10 +260,11 @@ pub(crate) enum Pane {
 
 impl Pane {
     /// The order the `?` help lists the panes in.
-    const IN_HELP: [Self; 23] = [
+    const IN_HELP: [Self; 24] = [
         Self::Editor,
         Self::Params,
         Self::Result,
+        Self::Plan,
         Self::Queries,
         Self::Schema,
         Self::SchemaFilter,
@@ -290,6 +293,7 @@ impl Pane {
             Self::Editor => "editor",
             Self::Params => "parameters",
             Self::Result => "result",
+            Self::Plan => "plan",
             Self::Queries => "queries",
             Self::Schema => "schema",
             Self::SchemaFilter => "schema filter",
@@ -448,6 +452,15 @@ pub(crate) const ROWS: &[Row] = &[
         .help("i", "the column's distinct values, NULLs, least, greatest and most common, over the rows loaded"),
     row(Act::JsonTree, Pane::Result, &[key(KeyCode::Char('o'))]).help("o", "the JSON cell as a tree that folds"),
     row(Act::Help, Pane::Result, &[key(KeyCode::Char('?'))]).help("?", HELP_KEYS),
+    row(Act::Down, Pane::Plan, &[key(KeyCode::Char('j')), key(KeyCode::Down)]).help("j k", "next, previous node").footer("j/k", "nodes"),
+    row(Act::Up, Pane::Plan, &[key(KeyCode::Char('k')), key(KeyCode::Up)]),
+    row(Act::Open, Pane::Plan, &[key(KeyCode::Enter), key(KeyCode::Char(' '))])
+        .help("⏎ space", "fold or unfold; on a node that does not fold, its parent")
+        .footer("⏎", "fold"),
+    row(Act::Chart, Pane::Plan, &[key(KeyCode::Char('v'))])
+        .help("v", "the plan's JSON in the grid; there, the tree again")
+        .footer("v", "grid"),
+    row(Act::Help, Pane::Plan, &[key(KeyCode::Char('?'))]).help("?", HELP_KEYS),
     row(Act::Down, Pane::Queries, &[key(KeyCode::Char('j')), key(KeyCode::Down)]).help("j k", "next, previous query").footer("j/k", "move"),
     row(Act::Up, Pane::Queries, &[key(KeyCode::Char('k')), key(KeyCode::Up)]),
     row(Act::Open, Pane::Queries, &[key(KeyCode::Enter)]).help("⏎", "open the query, fold the folder").footer("⏎", "open"),
@@ -803,6 +816,7 @@ mod tests {
         for pane in [
             Pane::Editor,
             Pane::Result,
+            Pane::Plan,
             Pane::Queries,
             Pane::Schema,
             Pane::SchemaFilter,
@@ -963,6 +977,6 @@ mod tests {
     fn the_first_help_lists_the_focused_pane_and_what_works_anywhere() {
         let titles: Vec<&str> = sections(Pane::Result, false).iter().map(|section| section.title).collect();
         assert_eq!(titles, ["result", "anywhere"]);
-        assert_eq!(sections(Pane::Result, true).len(), 23);
+        assert_eq!(sections(Pane::Result, true).len(), 24);
     }
 }

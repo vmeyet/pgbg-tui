@@ -22,7 +22,7 @@ pub(super) fn grouped_int(int: i64) -> String {
 }
 
 /// A decimal's text with its whole part grouped by thousands, or `None` when it is not a plain decimal (`NaN`, `Infinity`).
-pub(super) fn grouped_decimal(text: &str) -> Option<String> {
+pub(crate) fn grouped_decimal(text: &str) -> Option<String> {
     let (sign, unsigned) = text.strip_prefix('-').map_or(("", text), |unsigned| ("-", unsigned));
     let (whole, fraction) = unsigned.find('.').map_or((unsigned, ""), |at| unsigned.split_at(at));
     let is_plain = !whole.is_empty() && whole.bytes().all(|byte| byte.is_ascii_digit());

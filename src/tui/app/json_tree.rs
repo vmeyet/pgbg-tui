@@ -1,10 +1,10 @@
 //! `o` on a JSON cell of the grid: its value as a tree in a popup, each object and array folding, the value or the path
 //! under the cursor copied.
+use super::folds::{Folds, Mark, Span};
 use super::{Action, App, Overlay, Run};
 use crate::act::{self, Act, Pane};
 use crate::db::model::{ColumnName, JsonText, Value, json_string_end};
 use crossterm::event::KeyEvent;
-use std::collections::BTreeSet;
 use std::ops::Range;
 
 /// How a value is reached from the one holding it.
@@ -36,14 +36,6 @@ struct Node {
     end: usize,
 }
 
-/// The mark before a line: whether it folds, and which way.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::tui) enum Mark {
-    Open,
-    Folded,
-    Leaf,
-}
-
 /// A line as the popup draws it: its depth, its mark and its JSON text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::tui) struct TreeLine {
@@ -60,10 +52,7 @@ pub(in crate::tui) struct JsonTree {
     pub(in crate::tui) row: usize,
     json: JsonText,
     nodes: Vec<Node>,
-    folded: BTreeSet<usize>,
-    /// The node of each line shown, built again only when a value folds or unfolds.
-    shown: Vec<usize>,
-    pub(in crate::tui) at: usize,
+    pub(in crate::tui) folds: Folds,
 }
 
 /// Reads compact JSON, known valid, into its nodes; one pass, no value decoded.
@@ -147,39 +136,18 @@ fn is_identifier(key: &str) -> bool {
 impl JsonTree {
     pub(in crate::tui) fn new(column: ColumnName, row: usize, json: JsonText) -> Self {
         let nodes = nodes_of(&json);
-        let tree = Self { column, row, json, nodes, folded: BTreeSet::new(), shown: vec![], at: 0 };
-        Self { shown: tree.shown(), ..tree }
-    }
-
-    /// The node of each line shown: every value in order, the members of a folded one left out.
-    fn shown(&self) -> Vec<usize> {
-        let mut shown = vec![];
-        let mut index = 0;
-        while index < self.nodes.len() {
-            shown.push(index);
-            index = if self.mark(index) == Mark::Open { index + 1 } else { self.nodes[index].end };
-        }
-        shown
-    }
-
-    fn mark(&self, index: usize) -> Mark {
-        let node = &self.nodes[index];
-        let has_members = node.end > index + 1;
-        match node.shape {
-            Shape::Object | Shape::Array if has_members && self.folded.contains(&index) => Mark::Folded,
-            Shape::Object | Shape::Array if has_members => Mark::Open,
-            _ => Mark::Leaf,
-        }
+        let folds = Folds::new(nodes.iter().map(|node| Span { parent: node.parent, end: node.end }).collect());
+        Self { column, row, json, nodes, folds }
     }
 
     /// The `count` lines from `first` on, built for a frame that draws only those.
     pub(in crate::tui) fn lines_in(&self, first: usize, count: usize) -> Vec<TreeLine> {
-        self.shown.iter().skip(first).take(count).map(|&index| self.line(index)).collect()
+        self.folds.shown_in(first, count).map(|index| self.line(index)).collect()
     }
 
     fn line(&self, index: usize) -> TreeLine {
         let node = &self.nodes[index];
-        let mark = self.mark(index);
+        let mark = self.folds.mark(index);
         let value = match (mark, node.shape) {
             (Mark::Leaf, _) => &self.json.as_str()[node.bytes.clone()],
             (Mark::Open, Shape::Object) => "{",
@@ -194,46 +162,16 @@ impl JsonTree {
         TreeLine { depth: node.depth, mark, text }
     }
 
-    fn node_at(&self) -> usize {
-        self.shown.get(self.at).copied().unwrap_or(0)
-    }
-
-    fn step(&mut self, delta: isize) {
-        let last = self.shown.len().saturating_sub(1);
-        self.at = self.at.saturating_add_signed(delta).min(last);
-    }
-
-    fn go_to(&mut self, index: usize) {
-        self.at = self.shown.iter().position(|&shown| shown == index).unwrap_or(0);
-    }
-
-    fn set_fold(&mut self, index: usize, is_folded: bool) {
-        if self.mark(index) != Mark::Leaf {
-            _ = if is_folded { self.folded.insert(index) } else { self.folded.remove(&index) };
-            self.shown = self.shown();
-        }
-        self.go_to(index);
-    }
-
-    /// Folds or unfolds the value under the cursor; on a value that does not fold, folds the one holding it.
-    fn toggle(&mut self) {
-        let index = self.node_at();
-        match (self.mark(index), self.nodes[index].parent) {
-            (Mark::Leaf, Some(parent)) => self.set_fold(parent, true),
-            (mark, _) => self.set_fold(index, mark == Mark::Open),
-        }
-    }
-
     /// The value under the cursor to paste: a string's text unescaped, any other value as compact JSON.
     fn value_text(&self) -> String {
-        let node = &self.nodes[self.node_at()];
+        let node = &self.nodes[self.folds.node_at()];
         let json = &self.json.as_str()[node.bytes.clone()];
         if node.shape == Shape::String { unquoted(json) } else { json.to_owned() }
     }
 
     /// The steps from the cell's value to the one under the cursor, the outermost first.
     fn steps(&self) -> Vec<&Step> {
-        let ancestors = std::iter::successors(Some(self.node_at()), |&index| self.nodes[index].parent);
+        let ancestors = std::iter::successors(Some(self.folds.node_at()), |&index| self.nodes[index].parent);
         let mut steps: Vec<&Step> = ancestors.filter_map(|index| self.nodes[index].step.as_ref()).collect();
         steps.reverse();
         steps
@@ -273,9 +211,9 @@ impl App {
         match act {
             Some(Act::Quit) => return self.quit(),
             Some(Act::Close) => return vec![],
-            Some(Act::Down) => tree.step(1),
-            Some(Act::Up) => tree.step(-1),
-            Some(Act::Open) => tree.toggle(),
+            Some(Act::Down) => tree.folds.step(1),
+            Some(Act::Up) => tree.folds.step(-1),
+            Some(Act::Open) => tree.folds.toggle(),
             _ => {}
         }
         let copied = act.and_then(|act| copied(&tree, act));
@@ -308,11 +246,13 @@ mod tests {
     }
 
     fn texts(tree: &JsonTree) -> Vec<String> {
-        tree.lines_in(0, tree.shown.len()).into_iter().map(|line| format!("{}{}", "  ".repeat(line.depth), line.text)).collect()
+        tree.lines_in(0, tree.folds.line_count()).into_iter().map(|line| format!("{}{}", "  ".repeat(line.depth), line.text)).collect()
     }
 
     fn on_line(json: &str, line: usize) -> JsonTree {
-        JsonTree { at: line, ..tree_of(json) }
+        let mut tree = tree_of(json);
+        tree.folds.at = line;
+        tree
     }
 
     #[test]
@@ -338,18 +278,18 @@ mod tests {
     #[test]
     fn toggling_an_array_folds_its_members_away_and_again_brings_them_back() {
         let mut tree = on_line(ORDER, 2);
-        tree.toggle();
+        tree.folds.toggle();
         let line = &tree.lines_in(2, 1)[0];
-        assert_eq!((line.text.as_str(), line.mark, tree.shown.len()), (r#""items": […]"#, Mark::Folded, 5));
-        tree.toggle();
-        assert_eq!(tree.shown.len(), 11);
+        assert_eq!((line.text.as_str(), line.mark, tree.folds.line_count()), (r#""items": […]"#, Mark::Folded, 5));
+        tree.folds.toggle();
+        assert_eq!(tree.folds.line_count(), 11);
     }
 
     #[test]
     fn toggling_a_scalar_folds_the_value_holding_it_and_moves_there() {
         let mut tree = on_line(ORDER, 4);
-        tree.toggle();
-        assert_eq!((tree.at, tree.lines_in(3, 1)[0].mark), (3, Mark::Folded));
+        tree.folds.toggle();
+        assert_eq!((tree.folds.at, tree.lines_in(3, 1)[0].mark), (3, Mark::Folded));
     }
 
     #[test]

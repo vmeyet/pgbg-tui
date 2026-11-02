@@ -150,6 +150,9 @@ impl App {
         {
             return actions;
         }
+        if self.pane() == Pane::Plan && self.plan_act(act) {
+            return vec![];
+        }
         match act {
             Act::Run => return self.run_editor(),
             Act::Explain => return self.explain(Explain::Plan),
