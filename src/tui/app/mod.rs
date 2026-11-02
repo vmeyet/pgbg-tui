@@ -51,6 +51,7 @@ mod copy;
 mod detail;
 mod diff;
 mod editor;
+mod explain;
 #[cfg(test)]
 pub(super) mod fixtures;
 pub(super) mod form;

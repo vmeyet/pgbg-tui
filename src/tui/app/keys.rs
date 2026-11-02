@@ -5,6 +5,7 @@ use super::panes::Side;
 use super::param_bar::Direction;
 use super::{Action, App, AskStep, Focus, Grid, Opening, Overlay};
 use crate::act::{self, Act, Pane};
+use crate::db::explain::Explain;
 use crate::query::condition::Comparison;
 use crossterm::event::{KeyCode, KeyEvent};
 use vtui::help::Help;
@@ -151,6 +152,8 @@ impl App {
         }
         match act {
             Act::Run => return self.run_editor(),
+            Act::Explain => return self.explain(Explain::Plan),
+            Act::ExplainAnalyze => return self.explain(Explain::Analyze),
             Act::Complete => return self.open_completions(),
             Act::Ask => return self.open_ask(),
             Act::Undo => self.sheet_mut().undo(),

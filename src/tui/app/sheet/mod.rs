@@ -10,6 +10,7 @@ use crate::ai::TableUse;
 use crate::chart::{self, ChartColumns, ChartError, Series};
 use crate::complete::Index;
 use crate::connection::{Connection, ConnectionName, WritePolicy};
+use crate::db::explain::Explain;
 use crate::db::guard::{self, Write};
 use crate::db::model::{ColumnName, Extent, Page, ResultSet, Statement};
 use crate::db::preview;
@@ -38,6 +39,8 @@ const NEAR_END_ROWS: usize = 100;
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Sent {
     start: Option<usize>,
+    /// The bytes of the `EXPLAIN` pgbg put before the editor's text, which the server's error position counts too.
+    lead: usize,
     statement: Statement,
     /// The `$n` the server got for each `{{name}}`, which the server's error position counts in.
     numbering: Numbering,
@@ -49,6 +52,8 @@ struct Sent {
 pub(in crate::tui) struct ToRun {
     statement: Statement,
     start: Option<usize>,
+    /// The bytes of the `EXPLAIN` pgbg put before the editor's text.
+    lead: usize,
     input: ParamInput,
 }
 
@@ -358,7 +363,7 @@ impl Sheet {
         let (range, statement) = self.statement_under_cursor()?;
         let names = params::names(self.editor.lexed().tokens_in(range.clone())).unwrap_or_default();
         let input = ParamInput { given: self.bar.given(&names), specs: self.header.params.clone() };
-        Some(ToRun { statement, start: Some(range.start), input })
+        Some(ToRun { statement, start: Some(range.start), lead: 0, input })
     }
 
     /// What the statement under the cursor writes, on a connection that allows writes; a read-only connection refuses
@@ -372,8 +377,24 @@ impl Sheet {
     }
 
     /// Runs `to_run`; the backend refuses a write unless `confirmed` shows the user answered `y`.
+    /// Does nothing while another statement runs.
     pub(super) fn run(&mut self, to_run: ToRun, confirmed: Option<Confirmed>) -> Vec<Action> {
-        self.run_statement(to_run.statement, to_run.start, to_run.input, confirmed)
+        let Some(run) = self.mark_sent(&to_run) else { return vec![] };
+        let ToRun { statement, input, .. } = to_run;
+        vec![Action::Run { connection: self.name().clone(), run, statement, input, confirmed }]
+    }
+
+    /// Runs `explain` of the statement under the cursor, its parameters bound as a run binds them; none when the guard
+    /// does not read that statement as a query that changes nothing.
+    pub(super) fn explain(&mut self, explain: Explain) -> Option<Vec<Action>> {
+        let Some(to_run) = self.editor_run() else { return Some(vec![]) };
+        let to_run = ToRun { statement: explain.of(&to_run.statement)?, lead: explain.lead().len(), ..to_run };
+        if explain == Explain::Plan {
+            return Some(self.run(to_run, None));
+        }
+        let Some(run) = self.mark_sent(&to_run) else { return Some(vec![]) };
+        let ToRun { statement, input, .. } = to_run;
+        Some(vec![Action::Analyze { connection: self.name().clone(), run, statement, input }])
     }
 
     /// Writes `preview` at the end of the editor, in place of the table browsed last while the editor still holds what
@@ -391,27 +412,20 @@ impl Sheet {
         self.editor.rewrite(&written);
         self.text_changed();
         self.browsed = Some(Browsed { before, written });
-        self.run_statement(preview, Some(start), ParamInput::default(), None)
+        self.run(ToRun { statement: preview, start: Some(start), lead: 0, input: ParamInput::default() }, None)
     }
 
-    /// Runs `statement` with `input` for its parameters; `start` is its first editor byte when it was cut from the
-    /// editor.
-    /// Does nothing while another statement runs.
-    fn run_statement(
-        &mut self,
-        statement: Statement,
-        start: Option<usize>,
-        input: ParamInput,
-        confirmed: Option<Confirmed>,
-    ) -> Vec<Action> {
+    /// Marks `to_run` as the statement running and gives its new id; none while another statement runs.
+    fn mark_sent(&mut self, to_run: &ToRun) -> Option<RunId> {
         if self.is_running() {
-            return vec![];
+            return None;
         }
         let run = self.next_run();
+        let ToRun { statement, start, lead, input } = to_run.clone();
         self.tried_to_write = None;
         self.run = Run::Running { run };
-        self.sent = Some(Sent { start, numbering: params::numbering(&statement), statement: statement.clone(), input: input.clone() });
-        vec![Action::Run { connection: self.name().clone(), run, statement, input, confirmed }]
+        self.sent = Some(Sent { start, lead, numbering: params::numbering(&statement), statement, input });
+        Some(run)
     }
 
     /// The grid on a new `result`, under what was chosen for the last one when it has the same columns.
@@ -465,7 +479,7 @@ impl Sheet {
     fn editor_byte(&self, position: usize) -> Option<usize> {
         let sent = self.sent.as_ref()?;
         let offset = sent.numbering.template_byte(sent.statement.as_str(), position.checked_sub(1)?)?;
-        Some(sent.start? + offset)
+        Some(sent.start? + offset.checked_sub(sent.lead)?)
     }
 
     /// The token at editor byte `at`, or else the one character there, as where a statement ends or a comment never closes.
@@ -549,8 +563,8 @@ impl Sheet {
             return None;
         }
         self.run = Run::Failed(Failure::TriedToWrite.to_string());
-        let Sent { statement, start, input, .. } = self.sent.clone()?;
-        Some(ToRun { statement, start, input })
+        let Sent { statement, start, lead, input, .. } = self.sent.clone()?;
+        Some(ToRun { statement, start, lead, input })
     }
 
     /// Moves the grid's cursor by `step` in the `room` it has, and asks for the next page once it nears the last row,

@@ -46,10 +46,12 @@ struct Bound {
 impl Session {
     /// Runs `admitted` alone and returns its first page; on a read-only connection the rest wait in its portal, kept
     /// open in `Started::rest`. On a connection that allows writes it runs as `run` does, its first `ROW_CAP` rows kept.
+    /// A statement read only whatever the connection allows is refused inside the user's transaction.
     pub(crate) async fn start(&mut self, admitted: &Admitted) -> Result<Started<'_>> {
         if admitted.mode != Mode::ReadOnly {
             return Ok(Started { result: self.run(admitted).await?, rest: None });
         }
+        self.refuse_inside_user_transaction().await?;
         let Self { client, limits, marks, ended, .. } = self;
         let idle_limit_on_server = limits.idle.on_server();
         let transaction = marks.during(begin_read_only(client, limits, Isolation::EachStatement)).await?;
@@ -141,9 +143,10 @@ mod tests {
     use super::*;
     use crate::connection::{StatementTimeout, WritePolicy};
     use crate::db::guard;
-    use crate::db::model::{ParamValue, Params, Route, Statement, Value};
+    use crate::db::model::{InsideUserTransaction, ParamValue, Params, Route, Statement, Value};
     use crate::db::run::ROW_CAP;
     use crate::fixtures;
+    use crate::fixtures::run_on;
 
     async fn session(extra: &str) -> Session {
         Session::open(&fixtures::test_database("local", extra), Route::Direct).await.unwrap()
@@ -301,5 +304,17 @@ mod tests {
         let mut session = session("").await;
         cancelled_mid_page(&mut session).await;
         assert_eq!(session.run(&read_only("SELECT 7")).await.unwrap().rows(), [[Value::Int(7)]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_statement_read_only_whatever_the_connection_allows_is_refused_inside_the_users_transaction_and_leaves_it_open() {
+        let mut writer = fixtures::session(WritePolicy::Allowed).await;
+        run_on(&mut writer, "BEGIN").await;
+        let read = guard::admit(Statement::new("SELECT 1"), Params::default(), WritePolicy::ReadOnly).unwrap();
+        let Err(refused) = writer.start(&read).await else { panic!("it ran") };
+        assert_eq!(refused.downcast_ref(), Some(&InsideUserTransaction));
+        run_on(&mut writer, "SAVEPOINT only_inside_a_transaction").await;
+        run_on(&mut writer, "ROLLBACK").await;
     }
 }

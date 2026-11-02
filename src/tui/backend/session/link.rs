@@ -69,6 +69,16 @@ pub(in crate::tui::backend) struct Queued {
     pub(in crate::tui::backend) statement: Statement,
     pub(in crate::tui::backend) input: ParamInput,
     pub(in crate::tui::backend) confirmed: Option<Confirmed>,
+    pub(in crate::tui::backend) policy: Policy,
+}
+
+/// Which write policy a queued statement is admitted under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::tui::backend) enum Policy {
+    OfTheConnection,
+    /// Read only whatever the connection allows, as an `EXPLAIN ANALYZE` from a key runs: a write hidden in it fails, and
+    /// nothing offers to run it again.
+    ReadOnly,
 }
 
 impl SessionLink {

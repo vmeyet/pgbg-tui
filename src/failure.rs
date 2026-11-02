@@ -1,6 +1,6 @@
 //! Why a session did not open, was lost, or gave a run no result: one kind per reason, its words drawn or logged only.
 use crate::db::guard::Refusal;
-use crate::db::model::{ServerError, TriedToWrite, UnknownType};
+use crate::db::model::{InsideUserTransaction, ServerError, TriedToWrite, UnknownType};
 use crate::query::params::ParamError;
 use std::fmt;
 
@@ -42,8 +42,8 @@ pub(crate) enum Failure {
     Login(String),
     /// The link failed before the server answered, in the driver's words.
     Link(String),
-    /// pgbg kept the statement from the server: the guard, its parameters, a type the server does not know, or a write
-    /// not confirmed.
+    /// pgbg kept the statement from the server: the guard, its parameters, a type the server does not know, a write not
+    /// confirmed, or a read-only run inside the user's transaction.
     Refused(String),
     /// The server refused a write in a statement the guard read as a read; what the statement did before it already ran.
     TriedToWrite,
@@ -76,7 +76,7 @@ impl From<&anyhow::Error> for Failure {
         if err.is::<TriedToWrite>() {
             return Self::TriedToWrite;
         }
-        if err.is::<Refusal>() || err.is::<ParamError>() || err.is::<UnknownType>() {
+        if err.is::<Refusal>() || err.is::<ParamError>() || err.is::<UnknownType>() || err.is::<InsideUserTransaction>() {
             return Self::Refused(words);
         }
         match err.downcast_ref::<ServerError>() {
@@ -132,6 +132,12 @@ mod tests {
     fn a_server_error_says_the_servers_words() {
         let failure = Failure::from(&anyhow::Error::new(server_error(None)).context("running it"));
         assert_eq!(failure.to_string(), "running it: ERROR: column \"totl\" does not exist");
+    }
+
+    #[test]
+    fn a_read_only_run_inside_the_users_transaction_is_refused() {
+        let failure = Failure::from(&anyhow::Error::new(InsideUserTransaction));
+        assert!(failure.to_string().starts_with("not sent: a transaction you began"), "{failure}");
     }
 
     #[test]

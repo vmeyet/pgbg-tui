@@ -14,6 +14,7 @@ mod bind;
 mod cancel;
 mod connect;
 mod decode;
+pub(crate) mod explain;
 pub(crate) mod guard;
 pub(crate) mod lex;
 mod limits;

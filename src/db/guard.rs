@@ -112,6 +112,12 @@ impl Admitted {
         self.mode != Mode::Writes
     }
 
+    /// Whether it runs in `BEGIN READ ONLY`, always rolled back.
+    #[cfg(test)]
+    pub(crate) fn is_read_only(&self) -> bool {
+        self.mode == Mode::ReadOnly
+    }
+
     /// The statement once the user said yes to it: a read that tried to write runs as a write; a read-only
     /// connection stays read only.
     pub(crate) fn confirmed(self) -> Self {
@@ -156,6 +162,14 @@ pub(crate) fn write_in(sql: &str, tokens: &[Placed]) -> Option<Write> {
     let upper = upper_case_words(sql, tokens);
     let words: Vec<&str> = upper.iter().map(String::as_str).collect();
     not_read(tokens, &words).and_then(|found| named(sql, tokens, &words, &found))
+}
+
+/// Whether `sql` is a query the guard reads as changing nothing, the only kind an `EXPLAIN` from a key may hold.
+pub(crate) fn is_read_query(sql: &str) -> bool {
+    let tokens = lex::tokens(sql);
+    let upper = upper_case_words(sql, &tokens);
+    let words: Vec<&str> = upper.iter().map(String::as_str).collect();
+    opens_a_query(&words) && not_read(&tokens, &words).is_none()
 }
 
 /// What a statement does to a transaction the user began, read from its first words; the server's answer to it
@@ -211,9 +225,13 @@ pub(crate) fn admit(statement: Statement, params: Params, writes: WritePolicy) -
         (WritePolicy::ReadOnly, None) => (Mode::ReadOnly, TransactionStep::Keeps),
     };
     check_params(&tokens, &params)?;
-    let is_query = words.first().is_some_and(|first| QUERIES.contains(first)) && found.is_none();
+    let is_query = opens_a_query(&words) && found.is_none();
     let write = found.and_then(|found| named(statement.as_str(), &tokens, &words, &found));
     Ok(Admitted { statement, params, mode, transaction_step, is_query, own_timeout: None, write })
+}
+
+fn opens_a_query(words: &[&str]) -> bool {
+    words.first().is_some_and(|first| QUERIES.contains(first))
 }
 
 /// The words of `tokens` out of `sql`, in upper case as the guard's lists write them; PostgreSQL folds ASCII only.
