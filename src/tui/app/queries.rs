@@ -331,6 +331,17 @@ pub(in crate::tui) mod tests {
     }
 
     #[test]
+    fn v_comes_back_to_the_chart_of_the_header() {
+        use super::super::fixtures::view;
+        let (mut app, _) = opened_and_run("-- chart: stacked x=customer y=total\nSELECT customer, total FROM orders");
+        app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result: orders(), took: Duration::from_millis(38) }));
+        let asked = view(&app).clone();
+        app.sheet_mut().switch_view();
+        app.sheet_mut().switch_view();
+        assert_eq!(view(&app), &asked);
+    }
+
+    #[test]
     fn a_chart_header_that_does_not_fit_the_result_starts_on_the_grid() {
         let (mut app, _) = opened_and_run("-- chart: bar x=day y=refunds\nSELECT customer, total FROM orders");
         app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result: orders(), took: Duration::from_millis(38) }));

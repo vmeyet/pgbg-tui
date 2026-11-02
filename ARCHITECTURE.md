@@ -158,7 +158,7 @@ One word per concept, in code, docs and UI.
 | query | A saved `.sql` file in a connection's queries folder |
 | result | The columns and rows a statement returned, page by page |
 | page | One batch of rows fetched from the portal |
-| chart | A grouped or line drawing of a result |
+| chart | A grouped, stacked or line drawing of a result |
 | orientation | Which way a chart's bars run: `vertical`, upright, or `horizontal`, on their side |
 | history | Every statement run on a connection |
 | version | A text of a saved query that a save replaced, kept apart from the queries |

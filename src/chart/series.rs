@@ -71,6 +71,11 @@ impl Series {
         Self::from_columns(result, resolve(result, spec)?)
     }
 
+    /// The series of the `-- chart:` header `spec`, when there is one and it fits `result`: one that does not is ignored.
+    pub(crate) fn asked(spec: Option<&ChartSpec>, result: &ResultSet) -> Option<Self> {
+        Self::from_result(result, spec?).ok()
+    }
+
     /// The points of `result` for the columns picked by index.
     /// A line over dates, times or integers is placed on their scale and sorted; anything else keeps the result's order.
     pub(crate) fn from_columns(result: &ResultSet, columns: ChartColumns) -> Result<Self, ChartError> {
@@ -91,6 +96,22 @@ impl Series {
             return Err(ChartError::Empty);
         }
         Ok(series)
+    }
+
+    /// Draws the same columns as the next kind that can: a line leaves out what has no place on its scale, which can be every row.
+    pub(crate) fn step_kind(&mut self, result: &ResultSet) {
+        let columns_as = |kind| ChartColumns { kind, ..self.columns.clone() };
+        let next = self.columns.kind.others().find_map(|kind| Self::from_columns(result, columns_as(kind)).ok());
+        if let Some(next) = next {
+            *self = next;
+        }
+    }
+
+    /// Stands the bars up, or lays them on their side; a line stays as it is.
+    pub(crate) const fn flip(&mut self) {
+        if self.columns.kind.has_orientation() {
+            self.columns.orientation = self.columns.orientation.flipped();
+        }
     }
 
     /// The x label at `position`: a time or number axis writes the value there, the rows axis gives the nearest point's label.
@@ -304,6 +325,35 @@ mod tests {
         assert_eq!(values(&series).len(), line::MAX_POINTS);
         assert_eq!(values(&series).last(), Some(&Some(4999.0)));
         assert!(series.is_cut);
+    }
+
+    #[test]
+    fn a_new_kind_reads_the_columns_the_series_was_asked_for() {
+        let mut series = Series::from_result(&orders(), &spec("stacked x=customer y=total horizontal")).unwrap();
+        series.step_kind(&orders());
+        assert_eq!(series, Series::from_result(&orders(), &spec("line x=customer y=total")).map(with_side).unwrap());
+    }
+
+    fn with_side(series: Series) -> Series {
+        Series { columns: ChartColumns { orientation: Orientation::Horizontal, ..series.columns }, ..series }
+    }
+
+    #[test]
+    fn stepping_past_a_kind_that_cannot_draw_the_result_goes_to_the_next() {
+        let no_place = daily(&[Value::Null, Value::Infinity]);
+        let mut series = Series::from_result(&no_place, &spec("stacked")).unwrap();
+        series.step_kind(&no_place);
+        assert_eq!(series.columns.kind, ChartKind::Grouped);
+    }
+
+    #[test]
+    fn flipping_turns_bars_and_leaves_a_line_alone() {
+        let mut bars = Series::from_result(&orders(), &spec("stacked")).unwrap();
+        bars.flip();
+        assert_eq!(bars.columns.orientation, Orientation::Horizontal);
+        let mut line = Series::from_result(&orders(), &spec("line")).unwrap();
+        line.flip();
+        assert_eq!(line.columns.orientation, Orientation::Vertical);
     }
 
     #[test]

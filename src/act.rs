@@ -33,6 +33,8 @@ pub(crate) enum Act {
     Open,
     Close,
     Chart,
+    ChartKind,
+    ChartFlip,
     StepFormat,
     SwitchFormats,
     Delete,
@@ -105,6 +107,8 @@ impl Act {
             Self::Open => "open",
             Self::Close => "close",
             Self::Chart => "chart",
+            Self::ChartKind => "chart_kind",
+            Self::ChartFlip => "chart_flip",
             Self::StepFormat => "step_format",
             Self::SwitchFormats => "switch_formats",
             Self::Delete => "delete",
@@ -395,6 +399,8 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::CopyRow, Pane::Result, &[key(KeyCode::Char('Y'))]).help("Y", "copy the row as CSV"),
     row(Act::CopyResult, Pane::Result, &[key(KeyCode::Char('c'))]).help("c", "copy the result as CSV, JSON or Markdown"),
     row(Act::Chart, Pane::Result, &[key(KeyCode::Char('v'))]).help("v", "the result as a grid or a chart").footer("v", "chart"),
+    row(Act::ChartKind, Pane::Result, &[key(KeyCode::Char('t'))]).help("t", "on a chart: its next kind, grouped, stacked or line"),
+    row(Act::ChartFlip, Pane::Result, &[key(KeyCode::Char('r'))]).help("r", "on a chart: its bars upright, or on their side"),
     row(Act::StepFormat, Pane::Result, &[key(KeyCode::Char('f'))])
         .help("f", "the column in its next format: raw, then readable ones")
         .footer("f", "format"),

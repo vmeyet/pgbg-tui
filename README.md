@@ -5,7 +5,7 @@ Read your PostgreSQL databases from the terminal: local, staging, and production
 - **Read only by default.** A connection takes writes only when you say so, and then each write asks first, even one inside a function call.
 - **Tunnels built in.** pgbg starts your `ssh` (or any other) tunnel, and stops it when you quit.
 - **Saved queries are plain `.sql` files.** They live per connection in pgbg's data folder, never in a repository, and open in `$EDITOR` with `ctrl-x`.
-- **Charts in the terminal.** Press `v` on a result to see it as bars or a line.
+- **Charts in the terminal.** Press `v` on a result to see it as grouped bars, stacked bars or a line, upright or on their side.
 - **Safe on production.** Its own frame colour, a short statement timeout, and `pgbg doctor` to check the role you log in with.
 
 ```text
@@ -200,12 +200,13 @@ ORDER BY 1;
 | --- | --- |
 | `-- name:` | A readable name for the query. |
 | `-- connection:` | The connection it was written for; the query still runs on the one on screen. |
-| `-- chart:` | `grouped`, `bar` or `line`, with optional `x=` and `y=` columns (`y=orders,refunds`), and `horizontal` or `vertical` on all but `line`. |
+| `-- chart:` | `grouped`, `stacked`, `bar` or `line`, with optional `x=` and `y=` columns (`y=orders,refunds`), and `horizontal` or `vertical` on all but `line`. |
 | `-- param:` | A parameter: `name type = default`, or `name type optional` for NULL when empty. |
 | `-- format:` | How columns open: `raw`, `local`, `relative`, `grouped`, `bytes`, `short`, `check` or `duration`. |
 
-`grouped` stands upright unless the header says `horizontal`: `-- chart: grouped x=day y=orders,refunds horizontal`.
+`grouped` and `stacked` stand upright unless the header says `horizontal`: `-- chart: stacked x=day y=orders,refunds`, `-- chart: grouped x=day y=orders,refunds horizontal`.
 `bar` is `grouped horizontal`.
+A stack piles positive values up from zero and negative ones down from it, a NULL adds nothing, and its number is the net sum.
 
 `{{name}}` in a statement is a parameter.
 Its value is always bound, never pasted into the SQL text.
@@ -231,6 +232,7 @@ In the TUI, a bar above the editor shows one field per parameter.
 | `^s` | Save the query. |
 | `⌥s` | Save the text under a new path, starting from the open query's. On macOS, the terminal must send option as meta. |
 | `v` | Show the result as a chart, or as a grid again. |
+| `t` `r` | On a chart: its next kind, grouped, stacked or line; its bars upright or on their side. |
 | `y` `Y` `c` | Copy the cell; the row as CSV; the result as CSV, JSON or Markdown. |
 | `o` | A JSON cell as a tree: `⏎` folds, `y` copies the value, `Y` its path as `.items[0].sku`. |
 | `F1` `?` | Every key of the pane you are in: filter, sort, formats, mouse, undo and the rest. |

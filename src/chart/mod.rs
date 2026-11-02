@@ -4,6 +4,7 @@ pub(crate) use bars::{Bars, Lane};
 pub(crate) use grouped::bars as grouped_bars;
 pub(crate) use series::{ChartError, Series, YColumn};
 pub(crate) use spec::ChartSpec;
+pub(crate) use stacked::bars as stacked_bars;
 
 use crate::db::model::{Column, ColumnKind, ResultSet, Value};
 
@@ -13,6 +14,7 @@ mod grouped;
 mod line;
 mod series;
 mod spec;
+mod stacked;
 
 /// A result with at most this many rows is drawn as grouped bars, whatever its x.
 const FEW_POINTS: usize = 12;
@@ -22,24 +24,33 @@ const FEW_POINTS: usize = 12;
 pub(crate) enum ChartKind {
     /// One bar per y column at each point, side by side.
     Grouped,
+    /// One bar at each point, its y columns piled along it.
+    Stacked,
     Line,
 }
 
 impl ChartKind {
-    const ALL: [Self; 2] = [Self::Grouped, Self::Line];
+    /// The kinds in the order the chart view steps through them.
+    const ALL: [Self; 3] = [Self::Grouped, Self::Stacked, Self::Line];
 
     /// The word a `-- chart:` header uses for it.
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::Grouped => "grouped",
+            Self::Stacked => "stacked",
             Self::Line => "line",
         }
+    }
+
+    /// The other kinds, the next one first and starting over after the last.
+    fn others(self) -> impl Iterator<Item = Self> {
+        Self::ALL.into_iter().cycle().skip_while(move |&kind| kind != self).skip(1).take(Self::ALL.len() - 1)
     }
 
     /// Whether it can draw its bars upright or on their side; a line goes left to right.
     const fn has_orientation(self) -> bool {
         match self {
-            Self::Grouped => true,
+            Self::Grouped | Self::Stacked => true,
             Self::Line => false,
         }
     }
@@ -47,7 +58,7 @@ impl ChartKind {
     /// The indexes of the points drawn out of `points`, in order: all of them when they fit the kind's cap.
     fn keep(self, points: usize) -> Vec<usize> {
         match self {
-            Self::Grouped => bars::keep(points),
+            Self::Grouped | Self::Stacked => bars::keep(points),
             Self::Line => line::keep(points),
         }
     }
@@ -69,6 +80,13 @@ impl Orientation {
             "vertical" => Some(Self::Vertical),
             "horizontal" => Some(Self::Horizontal),
             _ => None,
+        }
+    }
+
+    const fn flipped(self) -> Self {
+        match self {
+            Self::Vertical => Self::Horizontal,
+            Self::Horizontal => Self::Vertical,
         }
     }
 }
@@ -95,6 +113,11 @@ pub(crate) fn infer(result: &ResultSet) -> Option<ChartColumns> {
         return None;
     }
     Some(ChartColumns { kind: suited_kind(&result.columns()[x], result.rows().len()), orientation: Orientation::Horizontal, x, y })
+}
+
+/// The series `spec` asks for when it fits `result`, else what `infer_series` gives.
+pub(crate) fn asked_or_inferred_series(spec: Option<&ChartSpec>, result: &ResultSet) -> Result<Series, ChartError> {
+    Series::asked(spec, result).map_or_else(|| infer_series(result), Ok)
 }
 
 /// The series of the chart `infer` picks for `result`, or why there is none.
@@ -154,6 +177,12 @@ mod tests {
 
     fn day(index: usize) -> Value {
         Value::Date(chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap() + chrono::Days::new(index as u64))
+    }
+
+    #[test]
+    fn the_kinds_step_in_a_ring() {
+        assert_eq!(ChartKind::Grouped.others().collect::<Vec<_>>(), [ChartKind::Stacked, ChartKind::Line]);
+        assert_eq!(ChartKind::Line.others().collect::<Vec<_>>(), [ChartKind::Grouped, ChartKind::Stacked]);
     }
 
     #[test]

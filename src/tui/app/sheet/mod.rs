@@ -6,7 +6,7 @@ use super::grid::{Clock, Move, Reading, Room};
 use super::param_bar::{Direction, ParamBar};
 use super::{Action, Confirmed, Grid, Incoming, RunId, SessionId, TunnelState};
 use crate::ai::TableUse;
-use crate::chart::{self, ChartError, Series};
+use crate::chart::{self, ChartColumns, ChartError, Series};
 use crate::complete::Index;
 use crate::connection::{Connection, ConnectionName, WritePolicy};
 use crate::db::guard::{self, Write};
@@ -103,7 +103,7 @@ pub(in crate::tui) enum Run {
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::tui) enum View {
     Grid,
-    /// The chart of the header's `-- chart:`, or the one `chart::infer` picks when `v` is pressed, or why there is none.
+    /// The chart of the header's `-- chart:` when it fits, or the one `chart::infer` picks, or why there is none.
     Chart(Result<Series, ChartError>),
 }
 
@@ -150,6 +150,8 @@ pub(in crate::tui) struct Sheet {
     tried_to_write: Option<ToRun>,
     /// The last table browsed, replaced by the next one while the editor still holds exactly what browsing wrote.
     browsed: Option<Browsed>,
+    /// The chart last left for the grid, so `v` comes back to the kind and orientation it had, until the next result.
+    left_chart: Option<ChartColumns>,
 }
 
 /// The editor's text before a table was browsed, and the text browsing wrote.
@@ -185,16 +187,35 @@ impl Sheet {
             bar: ParamBar::default(),
             tried_to_write: None,
             browsed: None,
+            left_chart: None,
         }
     }
 
     /// Shows the result as a chart, or as the grid again.
     pub(super) fn switch_view(&mut self) {
         if let Run::Done { result, view, .. } = &mut self.run {
-            *view = match view {
-                View::Grid => View::Chart(chart::infer_series(result)),
-                View::Chart(_) => View::Grid,
+            if let View::Chart(Ok(series)) = view {
+                self.left_chart = Some(series.columns.clone());
+            }
+            *view = match (&*view, &self.left_chart) {
+                (View::Grid, Some(columns)) => View::Chart(Series::from_columns(result, columns.clone())),
+                (View::Grid, None) => View::Chart(chart::asked_or_inferred_series(self.header.chart.as_ref(), result)),
+                (View::Chart(_), _) => View::Grid,
             };
+        }
+    }
+
+    /// Draws the chart on screen as its next kind, with the same columns.
+    pub(super) fn step_chart_kind(&mut self) {
+        if let Run::Done { result, view: View::Chart(Ok(series)), .. } = &mut self.run {
+            series.step_kind(result);
+        }
+    }
+
+    /// Stands the bars of the chart on screen up, or lays them on their side.
+    pub(super) fn flip_chart(&mut self) {
+        if let Run::Done { view: View::Chart(Ok(series)), .. } = &mut self.run {
+            series.flip();
         }
     }
 
@@ -474,8 +495,8 @@ impl Sheet {
             Incoming::TableUse(table_use) => self.table_use = table_use,
             Incoming::Result { run, .. } | Incoming::Failed { run, .. } if !self.is_answer_to_running(run) => {}
             Incoming::Result { run, result, took } => {
-                let header_chart = self.header.chart.as_ref().and_then(|spec| Series::from_result(&result, spec).ok());
-                let view = header_chart.map_or(View::Grid, |series| View::Chart(Ok(series)));
+                self.left_chart = None;
+                let view = Series::asked(self.header.chart.as_ref(), &result).map_or(View::Grid, |series| View::Chart(Ok(series)));
                 let formats = format::opening(result.columns(), &self.header.formats, reading.mode);
                 let grid = Box::new(Grid::new(&result, formats, self.keys_of(&result), &reading.clock));
                 self.run = Run::Done { run, grid, result, took, view, is_page_asked: false };

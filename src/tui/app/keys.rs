@@ -184,6 +184,8 @@ impl App {
             Act::Find => return self.find(),
             Act::Connections => self.open_picker(),
             Act::Chart => self.sheet_mut().switch_view(),
+            Act::ChartKind => self.sheet_mut().step_chart_kind(),
+            Act::ChartFlip => self.sheet_mut().flip_chart(),
             Act::StepFormat => self.step_format(),
             Act::SwitchFormats => {
                 let clock = self.reading.clock;
@@ -276,7 +278,7 @@ impl App {
 mod tests {
     use super::super::fixtures::{app, enter, on_the_result, press, shop, typed, view, with_every_pane, with_result};
     use super::*;
-    use crate::chart;
+    use crate::chart::{self, ChartKind, Orientation, Series};
     use crate::fixtures::orders;
     use crate::tui::app::{Run, RunId, View};
     use crossterm::event::KeyModifiers;
@@ -383,6 +385,50 @@ mod tests {
         press(&mut app, KeyCode::Tab);
         press(&mut app, KeyCode::Char('v'));
         app
+    }
+
+    fn chart_on_screen(app: &App) -> &Series {
+        let View::Chart(Ok(series)) = view(app) else { panic!("no chart") };
+        series
+    }
+
+    #[test]
+    fn t_on_the_chart_steps_through_the_kinds_and_comes_back() {
+        let mut app = on_the_chart();
+        let first = chart_on_screen(&app).clone();
+        press(&mut app, KeyCode::Char('t'));
+        assert_eq!(chart_on_screen(&app).columns.kind, ChartKind::Stacked);
+        press(&mut app, KeyCode::Char('t'));
+        assert_eq!(chart_on_screen(&app).columns.kind, ChartKind::Line);
+        press(&mut app, KeyCode::Char('t'));
+        assert_eq!(chart_on_screen(&app), &first);
+    }
+
+    #[test]
+    fn r_on_the_chart_flips_its_bars() {
+        let mut app = on_the_chart();
+        press(&mut app, KeyCode::Char('r'));
+        assert_eq!(chart_on_screen(&app).columns.orientation, Orientation::Vertical);
+    }
+
+    #[test]
+    fn v_comes_back_to_the_kind_and_orientation_left() {
+        let mut app = on_the_chart();
+        press(&mut app, KeyCode::Char('t'));
+        press(&mut app, KeyCode::Char('r'));
+        let left = chart_on_screen(&app).clone();
+        press(&mut app, KeyCode::Char('v'));
+        press(&mut app, KeyCode::Char('v'));
+        assert_eq!(chart_on_screen(&app), &left);
+    }
+
+    #[test]
+    fn t_and_r_on_the_grid_change_nothing() {
+        let mut app = with_result();
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Char('t'));
+        press(&mut app, KeyCode::Char('r'));
+        assert_eq!(view(&app), &View::Grid);
     }
 
     #[test]

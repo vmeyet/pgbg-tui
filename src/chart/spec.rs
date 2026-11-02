@@ -53,7 +53,7 @@ impl fmt::Display for ChartSpecError {
 
 impl std::error::Error for ChartSpecError {}
 
-/// `grouped x=day y=orders,refunds horizontal`: the kind first, then `x=`, `y=` and the orientation in any order, each optional.
+/// `stacked x=day y=orders,refunds horizontal`: the kind first, then `x=`, `y=` and the orientation in any order, each optional.
 impl FromStr for ChartSpec {
     type Err = ChartSpecError;
 
@@ -136,10 +136,11 @@ mod tests {
     }
 
     #[test]
-    fn grouped_stands_upright_unless_told_otherwise() {
+    fn stacked_and_grouped_stand_upright_unless_told_otherwise() {
         let orientation = |text| parse(text).unwrap().orientation;
+        assert_eq!(parse("stacked").unwrap().kind, ChartKind::Stacked);
         assert_eq!(parse("grouped").unwrap().kind, ChartKind::Grouped);
-        assert_eq!(orientation("grouped x=day y=orders,refunds"), None);
+        assert_eq!(orientation("stacked x=day y=orders,refunds"), None);
         assert_eq!(orientation("grouped horizontal x=day y=orders,refunds"), Some(Orientation::Horizontal));
     }
 
@@ -156,12 +157,12 @@ mod tests {
 
     #[test]
     fn an_orientation_given_twice_is_refused() {
-        assert_eq!(parse("grouped horizontal vertical"), Err(ChartSpecError::RepeatedOrientation));
+        assert_eq!(parse("stacked horizontal vertical"), Err(ChartSpecError::RepeatedOrientation));
     }
 
     #[test]
     fn a_word_that_is_no_part_says_what_a_part_can_be() {
-        let refused = parse("grouped sideways").unwrap_err().to_string();
+        let refused = parse("stacked sideways").unwrap_err().to_string();
         assert_eq!(refused, "`sideways` is none of `x=<column>`, `y=<column>,<column>`, `horizontal`, `vertical`");
     }
 
@@ -195,6 +196,6 @@ mod tests {
 
     #[test]
     fn an_unknown_kind_says_which_kinds_exist() {
-        assert_eq!(ChartSpecError::UnknownKind("pie".into()).to_string(), "`pie` is not a chart kind: bar, grouped, line");
+        assert_eq!(ChartSpecError::UnknownKind("pie".into()).to_string(), "`pie` is not a chart kind: bar, grouped, stacked, line");
     }
 }

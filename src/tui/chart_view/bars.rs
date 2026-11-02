@@ -243,7 +243,7 @@ mod tests {
     use crate::chart::ChartError;
     use crate::db::model::Value;
 
-    const KINDS: [&str; 2] = ["grouped", "grouped horizontal"];
+    const KINDS: [&str; 4] = ["grouped", "grouped horizontal", "stacked", "stacked horizontal"];
 
     #[test]
     fn bars_are_as_long_as_their_value_and_say_it() {
@@ -268,10 +268,28 @@ mod tests {
     }
 
     #[test]
+    fn stacked_columns_pile_their_values() {
+        insta::assert_snapshot!("stacked_vertical", render(&series(&daily_orders_and_refunds(), "stacked"), 48, 10).backend());
+    }
+
+    #[test]
+    fn stacked_bars_pile_their_values_along_the_row() {
+        insta::assert_snapshot!("stacked_horizontal", render(&series(&daily_orders_and_refunds(), "stacked horizontal"), 48, 8).backend());
+    }
+
+    #[test]
     fn a_negative_value_runs_the_other_way_from_zero() {
         let daily = daily_orders_and_refunds().with_cell(0, 2, Value::Int(-40));
-        insta::assert_snapshot!("bars_negative", render(&series(&daily, "grouped horizontal"), 48, 10).backend());
-        insta::assert_snapshot!("bars_negative_upright", render(&series(&daily, "grouped"), 48, 10).backend());
+        insta::assert_snapshot!("stacked_negative", render(&series(&daily, "stacked"), 48, 10).backend());
+        insta::assert_snapshot!("stacked_negative_horizontal", render(&series(&daily, "stacked horizontal"), 48, 8).backend());
+    }
+
+    #[test]
+    fn a_stack_is_drawn_in_the_colours_of_its_columns() {
+        let terminal = render(&series(&daily_orders_and_refunds(), "stacked horizontal"), 48, 8);
+        let row: Vec<_> = (0..48).map(|x| &terminal.backend().buffer()[(x, 1)]).filter(|cell| cell.symbol() == BLOCK).collect();
+        let theme = Theme::default();
+        assert_eq!((row[0].fg, row[row.len() - 1].fg), (colour(&theme, 0), colour(&theme, 1)));
     }
 
     #[test]
@@ -320,7 +338,7 @@ mod tests {
 
     #[test]
     fn the_labels_under_narrow_columns_skip_rather_than_cut() {
-        let drawn = render(&series(&daily_orders_and_refunds(), "grouped"), 24, 6).backend().to_string();
+        let drawn = render(&series(&daily_orders_and_refunds(), "stacked"), 24, 6).backend().to_string();
         assert!(drawn.contains("2026-01-01") && !drawn.contains('…'), "{drawn}");
     }
 }
