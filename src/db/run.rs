@@ -2,7 +2,7 @@
 use super::guard::{Admitted, Mode, TransactionStep};
 use super::limits::ReadLimits;
 use super::model::{Column, Extent, InsideUserTransaction, Page, Params, ResultSet, Value};
-use super::{Isolation, Session, bind, decode, roll_back, server_error};
+use super::{Isolation, Session, bind, decode, roll_back, server_error, statement_error};
 use anyhow::{Context, Result};
 use futures_util::{StreamExt, TryStreamExt, future};
 use std::pin::pin;
@@ -238,12 +238,12 @@ pub(super) async fn read_in(transaction: &Transaction<'_>, admitted: &Admitted, 
 /// `statement` bound to a portal with `params`, each in text.
 pub(super) async fn bind_portal(transaction: &Transaction<'_>, statement: &Prepared, params: &Params) -> Result<Portal> {
     let values = bind::as_text(params);
-    transaction.bind(statement, &bind::borrowed(&values)).await.map_err(server_error)
+    transaction.bind(statement, &bind::borrowed(&values)).await.map_err(statement_error)
 }
 
 /// Streams the rows of `statement` run with `params`, prepared first so a result without rows still has its columns.
 async fn fetch(client: &Client, statement: &Prepared, params: &Params) -> Result<ResultSet> {
-    let rows = client.query_raw(statement, bind::as_text(params)).await.map_err(server_error)?;
+    let rows = client.query_raw(statement, bind::as_text(params)).await.map_err(statement_error)?;
     Ok(ResultSet::new(columns(statement), first_rows(rows).await?))
 }
 
@@ -259,8 +259,8 @@ pub(super) fn columns(statement: &Prepared) -> Vec<Column> {
 
 /// The next `size` rows of `portal`, decoded: all of them when the portal ran to its end, else more wait in it.
 pub(super) async fn fetch_page(transaction: &Transaction<'_>, portal: &Portal, size: FetchSize) -> Result<Page> {
-    let mut stream = pin!(transaction.query_portal_raw(portal, size.rows()).await.map_err(server_error)?);
-    let rows = stream.as_mut().and_then(|row| future::ready(decode::row(&row))).try_collect().await.map_err(server_error)?;
+    let mut stream = pin!(transaction.query_portal_raw(portal, size.rows()).await.map_err(statement_error)?);
+    let rows = stream.as_mut().and_then(|row| future::ready(decode::row(&row))).try_collect().await.map_err(statement_error)?;
     let has_ended = stream.rows_affected().is_some();
     Ok(Page { rows, extent: if has_ended { Extent::All } else { Extent::More } })
 }

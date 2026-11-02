@@ -2,6 +2,7 @@
 use super::{Action, Answer, App, Fit, Focus, Incoming, Panes, Run, RunId, SessionId, View};
 use crate::connection::{Connection, ConnectionName};
 use crate::db::model::{ResultSet, Statement};
+use crate::failure::Failure;
 use crate::fixtures::{self, keyed_catalog, keyed_orders, orders};
 use crate::query::params::ParamInput;
 use crate::tui::theme::Theme;
@@ -81,6 +82,22 @@ pub(in crate::tui) fn first_run(connection: &ConnectionName, sql: &str) -> Actio
 
 pub(in crate::tui) fn enter(app: &mut App) -> Vec<Action> {
     app.handle_key(KeyEvent::from(KeyCode::Enter))
+}
+
+/// The first run answers that the server failed it at character `position`.
+pub(in crate::tui) fn failed_at(app: &mut App, position: usize) {
+    app.apply(to_shop(Incoming::Failed {
+        run: RunId::FIRST,
+        failure: Failure::Server { message: "ERROR: syntax error".into(), position: Some(position) },
+    }));
+}
+
+/// The app whose first run, of `sql`, the server failed at character `position`.
+pub(in crate::tui) fn failed_run(sql: &str, position: usize) -> App {
+    let mut app = typed(sql);
+    enter(&mut app);
+    failed_at(&mut app, position);
+    app
 }
 
 pub(in crate::tui) fn with_result() -> App {

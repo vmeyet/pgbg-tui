@@ -34,6 +34,9 @@ Each entry says what changed, then where, then how to use it.
 
 - **A tunnel that still runs but no longer forwards is started anew**, on every connection with a tunnel: a run after a lost link no longer fails over and over until the connection is closed.
 - **The history gives the real time of a run whose session did not open**, in `ctrl-r`: it said `0 ms` whatever the wait.
+- **The editor underlines where the server stopped**, in the TUI, when the server rejects a statement and says where: the failing token is underlined in the theme's `danger` colour, a `{{name}}` whole, and scrolled into view while the cursor stays where it was.
+  It works out where the text sent falls in the editor, so comments, `{{name}}` parameters, other statements and multi-byte text never shift it.
+  The underline goes when the text changes or the next run starts; an error without a position shows as before, with none.
 
 ## 0.2.0 - 2026-10-30
 

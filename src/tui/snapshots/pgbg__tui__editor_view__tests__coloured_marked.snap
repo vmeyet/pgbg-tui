@@ -1,6 +1,6 @@
 ---
 source: src/tui/editor_view.rs
-expression: "painted(\"SELECT id, 'paid', 10 -- recent\\nFROM ordrs\", Some(37))"
+expression: "painted(\"SELECT id, 'paid', 10 -- recent\\nFROM ordrs\", Some(37..42))"
 ---
 Some(Magenta)/NONE "SELECT"
 None/NONE " id"
@@ -15,5 +15,4 @@ Some(Indexed(244))/NONE "-- recent"
 ---
 Some(Magenta)/NONE "FROM"
 None/NONE " "
-Some(Red)/REVERSED "o"
-None/NONE "rdrs"
+Some(Red)/UNDERLINED "ordrs"

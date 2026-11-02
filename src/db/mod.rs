@@ -113,12 +113,22 @@ async fn roll_back(transaction: Transaction<'_>, marks: &mut Marks) -> Result<()
 }
 
 /// A `ServerError` when the server answered with one, the driver's error otherwise.
+/// It says no position: the text it failed on is pgbg's own, or holds more than the statement.
 fn server_error(err: tokio_postgres::Error) -> anyhow::Error {
-    let Some(db) = err.as_db_error() else { return anyhow::Error::new(err) };
-    let position = match db.position() {
+    from_server(err, None)
+}
+
+/// `server_error` for a failure of the statement sent exactly as it was admitted, so its position counts in that text.
+fn statement_error(err: tokio_postgres::Error) -> anyhow::Error {
+    let position = err.as_db_error().and_then(|db| match db.position() {
         Some(ErrorPosition::Original(position)) => Some(*position as usize),
         Some(ErrorPosition::Internal { .. }) | None => None,
-    };
+    });
+    from_server(err, position)
+}
+
+fn from_server(err: tokio_postgres::Error, position: Option<usize>) -> anyhow::Error {
+    let Some(db) = err.as_db_error() else { return anyhow::Error::new(err) };
     anyhow::Error::new(ServerError {
         severity: db.severity().to_owned(),
         message: db.message().to_owned(),
@@ -133,10 +143,14 @@ fn server_error(err: tokio_postgres::Error) -> anyhow::Error {
 mod tests {
     use super::*;
     use crate::connection::WritePolicy;
-    use crate::fixtures::{run, session};
+    use crate::fixtures::{run, run_on, session, try_on};
     use model::{Params, Statement};
     use std::time::Duration;
     use tokio::time::timeout;
+
+    fn position_of(err: &anyhow::Error) -> Option<usize> {
+        err.downcast_ref::<ServerError>().and_then(|server| server.position)
+    }
 
     async fn ended_on_the_server() -> Session {
         let mut doomed = session(WritePolicy::ReadOnly).await;
@@ -190,6 +204,29 @@ mod tests {
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_server_error_says_where_in_the_statement_it_stopped() {
         let err = run(WritePolicy::ReadOnly, "SELECT * FROM no_such_orders").await.unwrap_err();
-        assert_eq!(err.downcast_ref::<ServerError>().and_then(|server| server.position), Some(15));
+        assert_eq!(position_of(&err), Some(15));
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_server_position_counts_characters_and_the_comments_above() {
+        let err = run(WritePolicy::ReadOnly, "-- zoë\nSELECT 'é', nope").await.unwrap_err();
+        assert_eq!(position_of(&err), Some(20));
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_read_failing_inside_a_transaction_of_the_user_says_where_in_the_statement_not_in_its_cursor() {
+        let mut writer = session(WritePolicy::Allowed).await;
+        run_on(&mut writer, "BEGIN").await;
+        let err = try_on(&mut writer, "SELECT nope").await.unwrap_err();
+        assert_eq!(position_of(&err), Some(8));
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_statement_cut_short_fails_just_past_its_last_character() {
+        let err = run(WritePolicy::ReadOnly, "SELECT * FROM").await.unwrap_err();
+        assert_eq!(position_of(&err), Some(14));
     }
 }

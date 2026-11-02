@@ -34,6 +34,14 @@ pub(in crate::tui) struct Editor {
     has_stale_colours: bool,
     /// The first line the last frame drew: it moves only when the cursor leaves the view, so a click never scrolls.
     first_line: usize,
+    reveal: Option<Reveal>,
+}
+
+/// A line kept in view in place of the cursor's, as long as the cursor stays at byte `cursor`.
+#[derive(Clone, Copy, Debug)]
+struct Reveal {
+    line: usize,
+    cursor: usize,
 }
 
 impl Editor {
@@ -108,17 +116,32 @@ impl Editor {
         self.field.select_to(place);
     }
 
-    /// The first line in view in a pane `rows` lines high: the one the last frame drew, moved only as far as the cursor's
-    /// line needs to show.
+    /// The first line in view in a pane `rows` lines high: the one the last frame drew, moved only as far as the line
+    /// being revealed, or else the cursor's, needs to show.
     pub(in crate::tui) fn first_line_in_view(&self, rows: u16) -> usize {
         let (before, _, _) = self.split();
-        let cursor_line = before.matches('\n').count();
-        self.first_line.clamp(cursor_line.saturating_sub(usize::from(rows.saturating_sub(1))), cursor_line)
+        let line = self.live_reveal().map_or_else(|| before.matches('\n').count(), |reveal| reveal.line);
+        self.first_line.clamp(line.saturating_sub(usize::from(rows.saturating_sub(1))), line)
+    }
+
+    /// Scrolls to the line of byte `at` and leaves the cursor where it is, until the cursor moves.
+    pub(super) fn reveal(&mut self, at: usize) {
+        self.reveal = Some(Reveal { line: place_of(self.text(), at).line, cursor: self.split().0.len() });
+    }
+
+    /// The reveal in force: a cursor that moved ended it.
+    fn live_reveal(&self) -> Option<Reveal> {
+        self.reveal.filter(|reveal| reveal.cursor == self.split().0.len())
+    }
+
+    pub(super) fn stop_revealing(&mut self) {
+        self.reveal = None;
     }
 
     /// Keeps the first line a frame drew in a pane `rows` lines high, which the next frame and the mouse start from; a
     /// pane not drawn keeps the line it had.
     pub(super) fn keep_in_view(&mut self, rows: u16) {
+        self.reveal = self.live_reveal();
         if rows > 0 {
             self.first_line = self.first_line_in_view(rows);
         }
@@ -234,6 +257,7 @@ impl Editor {
         self.revision = self.revision.next();
         self.lexed = Lexed::of(self.field.text());
         self.has_stale_colours = true;
+        self.reveal = None;
     }
 }
 

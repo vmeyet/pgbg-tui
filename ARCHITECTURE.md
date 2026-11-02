@@ -54,6 +54,7 @@ These invariants hold across every flow; a change that breaks one is a bug.
 - On a writable connection, a read the server finds writing (`25006`) is undone and asks before it runs again as a write: it may run twice.
 - Inside the user's own `BEGIN`, pgbg sends no `BEGIN`, `COMMIT` or `ROLLBACK` and never uses the driver's transaction handle: the user's `COMMIT` or `ROLLBACK` decides.
 - A parameter is always bound as `$n`, never pasted into the text; the history keeps the `{{name}}`, never the value.
+- A server error keeps its position only when the text it failed on is the statement as admitted (`db::statement_error`); the sheet reads it back through the `$n` numbering and the statement's place in the editor, and marks nothing once that text changed; the mark is sheet state, never in the text, the undo or the history.
 - A result streams a page of 500 rows at a time through a portal; the portal closes on a new run, a cancel, the session closing or lost, its tunnel dying, or 5 minutes idle (a tenth before a stricter server timeout), and the result then stays cut.
 - A run or a lookup that finds no open session reconnects first, and `esc` stops a run's reconnect.
 - A read that fails on a lost link before any row shows goes once more on a new session, in the same transaction shape; a write, a read inside the user's `BEGIN`, a failure in the server's words, and a result already showing never go again.

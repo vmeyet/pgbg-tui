@@ -121,8 +121,9 @@ pub(in crate::tui) struct Sheet {
     pub(in crate::tui) run: Run,
     sent: Option<Sent>,
     last_run: Option<RunId>,
-    /// The editor byte the server's last error points at, until the text changes.
-    pub(in crate::tui) error_mark: Option<usize>,
+    /// The editor bytes of the token the server's last error points at, until the text changes or the next run starts;
+    /// empty at the end of a line, where there is nothing to mark but its end.
+    pub(in crate::tui) error_mark: Option<Range<usize>>,
     /// The saved query the editor stands for, once one has been opened in it.
     pub(in crate::tui) opened: Option<Query>,
     /// Why the last query asked for could not be opened, until a query opens.
@@ -405,9 +406,19 @@ impl Sheet {
         let run = self.last_run.map_or(RunId::FIRST, RunId::next);
         self.last_run = Some(run);
         self.error_mark = None;
+        self.editor.stop_revealing();
         self.page_failure = None;
         self.shown = None;
         run
+    }
+
+    /// Marks what the server's `position` points at and brings it into view; no position, or one that cannot be read back
+    /// in the editor, marks nothing.
+    fn mark_error(&mut self, position: Option<usize>) {
+        self.error_mark = position.and_then(|position| self.editor_byte(position)).and_then(|at| self.failing_bytes(at));
+        if let Some(mark) = &self.error_mark {
+            self.editor.reveal(mark.start);
+        }
     }
 
     /// The editor byte at character `position` of the statement the server got, counted from 1; the statement's end
@@ -416,6 +427,15 @@ impl Sheet {
         let sent = self.sent.as_ref()?;
         let offset = sent.numbering.template_byte(sent.statement.as_str(), position.checked_sub(1)?)?;
         Some(sent.start? + offset)
+    }
+
+    /// The token at editor byte `at`, or else the one character there, as where a statement ends or a comment never closes.
+    fn failing_bytes(&self, at: usize) -> Option<Range<usize>> {
+        if let Some(token) = self.editor.lexed().token_at(at) {
+            return Some(token.range.clone());
+        }
+        let character = self.editor.text().get(at..)?.chars().next().filter(|&c| c != '\n');
+        Some(at..at + character.map_or(0, char::len_utf8))
     }
 
     /// Takes an answer from the session; a result opens in the formats its header and `reading` give it.
@@ -468,7 +488,7 @@ impl Sheet {
                 self.page_failure = Some(format!("the next page failed: {failure}"));
             }
             Incoming::Failed { failure, .. } => {
-                self.error_mark = failure.position().and_then(|position| self.editor_byte(position));
+                self.mark_error(failure.position());
                 self.run = Run::Failed(failure.to_string());
             }
         }

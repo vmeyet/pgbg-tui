@@ -119,6 +119,12 @@ impl Lexed {
         self.not_code.last().is_some_and(|run| run.is_open && matches!(run.span, Span::String | Span::QuotedName))
     }
 
+    /// The token holding byte `at`; none on a comment or a blank.
+    pub(crate) fn token_at(&self, at: usize) -> Option<&Placed> {
+        let up_to = self.tokens.partition_point(|placed| placed.range.start <= at);
+        self.tokens[..up_to].last().filter(|placed| at < placed.range.end)
+    }
+
     /// What kind of text a character typed at byte `at` would fall in.
     pub(crate) fn span_at(&self, at: usize) -> Span {
         let before = self.not_code.partition_point(|run| run.range.start < at);
@@ -331,6 +337,14 @@ mod tests {
     fn each_token_spans_its_bytes() {
         let spans: Vec<Range<usize>> = tokens("SELECT 'a;b' ;").into_iter().map(|placed| placed.range).collect();
         assert_eq!(spans, [0..6, 7..12, 13..14]);
+    }
+
+    #[test]
+    fn the_token_at_a_byte_holds_it_and_a_comment_or_a_blank_holds_none() {
+        let sql = "SELECT 'zoë' -- paid";
+        let lexed = Lexed::of(sql);
+        let at = |byte: usize| lexed.token_at(byte).map(|placed| &sql[placed.range.clone()]);
+        assert_eq!((at(0), at(5), at(6), at(9), at(14)), (Some("SELECT"), Some("SELECT"), None, Some("'zoë'"), None));
     }
 
     fn numbered(sql: &str) -> Vec<Token> {
