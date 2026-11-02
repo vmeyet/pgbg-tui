@@ -86,7 +86,7 @@ mod tests {
         let header = Header::parse("-- name: daily orders\n-- connection: shop\n-- chart: bar x=day y=orders\nSELECT 1");
         assert_eq!(header.name.as_deref(), Some("daily orders"));
         assert_eq!(header.connection.map(|name| name.to_string()).as_deref(), Some("shop"));
-        assert_eq!(header.chart.map(|chart| chart.kind), Some(ChartKind::Bar));
+        assert_eq!(header.chart.map(|chart| chart.kind), Some(ChartKind::Grouped));
         assert_eq!(header.warnings, Vec::<String>::new());
     }
 

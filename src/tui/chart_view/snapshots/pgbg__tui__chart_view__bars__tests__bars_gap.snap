@@ -1,5 +1,5 @@
 ---
-source: src/tui/chart_view/bar.rs
+source: src/tui/chart_view/bars.rs
 expression: "render(&drawn, 40, 4).backend()"
 ---
 "nina         1.2k███████████████████████"

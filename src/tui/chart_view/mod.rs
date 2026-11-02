@@ -1,5 +1,5 @@
-//! The result pane as a chart: a `Series` drawn as bars or a line, one colour per y column, or why there is none.
-use crate::chart::{ChartError, ChartKind, Series};
+//! The result pane as a chart: a `Series` drawn as bars or lines, one colour per y column, or why there is none.
+use crate::chart::{self, ChartError, ChartKind, Series};
 use crate::render::printable;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 use vtui::theme::Theme;
 
-mod bar;
+mod bars;
 mod line;
 
 const UNITS: [(f64, &str); 4] = [(1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "k")];
@@ -38,7 +38,7 @@ fn draw_series(f: &mut Frame<'_>, series: &Series, theme: &Theme, area: Rect) {
     let [legend_area, plot] = Layout::vertical([Constraint::Length(legend_rows), Constraint::Fill(1)]).areas(area);
     f.render_widget(Paragraph::new(legend), legend_area);
     match series.kind {
-        ChartKind::Bar => bar::draw(f, series, theme, plot),
+        ChartKind::Grouped => bars::draw(f, &chart::grouped_bars(&series.y), series, theme, plot),
         ChartKind::Line => line::draw(f, series, theme, plot),
     }
 }
@@ -108,8 +108,19 @@ mod tests {
         insta::assert_snapshot!("legend", render(&series(&sales(), "bar"), 40, 8).backend());
     }
 
+    /// Orders and refunds over four days.
+    pub(super) fn daily_orders_and_refunds() -> ResultSet {
+        let row = |day: u32, orders: i64, refunds: i64| {
+            vec![Value::Date(chrono::NaiveDate::from_ymd_opt(2026, 1, day).unwrap()), Value::Int(orders), Value::Int(refunds)]
+        };
+        ResultSet::whole(
+            vec![column("day", ColumnKind::Date), column("orders", ColumnKind::Int), column("refunds", ColumnKind::Int)],
+            vec![row(1, 120, 30), row(2, 200, 10), row(3, 80, 60), row(4, 160, 20)],
+        )
+    }
+
     /// A customer and `columns` numeric columns, `series_0` first.
-    fn wide(columns: usize) -> ResultSet {
+    pub(super) fn wide(columns: usize) -> ResultSet {
         let names = (0..columns).map(|at| column(&format!("series_{at}"), ColumnKind::Int));
         let values = (0..columns).map(|at| Value::Int(at as i64 + 1));
         ResultSet::whole(

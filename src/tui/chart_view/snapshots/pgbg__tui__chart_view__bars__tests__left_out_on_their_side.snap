@@ -1,0 +1,9 @@
+---
+source: src/tui/chart_view/bars.rs
+expression: "render(&series(&daily_orders_and_refunds(), \"grouped horizontal\"), 20,\n5).backend()"
+---
+"■ orders            "
+"2026-… 120█████     "
+"       30           "
+"                    "
+"+3 more             "

@@ -83,7 +83,7 @@ mod tests {
 
     #[test]
     fn a_header_names_the_kind_x_and_y() {
-        let spec = ChartSpec { kind: ChartKind::Bar, x: Some(ColumnName::new("day")), y: vec![ColumnName::new("orders")] };
+        let spec = ChartSpec { kind: ChartKind::Grouped, x: Some(ColumnName::new("day")), y: vec![ColumnName::new("orders")] };
         assert_eq!(parse("bar x=day y=orders"), Ok(spec));
     }
 

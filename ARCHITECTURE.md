@@ -25,7 +25,7 @@ The code is the contract; this page describes it, and changes in the MR that cha
 | `query/` | Saved queries: `Roots`, the header, load and save; `versions.rs` the texts a save replaced; `params.rs` `{{name}}` to `$n`; `condition.rs` a `WHERE` added from the grid; all but the file system pure |
 | `complete/` | Completion, pure: the `Index` built from a `Catalog`, the `Ask` at the cursor, ranked candidates, joins on foreign keys |
 | `ai/` | Asking a command for SQL: the prompt and its masking, the schema slice, the answer read back, all pure; `command.rs` runs the command |
-| `format/`, `chart/`, `keys.rs`, `export.rs` | Pure: cell formats under a `Clock`, chart series, a result's keys and lookups, copies as CSV, JSON or Markdown |
+| `format/`, `chart/`, `keys.rs`, `export.rs` | Pure: cell formats under a `Clock`, chart series and, in one file per `ChartKind`, what each draws; a result's keys and lookups, copies as CSV, JSON or Markdown |
 | `history.rs` | Every statement run, per connection, in `<data folder>/history/<connection>.jsonl`; never a row nor a secret |
 | `syntax/` | SQL colours from tree-sitter, JSON colours by hand |
 | `act.rs` | Every action in one table: name, default keys, help line, pane; the help, the footer and the command palette all read it |
