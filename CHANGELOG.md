@@ -26,24 +26,8 @@ Each entry says what changed, then where, then how to use it.
   Nothing to set; a label holding a secret is left out, as a comment holding one is.
 - **The AI sees the tables you use first**, in the prompt `[ai] command` gets: among tables your words point to equally, those you run most on that connection come first, so they survive the 16 KiB cap.
   Nothing to set; your history only changes the order and is never sent.
-
-### Fixed
-
-- **Common words no longer pull tables into the AI prompt**: `for` does not bring a table `forms`, and a column such as `name` or `created_at` does not bring every table holding one.
-- **A rewrite waits for `ctrl-g`**, in the TUI with `[ai] ghost = true`: when the answer rewrites what you typed instead of continuing it, the footer reads `^g rewrite waiting`.
-  `ctrl-g` then shows it as a diff, with no new ask, and `tab` takes it; any other key drops it.
-
-### Fixed
-
-- **An apostrophe inside a word no longer loses the comment**, in the AI completion with literals masked: `-- what's the total` is now the instruction, and a quoted value after it is still masked.
-- **A comment left out of the AI completion says why**, on the status line until the next key, and not only in the log.
 - **pgbg reconnects by itself when the link is lost**, in the TUI: a read that fails on the link before any row shows goes once more on a new session, and the status line says `reconnecting…` until the result shows.
   A write, a read inside your own `BEGIN` and a result already on screen never go again, `esc` stops the reconnect, and the history keeps one entry per sending.
-
-### Fixed
-
-- **A tunnel that still runs but no longer forwards is started anew**, on every connection with a tunnel: a run after a lost link no longer fails over and over until the connection is closed.
-- **The history gives the real time of a run whose session did not open**, in `ctrl-r`: it said `0 ms` whatever the wait.
 - **The editor underlines where the server stopped**, in the TUI, when the server rejects a statement and says where: the failing token is underlined in the theme's `danger` colour, a `{{name}}` whole, and scrolled into view while the cursor stays where it was.
   It works out where the text sent falls in the editor, so comments, `{{name}}` parameters, other statements and multi-byte text never shift it.
   The underline goes when the text changes or the next run starts; an error without a position shows as before, with none.
@@ -57,16 +41,23 @@ Each entry says what changed, then where, then how to use it.
   `bar` stays valid and means `grouped horizontal`.
 - **A bar chart says what did not fit**, in the TUI's chart view: a pane too small says `+3 more` for the points it leaves out.
 - **A legend names each series in its colour**, on a chart of several `y=` columns: it goes on to more rows in a narrow pane, and the colours keep neighbours apart on every `[tui] theme`, starting over past the sixth.
-
-### Fixed
-
-- **`v` comes back to the chart of the `-- chart:` header**, in the TUI: it went to the chart pgbg picks by itself.
-- **A negative value draws its bar**, in the TUI's bar charts: it runs the other way from zero, where it drew none.
-- **A point with a gap on each side shows**, on a line chart: a value between two NULLs drew nothing.
 - **Frozen columns**: in the TUI's result grid, the primary key's columns a result starts with, or else its first column, stay on the left while the grid scrolls right, in the order the statement asked for.
   `z` switches that off and on, `Z` freezes the columns up to the cursor's; on a narrow terminal the frozen columns give way past half the width.
 - **Hidden columns**: in the TUI's result grid, `x` hides the column under the cursor and `X` shows them all again; the title counts those hidden.
   Copies, `/`, the row detail and charts still hold every column, and what you hid or froze stays when a statement returns the same columns.
+
+### Fixed
+
+- **Common words no longer pull tables into the AI prompt**: `for` does not bring a table `forms`, and a column such as `name` or `created_at` does not bring every table holding one.
+- **A rewrite waits for `ctrl-g`**, in the TUI with `[ai] ghost = true`: when the answer rewrites what you typed instead of continuing it, the footer reads `^g rewrite waiting`.
+  `ctrl-g` then shows it as a diff, with no new ask, and `tab` takes it; any other key drops it.
+- **An apostrophe inside a word no longer loses the comment**, in the AI completion with literals masked: `-- what's the total` is now the instruction, and a quoted value after it is still masked.
+- **A comment left out of the AI completion says why**, on the status line until the next key, and not only in the log.
+- **A tunnel that still runs but no longer forwards is started anew**, on every connection with a tunnel: a run after a lost link no longer fails over and over until the connection is closed.
+- **The history gives the real time of a run whose session did not open**, in `ctrl-r`: it said `0 ms` whatever the wait.
+- **`v` comes back to the chart of the `-- chart:` header**, in the TUI: it went to the chart pgbg picks by itself.
+- **A negative value draws its bar**, in the TUI's bar charts: it runs the other way from zero, where it drew none.
+- **A point with a gap on each side shows**, on a line chart: a value between two NULLs drew nothing.
 
 ## 0.2.0 - 2026-10-30
 
