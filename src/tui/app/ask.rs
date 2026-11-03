@@ -2,6 +2,7 @@
 //! and its answer, which `tab` puts in the editor; nothing of it ever runs by itself.
 //! From the result pane the ask is about the statement that gave the result, and adds its columns' names and types.
 //! A blank instruction after a server's error asks for a fix, under `[ai] errors = "code"`, with its code and position.
+use super::ask_schema::SchemaForAsk;
 use super::diff::{self, DiffLine};
 use super::editor::{Edited, Revision, edit_line};
 use super::idle_ghost::IdleAsk;
@@ -23,6 +24,9 @@ use vtui::field::Field;
 pub(in crate::tui) enum AskStep {
     /// The instruction, as typed so far.
     Instruction(Field),
+    /// The instruction sent while the schema is on its way, about the editor at `revision`; it goes by itself once the
+    /// schema arrives, and `esc` drops it.
+    WaitingForSchema { instruction: Field, revision: Revision },
     /// The command runs on `ask`, asked about the editor at `revision`; `esc` drops it.
     Waiting { ask: AskId, revision: Revision },
     /// The answer, until `tab` takes it or `esc` drops it.
@@ -77,7 +81,7 @@ impl AskStep {
     pub(in crate::tui) const fn pane(&self) -> Pane {
         match self {
             Self::Instruction(_) => Pane::Instruction,
-            Self::Waiting { .. } => Pane::Asking,
+            Self::WaitingForSchema { .. } | Self::Waiting { .. } => Pane::Asking,
             Self::Answered(_) => Pane::Answer,
         }
     }
@@ -85,7 +89,7 @@ impl AskStep {
 
 impl App {
     /// Shows the rewrite the idle ask answered when one waits, with no new ask; else opens the instruction line, or says
-    /// why asking is off; the schema is read meanwhile, for the prompt's slice.
+    /// why asking is off; the schema is read meanwhile, for the prompt's slice, and a read that failed gets another try.
     pub(super) fn open_ask(&mut self) -> Vec<Action> {
         if let Some(why) = self.why_asking_is_off() {
             self.asks.failure = Some(why);
@@ -96,7 +100,7 @@ impl App {
             return vec![];
         }
         self.overlay = Some(Overlay::Ask(AskStep::Instruction(Field::default())));
-        self.sheet_mut().want_schema_while_open()
+        self.sheet_mut().read_failed_schema_again()
     }
 
     /// Hands `key` to the open ask: `⏎` sends the instruction, `esc` drops the ask at any step, `tab` takes an answer;
@@ -123,9 +127,9 @@ impl App {
         }
     }
 
-    /// Asks with `instruction`, or for a fix when it is blank and one is on offer; says why the prompt is not sent; a blank
-    /// one with no fix on offer waits for words.
-    fn send_ask(&mut self, instruction: Field) -> Vec<Action> {
+    /// Asks with `instruction`, or for a fix when it is blank and one is on offer, once the schema is there to go with it;
+    /// says why the prompt is not sent; a blank one with no fix on offer waits for words.
+    pub(super) fn send_ask(&mut self, instruction: Field) -> Vec<Action> {
         if let Some(why) = self.why_asking_is_off() {
             self.asks.failure = Some(why);
             return vec![];
@@ -137,6 +141,18 @@ impl App {
             return vec![];
         };
         let settings = settings.without_passwords_of(&self.connections);
+        match self.sheet().schema_for_ask() {
+            SchemaForAsk::Ready => {}
+            SchemaForAsk::OnItsWay => {
+                let revision = self.sheet().editor.revision();
+                self.overlay = Some(Overlay::Ask(AskStep::WaitingForSchema { instruction, revision }));
+                return vec![];
+            }
+            SchemaForAsk::Missing(why) => {
+                self.asks.failure = Some(AskFailure::NoSchema(why));
+                return vec![];
+            }
+        }
         let is_on_result = self.focus == Focus::Result;
         if is_on_result || fault.is_some() {
             self.sheet_mut().go_to_sent();
@@ -320,7 +336,7 @@ pub(in crate::tui) mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    fn press(app: &mut App, code: KeyCode) -> Vec<Action> {
+    pub(in crate::tui) fn press(app: &mut App, code: KeyCode) -> Vec<Action> {
         app.handle_key(KeyEvent::from(code))
     }
 
@@ -328,7 +344,7 @@ pub(in crate::tui) mod tests {
         app.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL))
     }
 
-    fn type_in(app: &mut App, text: &str) {
+    pub(in crate::tui) fn type_in(app: &mut App, text: &str) {
         text.chars().for_each(|c| drop(press(app, KeyCode::Char(c))));
     }
 
@@ -370,7 +386,7 @@ pub(in crate::tui) mod tests {
         app
     }
 
-    fn step(app: &App) -> Option<&AskStep> {
+    pub(in crate::tui) fn step(app: &App) -> Option<&AskStep> {
         match app.overlay() {
             Some(Overlay::Ask(step)) => Some(step),
             _ => None,
@@ -523,6 +539,8 @@ pub(in crate::tui) mod tests {
     #[test]
     fn a_taken_write_asks_before_it_runs() {
         let mut app = app_on(&connection("production", "allowed")).with_ai(Some(ai_settings()));
+        app.apply(to_shop(Incoming::Opened));
+        app.apply(to_shop(Incoming::Schema(Ok(Arc::new(shop_catalog())))));
         ctrl_g(&mut app);
         type_in(&mut app, "drop the old ones");
         press(&mut app, KeyCode::Enter);
@@ -806,7 +824,7 @@ pub(in crate::tui) mod tests {
         assert!(app.offers_fix() && prompt_sent(&mut app, "").contains("SQLSTATE 42703"));
     }
 
-    fn open_in_the_editor(app: &mut App, text: &str) {
+    pub(in crate::tui) fn open_in_the_editor(app: &mut App, text: &str) {
         app.apply(Answer::Queries(QueryAnswer::Opened { connection: shop(), query: query("customers.sql"), text: text.into() }));
     }
 

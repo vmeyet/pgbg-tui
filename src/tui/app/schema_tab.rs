@@ -174,10 +174,11 @@ impl App {
         self.sidebar == SidebarTab::Schema && self.fit.panes.has_sidebar()
     }
 
-    /// `actions`, plus a read of the schema when its tab is drawn and the open session on screen has no schema yet.
-    /// So the schema is read as soon as it shows, on any sheet, while a failed session stays failed.
-    pub(super) fn and_the_schema_shown(&mut self, mut actions: Vec<Action>) -> Vec<Action> {
-        if self.is_schema_shown() {
+    /// `actions`, plus a read of the schema when its tab is drawn or an ask will need it, and the open session on screen
+    /// has no schema yet.
+    /// So the schema is read as soon as it is needed and the session opens, on any sheet, while a failed session stays failed.
+    pub(super) fn and_the_schema_needed(&mut self, mut actions: Vec<Action>) -> Vec<Action> {
+        if self.is_schema_shown() || self.is_ask_before_sending() {
             actions.extend(self.sheet_mut().want_schema_while_open());
         }
         actions

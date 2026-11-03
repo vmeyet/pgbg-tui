@@ -10,6 +10,8 @@ Each entry says what changed, then where, then how to use it.
 
 - **One-line fields move and delete as the editor does**, in the TUI's `ctrl-g` instruction, save-as path, row filter and schema filter.
   `⌥←` `⌥→` and `⌥b` `⌥f` move by word, `Home` `End` `^a` `^e` go to the ends, and `Delete` `^w` `^u` `^k` `⌥⌫` delete; `⌥b` and `⌥f` no longer type a letter, and other option characters still do.
+- **`ctrl-g` waits for the schema**, in the TUI: an instruction sent before the schema is read shows `reading schema…` and goes by itself once it arrives, and `esc` drops it.
+  The read starts as soon as the session opens, a failed read says why on the status line instead of asking without tables, and `schema = "off"` still asks at once.
 
 ## 0.3.0 - 2026-11-03
 

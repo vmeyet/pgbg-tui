@@ -33,7 +33,7 @@ impl App {
         }
         let asked = self.ask_under_an_ended_comment();
         self.ask_for_hidden_write();
-        self.and_the_schema_shown(dropped.into_iter().chain(actions).chain(asked).collect())
+        self.and_the_schema_needed(dropped.into_iter().chain(actions).chain(asked).collect())
     }
 
     fn take_key(&mut self, key: KeyEvent) -> Vec<Action> {

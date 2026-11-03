@@ -62,7 +62,7 @@ impl Sheet {
         actions
     }
 
-    /// Asks for the schema that completion needs, only while the session is open: typing never opens a session again.
+    /// Asks for the schema, only while the session is open: typing never opens a session again.
     pub(super) fn want_schema_while_open(&mut self) -> Vec<Action> {
         if self.session == SessionState::Open { self.want_schema() } else { vec![] }
     }

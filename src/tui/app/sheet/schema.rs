@@ -52,6 +52,12 @@ impl Sheet {
         vec![Action::ReadSchema { connection: self.name().clone(), session: self.session_id }]
     }
 
+    /// Asks again for a schema whose read failed while the session is open: what failed may have passed.
+    pub(in crate::tui::app) fn read_failed_schema_again(&mut self) -> Vec<Action> {
+        let has_failed = matches!(self.schema, SchemaState::Failed(_));
+        if has_failed && self.session == SessionState::Open { self.read_schema_again() } else { vec![] }
+    }
+
     /// Keeps `index` when the catalog it was built from is still the latest one read.
     pub(super) fn take_index(&mut self, catalog: &Arc<Catalog>, index: Arc<Index>) {
         let is_current = matches!(&self.schema, SchemaState::Read(read) if Arc::ptr_eq(read, catalog));
