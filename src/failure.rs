@@ -33,6 +33,15 @@ impl fmt::Display for Lost {
     }
 }
 
+/// What a session's lost link took with it, which a new session would not have.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LostWith {
+    Nothing,
+    /// What a statement may have changed on the session: a setting, a role, a lock.
+    SessionState,
+    UserTransaction,
+}
+
 /// Why a session did not open, or a run, a page or a schema read gave no result.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Failure {

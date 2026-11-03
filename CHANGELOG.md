@@ -28,6 +28,7 @@ Each entry says what changed, then where, then how to use it.
   Nothing to set; your history only changes the order and is never sent.
 - **pgbg reconnects by itself when the link is lost**, in the TUI: a read that fails on the link before any row shows goes once more on a new session, and the status line says `reconnecting…` until the result shows.
   A write, a read inside your own `BEGIN` and a result already on screen never go again, `esc` stops the reconnect, and the history keeps one entry per sending.
+  A read that calls a function outside a short safe list, or that follows a statement that may have changed the session, as a `SET`, says the link was lost and waits for your `⏎`.
 - **The editor underlines where the server stopped**, in the TUI, when the server rejects a statement and says where: the failing token is underlined in the theme's `danger` colour, a `{{name}}` whole, and scrolled into view while the cursor stays where it was.
   It works out where the text sent falls in the editor, so comments, `{{name}}` parameters, other statements and multi-byte text never shift it.
   The underline goes when the text changes or the next run starts; an error without a position shows as before, with none.

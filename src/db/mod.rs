@@ -1,7 +1,8 @@
 //! The only module that sees `tokio_postgres`: connect, run one statement, decode its rows, cancel it.
 use crate::connection::Tls;
-use crate::failure::Lost;
+use crate::failure::{Lost, LostWith};
 use anyhow::Result;
+use guard::Admitted;
 use limits::ReadLimits;
 use model::{CancelToken, ServerError};
 use run::UserTransaction;
@@ -11,6 +12,7 @@ use tokio_postgres::error::{ErrorPosition, SqlState};
 use tokio_postgres::{Client, Transaction};
 
 mod bind;
+mod calls;
 mod cancel;
 mod connect;
 mod decode;
@@ -60,6 +62,23 @@ struct Marks {
     /// that work instead of the link running it to its end.
     is_mid_statement: bool,
     user_transaction: UserTransaction,
+    /// A statement sent may have changed what later reads see: a setting, a role. It stays set even when that statement
+    /// failed, since a failure need not say how far it got.
+    may_have_changed_state: bool,
+}
+
+impl Marks {
+    fn note_sent(&mut self, admitted: &Admitted) {
+        self.may_have_changed_state |= admitted.may_change_session();
+    }
+
+    fn lost_with_link(&self) -> LostWith {
+        match (self.user_transaction, self.may_have_changed_state) {
+            (UserTransaction::Open | UserTransaction::Unsure, _) => LostWith::UserTransaction,
+            (UserTransaction::None, true) => LostWith::SessionState,
+            (UserTransaction::None, false) => LostWith::Nothing,
+        }
+    }
 }
 
 impl Session {
@@ -76,11 +95,12 @@ impl Session {
         lost.or_else(|| self.marks.has_failed_rollback.then_some(Lost::RollbackFailed))
     }
 
-    /// Whether only the link went: it ended with no transaction of the user's on it, so a read sent again on a new
-    /// session sees the same database.
-    pub(crate) fn lost_only_its_link(&self) -> bool {
+    /// What a new session would not have, once the link went; none while the link holds.
+    /// A new session starts from the login's defaults: its `search_path` and role match this one's only as long as no
+    /// statement here may have changed them.
+    pub(crate) fn lost_with_link(&self) -> Option<LostWith> {
         let is_link_gone = self.lost().is_some_and(|lost| lost != Lost::RollbackFailed);
-        is_link_gone && self.marks.user_transaction == UserTransaction::None
+        is_link_gone.then(|| self.marks.lost_with_link())
     }
 
     /// What cancels the statement this session is running, usable while `run` waits.
@@ -152,6 +172,57 @@ mod tests {
 
     fn position_of(err: &anyhow::Error) -> Option<usize> {
         err.downcast_ref::<ServerError>().and_then(|server| server.position)
+    }
+
+    fn marks_after(sql: &str, writes: WritePolicy) -> Marks {
+        let mut marks = Marks::default();
+        marks.note_sent(&guard::admit(Statement::new(sql), Params::default(), writes).unwrap());
+        marks
+    }
+
+    #[test]
+    fn a_read_calling_only_safe_functions_leaves_nothing_a_new_session_lacks() {
+        assert_eq!(marks_after("SELECT count(*) FROM orders", WritePolicy::Allowed).lost_with_link(), LostWith::Nothing);
+    }
+
+    #[test]
+    fn a_set_on_a_writable_connection_is_lost_with_the_link() {
+        assert_eq!(marks_after("SET search_path = archive", WritePolicy::Allowed).lost_with_link(), LostWith::SessionState);
+    }
+
+    #[test]
+    fn a_read_calling_set_config_is_lost_with_the_link() {
+        let marks = marks_after("SELECT set_config('role', 'reporting', false)", WritePolicy::Allowed);
+        assert_eq!(marks.lost_with_link(), LostWith::SessionState);
+    }
+
+    #[test]
+    fn a_read_rolled_back_whatever_it_calls_leaves_nothing_a_new_session_lacks() {
+        let marks = marks_after("SELECT set_config('search_path', 'archive', false)", WritePolicy::ReadOnly);
+        assert_eq!(marks.lost_with_link(), LostWith::Nothing);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_setting_changed_by_a_read_only_statement_is_gone_after_its_rollback() {
+        let admitted = |sql: &str| guard::admit(Statement::new(sql), Params::default(), WritePolicy::ReadOnly).unwrap();
+        let mut reader = session(WritePolicy::ReadOnly).await;
+        reader.run(&admitted("SELECT set_config('application_name', 'nina_shop', false)")).await.unwrap();
+        let name = reader.run(&admitted("SHOW application_name")).await.unwrap();
+        assert_ne!(name.rows(), [[model::Value::Text("nina_shop".into())]]);
+    }
+
+    #[test]
+    fn a_safe_read_after_a_set_leaves_the_mark() {
+        let mut marks = marks_after("SET ROLE reporting", WritePolicy::Allowed);
+        marks.note_sent(&guard::admit(Statement::new("SELECT 1"), Params::default(), WritePolicy::Allowed).unwrap());
+        assert_eq!(marks.lost_with_link(), LostWith::SessionState);
+    }
+
+    #[test]
+    fn a_transaction_of_the_user_comes_before_the_state_it_changed() {
+        let marks = Marks { user_transaction: UserTransaction::Open, ..marks_after("BEGIN", WritePolicy::Allowed) };
+        assert_eq!(marks.lost_with_link(), LostWith::UserTransaction);
     }
 
     async fn ended_on_the_server() -> Session {

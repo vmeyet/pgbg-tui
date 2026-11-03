@@ -9,7 +9,7 @@ use crate::tui::app::{Incoming, RunId};
 use crate::tunnel::Died;
 use open::Opener;
 use record::{Recorder, RunStart};
-use run::{Answered, run_until_answered};
+use run::{Answered, Resend, Sending, resend, run_until_answered};
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -39,13 +39,6 @@ pub(super) enum Next {
     Act(Woken),
     /// Stop, because pgbg quits.
     Stop,
-}
-
-/// How one sending of a run ended.
-enum Sent {
-    Over(Next),
-    /// A read failed on its link with no row shown: its answer, not yet given, in case it does not go again.
-    LinkFailed(Incoming),
 }
 
 /// The task that owns the session and its tunnel: it opens them, runs each statement in turn, and reports when they are
@@ -136,51 +129,40 @@ impl SessionTask {
     }
 
     /// Runs `queued` on the open session, or on one opened for it; returns what the task does next.
-    /// A read that loses its link before any row shows goes once more on a new session, each sending its own history entry.
+    /// A read that `resend` lets go again goes once more on a new session, each sending its own history entry.
     async fn run(&mut self, queued: Queued) -> Next {
-        let start = RunStart::now(&queued);
-        let mut session = match self.session_for(queued.run).await {
-            Ok(session) => session,
-            Err(failure) => return self.fail_unopened(start, queued.run, failure),
-        };
-        if self.mailbox.cancelled.was_cancelled(queued.run) {
-            return self.refuse_cancelled(session, queued.run);
+        let mut sending = Sending::First;
+        loop {
+            if let Some(next) = self.send_on_a_session(&queued, sending).await {
+                return next;
+            }
+            tracing::warn!("a read lost its link before any row showed: it goes once more on a new session");
+            sending = Sending::Last;
         }
-        let incoming = match self.answer_and_page(&mut session, &queued, start).await {
-            Sent::Over(next) => return self.keep_unless_lost(session, next),
-            Sent::LinkFailed(incoming) => incoming,
-        };
-        if !session.lost_only_its_link() || self.mailbox.cancelled.was_cancelled(queued.run) {
-            self.send(incoming);
-            return self.keep_unless_lost(session, Next::Wait);
-        }
-        tracing::warn!("a read lost its link before any row showed: it goes once more on a new session");
-        self.keep_unless_lost(session, Next::Wait);
-        self.run_again(&queued).await
     }
 
-    /// Sends `queued` a last time on a new session. A session that does not open sends nothing, so its failure adds no
-    /// history entry to the one the first sending left.
-    async fn run_again(&mut self, queued: &Queued) -> Next {
-        let start = RunStart::now(queued);
-        let mut session = match self.session_for(queued.run).await {
+    /// One sending of `queued`; none when it goes again. A session that does not open sends nothing, so on the last
+    /// sending its failure adds no history entry to the one the first sending left.
+    async fn send_on_a_session(&mut self, queued: &Queued, sending: Sending) -> Option<Next> {
+        let (run, start) = (queued.run, RunStart::now(queued));
+        let mut session = match self.session_for(run).await {
             Ok(session) => session,
             Err(failure) => {
-                self.send(Incoming::Failed { run: queued.run, failure });
-                return Next::Wait;
+                if sending == Sending::First {
+                    self.recorder.record(start, Outcome::from(&failure));
+                }
+                self.send(Incoming::Failed { run, failure });
+                return Some(Next::Wait);
             }
         };
-        if self.mailbox.cancelled.was_cancelled(queued.run) {
-            return self.refuse_cancelled(session, queued.run);
+        if self.mailbox.cancelled.was_cancelled(run) {
+            return Some(self.refuse_cancelled(session, run));
         }
-        let next = match self.answer_and_page(&mut session, queued, start).await {
-            Sent::Over(next) => next,
-            Sent::LinkFailed(incoming) => {
-                self.send(incoming);
-                Next::Wait
-            }
+        let Some(next) = self.answer_and_page(&mut session, queued, start, sending).await else {
+            self.keep_unless_lost(session, Next::Wait);
+            return None;
         };
-        self.keep_unless_lost(session, next)
+        Some(self.keep_unless_lost(session, next))
     }
 
     /// The session `run` goes on: the open one, or one opened for it unless `esc` stops that first.
@@ -213,13 +195,6 @@ impl SessionTask {
         self.keep_unless_lost(session, Next::Wait)
     }
 
-    /// Records and answers `run` as failed, since its session did not open.
-    fn fail_unopened(&self, start: RunStart, run: RunId, failure: Failure) -> Next {
-        self.recorder.record(start, Outcome::from(&failure));
-        self.send(Incoming::Failed { run, failure });
-        Next::Wait
-    }
-
     /// Keeps `session` and answers `run` as cancelled, since its cancel came before it was sent.
     fn refuse_cancelled(&mut self, session: Session, run: RunId) -> Next {
         self.opener.keep(session);
@@ -228,20 +203,28 @@ impl SessionTask {
     }
 
     /// Sends `queued` on `session` and records it, then answers it and serves the pages of its result while its portal is
-    /// open; a read that failed on its link is left unanswered for the caller to decide.
-    async fn answer_and_page(&mut self, session: &mut Session, queued: &Queued, start: RunStart) -> Sent {
+    /// open; returns what the task does next, or none when `resend` lets it go again, a cancel making this its last sending.
+    async fn answer_and_page(&mut self, session: &mut Session, queued: &Queued, start: RunStart, sending: Sending) -> Option<Next> {
         let (run, token) = (queued.run, session.cancel_token());
         let writes = self.opener.connection().writes();
-        let Answered { incoming, outcome, rest, may_go_again } =
+        let Answered { incoming, outcome, rest, repeat } =
             run_until_answered(session, writes, queued, &mut self.mailbox.cancelled, &self.mailbox.on_server).await;
         self.recorder.record(start, outcome);
-        if may_go_again {
-            return Sent::LinkFailed(incoming);
+        let Incoming::Failed { failure, .. } = incoming else {
+            self.send(incoming);
+            let Some(pages) = rest else { return Some(Next::Wait) };
+            let (tunnel, mailbox, idle_limit) = (self.opener.tunnel(), &mut self.mailbox, self.idle_limit);
+            return Some(serve_pages(Paging { pages, run, token, mailbox, tunnel, idle_limit }).await);
+        };
+        drop(rest);
+        let sending = if self.mailbox.cancelled.was_cancelled(run) { Sending::Last } else { sending };
+        match resend(failure, repeat, session.lost_with_link(), sending) {
+            Resend::Goes => None,
+            Resend::Stays(failure) => {
+                self.send(Incoming::Failed { run, failure });
+                Some(Next::Wait)
+            }
         }
-        self.send(incoming);
-        let Some(pages) = rest else { return Sent::Over(Next::Wait) };
-        let (tunnel, mailbox, idle_limit) = (self.opener.tunnel(), &mut self.mailbox, self.idle_limit);
-        Sent::Over(serve_pages(Paging { pages, run, token, mailbox, tunnel, idle_limit }).await)
     }
 
     /// Keeps `session` for the next run, or closes it when it can run no more statements.
@@ -477,6 +460,12 @@ mod tests {
         matches!(answer, Some(Incoming::Failed { failure: Failure::Link(_), .. }))
     }
 
+    /// Whether the answers `seen` end on a failure saying `why`, and no reconnect came before it.
+    fn stayed_saying(seen: &[Incoming], why: &str) -> bool {
+        let says_why = matches!(seen.last(), Some(Incoming::Failed { failure, .. }) if failure.to_string().ends_with(why));
+        says_why && !seen.contains(&Incoming::Reconnecting)
+    }
+
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn a_read_that_loses_its_tunnel_goes_once_more_in_its_read_only_transaction() {
@@ -553,6 +542,56 @@ mod tests {
         answer_to(&backend, &mut answers, RunId::FIRST, "BEGIN").await;
         let seen = answers_with_tunnel_killed(&backend, &mut answers, marker, RunId::FIRST.next(), SLOW_READ, None).await;
         assert!(!seen.contains(&Incoming::Reconnecting) && is_link_failure(seen.last()), "{seen:?}");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_set_then_a_lost_read_does_not_go_again_and_says_so() {
+        let _ports = fixtures::TUNNEL_PORTS.lock().await;
+        let marker = "pgbg-test-set-then-read";
+        let (backend, mut answers) = opened_on(fixtures::tunnelled_after(marker, "true", WritePolicy::Allowed)).await;
+        answer_to(&backend, &mut answers, RunId::FIRST, "SET search_path = public").await;
+        let seen = answers_with_tunnel_killed(&backend, &mut answers, marker, RunId::FIRST.next(), SLOW_READ, None).await;
+        assert!(stayed_saying(&seen, run::STATE_LOST), "{seen:?}");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_read_calling_set_config_then_a_lost_read_does_not_go_again() {
+        let _ports = fixtures::TUNNEL_PORTS.lock().await;
+        let marker = "pgbg-test-set-config-then-read";
+        let (backend, mut answers) = opened_on(fixtures::tunnelled_after(marker, "true", WritePolicy::Allowed)).await;
+        let set_config = Statement::new("SELECT set_config('search_path', 'public', false)");
+        backend.run(&shop(), RunId::FIRST, set_config, ParamInput::default(), None);
+        answers_until(&mut answers, |answer| is_answer_to(RunId::FIRST, answer)).await;
+        let seen = answers_with_tunnel_killed(&backend, &mut answers, marker, RunId::FIRST.next(), SLOW_READ, None).await;
+        assert!(stayed_saying(&seen, run::STATE_LOST), "{seen:?}");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_select_of_a_plain_name_that_loses_its_link_goes_once_more() {
+        let _ports = fixtures::TUNNEL_PORTS.lock().await;
+        on_a_side_session_writing("CREATE OR REPLACE VIEW pgbg_slow_orders AS SELECT 1 AS n FROM pg_sleep(2)").await;
+        let marker = "pgbg-test-plain-name-again";
+        let (backend, mut answers) = opened_on(fixtures::tunnelled(marker)).await;
+        let read = "SELECT n FROM pgbg_slow_orders";
+        let seen = answers_with_tunnel_killed(&backend, &mut answers, marker, RunId::FIRST, read, None).await;
+        assert!(seen.contains(&Incoming::Reconnecting), "{seen:?}");
+        let Some(Incoming::Result { result, .. }) = seen.last() else { panic!("{seen:?}") };
+        assert_eq!(result.rows(), [[Value::Int(1)]]);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn a_select_calling_an_unknown_function_does_not_go_again_and_says_a_key_runs_it() {
+        let _ports = fixtures::TUNNEL_PORTS.lock().await;
+        on_a_side_session_writing("CREATE OR REPLACE FUNCTION pgbg_slow_unknown() RETURNS void LANGUAGE sql AS $$ SELECT pg_sleep(2) $$")
+            .await;
+        let marker = "pgbg-test-unknown-function";
+        let (backend, mut answers) = opened_on(fixtures::tunnelled(marker)).await;
+        let seen = answers_with_tunnel_killed(&backend, &mut answers, marker, RunId::FIRST, "SELECT pgbg_slow_unknown()", None).await;
+        assert!(stayed_saying(&seen, run::MAY_HAVE_OUTSIDE_EFFECT), "{seen:?}");
     }
 
     #[tokio::test]
