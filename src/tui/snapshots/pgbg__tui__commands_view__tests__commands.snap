@@ -19,7 +19,7 @@ expression: render(&app).backend()
 "││                  │  › copy the selection, else the statement  ⌘c            │                  ││"
 "││                  │  › paste the clipboard  ⌘v                               │                  ││"
 "││                  │  › cancel the running statement  esc                     │                  ││"
-"││                  │   ↑↓ pick · ⏎ runs · esc closes                          │                  ││"
+"││                  │   ↑↓ pick · ⇥ completes · ⏎ runs · esc closes            │                  ││"
 "││                  ╰──────────────────────────────────────────────────────────╯                  ││"
 "││                            ││                                                                  ││"
 "││                            ││                                                                  ││"

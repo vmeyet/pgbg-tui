@@ -1,17 +1,31 @@
-//! `ctrl-l`, or `:` where it types nothing: the command palette, every act and every theme narrowed as fzf does.
+//! `ctrl-l`, or `:` where it types nothing: the command palette, every act and every theme narrowed as fzf does, and
+//! a command typed on the same line, its row on top of the list once it parses, with tab completion and a history.
 //! An act runs as its key does, so a write still asks; a theme shows while highlighted, and `⏎` keeps it.
 use super::search::{self, Search, Searched, Searching};
-use super::{Action, App, Overlay};
+use super::typed::{self, Known, Slot, VERBS};
+use super::{Action, App, Opening, Overlay};
 use crate::act::{self, Act, Listing, Pane};
+use crate::connection::Connection;
+use crate::query::Query;
 use crate::tui::theme::Theme;
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyCode, KeyEvent};
+use vtui::palette::{CommandLine, remembered};
 use vtui::theme::Theme as Palette;
+use vtui::toward::Toward;
 
 /// One row of the palette.
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::tui) enum Command {
     Act(Listing),
     Theme(Palette),
+    /// Only a typed line says these two.
+    Go(Connection),
+    Open(Query),
+    /// The line as typed, once it parses, and the command it says.
+    Typed {
+        line: String,
+        command: Box<Command>,
+    },
 }
 
 impl Command {
@@ -19,7 +33,7 @@ impl Command {
     fn runs(&self) -> bool {
         match self {
             Self::Act(listing) => listing.runs,
-            Self::Theme(_) => true,
+            Self::Theme(_) | Self::Go(_) | Self::Open(_) | Self::Typed { .. } => true,
         }
     }
 
@@ -27,7 +41,17 @@ impl Command {
     fn act_to_run(&self) -> Option<Act> {
         match self {
             Self::Act(Listing { act, runs: true, .. }) => Some(*act),
-            Self::Act(_) | Self::Theme(_) => None,
+            Self::Typed { command, .. } => command.act_to_run(),
+            Self::Act(_) | Self::Theme(_) | Self::Go(_) | Self::Open(_) => None,
+        }
+    }
+
+    /// The palette to show while highlighted.
+    fn palette_shown(&self) -> Option<Palette> {
+        match self {
+            Self::Theme(palette) => Some(*palette),
+            Self::Typed { command, .. } => command.palette_shown(),
+            Self::Act(_) | Self::Go(_) | Self::Open(_) => None,
         }
     }
 }
@@ -37,6 +61,9 @@ impl Searched for Command {
         match self {
             Self::Act(listing) => format!("{} {}", listing.does, listing.act.name()),
             Self::Theme(palette) => format!("theme {}", palette.name),
+            Self::Go(connection) => connection.name().to_string(),
+            Self::Open(query) => query.path.to_string(),
+            Self::Typed { line, .. } => line.clone(),
         }
     }
 }
@@ -45,7 +72,7 @@ impl Searched for Command {
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::tui) struct Commands {
     all: Vec<Command>,
-    pub(in crate::tui) search: Search<Command>,
+    pub(in crate::tui) search: Search<Command, CommandLine>,
     kept: Theme,
 }
 
@@ -57,7 +84,8 @@ fn commands_from(pane: Pane) -> Vec<Command> {
 impl App {
     pub(super) fn open_commands(&mut self) {
         let all = commands_from(self.pane());
-        let search = Search::new(&all);
+        let line = vtui::palette::Palette::new(CommandLine, self.typed_lines.clone());
+        let search = Search::with_palette(line, &all);
         self.keep_commands(Commands { all, search, kept: self.theme });
     }
 
@@ -65,7 +93,14 @@ impl App {
     pub(super) fn commands_key(&mut self, commands: Commands, key: KeyEvent) -> Vec<Action> {
         let Commands { all, search, kept } = commands;
         match search::after(search, key, Pane::Commands, &all) {
-            Searching::Typed(search) | Searching::Unhandled(search, _) => self.keep_commands(Commands { all, search, kept }),
+            Searching::Typed(search) => {
+                self.note = self.why_nothing_ran(&search, key);
+                self.keep_commands(Commands { all, search, kept });
+            }
+            Searching::Unhandled(search, act) => {
+                let search = self.completed(search, act, key, &all);
+                self.keep_commands(Commands { all, search, kept });
+            }
             Searching::Closed => self.theme = kept,
             Searching::Picked(command) => return self.run_command(command),
             Searching::Quit => return self.quit(),
@@ -79,25 +114,80 @@ impl App {
         self.keep_commands(*commands);
     }
 
-    /// Keeps the palette open, what runs on top of what it lists, the highlighted theme on screen.
+    /// Keeps the palette open, the typed command on top, then what runs on top of what it lists, the highlighted theme
+    /// on screen.
     fn keep_commands(&mut self, mut commands: Commands) {
+        let listed = commands.search.shown.into_iter().filter(|command| !matches!(command, Command::Typed { .. }));
+        commands.search.shown = self.typed_row(&commands.search.palette.input).into_iter().chain(listed).collect();
         commands.search.shown.sort_by_key(|command| !command.runs());
-        self.theme = match commands.search.selected() {
-            Some(Command::Theme(palette)) => Theme::from(*palette).with_ground(self.ground),
-            _ => commands.kept,
-        };
+        let shown = commands.search.selected().and_then(Command::palette_shown);
+        self.theme = shown.map_or(commands.kept, |palette| Theme::from(palette).with_ground(self.ground));
         self.overlay = Some(Overlay::Commands(Box::new(commands)));
     }
 
+    /// The row of the command `line` says, when it says one.
+    fn typed_row(&self, line: &str) -> Option<Command> {
+        let command = Box::new(typed::parse(line, self.known()).ok()?);
+        Some(Command::Typed { line: line.trim().to_owned(), command })
+    }
+
+    fn known(&self) -> Known<'_> {
+        Known { pane: self.pane(), connections: &self.connections, queries: &self.queries.all }
+    }
+
+    /// Why `⏎` left the palette open: nothing is listed, so the line is all it could have run.
+    fn why_nothing_ran(&self, search: &Search<Command, CommandLine>, key: KeyEvent) -> Option<String> {
+        if search.selected().is_some() || act::act_for(key, Pane::Commands) != Some(Act::Open) {
+            return None;
+        }
+        typed::parse(&search.palette.input, self.known()).err()
+    }
+
+    /// The search after `⇥`, `⇧⇥` or `→` on the typed line.
+    fn completed(
+        &self,
+        mut search: Search<Command, CommandLine>,
+        act: Act,
+        key: KeyEvent,
+        all: &[Command],
+    ) -> Search<Command, CommandLine> {
+        let candidates = self.completions_for(&search.palette.input);
+        match act {
+            Act::Complete => search.palette.complete(&candidates, Toward::next_if(key.code != KeyCode::BackTab)),
+            Act::TakeGhost => search.palette.accept(&candidates),
+            _ => return search,
+        }
+        search.rank(all);
+        search
+    }
+
+    /// What the token at the end of `line` completes to, for tab and the ghost.
+    pub(in crate::tui) fn completions_for(&self, line: &str) -> Vec<String> {
+        match typed::slot(line) {
+            Slot::Verb => VERBS.map(str::to_owned).to_vec(),
+            Slot::Connection => self.connections.iter().map(|connection| connection.name().to_string()).collect(),
+            Slot::Query => self.queries.all.iter().map(|query| query.path.as_str().to_owned()).collect(),
+            Slot::Setting => vec!["theme=".to_owned()],
+            Slot::Theme => Palette::NAMES.iter().map(|name| format!("theme={name}")).collect(),
+            Slot::Free => vec![],
+        }
+    }
+
     fn run_command(&mut self, command: Command) -> Vec<Action> {
-        if let Some(act) = command.act_to_run() {
-            return self.act(act);
-        }
         match command {
-            Command::Act(listing) => self.note = Some(format!("only in {}: {}", listing.pane.title(), listing.keys)),
-            Command::Theme(theme) => return vec![Action::SaveTheme { id: self.new_config_change(), theme }],
+            Command::Act(Listing { act, runs: true, .. }) => self.act(act),
+            Command::Act(listing) => {
+                self.note = Some(format!("only in {}: {}", listing.pane.title(), listing.keys));
+                vec![]
+            }
+            Command::Theme(theme) => vec![Action::SaveTheme { id: self.new_config_change(), theme }],
+            Command::Go(connection) => self.show(connection),
+            Command::Open(query) => self.ask_open(Opening::Saved(query)),
+            Command::Typed { line, command } => {
+                self.typed_lines = remembered(std::mem::take(&mut self.typed_lines), &line);
+                self.run_command(*command)
+            }
         }
-        vec![]
     }
 
     /// The act `⏎` would run in the open palette.
@@ -310,6 +400,116 @@ mod tests {
         assert_eq!(opened_on(with_result(), "as a grid or a chart").act_of(enter_key), Some(Act::Open), "it runs nothing");
         assert_eq!(opened_on(app(), "theme nord").act_of(enter_key), Some(Act::Open));
         assert_eq!(app().act_of(control('l')), Some(Act::Commands));
+    }
+
+    fn line(app: &App) -> &str {
+        let Some(Overlay::Commands(commands)) = &app.overlay else { panic!("no palette") };
+        &commands.search.palette.input
+    }
+
+    /// Runs `text` as a typed command, leaving the palette closed.
+    fn run_typed(app: App, text: &str) -> (App, Vec<Action>) {
+        let mut app = opened_on(app, text);
+        let actions = enter(&mut app);
+        (app, actions)
+    }
+
+    #[test]
+    fn a_typed_theme_shows_as_it_parses_and_esc_brings_the_old_one_back() {
+        let mut app = opened_on(app(), "set theme=nord");
+        assert_eq!(app.theme().name, "nord");
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert_eq!(*app.theme(), Theme::default());
+    }
+
+    #[test]
+    fn set_theme_typed_saves_it_as_the_row_does() {
+        let (app, actions) = run_typed(app(), "set theme=nord");
+        assert_eq!(actions, [Action::SaveTheme { id: ConfigChangeId::FIRST, theme: nord() }]);
+        assert_eq!(app.theme().name, "nord");
+    }
+
+    #[test]
+    fn moving_down_runs_the_row_under_the_highlight_and_not_the_typed_command() {
+        let mut app = opened_on(on_the_result(orders()), "copy");
+        press(&mut app, KeyCode::Down);
+        let Some(Overlay::Commands(commands)) = &app.overlay else { panic!("no palette") };
+        assert!(matches!(commands.search.selected(), Some(Command::Act(_))));
+    }
+
+    #[test]
+    fn a_typed_act_of_another_pane_says_where_it_works() {
+        let (app, actions) = run_typed(on_the_result(orders()), "run");
+        assert_eq!(actions, []);
+        assert_eq!(app.note().map(|note| note.starts_with("only in editor")), Some(true));
+    }
+
+    #[test]
+    fn a_typed_act_is_the_one_counted() {
+        assert_eq!(opened_on(app(), "copy").act_of(KeyEvent::from(KeyCode::Enter)), Some(Act::CopyStatement));
+    }
+
+    #[test]
+    fn go_shows_the_connection_it_names() {
+        let (app, _) = run_typed(app_on(&connection("local", "read-only")), "go shop");
+        assert_eq!(app.sheet().name(), &shop());
+    }
+
+    #[test]
+    fn a_line_that_neither_parses_nor_matches_says_why_and_stays_open() {
+        let mut app = opened_on(app(), "go zzzz");
+        assert_eq!(enter(&mut app), []);
+        assert_eq!((app.note(), line(&app)), (Some("no connection `zzzz`"), "go zzzz"));
+    }
+
+    #[test]
+    fn tab_goes_from_the_setting_on_to_its_value() {
+        let mut app = opened_on(app(), "set ");
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(line(&app), "set theme=");
+        press(&mut app, KeyCode::Tab);
+        assert!(line(&app).starts_with("set theme="), "{}", line(&app));
+        assert_ne!(line(&app), "set theme=");
+    }
+
+    #[test]
+    fn right_takes_the_ghost_and_the_list_follows_the_line() {
+        let mut app = opened_on(app(), "set theme=no");
+        press(&mut app, KeyCode::Right);
+        assert_eq!(line(&app), "set theme=nord ");
+        assert_eq!(app.theme().name, "nord");
+    }
+
+    #[test]
+    fn up_on_an_empty_line_recalls_the_last_command_that_ran() {
+        let (mut app, _) = run_typed(app(), "set theme=nord");
+        app.handle_key(control('l'));
+        press(&mut app, KeyCode::Up);
+        assert_eq!(line(&app), "set theme=nord");
+    }
+
+    #[test]
+    fn a_filter_that_ran_a_row_is_not_recalled() {
+        let (mut app, _) = run_typed(app(), "theme nord");
+        app.handle_key(control('l'));
+        press(&mut app, KeyCode::Up);
+        assert_eq!(line(&app), "");
+    }
+
+    #[test]
+    fn a_typed_act_that_runs_is_recalled_too() {
+        let (mut app, _) = run_typed(app(), "copy");
+        app.handle_key(control('l'));
+        press(&mut app, KeyCode::Up);
+        assert_eq!(line(&app), "copy");
+    }
+
+    #[test]
+    fn a_recalled_command_runs_again() {
+        let (mut app, _) = run_typed(app(), "set theme=nord");
+        app.handle_key(control('l'));
+        press(&mut app, KeyCode::Up);
+        assert!(matches!(enter(&mut app).as_slice(), [Action::SaveTheme { .. }]));
     }
 
     #[test]

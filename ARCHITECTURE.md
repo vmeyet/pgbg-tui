@@ -32,11 +32,12 @@ The code is the contract; this page describes it, and changes in the MR that cha
 | `history/` | Every statement run, per connection, in `<data folder>/history/<connection>.jsonl`; never a row nor a secret; `index.rs` the successful reads the ghost offers from, pure |
 | `syntax/` | SQL colours from tree-sitter, JSON colours by hand |
 | `act.rs` | Every action in one table: name, default keys, help line, pane; the help, the footer and the command palette all read it |
+| `tui/app/typed.rs` | Pure: a typed command read against what the app holds, its words and what its last token completes to |
 | `tui/mod.rs` | The event loop: keys, pastes, clicks, answers and timers in, frames out |
 | `tui/app/` | `App`, the pure state machine: keys in, `Action`s out, `Answer`s applied; `protocol.rs` what the app and the backend say; one `Overlay` at most takes the keys |
 | `tui/backend/` | `Backend::dispatch` hands each `Action` to its part without waiting: one session task per connection, queries, config, history, AI, clipboard |
 | `tui/ui.rs`, `tui/*_view.rs`, `tui/grid_view/`, `tui/chart_view/`, `tui/theme.rs` | Drawing: one view per pane or overlay, in the vtui palette `[tui] theme` names, with the tier colours mixed from it |
-| `vtui` (git dependency) | Shared with the sibling TUIs: terminal, palette and its `Search`, the `↑` `↓` rule, fields, completion index, help, fuzzy matching, usage |
+| `vtui` (git dependency) | Shared with the sibling TUIs: terminal, palette and its `Search`, the `↑` `↓` rule, the reading of a typed line, fields, completion index, help, fuzzy matching, usage |
 | `failure.rs` | Why a session did not open, was lost, or gave no result; the history's `Outcome` derives from it |
 | `files.rs` | `make_private_dir`, folders for their owner alone (`0700`), and `write_whole`, a whole file through a synced temp file and a rename; every file pgbg writes whole goes through it |
 | `lock.rs` | A file opened to append under an exclusive `flock`, so two pgbg never lose each other's writes |
@@ -87,6 +88,7 @@ These invariants hold across every flow; a change that breaks one is a bug.
 - A sheet's `HistoryIndex` is read once off the loop as the sheet opens, and each result adds its statement; what `db::guard` reads as no read, or what holds a secret, stays out, and the index never goes into a prompt.
 - `tui/app/` stays pure: the loop hands it the clock as a `Clock` and the timers as events.
 - The command palette runs an act through the path its key takes, and only an act whose row works in the pane it opened on, so a write still asks; a theme shows while highlighted, and only `⏎` sends the `Action` that writes `[tui] theme`.
+- A typed command is read on each key against the connections and queries the app holds; only a line that reads as a command gets a row, and `⏎` runs the highlighted row, so the row a key moved to always wins; the lines that ran are kept for `↑` in memory, never written, and no statement is one.
 - The grid's cursor and every act on it name a column by its index in the result, never a hidden one; only `tui/app/shown_columns.rs` knows where a column is drawn.
 
 ## Boundaries
@@ -186,7 +188,8 @@ One word per concept, in code, docs and UI.
 | version | A text of a saved query that a save replaced, kept apart from the queries |
 | schema | The schemas, tables, columns and indexes a session's role can read |
 | catalog | The schema as one read gave it, with its search path and whether the table cap cut it |
-| command palette | The `ctrl-l` popup over every act and theme |
+| command palette | The `ctrl-l` popup over every act and theme, and its line for a typed command |
+| typed command | A line in the command palette that reads as `:word [argument]`, in `tui/app/typed.rs` |
 | completion | A name the editor offers at the cursor |
 | parameter | A `{{name}}` in a statement, bound when it runs |
 | format | How a column's cells read: raw, or a readable form of its kind |

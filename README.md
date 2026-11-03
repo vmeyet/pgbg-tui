@@ -228,7 +228,7 @@ In the TUI, a bar above the editor shows one field per parameter.
 | `^o` | Pick another connection; sessions stay open. |
 | `^p` `⌘k` | Find a saved query; `^k` too outside the editor and the fields, where it deletes to the line's end. |
 | `^t` | Find a table of the schema. |
-| `^l` `:` | The command palette: every command and theme, filtered as you type; `:` where it types nothing, so not in the editor nor in a field. |
+| `^l` `:` | The command palette: every command and theme, filtered as you type, or a command typed as `:set theme=nord`; `:` where it types nothing, so not in the editor nor in a field. |
 | `⏎` `d` | In the schema tab: a table's first rows, written in the editor to refine, a click doing the same; its columns and indexes. |
 | `^r` | Search the history of this connection. |
 | `^s` | Save the query. |
@@ -254,6 +254,21 @@ The `⌥` keys beside them fire only where the terminal sends option as meta; le
 It lists every command with its keys, those that run from the pane you are on first; the others name the pane they work in, and `⏎` on one only says so.
 A command run from it does what its key does: a write still asks first.
 
+Typing filters the list, and a line that reads as a command also shows on top of it, so `⏎` runs it; `↓` picks a row below instead.
+The words are those of revu and slack:
+
+| Command | Does |
+|---|---|
+| `:go <connection>` | Show a connection. |
+| `:open <query>` | Open a saved query. |
+| `:set theme=<name>` | Change the theme and write `[tui] theme`. |
+| `:run`, `:save` | Run the statement, save the query. |
+| `:copy` | Copy the cell on the result, the statement elsewhere. |
+| `:help`, `:quit` | Show the keys, leave. |
+
+`⇥` completes the word under the cursor and `→` takes the faded rest.
+`↑` on an empty line, with the top row highlighted, brings back the last command you ran; `↑` `↓` walk them until you type.
+
 ### Theme
 
 `[tui] theme` in `config.toml` picks the palette of every pane, as in the other TUIs built on vtui:
@@ -264,6 +279,7 @@ theme = "dracula"   # default, dracula, catppuccin, catppuccin-latte, rosepine, 
 ```
 
 Or type `theme` in the command palette: moving over a name shows it on the whole TUI, `esc` brings the old one back, and `⏎` keeps it and writes `[tui] theme`, leaving the rest of the file as it is.
+`:set theme=nord` does the same, and shows the theme as soon as the line names one.
 A write that fails says so on the status line, and the theme stays until you quit.
 
 Case, spaces and dashes do not matter: `Tokyo Night` is `tokyonight`.
