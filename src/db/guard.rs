@@ -49,6 +49,33 @@ const TARGETED: [&str; 12] =
 const UNASKED: [&str; 11] = ["BEGIN", "START", "COMMIT", "END", "ROLLBACK", "ABORT", "SAVEPOINT", "RELEASE", "FETCH", "CLOSE", "MOVE"];
 /// The words between such a write and its table: `DELETE FROM ONLY`, `TRUNCATE TABLE`, `SELECT INTO TEMP`.
 const BEFORE_TARGET: &str = "FROM INTO ONLY TABLE TEMP TEMPORARY UNLOGGED";
+/// The other words a statement may open on, beyond the reads and the lists above.
+const OTHER_OPENINGS: [&str; 24] = [
+    "SET",
+    "RESET",
+    "GRANT",
+    "REVOKE",
+    "CALL",
+    "DO",
+    "LOCK",
+    "COMMENT",
+    "REINDEX",
+    "CLUSTER",
+    "REFRESH",
+    "PREPARE",
+    "EXECUTE",
+    "DEALLOCATE",
+    "DISCARD",
+    "LISTEN",
+    "UNLISTEN",
+    "NOTIFY",
+    "DECLARE",
+    "LOAD",
+    "CHECKPOINT",
+    "IMPORT",
+    "REASSIGN",
+    "SECURITY",
+];
 /// The writes that change the schema: a confirmation names them with the kind of object they change and that object.
 const SCHEMA_CHANGES: [&str; 3] = ["CREATE", "DROP", "ALTER"];
 /// The options a change of the schema may take before its kind, left out of its name: `CREATE OR REPLACE`, `CREATE TEMP`.
@@ -194,6 +221,13 @@ pub(crate) fn is_read_query(sql: &str) -> bool {
     let upper = upper_case_words(sql, &tokens);
     let words: Vec<&str> = upper.iter().map(String::as_str).collect();
     opens_a_query(&words) && not_read(&tokens, &words).is_none()
+}
+
+/// Whether `sql` reads as SQL from its first token: a word a statement opens on, or a sign such as `(`; prose does not.
+pub(crate) fn opens_a_statement(sql: &str) -> bool {
+    let tokens = lex::tokens(sql);
+    let Some(word) = tokens.first().and_then(|first| first.word(sql)) else { return true };
+    [READS.as_slice(), &TARGETED, &UNASKED, &OTHER_OPENINGS].iter().any(|openings| lex::is_one_of(word, openings))
 }
 
 /// What a statement does to a transaction the user began, read from its first words; the server's answer to it

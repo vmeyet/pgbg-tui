@@ -1,16 +1,22 @@
 //! A command's answer read back: the SQL out of its Markdown fence, its markers put back, split into statements.
 use super::mask::{Literals, UnknownMarker};
+use crate::db::guard;
 use crate::db::lex::{self, Token};
 use crate::db::model::Statement;
 use std::fmt;
 
 const FENCE: &str = "```";
+/// What the prompt asks a line to open on when the command cannot answer without a guess.
+const CANNOT: &str = "cannot:";
 
 /// Why an answer gives no statement to show.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum AnswerError {
     /// The answer holds a marker that stands for no literal of the statement asked about; holds the marker.
     UnknownMarker(String),
+    /// The command said why it wrote no statement, in its own words, which may quote what the user typed: for the screen,
+    /// never for the log.
+    Cannot(String),
     NoStatement,
 }
 
@@ -18,7 +24,19 @@ pub(crate) enum AnswerError {
 pub(super) fn read(reply: &str, literals: &Literals) -> Result<Vec<Statement>, AnswerError> {
     let sql = literals.put_back(fenced(reply))?;
     let statements = split(&sql);
-    if statements.is_empty() { Err(AnswerError::NoStatement) } else { Ok(statements) }
+    let is_prose = !reply.contains(FENCE) && !guard::opens_a_statement(&sql);
+    if statements.is_empty() || is_prose { Err(no_statement(reply)) } else { Ok(statements) }
+}
+
+/// The words of `reply`, one that holds no statement, on one line, without its fences and its `--` and `cannot:` marks.
+fn no_statement(reply: &str) -> AnswerError {
+    let lines = reply.lines().map(str::trim).filter(|line| !line.starts_with(FENCE));
+    let words = lines.map(|line| {
+        let line = line.strip_prefix("--").unwrap_or(line).trim_start();
+        line.strip_prefix(CANNOT).unwrap_or(line).trim_start()
+    });
+    let reason = words.filter(|words| !words.is_empty()).collect::<Vec<_>>().join(" ");
+    if reason.is_empty() { AnswerError::NoStatement } else { AnswerError::Cannot(reason) }
 }
 
 /// What the first Markdown fence of `reply` holds, without its language; the whole reply when it holds no fence.
@@ -59,6 +77,7 @@ impl fmt::Display for AnswerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnknownMarker(marker) => write!(f, "the answer holds `{marker}`, which stands for no value of the statement"),
+            Self::Cannot(why) => write!(f, "no statement: {why}"),
             Self::NoStatement => f.write_str("the answer holds no statement"),
         }
     }
@@ -115,7 +134,42 @@ mod tests {
     }
 
     #[test]
-    fn an_answer_of_comments_alone_gives_no_statement() {
-        assert_eq!(statements("", "```sql\n-- nothing to do\n```"), Err(AnswerError::NoStatement));
+    fn an_answer_of_comments_alone_gives_their_words() {
+        assert_eq!(statements("", "```sql\n-- nothing to do\n```"), Err(AnswerError::Cannot("nothing to do".into())));
+    }
+
+    #[test]
+    fn the_line_the_prompt_asks_for_gives_its_reason_inside_a_fence_or_not() {
+        let cannot = Err(AnswerError::Cannot("no key links orders and invoices".into()));
+        assert_eq!(statements("", "-- cannot: no key links orders and invoices\n"), cannot);
+        assert_eq!(statements("", "```sql\n-- cannot: no key links orders and invoices\n```"), cannot);
+    }
+
+    #[test]
+    fn prose_without_a_fence_is_the_reason_and_no_statement() {
+        let reply = "I can't write this:\nthe columns of invoices are not listed.";
+        assert_eq!(statements("", reply), Err(AnswerError::Cannot("I can't write this: the columns of invoices are not listed.".into())));
+    }
+
+    #[test]
+    fn prose_around_an_empty_fence_is_the_reason() {
+        assert_eq!(statements("", "No key is listed.\n```sql\n```"), Err(AnswerError::Cannot("No key is listed.".into())));
+    }
+
+    #[test]
+    fn a_reply_with_no_words_gives_no_statement() {
+        assert_eq!(statements("", "```sql\n```"), Err(AnswerError::NoStatement));
+        assert_eq!(statements("", ""), Err(AnswerError::NoStatement));
+    }
+
+    #[test]
+    fn a_statement_under_a_comment_or_in_brackets_without_a_fence_stays_a_statement() {
+        assert_eq!(statements("", "-- the ids\nSELECT id FROM orders").unwrap(), ["-- the ids\nSELECT id FROM orders"]);
+        assert_eq!(statements("", "(SELECT 1)").unwrap(), ["(SELECT 1)"]);
+    }
+
+    #[test]
+    fn the_reason_is_shown_after_saying_there_is_no_statement() {
+        assert_eq!(AnswerError::Cannot("no key".into()).to_string(), "no statement: no key");
     }
 }

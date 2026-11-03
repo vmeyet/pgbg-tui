@@ -6,7 +6,7 @@
 use super::editor::Revision;
 use super::ghost::Ghost;
 use super::{Action, App, AskFailure, AskId, Focus, NoIdleGhost, Sheet};
-use crate::ai::{Instruction, LiteralPolicy, NotSent, Prompt};
+use crate::ai::{AnswerError, Instruction, LiteralPolicy, NotSent, Prompt};
 use crate::config::AiSettings;
 use crate::connection::{AiAsking, ConnectionName};
 use crate::db::lex::{self, Placed, Token};
@@ -151,6 +151,9 @@ impl App {
         }
         match answer {
             Ok(statements) => self.sheet_mut().keep_idle_answer(&statements).map(Action::LogNoIdleGhost),
+            Err(AskFailure::Answer(AnswerError::Cannot(_) | AnswerError::NoStatement)) => {
+                Some(Action::LogNoIdleGhost(NoIdleGhost::NothingToAdd))
+            }
             Err(failure) => Some(Action::LogNoIdleGhost(NoIdleGhost::Failed(failure))),
         }
     }
@@ -573,6 +576,14 @@ pub(in crate::tui) mod tests {
                 prompt.text()
             );
         }
+    }
+
+    #[test]
+    fn the_reason_of_an_idle_answer_without_a_statement_stays_out_of_the_log() {
+        let mut app = idle_on("SELECT * FROM orders o JOIN ");
+        app.ask_idle_ghost();
+        let answer = Err(AskFailure::Answer(AnswerError::Cannot("no key to nina".into())));
+        assert_eq!(app.apply(Answer::Asked { ask: AskId::FIRST, answer }), [Action::LogNoIdleGhost(NoIdleGhost::NothingToAdd)]);
     }
 
     #[test]
