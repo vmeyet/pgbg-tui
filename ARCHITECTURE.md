@@ -19,6 +19,7 @@ The code is the contract; this page describes it, and changes in the MR that cha
 | `db/model/` | The neutral model every other module uses: `ResultSet`, `Column` and its `Origin`, `Value`, `Catalog`, `Schema`, `ServerError`, `Route`, `Params`, `CancelToken` |
 | `db/lex.rs` | The tokenizer the guard, parameters, completion and AI share; strings, comments and quoted names hide what they hold |
 | `db/guard.rs` | Classifies a statement before it is sent; `admit` builds the `Admitted`, the only kind a session runs; `write_in` names a write for the confirmation |
+| `db/calls.rs` | Pure: whether a statement calls only functions of its short safe list, read from its tokens; what it does not know counts as unsafe |
 | `db/explain.rs` | The `EXPLAIN` a key puts before a statement, pure: only a query the guard reads as changing nothing goes under it |
 | `db/preview.rs` | What a write would touch, pure: `count_of` rewrites an `UPDATE` or `DELETE` into a read that counts the rows its `WHERE` picks, capped at 10 001; `Touched` reads the count back |
 | `db/run.rs`, `db/read_first.rs`, `db/pages.rs` | Running one statement in its transaction, a read with writes refused on a writable connection, and the portal kept open for its next pages |
@@ -60,7 +61,10 @@ These invariants hold across every flow; a change that breaks one is a bug.
 - A server error keeps its position only when the text it failed on is the statement as admitted (`db::statement_error`); the sheet reads it back through the `$n` numbering and the statement's place in the editor, and marks nothing once that text changed; the mark is sheet state, never in the text, the undo or the history.
 - A result streams a page of 500 rows at a time through a portal; the portal closes on a new run, a cancel, the session closing or lost, its tunnel dying, or 5 minutes idle (a tenth before a stricter server timeout), and the result then stays cut.
 - A run or a lookup that finds no open session reconnects first, and `esc` stops a run's reconnect.
-- A read that fails on a lost link before any row shows goes once more on a new session, in the same transaction shape; a write, a read inside the user's `BEGIN`, a failure in the server's words, and a result already showing never go again.
+- A read that fails on a lost link before any row shows goes once more on a new session, in the same transaction shape, when `tui/backend/session/run.rs`'s `resend`, the one place that decides, finds that it calls only what `db/calls.rs` lists and that its session ran nothing that may have changed its state; `⌥a` follows the same rule.
+- A statement in `Mode::Writes`, or a read outside `BEGIN READ ONLY` calling anything `db/calls.rs` does not list, marks its session for good, as a new session starts from the login's `search_path` and role, so a later read would see another table or run with other rights; that transaction's rollback undoes a setting.
+- A read kept from going again by that rule says the link was lost and that `⏎` runs it again; the reconnect stays automatic; a write, a read inside the user's `BEGIN`, a failure in the server's words, and a result already showing never go again.
+- `db/calls.rs` reads text alone: a function hidden in a view, a custom operator or a cast goes again unseen, and only a read-only role stops what it does.
 - Each sending is one history entry with its own time and outcome; a run whose session did not open is one too, but going again sends nothing until the session opens, so a failure there adds none to the first sending's.
 - A writable connection and `pgbg run` keep the first 10 000 rows and say the result is cut.
 - Every stop goes through `CancelToken::unless_stopped`: a cancel within 1 s, then the work is dropped, so no further round trip is sent.

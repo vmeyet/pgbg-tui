@@ -80,6 +80,7 @@ impl UserTransaction {
 impl Session {
     /// Runs `admitted` alone and returns its first `ROW_CAP` rows; a read-only one is always rolled back.
     pub(crate) async fn run(&mut self, admitted: &Admitted) -> Result<ResultSet> {
+        self.marks.note_sent(admitted);
         self.marks.is_mid_statement = true;
         let result = match admitted.mode {
             Mode::Writes => self.run_writes(admitted).await,

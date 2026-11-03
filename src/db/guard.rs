@@ -1,5 +1,6 @@
 //! Classifies a statement before it is sent: a read, a write, or more than one statement.
 //! A best effort that spares a round trip; the read-only transaction and role are what hold.
+use super::calls::calls_only_safe_functions;
 use super::lex::{self, Lexed, Placed, Token};
 use super::model::words::{LOCKS, WRITES};
 use super::model::{Params, Statement};
@@ -99,6 +100,7 @@ pub(crate) struct Admitted {
     /// A timeout of its own for a read-only statement, which runs under it or the session's, whichever is stricter.
     pub(super) own_timeout: Option<StatementTimeout>,
     write: Option<Write>,
+    calls_only_safe_functions: bool,
 }
 
 impl Admitted {
@@ -107,9 +109,20 @@ impl Admitted {
         self.write.as_ref()
     }
 
-    /// Whether it runs as a read: what the guard read as a read and the user did not then confirm as a write.
-    pub(crate) fn is_read(&self) -> bool {
-        self.mode != Mode::Writes
+    /// What sending it a second time risks: only what runs as a read may repeat, and only one that calls nothing unknown
+    /// repeats on its own.
+    pub(crate) fn repeat(&self) -> Repeat {
+        match (self.mode, self.calls_only_safe_functions) {
+            (Mode::Writes, _) => Repeat::Never,
+            (Mode::ReadOnly | Mode::ReadThenAsk, false) => Repeat::OnAKey,
+            (Mode::ReadOnly | Mode::ReadThenAsk, true) => Repeat::Free,
+        }
+    }
+
+    /// Whether it may leave on its session something a later read sees: a rollback undoes a setting, so what runs read only
+    /// never does.
+    pub(super) fn may_change_session(&self) -> bool {
+        self.mode != Mode::ReadOnly && self.repeat() != Repeat::Free
     }
 
     /// Whether it runs in `BEGIN READ ONLY`, always rolled back.
@@ -129,6 +142,17 @@ impl Admitted {
     pub(crate) fn with_own_timeout(self, timeout: Option<StatementTimeout>) -> Self {
         Self { own_timeout: timeout, ..self }
     }
+}
+
+/// What a second sending of a statement risks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Repeat {
+    /// A read that calls only safe functions: running it twice changes nothing.
+    Free,
+    /// A read that calls something unknown, which may reach outside its transaction: only the user sends it again.
+    OnAKey,
+    /// It may have landed.
+    Never,
 }
 
 /// A statement that is not a read, as a confirmation names it.
@@ -227,7 +251,8 @@ pub(crate) fn admit(statement: Statement, params: Params, writes: WritePolicy) -
     check_params(&tokens, &params)?;
     let is_query = opens_a_query(&words) && found.is_none();
     let write = found.and_then(|found| named(statement.as_str(), &tokens, &words, &found));
-    Ok(Admitted { statement, params, mode, transaction_step, is_query, own_timeout: None, write })
+    let calls_only_safe_functions = calls_only_safe_functions(statement.as_str(), &tokens);
+    Ok(Admitted { statement, params, mode, transaction_step, is_query, own_timeout: None, write, calls_only_safe_functions })
 }
 
 fn opens_a_query(words: &[&str]) -> bool {

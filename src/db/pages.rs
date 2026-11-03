@@ -52,6 +52,7 @@ impl Session {
             return Ok(Started { result: self.run(admitted).await?, rest: None });
         }
         self.refuse_inside_user_transaction().await?;
+        self.marks.note_sent(admitted);
         let Self { client, limits, marks, ended, .. } = self;
         let idle_limit_on_server = limits.idle.on_server();
         let transaction = marks.during(begin_read_only(client, limits, Isolation::EachStatement)).await?;
@@ -89,6 +90,7 @@ impl<'s> Pages<'s> {
     pub(crate) async fn read_beside(&mut self, admitted: &Admitted) -> Result<ResultSet> {
         anyhow::ensure!(admitted.mode == Mode::ReadOnly, "only a read-only statement runs beside a result's pages");
         let Self { transaction, marks, limits, .. } = self;
+        marks.note_sent(admitted);
         marks
             .during(async {
                 let savepoint = transaction.savepoint(BESIDE_SAVEPOINT).await.map_err(server_error)?;

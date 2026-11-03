@@ -1,10 +1,10 @@
 //! One statement on the server: its cancels, the token an abort uses to reach it, and its answer.
 use super::link::{Policy, Queued};
 use crate::connection::WritePolicy;
-use crate::db::guard::Admitted;
+use crate::db::guard::{Admitted, Repeat};
 use crate::db::model::CancelToken;
 use crate::db::{Interrupted, Pages, Session, Started};
-use crate::failure::Failure;
+use crate::failure::{Failure, LostWith};
 use crate::history::Outcome;
 use crate::query::params;
 use crate::tui::app::{Incoming, RunId};
@@ -14,6 +14,9 @@ use tokio::sync::watch;
 use tokio::time::Instant;
 
 const UNCONFIRMED_WRITE: &str = "a write runs only once confirmed";
+pub(super) const MAY_HAVE_OUTSIDE_EFFECT: &str =
+    "the link was lost and it calls a function pgbg cannot tell runs safely twice, so it did not go again: ⏎ runs it again";
+pub(super) const STATE_LOST: &str = "the link was lost and a new session has none of the settings this one may have changed, so it did not go again: set them again if you need them, then ⏎ runs it";
 
 /// Holds the cancel token of what a session task runs on the server, a statement or a page, for its link's abort.
 #[derive(Debug)]
@@ -91,13 +94,13 @@ impl Cancels {
     }
 }
 
-/// A run's answer for the app, its outcome for the history, and its portal while more pages wait in it.
+/// A run's answer for the app, its outcome for the history, its portal while more pages wait in it, and what a second
+/// sending of it risks.
 pub(super) struct Answered<'s> {
     pub(super) incoming: Incoming,
     pub(super) outcome: Outcome,
     pub(super) rest: Option<Pages<'s>>,
-    /// A read failed on its link with no row shown yet: it may go once more should its session turn out lost.
-    pub(super) may_go_again: bool,
+    pub(super) repeat: Repeat,
 }
 
 impl Answered<'_> {
@@ -108,7 +111,37 @@ impl Answered<'_> {
     }
 
     fn failed(run: RunId, failure: Failure) -> Self {
-        Self { outcome: Outcome::from(&failure), incoming: Incoming::Failed { run, failure }, rest: None, may_go_again: false }
+        Self { outcome: Outcome::from(&failure), incoming: Incoming::Failed { run, failure }, rest: None, repeat: Repeat::Never }
+    }
+}
+
+/// Which sending of a run this is: a read that lost only its link goes once more.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Sending {
+    First,
+    Last,
+}
+
+/// What follows a failed sending: it goes again, or the failure to show stays.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Resend {
+    Goes,
+    Stays(Failure),
+}
+
+/// The one decision on sending a failed statement again by itself: only when its link failed, the session it failed on
+/// held nothing a new one lacks, running it twice changes nothing, and this was not its last sending.
+/// `Failure::Link` also holds failures that are not the link's, as a value that does not decode: on those the session
+/// still stands, so `lost_with` is none.
+pub(super) fn resend(failure: Failure, repeat: Repeat, lost_with: Option<LostWith>, sending: Sending) -> Resend {
+    let Failure::Link(words) = &failure else { return Resend::Stays(failure) };
+    match (repeat, lost_with) {
+        (Repeat::Free, Some(LostWith::Nothing)) if sending == Sending::First => Resend::Goes,
+        (Repeat::Free, Some(LostWith::Nothing)) | (Repeat::Never, _) | (_, None | Some(LostWith::UserTransaction)) => {
+            Resend::Stays(failure)
+        }
+        (_, Some(LostWith::SessionState)) => Resend::Stays(Failure::Link(format!("{words}: {STATE_LOST}"))),
+        (Repeat::OnAKey, Some(LostWith::Nothing)) => Resend::Stays(Failure::Link(format!("{words}: {MAY_HAVE_OUTSIDE_EFFECT}"))),
     }
 }
 
@@ -154,18 +187,10 @@ async fn answer_to<'s>(session: &'s mut Session, writes: WritePolicy, queued: &Q
     match session.start(&admitted).await {
         Ok(Started { result, rest }) => {
             let outcome = Outcome::rows(&result);
-            Answered { outcome, incoming: Incoming::Result { run, result, took: started.elapsed() }, rest, may_go_again: false }
+            Answered { outcome, incoming: Incoming::Result { run, result, took: started.elapsed() }, rest, repeat: Repeat::Never }
         }
-        Err(err) => {
-            let failure = Failure::from(&err);
-            Answered { may_go_again: may_go_again(&admitted, &failure), ..Answered::failed(run, failure) }
-        }
+        Err(err) => Answered { repeat: admitted.repeat(), ..Answered::failed(run, Failure::from(&err)) },
     }
-}
-
-/// Only a read that failed on its link may go again: a write may have landed, and a server's answer stands.
-fn may_go_again(admitted: &Admitted, failure: &Failure) -> bool {
-    admitted.is_read() && matches!(failure, Failure::Link(_))
 }
 
 /// `queued` with its parameters filled in and checked against the connection's `writes` policy, unless it runs read only
@@ -240,38 +265,100 @@ mod tests {
         assert!(admit(&queued("SELECT * FROM orders", None), WritePolicy::Allowed).is_ok());
     }
 
+    const WORDS: &str = "connection closed";
+
     fn lost_link() -> Failure {
-        Failure::Link("connection closed".into())
+        Failure::Link(WORDS.into())
     }
 
-    fn may_go_again_after(sql: &str, confirmed: Option<Confirmed>, writes: WritePolicy, failure: &Failure) -> bool {
-        may_go_again(&admit(&queued(sql, confirmed), writes).unwrap(), failure)
+    fn repeat_of(sql: &str, confirmed: Option<Confirmed>, writes: WritePolicy) -> Repeat {
+        admit(&queued(sql, confirmed), writes).unwrap().repeat()
     }
 
-    #[test]
-    fn a_read_on_a_read_only_connection_may_go_again_after_a_lost_link() {
-        assert!(may_go_again_after("SELECT * FROM orders", None, WritePolicy::ReadOnly, &lost_link()));
+    fn first_resend(repeat: Repeat, lost_with: Option<LostWith>) -> Resend {
+        resend(lost_link(), repeat, lost_with, Sending::First)
     }
 
-    #[test]
-    fn a_read_on_a_writable_connection_may_go_again_after_a_lost_link() {
-        assert!(may_go_again_after("SELECT * FROM orders", None, WritePolicy::Allowed, &lost_link()));
-    }
-
-    #[test]
-    fn a_confirmed_write_never_goes_again() {
-        assert!(!may_go_again_after("DELETE FROM orders", Some(Confirmed::FOR_TESTS), WritePolicy::Allowed, &lost_link()));
+    fn stays_saying(why: &str) -> Resend {
+        Resend::Stays(Failure::Link(format!("{WORDS}: {why}")))
     }
 
     #[test]
-    fn a_read_confirmed_as_a_write_never_goes_again() {
-        assert!(!may_go_again_after("SELECT add_order()", Some(Confirmed::FOR_TESTS), WritePolicy::Allowed, &lost_link()));
+    fn a_read_of_a_table_repeats_freely_on_either_kind_of_connection() {
+        for writes in [WritePolicy::ReadOnly, WritePolicy::Allowed] {
+            assert_eq!(repeat_of("SELECT * FROM orders", None, writes), Repeat::Free);
+        }
     }
 
     #[test]
-    fn a_read_the_server_failed_does_not_go_again() {
+    fn a_read_calling_an_unknown_function_repeats_only_on_a_key() {
+        assert_eq!(repeat_of("SELECT dblink_exec('shop', 'DELETE FROM orders')", None, WritePolicy::ReadOnly), Repeat::OnAKey);
+    }
+
+    #[test]
+    fn a_confirmed_write_never_repeats() {
+        assert_eq!(repeat_of("DELETE FROM orders", Some(Confirmed::FOR_TESTS), WritePolicy::Allowed), Repeat::Never);
+    }
+
+    #[test]
+    fn a_read_confirmed_as_a_write_never_repeats() {
+        assert_eq!(repeat_of("SELECT add_order()", Some(Confirmed::FOR_TESTS), WritePolicy::Allowed), Repeat::Never);
+    }
+
+    #[test]
+    fn an_analyze_from_a_key_of_a_table_repeats_freely() {
+        let admitted = admit(&analyzed("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) SELECT * FROM orders"), WritePolicy::Allowed).unwrap();
+        assert_eq!(admitted.repeat(), Repeat::Free);
+    }
+
+    #[test]
+    fn an_analyze_from_a_key_calling_an_unknown_function_repeats_only_on_a_key() {
+        let sql = "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) SELECT dblink_exec('shop', 'DELETE FROM orders')";
+        assert_eq!(admit(&analyzed(sql), WritePolicy::Allowed).unwrap().repeat(), Repeat::OnAKey);
+    }
+
+    #[test]
+    fn a_free_read_that_lost_only_its_link_goes_again() {
+        assert_eq!(first_resend(Repeat::Free, Some(LostWith::Nothing)), Resend::Goes);
+    }
+
+    #[test]
+    fn a_free_read_on_its_last_sending_stays_in_the_links_words() {
+        assert_eq!(resend(lost_link(), Repeat::Free, Some(LostWith::Nothing), Sending::Last), Resend::Stays(lost_link()));
+    }
+
+    #[test]
+    fn a_read_calling_an_unknown_function_stays_and_says_a_key_runs_it() {
+        assert_eq!(first_resend(Repeat::OnAKey, Some(LostWith::Nothing)), stays_saying(MAY_HAVE_OUTSIDE_EFFECT));
+    }
+
+    #[test]
+    fn a_free_read_on_a_session_whose_state_may_have_changed_stays_and_says_so() {
+        assert_eq!(first_resend(Repeat::Free, Some(LostWith::SessionState)), stays_saying(STATE_LOST));
+    }
+
+    #[test]
+    fn a_read_in_the_users_transaction_stays_in_the_links_words() {
+        assert_eq!(first_resend(Repeat::Free, Some(LostWith::UserTransaction)), Resend::Stays(lost_link()));
+    }
+
+    #[test]
+    fn a_write_stays_in_the_links_words_whatever_went_with_the_link() {
+        for lost_with in [LostWith::Nothing, LostWith::SessionState, LostWith::UserTransaction] {
+            assert_eq!(first_resend(Repeat::Never, Some(lost_with)), Resend::Stays(lost_link()));
+        }
+    }
+
+    #[test]
+    fn a_link_failure_on_a_session_still_standing_stays_in_its_words() {
+        assert_eq!(first_resend(Repeat::Free, None), Resend::Stays(lost_link()));
+        assert_eq!(first_resend(Repeat::OnAKey, None), Resend::Stays(lost_link()));
+    }
+
+    #[test]
+    fn a_failure_in_the_servers_words_stays_as_it_is() {
         let failure = Failure::Server { message: "FATAL: terminating connection".into(), position: None, code: None };
-        assert!(!may_go_again_after("SELECT * FROM orders", None, WritePolicy::ReadOnly, &failure));
+        assert_eq!(resend(failure.clone(), Repeat::Free, Some(LostWith::Nothing), Sending::First), Resend::Stays(failure));
     }
 
     fn cancels() -> (mpsc::UnboundedSender<RunId>, Cancels) {
