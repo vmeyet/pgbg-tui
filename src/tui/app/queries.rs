@@ -1,5 +1,5 @@
 //! The saved queries in the app: the sidebar's tree and its cursor, the `ctrl-p` finder, and the query opened in the editor.
-use super::search::{Search, Searching};
+use super::search::{self, Search, Searching};
 use super::{Action, App, Focus, Opening, Overlay, Sheet};
 use crate::act::Pane;
 use crate::connection::ConnectionName;
@@ -89,7 +89,7 @@ impl App {
 
     /// The finder after `key`, `None` once it closes, and the actions to run: a picked query opens in the editor.
     pub(super) fn finder_after(&mut self, finder: Finder, key: KeyEvent) -> (Option<Finder>, Vec<Action>) {
-        match finder.after(key, Pane::Finder, &self.queries.all) {
+        match search::after(finder, key, Pane::Finder, &self.queries.all) {
             Searching::Typed(finder) | Searching::Unhandled(finder, _) => (Some(finder), vec![]),
             Searching::Closed => (None, vec![]),
             Searching::Picked(query) => (None, self.ask_open(Opening::Saved(query))),
