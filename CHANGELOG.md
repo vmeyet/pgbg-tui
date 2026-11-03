@@ -6,6 +6,8 @@ Each entry says what changed, then where, then how to use it.
 
 ## Unreleased
 
+## 0.3.0 - 2026-11-03
+
 ### New
 
 - **Typed commands**, in the TUI's command palette: `:set theme=nord`, `:go shop`, `:open orders/daily.sql`, `:run`, `:save`, `:copy`, `:help` and `:quit`, with the words revu and slack use.
