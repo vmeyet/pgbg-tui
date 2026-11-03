@@ -135,6 +135,46 @@ The review of #214 to #231 found these, most severe first.
 - [x] Ask for a fix after a server's error, with `[ai] errors = "code"`: the SQLSTATE and the position go along, never the server's words
 - [x] Ask for a chart: the answer leads with a `-- chart:` line, its statement's own, and `ctrl-g` on the result pane sends the columns' names and types
 
+## 25. Review of the week-of-use batch
+
+The review of #260 to #285 found these, most severe first.
+
+- [ ] `v` on a table's description after a chart never panics: `left_chart` moves into `Run::Done`, so it cannot outlive its result
+- [ ] The idle ask sends no secret from a comment: `PGPASSWORD=x`, `pwd x`, `api_key x` and `token x` count as secrets, as any `KEY=value` does
+- [ ] With literals masked, a double-quoted, backticked or curly-quoted span in a comment is masked, and a quoted name the catalog does not hold is masked or refused in a statement
+- [ ] The prompt says to join only along a listed foreign key and use only listed columns, and to say so when what it needs is not listed
+- [ ] A read is not sent again once the session's settings may have changed, as after a confirmed `SET search_path` or `SET ROLE`, or a read calling `set_config`
+- [ ] A read is sent again on its own only when it calls no function outside a short safe list; any other says the link was lost and `⏎` runs it again
+- [ ] A read-only rollback also releases session-level advisory locks, and the docs stop saying that everything is rolled back
+- [ ] Taking an answer keeps every comment above the statement, blank-separated and `/* */` ones too, and removes only the `key:` lines the answer sets
+- [ ] An idle answer leading with `-- chart:` waits as a rewrite, so taking it never loses the chart
+- [ ] A plan's result never overwrites the hidden and frozen columns of the statement before it
+- [ ] The timeout covers a login's follow-up round trips, so a tunnel gone silent after login is replaced and stalls no job
+- [ ] A save `⌥s` refuses keeps the prompt open with the path typed and the refusal in it
+- [ ] A comment whose quotes pair wrongly is refused: `5' tall '1 Main St.' x'` and `'' nina ''` sent their value in clear
+- [ ] Only the user's words choose the schema slice: pgbg's own instruction text pulled in tables named by `server` or `statement`
+- [ ] `:` and `^g` work on a plan, with a test that every pane with no text field has a `:` row
+- [ ] The palette says when an act cannot run on what the pane shows, as a grid act on a chart, or `t` and `r` on a grid
+- [ ] `esc` stops a reconnect a lookup or a schema read started
+- [ ] Cancelling a reconnect says the tunnel stopped, so it never stays shown as starting
+- [ ] During an outage, opening again does not restart the tunnel and rerun `before` each time, and the docs say what happens
+- [ ] The idle ghost ends a keyword in the case typed, through one function both ghosts call
+- [ ] The history ghost leaves out `pg_terminate_backend`, `pg_cancel_backend`, `setval`, `nextval` and any run confirmed as a write
+- [ ] `E'Paid'` and `E'paid'` stay two statements in the history index
+- [ ] One read of the history serves the index and `TableUse`, so a schema read does not parse it again
+- [ ] A comment the answer repeats is not kept twice
+- [ ] Schema names go through `printable`, a column named as a secret follows one rule in the slice and the result columns, and a cut falls between enum labels
+- [ ] `v` keeps a plan's tree and folds, the title promises a plan only when one parses, and a plan past serde's depth says why it shows as a grid
+- [ ] Hiding the sorted column keeps a sign of the sort
+- [ ] A stacked sum that is not finite counts as missing, and a very large or small number keeps a short form
+- [ ] `set_fold` takes no `bool`, and `backend/config.rs` names each `ConfigAnswer` instead of a catch-all
+- [ ] `Failure::Link` holds only link failures, through a typed kind, and `run` and `run_again` share one send helper
+- [ ] Character positions and byte offsets get their own newtypes
+- [ ] `Sheet` and `act.rs` are split by concern, with `Showing` holding one result's state
+- [ ] `rest_after` moves to `ghost.rs`, `match ()` chains become plain `if`, `prompt_about` takes `PromptInput`, and the writing-function test helper moves to `fixtures`
+- [ ] CI runs a plain `cargo test` without `PGBG_TEST_DATABASE_URL`, so a test reading it un-ignored fails there
+- [ ] The tunnel examples add `ExitOnForwardFailure=yes`, as a live ssh that failed to bind still counts as ready when something else answers on its port
+
 ## Later
 
 - revu and slack run `update` and the brew check through `vtui::update`, as pgbg does
