@@ -20,6 +20,7 @@ pub(super) fn footer(f: &mut Frame<'_>, app: &App, step: &AskStep, area: Rect) {
             Span::styled("▌ ", Style::default().fg(theme.accent)),
             Span::styled(blank_means(app, instruction.text()), Style::default().fg(theme.muted)),
         ],
+        AskStep::WaitingForSchema { .. } => vec![Span::styled(" reading schema… ", Style::default().fg(theme.warn))],
         AskStep::Waiting { .. } => vec![Span::styled(asking(app), Style::default().fg(theme.warn))],
         AskStep::Answered(_) => {
             vec![Span::styled(" the [ai] command answered: ", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))]
@@ -86,8 +87,10 @@ fn cut_to(mut lines: Vec<Line<'static>>, height: usize, style: Style) -> Vec<Lin
 #[cfg(test)]
 mod tests {
     use super::super::app::ask::tests::{answered, asking_on, ctrl_g, waiting};
+    use super::super::app::ask_schema::tests::{held_for_the_schema, schema_refused};
+    use super::super::app::fixtures::to_shop;
     use super::super::app::idle_ghost::tests::{UNMASKABLE_COMMENT, ghosted, idle_on};
-    use super::super::app::{Answer, AskFailure, AskId};
+    use super::super::app::{Answer, AskFailure, AskId, Incoming};
     use super::super::{styled, ui};
     use crate::ai::{AnswerError, CommandError};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -111,6 +114,18 @@ mod tests {
     #[test]
     fn the_footer_says_while_the_command_runs() {
         insta::assert_snapshot!("ask_waiting", render(&waiting("SELECT * FROM orders", "only the ids"), 60, 6).backend());
+    }
+
+    #[test]
+    fn the_footer_says_while_an_ask_waits_for_the_schema() {
+        insta::assert_snapshot!("ask_waiting_for_schema", render(&held_for_the_schema(), 60, 6).backend());
+    }
+
+    #[test]
+    fn an_ask_with_no_schema_says_why_in_the_status_line() {
+        let mut app = held_for_the_schema();
+        app.apply(to_shop(Incoming::Schema(Err(schema_refused()))));
+        insta::assert_snapshot!("ask_no_schema", render(&app, 140, 6).backend());
     }
 
     #[test]

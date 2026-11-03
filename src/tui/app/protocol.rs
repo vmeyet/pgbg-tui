@@ -199,6 +199,8 @@ pub(in crate::tui) enum AskFailure {
     /// The connection says `ai = "off"`.
     Off,
     NotSent(NotSent),
+    /// The schema the prompt needs will not come, and why; `ctrl-g` sends no prompt without it.
+    NoSchema(String),
     Command(CommandError),
     Answer(AnswerError),
     /// The editor changed while the ask was on screen, so the answer no longer fits the text it was asked about.
@@ -319,9 +321,10 @@ impl fmt::Display for AskFailure {
             Self::NoCommand => f.write_str("^g asks nothing: config.toml names no [ai] command"),
             Self::Off => f.write_str("^g asks nothing: this connection says ai = \"off\""),
             Self::NotSent(not_sent) => write!(f, "not asked: {not_sent}"),
+            Self::NoSchema(why) => write!(f, "not asked, no schema: {why}"),
             Self::Command(failed) => failed.fmt(f),
             Self::Answer(unread) => unread.fmt(f),
-            Self::EditorChanged => f.write_str("the answer is dropped: the editor changed since ^g asked"),
+            Self::EditorChanged => f.write_str("dropped: the editor changed since ^g asked"),
         }
     }
 }

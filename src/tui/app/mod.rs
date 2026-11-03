@@ -43,6 +43,7 @@ pub(super) use table_finder::TableFinder;
 pub(super) use versions::{Listed, VersionList};
 
 pub(super) mod ask;
+pub(super) mod ask_schema;
 mod colouring;
 mod column_stats;
 mod commands;
@@ -405,9 +406,10 @@ impl App {
     /// returns what the runner should do about it.
     pub(super) fn apply(&mut self, answer: Answer) -> Vec<Action> {
         let actions = self.take_answer(answer);
+        let sent = self.send_ask_waiting_for_schema();
         self.ask_for_hidden_write();
         self.fill_table_finder();
-        self.and_the_schema_shown(actions)
+        self.and_the_schema_needed(actions.into_iter().chain(sent).collect())
     }
 
     /// Takes what the session `session` of `connection` said: the count of the write waiting for its `y` to that
