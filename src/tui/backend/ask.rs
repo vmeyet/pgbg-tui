@@ -90,6 +90,7 @@ mod tests {
             table_use: &ai::TableUse::default(),
             tier: Tier::Local,
             literals: LiteralPolicy::Masked,
+            cap: ai::PromptCap::Ask,
         };
         ai::prompt(&ask).unwrap()
     }

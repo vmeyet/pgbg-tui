@@ -6,7 +6,7 @@
 use super::editor::Revision;
 use super::ghost::Ghost;
 use super::{Action, App, AskFailure, AskId, Focus, NoIdleGhost, Sheet};
-use crate::ai::{AnswerError, Instruction, LiteralPolicy, NotSent, Prompt};
+use crate::ai::{AnswerError, Instruction, LiteralPolicy, NotSent, Prompt, PromptCap};
 use crate::config::AiSettings;
 use crate::connection::{AiAsking, ConnectionName};
 use crate::db::lex::{self, Placed, Token};
@@ -208,7 +208,7 @@ impl Sheet {
     /// default instruction when the comment may hold a secret, or `literals` masks it and it cannot be masked.
     fn idle_prompt(&self, question: &Question<'_>, literals: LiteralPolicy) -> IdlePrompt {
         let statement = Statement::new(question.typed);
-        let ask = |instruction: &Instruction| self.prompt_about(instruction, Some(&statement), &[], None, literals);
+        let ask = |instruction: &Instruction| self.prompt_about(instruction, Some(&statement), &[], None, literals, PromptCap::IdleAsk);
         match ask(&question.instruction()) {
             Err(left_out @ (NotSent::UnmaskableComment | NotSent::CommentHoldsSecret)) => {
                 IdlePrompt { prompt: ask(&no_comment()).ok().filter(|_| !question.typed.is_empty()), left_out: Some(left_out) }
@@ -337,6 +337,14 @@ pub(in crate::tui) mod tests {
     /// The app with `[ai] ghost = true` on `shop`, its schema read, `text` in the editor.
     pub(in crate::tui) fn idle_on(text: &str) -> App {
         with_ghost_on(&connection("local", "read-only"), text)
+    }
+
+    #[test]
+    fn an_idle_ask_stays_within_its_cap_on_a_schema_an_ask_details_whole() {
+        let mut app = idle_on("SELECT * FROM accounts");
+        app.apply(to_shop(Incoming::Schema(Ok(Arc::new(fixtures::accounts_catalog(60))))));
+        let text = prompt_text(&mut app);
+        assert!(text.len() <= 16 * 1024 && text.contains("public.accounts("), "{}", text.len());
     }
 
     /// The app showing the idle ghost `answer` gave for `text`.

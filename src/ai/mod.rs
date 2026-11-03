@@ -13,5 +13,5 @@ mod slice;
 pub(crate) use answer::AnswerError;
 pub(crate) use command::{Asking, CommandError};
 pub(crate) use mask::LiteralPolicy;
-pub(crate) use prompt::{Fault, Instruction, NotSent, Prompt, PromptInput, ServerErrors, prompt};
+pub(crate) use prompt::{Fault, Instruction, NotSent, Prompt, PromptCap, PromptInput, ServerErrors, prompt};
 pub(crate) use slice::TableUse;

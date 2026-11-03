@@ -8,7 +8,7 @@ use super::editor::{Edited, Revision, edit_line};
 use super::idle_ghost::IdleAsk;
 use super::{Action, App, AskFailure, AskId, Focus, Overlay, Sheet};
 use crate::act::{self, Act, Pane};
-use crate::ai::{self, Fault, Instruction, LiteralPolicy, NotSent, Prompt, ServerErrors};
+use crate::ai::{self, Fault, Instruction, LiteralPolicy, NotSent, Prompt, PromptCap, ServerErrors};
 use crate::config::AiSettings;
 use crate::connection::AiAsking;
 use crate::db::guard::{self, Write};
@@ -247,10 +247,11 @@ impl Sheet {
         literals: LiteralPolicy,
     ) -> Result<Prompt, NotSent> {
         let statement = self.range_under_cursor().map(|range| Statement::new(&self.editor.text()[range]));
-        self.prompt_about(instruction, statement.as_ref(), columns, fault, literals)
+        self.prompt_about(instruction, statement.as_ref(), columns, fault, literals, PromptCap::Ask)
     }
 
-    /// The prompt for `instruction` about `statement`, its result's `columns` and its `fault`, with the schema read so far.
+    /// The prompt for `instruction` about `statement`, its result's `columns` and its `fault`, with the schema read so far,
+    /// within `cap`.
     pub(super) fn prompt_about(
         &self,
         instruction: &Instruction,
@@ -258,6 +259,7 @@ impl Sheet {
         columns: &[Column],
         fault: Option<&Fault>,
         literals: LiteralPolicy,
+        cap: PromptCap,
     ) -> Result<Prompt, NotSent> {
         let unread = Catalog::default();
         let catalog = self.catalog().unwrap_or(&unread);
@@ -270,6 +272,7 @@ impl Sheet {
             table_use: &self.table_use,
             tier: self.connection.tier(),
             literals,
+            cap,
         })
     }
 
@@ -384,6 +387,14 @@ pub(in crate::tui) mod tests {
         let mut app = waiting(text, "only the ids");
         app.apply(Answer::Asked { ask: AskId::FIRST, answer: Ok(vec![Statement::new(answer)]) });
         app
+    }
+
+    #[test]
+    fn an_ask_details_a_schema_past_the_cap_of_an_idle_ask() {
+        let mut app = asking_on("SELECT * FROM accounts");
+        app.apply(to_shop(Incoming::Schema(Ok(Arc::new(fixtures::accounts_catalog(60))))));
+        let text = prompt_sent(&mut app, "the members");
+        assert!((16 * 1024..=64 * 1024).contains(&text.len()) && text.contains("public.invoices_59(account_id"), "{}", text.len());
     }
 
     pub(in crate::tui) fn step(app: &App) -> Option<&AskStep> {

@@ -1,6 +1,6 @@
 //! The part of a catalog a prompt shows, the tables most likely wanted first: each as the body of a `CREATE TABLE`, its
-//! columns with their types, enum labels, foreign keys and comments; then the name alone of every other table, so the
-//! model can name a table nothing pointed to.
+//! columns with their types, enum labels, foreign keys and comments; then every other table, in detail too when the whole
+//! schema fits and else by name alone, so the model can name a table nothing pointed to.
 use crate::db::lex::{self, Token};
 use crate::db::model::{Catalog, ForeignKey, SchemaColumn, SchemaNode, Table, qualified, sql_name, sql_string};
 use crate::secret;
@@ -21,6 +21,9 @@ const GENERIC_COLUMNS: [&str; 9] = ["uuid", "name", "title", "description", "typ
 const MAX_COMMENT_BYTES: usize = 300;
 /// What ends a comment or a list of enum labels cut short.
 const CUT_MARK: &str = "…";
+/// How many foreign keys a slice follows from a kept table: a many-to-many link takes two, from a table through the one
+/// joining it to the table on the other side.
+const MAX_HOPS: usize = 2;
 
 /// One line of a slice: a table in detail, or its name alone, which matters less and goes first past a cap.
 pub(super) enum Line {
@@ -73,21 +76,34 @@ impl TableUse {
 
 /// One line per table of `catalog` the `statement` names or the `instruction`'s words point to, as
 /// `schema.table(column type references schema.table(column), ...)`: first the tables the statement names, then those
-/// the instruction names, then those holding a column it names, then those a foreign key links to one of them, the
-/// links of the first kept first; among those with the same reason, the tables `table_use` counts most come first.
-/// Then one line per other table naming it alone, in the order of the search path, then the other schemas.
-/// Each line is written only once asked for, so a caller that stops at a cap writes no more.
+/// the instruction names, then those holding a column it names, then those foreign keys link to them, hop by hop up to
+/// [`MAX_HOPS`], at each hop those a table points to before those pointing to one; among those of one reason, or one
+/// direction of a hop, the tables `table_use` counts most come first.
+/// Then one line per other table, in the order of the search path, then the other schemas: in detail when every table fits
+/// in `room` bytes, else naming it alone.
+/// Each line is written only once asked for, so a caller that stops at a cap writes no more; telling whether all fit
+/// writes up to `room` bytes first.
 pub(super) fn slice<'a>(
     catalog: &'a Catalog,
     statement: &str,
     instruction: &str,
     table_use: &TableUse,
+    room: usize,
 ) -> impl Iterator<Item = Line> + use<'a> {
     let kept = kept(catalog, &statement_names(statement), &instruction_words(instruction), table_use);
-    let linked = linked(catalog, &kept);
-    let detailed: Vec<Entry<'a>> = kept.into_iter().chain(linked).collect();
-    let others = names_other_than(catalog, &detailed);
-    detailed.into_iter().map(|(node, table)| Line::Detailed(line(node, table))).chain(others.map(Line::NameAlone))
+    let linked = linked(catalog, &kept, table_use);
+    let ranked: Vec<Entry<'a>> = kept.into_iter().chain(linked).collect();
+    let others = others_than(catalog, &ranked);
+    let other_line: fn(Entry<'a>) -> Line = if fits_in(catalog, room) { detailed } else { name_alone };
+    ranked.into_iter().map(detailed).chain(others.into_iter().map(other_line))
+}
+
+fn detailed((node, table): Entry<'_>) -> Line {
+    Line::Detailed(line(node, table))
+}
+
+fn name_alone((node, table): Entry<'_>) -> Line {
+    Line::NameAlone(qualified(&node.name, &table.name))
 }
 
 fn kept<'a>(catalog: &'a Catalog, named: &[String], asked: &[String], table_use: &TableUse) -> Vec<Entry<'a>> {
@@ -117,16 +133,31 @@ fn reason(table: &Table, named: &[String], asked: &[String], pointing: &[&str], 
     }
 }
 
-/// The tables one foreign key away from those `kept`, none kept already: for each kept table in order, those it points
-/// to, then those pointing to it.
-fn linked<'a>(catalog: &'a Catalog, kept: &[Entry<'a>]) -> Vec<Entry<'a>> {
+/// The tables up to [`MAX_HOPS`] foreign keys away from those `kept`, none kept already: at each hop, those any table of
+/// the hop before points to, then those pointing to any of them, so a table many point to never crowds out what another
+/// table of its hop points to.
+fn linked<'a>(catalog: &'a Catalog, kept: &[Entry<'a>], table_use: &TableUse) -> Vec<Entry<'a>> {
     let by_name: HashMap<(&str, &str), Entry<'a>> = tables(catalog).map(|entry| (name_of(entry), entry)).collect();
     let pointing_to = pointing_to(catalog);
     let targets = |(_, table): Entry<'a>| table.foreign_keys.iter().filter_map(|key| by_name.get(&target_name(key)).copied());
     let pointing = |entry: Entry<'a>| pointing_to.get(&name_of(entry)).into_iter().flatten().copied();
     let mut seen: HashSet<(&str, &str)> = kept.iter().copied().map(name_of).collect();
-    let neighbours = kept.iter().flat_map(|&entry| targets(entry).chain(pointing(entry)));
-    neighbours.filter(|&neighbour| seen.insert(name_of(neighbour))).collect()
+    let mut is_new = |entry: &Entry<'a>| seen.insert(name_of(*entry));
+    let mut linked = vec![];
+    let mut hop = kept.to_vec();
+    for _ in 0..MAX_HOPS {
+        let outgoing = most_used_first(hop.iter().flat_map(|&entry| targets(entry)).filter(&mut is_new), table_use);
+        let incoming = most_used_first(hop.iter().flat_map(|&entry| pointing(entry)).filter(&mut is_new), table_use);
+        hop = [outgoing, incoming].concat();
+        linked.extend_from_slice(&hop);
+    }
+    linked
+}
+
+fn most_used_first<'a>(entries: impl Iterator<Item = Entry<'a>>, table_use: &TableUse) -> Vec<Entry<'a>> {
+    let mut sorted: Vec<Entry<'a>> = entries.collect();
+    sorted.sort_by_cached_key(|(_, table)| Reverse(table_use.of(table)));
+    sorted
 }
 
 /// The tables whose foreign keys point to each table, by its name.
@@ -148,12 +179,18 @@ fn target_name(key: &ForeignKey) -> (&str, &str) {
     (key.target_schema.as_str(), key.target_table.as_str())
 }
 
-/// The `schema.table` of every table but those `shown`, in the order of the search path, then the other schemas.
-fn names_other_than<'a>(catalog: &'a Catalog, shown: &[Entry<'a>]) -> impl Iterator<Item = String> + use<'a> {
+/// Every table but those `shown`, in the order of the search path, then the other schemas.
+fn others_than<'a>(catalog: &'a Catalog, shown: &[Entry<'a>]) -> Vec<Entry<'a>> {
     let shown: HashSet<(&str, &str)> = shown.iter().copied().map(name_of).collect();
     let mut entries: Vec<Entry<'a>> = tables(catalog).filter(|&entry| !shown.contains(&name_of(entry))).collect();
     entries.sort_by_key(|(node, _)| catalog.search_path.iter().position(|schema| *schema == node.name).unwrap_or(usize::MAX));
-    entries.into_iter().map(|(node, table)| qualified(&node.name, &table.name))
+    entries
+}
+
+/// Whether the detailed line of every table of `catalog`, each with its line end, fits in `room` bytes; it writes no more
+/// once they do not.
+fn fits_in(catalog: &Catalog, room: usize) -> bool {
+    tables(catalog).try_fold(room, |left, (node, table)| left.checked_sub(line(node, table).len() + 1)).is_some()
 }
 
 /// The words and quoted names of `statement`, lowercased and unquoted; what its literals hold is no name.
@@ -248,15 +285,16 @@ fn cut(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fixtures::{key_to_id, schema_column, schema_table, shop_catalog};
+    use crate::fixtures::{accounts_catalog, key_to_id, schema_column, schema_table, shop_catalog};
 
+    /// The lines past any cap, with no room for the whole schema: what a slice ranks shows in detail, the rest by name.
     fn lines_used<'a>(
         catalog: &'a Catalog,
         statement: &str,
         instruction: &str,
         table_use: &TableUse,
     ) -> impl Iterator<Item = String> + use<'a> {
-        slice(catalog, statement, instruction, table_use).map(|line| line.text().to_owned())
+        slice(catalog, statement, instruction, table_use, 0).map(|line| line.text().to_owned())
     }
 
     fn lines_of<'a>(catalog: &'a Catalog, statement: &str, instruction: &str) -> impl Iterator<Item = String> + use<'a> {
@@ -282,6 +320,14 @@ mod tests {
         public.tables[1].columns.push(schema_column("user_id", "integer", None));
         public.tables[1].foreign_keys.push(key_to_id("user_id", "public", "users"));
         public.tables.push(schema_table("users", vec![schema_column("id", "integer", None)]));
+        catalog
+    }
+
+    /// `shop` with `billing.refunds` and `public.coupons`, which no foreign key links to any table.
+    fn shop_with_unlinked_tables() -> Catalog {
+        let mut catalog = shop_catalog();
+        catalog.schema.schemas[0].tables.push(schema_table("refunds", vec![schema_column("id", "integer", None)]));
+        catalog.schema.schemas[1].tables.push(schema_table("coupons", vec![schema_column("id", "integer", None)]));
         catalog
     }
 
@@ -394,9 +440,54 @@ mod tests {
     }
 
     #[test]
-    fn the_links_of_the_first_kept_table_come_first() {
-        let kept = tables_in(&shop_with_users(), "SELECT * FROM users, invoices", "");
-        assert_eq!(kept, ["billing.invoices", "public.users", "public.orders", "public.customers"]);
+    fn what_any_kept_table_points_to_comes_before_what_points_to_any_of_them() {
+        let kept = tables_in(&shop_with_users(), "SELECT * FROM customers, orders", "");
+        assert_eq!(kept, ["public.orders", "public.customers", "public.users", "billing.invoices"]);
+    }
+
+    #[test]
+    fn a_table_two_keys_away_is_detailed_past_the_cap() {
+        let lines: Vec<String> = lines_of(&accounts_catalog(0), "", "which accounts does nina belong to").collect();
+        assert_eq!(
+            lines,
+            [
+                "public.accounts(id integer, name text)",
+                "public.members(account_id integer references public.accounts(id), user_id integer references public.users(id))",
+                "public.users(id integer, email text)",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_table_three_keys_away_comes_by_name_alone_past_the_cap() {
+        let mut catalog = accounts_catalog(0);
+        let public = &mut catalog.schema.schemas[0];
+        let far = schema_table("badges", vec![schema_column("user_id", "integer", None)]);
+        public.tables.push(Table { foreign_keys: vec![key_to_id("user_id", "public", "users")], ..far });
+        assert!(lines_of(&catalog, "", "which accounts does nina belong to").any(|line| line == "public.badges"));
+    }
+
+    #[test]
+    fn at_each_hop_and_direction_the_table_run_most_comes_first() {
+        let catalog = accounts_catalog(2);
+        let table_use = used(&catalog, &["SELECT * FROM invoices_1"]);
+        let names = names_in(lines_used(&catalog, "", "which accounts", &table_use));
+        assert_eq!(names[..3], ["public.accounts", "public.invoices_1", "public.invoices_0"]);
+    }
+
+    #[test]
+    fn a_schema_that_fits_is_all_detailed_the_slice_order_first() {
+        let catalog = shop_catalog();
+        let lines = slice(&catalog, "SELECT * FROM customers", "", &TableUse::default(), usize::MAX);
+        assert_eq!(names_in(lines.map(|line| line.text().to_owned()))[..2], ["public.customers", "public.orders"]);
+    }
+
+    #[test]
+    fn a_schema_fitting_to_the_byte_is_all_detailed_and_one_byte_less_is_not() {
+        let catalog = shop_catalog();
+        let whole: usize = tables(&catalog).map(|(node, table)| line(node, table).len() + 1).sum();
+        assert!(slice(&catalog, "", "", &TableUse::default(), whole).all(|line| matches!(line, Line::Detailed(_))));
+        assert!(slice(&catalog, "", "", &TableUse::default(), whole - 1).all(|line| matches!(line, Line::NameAlone(_))));
     }
 
     #[test]
@@ -466,14 +557,15 @@ mod tests {
 
     #[test]
     fn the_other_tables_follow_by_name_alone_the_search_path_first() {
-        let lines: Vec<String> = lines_of(&shop_with_users(), "SELECT * FROM users", "").collect();
+        let lines: Vec<String> = lines_of(&shop_with_unlinked_tables(), "SELECT * FROM invoices", "").collect();
         assert_eq!(
             lines,
             [
-                "public.users(id integer)",
-                "public.customers(id integer, name text, user_id integer references public.users(id))",
-                "public.orders",
-                "billing.invoices",
+                "billing.invoices(id integer, order_id integer references public.orders(id))",
+                "public.orders(id integer, customer_id integer references public.customers(id), total numeric(10,2))",
+                "public.customers(id integer, name text)",
+                "public.coupons",
+                "billing.refunds",
             ]
         );
     }
@@ -508,9 +600,9 @@ mod tests {
 
     #[test]
     fn a_table_shown_by_name_alone_comes_in_detail_once_the_instruction_asks_for_it() {
-        let catalog = shop_catalog();
-        assert!(lines_of(&catalog, "SELECT * FROM customers", "").any(|line| line == "billing.invoices"));
-        assert!(lines_of(&catalog, "SELECT * FROM customers", "join the invoices").any(|line| line.starts_with("billing.invoices(")));
+        let catalog = shop_with_unlinked_tables();
+        assert!(lines_of(&catalog, "SELECT * FROM customers", "").any(|line| line == "billing.refunds"));
+        assert!(lines_of(&catalog, "SELECT * FROM customers", "join the refunds").any(|line| line.starts_with("billing.refunds(")));
     }
 
     #[test]
