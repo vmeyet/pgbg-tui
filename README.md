@@ -177,7 +177,7 @@ pgbg never reads nor writes a query in the folder you start it in, so a query ne
 The sidebar and `ctrl-p` show the queries of the connection on screen.
 `queries = "prod"` on another connection, as a replica, makes it use the folder of `prod` instead of its own.
 `ctrl-s` on a new query saves it in that folder, and `ctrl-x` opens the query in `$EDITOR`.
-`⌥s` saves the editor's text under a new path, leaves the open query as it is, and the editor then stands for the new query; a path that holds other text is refused.
+`^d` or `⌥s` saves the editor's text under a new path, leaves the open query as it is, and the editor then stands for the new query; a path that holds other text is refused.
 
 Each save over a query, from `ctrl-s` or `$EDITOR`, keeps the text it replaced under `versions/` in pgbg's data folder: the newest 50 of each query.
 `ctrl-v` lists them, and `⏎` puts one back in the editor, unsaved until you press `ctrl-s`.
@@ -219,8 +219,8 @@ In the TUI, a bar above the editor shows one field per parameter.
 | Key | Does |
 | --- | --- |
 | `⏎` | Run the statement under the cursor. |
-| `⌥e` | The plan of the read under the cursor as a tree, without running it: `⏎` folds a node, `v` shows the JSON. |
-| `⌥a` | The same plan as it ran, with `ANALYZE` and `BUFFERS`: the read runs, read only and rolled back, under the connection's timeout, and a write is never offered. |
+| `^b` `⌥e` | The plan of the read under the cursor as a tree, without running it: `⏎` folds a node, `v` shows the JSON. |
+| `^f` `⌥a` | The same plan as it ran, with `ANALYZE` and `BUFFERS`: the read runs, read only and rolled back, under the connection's timeout, and a write is never offered. |
 | `esc` | Drop the suggestion after the cursor while one shows; else cancel the running statement. |
 | `tab` `⇧tab` | Next, previous pane: editor, parameters, result, sidebar. |
 | `→` `tab` | In the editor: take the suggestion after the cursor, a completion, a past statement or the AI completion. |
@@ -232,7 +232,8 @@ In the TUI, a bar above the editor shows one field per parameter.
 | `⏎` `d` | In the schema tab: a table's first rows, written in the editor to refine, a click doing the same; its columns and indexes. |
 | `^r` | Search the history of this connection. |
 | `^s` | Save the query. |
-| `⌥s` | Save the text under a new path, starting from the open query's. On macOS, the terminal must send option as meta. |
+| `^d` `⌥s` | Save the text under a new path, starting from the open query's. |
+| `F2` `⌥c` | In the editor: copy the statement under the cursor. |
 | `v` | Show the result as a chart, or as a grid again. |
 | `t` `r` | On a chart: its next kind, grouped, stacked or line; its bars upright or on their side. |
 | `z` `Z` | Keep the primary key the result starts with, or else its first column, on the left while the grid scrolls, or nothing: on by default; keep the columns up to the cursor's. |
@@ -241,6 +242,9 @@ In the TUI, a bar above the editor shows one field per parameter.
 | `o` | A JSON cell as a tree: `⏎` folds, `y` copies the value, `Y` its path as `.items[0].sku`. |
 | `F1` `?` | Every key of the pane you are in: filter, sort, formats, mouse, undo and the rest. |
 | `^c` | Quit. |
+
+`^b`, `^f`, `^d` and `F2` need nothing set in your terminal and work on any keyboard layout.
+The `⌥` keys beside them fire only where the terminal sends option as meta; leave that off on AZERTY and other layouts where Option types symbols, as `{{name}}` needs `{` and `}`.
 
 `pgbg tui <connection>` opens the TUI on another connection than the first.
 
@@ -286,12 +290,12 @@ The header names a primary-key column in bold and ends a column with a foreign k
 
 ### Reading a plan
 
-`⌥e` and `⌥a` show the plan of the statement under the cursor in the result pane, and so does your own `EXPLAIN (FORMAT JSON …)`.
+`^b` and `^f` show the plan of the statement under the cursor in the result pane, and so does your own `EXPLAIN (FORMAT JSON …)`.
 Each node says its type, its table, the estimated rows and cost, and with `ANALYZE` the rows counted, the loops and its own time.
 The node that took most time on its own is lit and marked `← costliest`, by its own estimated cost when nothing timed it.
 `est off ×80` flags a node whose rows are ten times or more away from the estimate.
 A time adds up every loop and every parallel worker, so it can pass the wall clock.
-`⌥a` runs the statement, so it takes a read only, and not while a transaction you began is open; a statement that writes in a function fails there and is never run again.
+`^f` runs the statement, so it takes a read only, and not while a transaction you began is open; a statement that writes in a function fails there and is never run again.
 
 ### Following keys
 

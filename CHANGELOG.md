@@ -15,12 +15,12 @@ Each entry says what changed, then where, then how to use it.
 - **Ask for a chart**, in the TUI's `ctrl-g`: say `orders per week as a line`, take the answer with `⇥`, run it with `⏎`, and the result opens as that chart.
   The answer leads with a `-- chart:` line right above its statement, so each statement of a file can have its own, and the comments above the statement stay.
 - **`ctrl-g` on the result pane**, in the TUI: asks about the statement that gave the result, for `chart this by week`, with its columns' names and types, never a row or a value.
-- **Plans as a tree**: in the TUI editor, `⌥e` shows the plan of the read under the cursor as a tree in the result pane, without running it, and `⌥a` shows it as it ran, with `ANALYZE` and `BUFFERS`.
+- **Plans as a tree**: in the TUI editor, `^b` or `⌥e` shows the plan of the read under the cursor as a tree in the result pane, without running it, and `^f` or `⌥a` shows it as it ran, with `ANALYZE` and `BUFFERS`.
   Your own `EXPLAIN (FORMAT JSON …)` opens the same way: `⏎` folds a node, `v` shows the JSON, the costliest node is lit, and `est off ×80` flags an estimate far from the rows counted.
-  `⌥a` runs the statement read only and rolled back under the connection's timeout, whatever the connection allows, and refuses a write.
+  `^f` runs the statement read only and rolled back under the connection's timeout, whatever the connection allows, and refuses a write.
 - **Past statements as you type**: in the TUI editor, the read you ran most on this connection that starts with what you typed shows faded after the cursor, from three characters on; `→` or `tab` takes it.
   A table or column name shows first and a past read beats a keyword; only reads that succeeded count, never a write, and a match saves an AI completion ask; nothing leaves your machine and there is nothing to set.
-- **Save as**: in the TUI, `⌥s` saves the editor's text under a new path and leaves the open query as it is.
+- **Save as**: in the TUI, `^d` or `⌥s` saves the editor's text under a new path and leaves the open query as it is, with nothing to set in your terminal and on any keyboard layout.
   The prompt starts from the open query's path, or empty with none open; once saved, the editor stands for the new query, and a path that holds other text is refused.
 - **A separate command for the AI completion**: `[ai] ghost_command` in `config.toml` names the program the idle ghost asks, as a quicker model, given as `command` is.
   `ctrl-g` keeps `command`, `ghost = true` still turns the ghost on, and with no `ghost_command` the ghost asks `command` as before.
@@ -52,6 +52,7 @@ Each entry says what changed, then where, then how to use it.
 ### Fixed
 
 - **The AI no longer guesses a join**, in `ctrl-g`: it joins only along a listed foreign key and uses only listed columns, and when what it needs is not listed, the status line shows its reason in place of a statement.
+- **`F2` copies the statement under the cursor**, in the TUI editor, on any keyboard layout, where `⌥c` needs the terminal to send option as meta.
 - **Common words no longer pull tables into the AI prompt**: `for` does not bring a table `forms`, and a column such as `name` or `created_at` does not bring every table holding one.
 - **A rewrite waits for `ctrl-g`**, in the TUI with `[ai] ghost = true`: when the answer rewrites what you typed instead of continuing it, the footer reads `^g rewrite waiting`.
   `ctrl-g` then shows it as a diff, with no new ask, and `tab` takes it; any other key drops it.

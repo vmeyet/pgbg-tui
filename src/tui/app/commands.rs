@@ -113,7 +113,7 @@ mod tests {
         app, app_on, connection, control, enter, first_run, on_the_result, opened_on, press, shop, typed, view, with_every_pane,
         with_focus, with_result,
     };
-    use super::super::{Answer, ConfigAnswer, ConfigChangeId, Focus, View};
+    use super::super::{Answer, ConfigAnswer, ConfigChangeId, Focus, Prompt, View};
     use super::*;
     use crate::fixtures::{nord, orders};
     use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -185,6 +185,26 @@ mod tests {
         enter(&mut app);
         assert!(matches!(view(&app), View::Chart(_)));
         assert!(app.overlay.is_none());
+    }
+
+    #[test]
+    fn save_as_runs_from_the_palette_on_the_editor() {
+        let mut app = opened_on(typed("SELECT 1"), "save as");
+        enter(&mut app);
+        assert!(matches!(app.overlay, Some(Overlay::Prompt(Prompt::SaveAs { .. }))), "{:?}", app.overlay);
+    }
+
+    #[test]
+    fn plan_runs_the_explain_from_the_palette_on_the_editor() {
+        let mut app = opened_on(typed("SELECT 2"), "plan");
+        assert_eq!(enter(&mut app), [first_run(&shop(), "EXPLAIN (FORMAT JSON) SELECT 2")]);
+    }
+
+    #[test]
+    fn plan_as_it_ran_runs_the_analyze_from_the_palette_on_the_editor() {
+        let mut app = opened_on(typed("SELECT 2"), "plan as it ran");
+        let actions = enter(&mut app);
+        assert!(matches!(&actions[..], [Action::Analyze { .. }]), "{actions:?}");
     }
 
     #[test]

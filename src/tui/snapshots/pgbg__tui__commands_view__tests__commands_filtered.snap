@@ -14,7 +14,7 @@ expression: render(&app).backend()
 "││                  │  · copy the result as CSV  c · copy as                   │──────────────────╮│"
 "││                  │  · copy the path, as jq writes it  Y · json              │                  ││"
 "││                  │  · copy it as a Markdown table  m · copy as              │                  ││"
-"││                  │  · copy the statement under the cursor  ⌥c · editor      │                  ││"
+"││                  │  · copy the statement under the cursor  F2 ⌥c · editor   │                  ││"
 "││                  │  · copy the selection, else the statement  ⌘c · editor   │                  ││"
 "││                  │   ↑↓ pick · ⏎ runs · esc closes                          │                  ││"
 "││                  │                                                          │                  ││"
