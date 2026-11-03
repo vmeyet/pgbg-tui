@@ -1,5 +1,5 @@
 use super::axis::XAxis;
-use super::{ChartColumns, ChartSpec, Orientation, default_x, default_y};
+use super::{ChartColumns, ChartKind, ChartSpec, Orientation, default_x, default_y};
 use crate::db::model::{Column, ColumnName, ResultSet, Value};
 use std::fmt;
 
@@ -18,6 +18,15 @@ pub(crate) struct Series {
     pub(crate) y: Vec<YColumn>,
     /// Rows were left out: the result was cut, a row had no place in time, or there were more points than the kind draws.
     pub(crate) is_cut: bool,
+    /// The kind stepping goes to: the next that can draw the result, so the footer never names one it would skip.
+    next_kind: Option<ChartKind>,
+}
+
+/// Where the chart's keys lead from the chart on screen; `None` where its key would do nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ChartNext {
+    pub(crate) kind: Option<ChartKind>,
+    pub(crate) orientation: Option<Orientation>,
 }
 
 /// A row and where it sits on the x axis.
@@ -85,36 +94,46 @@ impl Series {
         check_columns_exist(result, &columns)?;
         let ChartColumns { kind, x, ref y, .. } = columns;
         let axis = XAxis::of(kind, &result.columns()[x].kind);
-        let placed = place(result, x, axis);
-        let kept: Vec<Placed> = kind.keep(placed.len()).into_iter().map(|index| placed[index]).collect();
+        let kept = kept_points(result, &columns, kind);
         let rows: Vec<usize> = kept.iter().map(|point| point.row).collect();
-        let series = Self {
+        if !has_a_value(result, y, &rows) {
+            return Err(ChartError::Empty);
+        }
+        Ok(Self {
             axis,
             positions: kept.iter().map(|point| point.position).collect(),
             labels: rows.iter().map(|&row| result.rows()[row][x].prefix(MAX_LABEL_CHARS)).collect(),
             y: y.iter().map(|&column| y_values(result, column, &rows)).collect(),
             is_cut: !result.is_whole() || kept.len() < result.rows().len(),
+            next_kind: kind.others().find(|&other| can_draw(result, &columns, other)),
             columns,
-        };
-        if series.has_no_value() {
-            return Err(ChartError::Empty);
-        }
-        Ok(series)
+        })
     }
 
     /// Draws the same columns as the next kind that can: a line leaves out what has no place on its scale, which can be every row.
     pub(crate) fn step_kind(&mut self, result: &ResultSet) {
-        let columns_as = |kind| ChartColumns { kind, ..self.columns.clone() };
-        let next = self.columns.kind.others().find_map(|kind| Self::from_columns(result, columns_as(kind)).ok());
+        let next = self.next_kind.and_then(|kind| Self::from_columns(result, ChartColumns { kind, ..self.columns.clone() }).ok());
         if let Some(next) = next {
             *self = next;
         }
     }
 
+    /// Where `t` and `r` lead from this chart.
+    pub(crate) fn next(&self) -> ChartNext {
+        let ChartColumns { kind, orientation, .. } = self.columns;
+        ChartNext { kind: self.next_kind, orientation: kind.has_orientation().then(|| orientation.flipped()) }
+    }
+
+    /// The kind and orientation drawn, as the chart's title writes them: `stacked, upright`, or `line`.
+    pub(crate) fn shown_as(&self) -> String {
+        let ChartColumns { kind, orientation, .. } = self.columns;
+        if kind.has_orientation() { format!("{}, {}", kind.name(), orientation.shown_name()) } else { kind.name().to_owned() }
+    }
+
     /// Stands the bars up, or lays them on their side; a line stays as it is.
-    pub(crate) const fn flip(&mut self) {
-        if self.columns.kind.has_orientation() {
-            self.columns.orientation = self.columns.orientation.flipped();
+    pub(crate) fn flip(&mut self) {
+        if let Some(orientation) = self.next().orientation {
+            self.columns.orientation = orientation;
         }
     }
 
@@ -130,10 +149,22 @@ impl Series {
         let is_before_nearer = (position - self.positions[before]).abs() < (self.positions[after] - position).abs();
         self.labels[if is_before_nearer { before } else { after }].clone()
     }
+}
 
-    fn has_no_value(&self) -> bool {
-        self.y.iter().all(|column| column.values.iter().all(Option::is_none))
-    }
+/// The points `kind` keeps out of `result`, in the order it draws them.
+fn kept_points(result: &ResultSet, columns: &ChartColumns, kind: ChartKind) -> Vec<Placed> {
+    let axis = XAxis::of(kind, &result.columns()[columns.x].kind);
+    let placed = place(result, columns.x, axis);
+    kind.keep(placed.len()).into_iter().map(|index| placed[index]).collect()
+}
+
+fn can_draw(result: &ResultSet, columns: &ChartColumns, kind: ChartKind) -> bool {
+    let rows: Vec<usize> = kept_points(result, columns, kind).iter().map(|point| point.row).collect();
+    has_a_value(result, &columns.y, &rows)
+}
+
+fn has_a_value(result: &ResultSet, y: &[usize], rows: &[usize]) -> bool {
+    rows.iter().any(|&row| y.iter().any(|&column| number(&result.rows()[row][column]).is_some()))
 }
 
 /// Refuses an index past the last column: a panic aborts pgbg, and the editor's unsaved text goes with it.
@@ -211,7 +242,7 @@ fn number(value: &Value) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::super::tests::{column, result};
-    use super::super::{ChartKind, bars, line};
+    use super::super::{bars, line};
     use super::*;
     use crate::db::model::{ColumnKind, Extent, Page};
 
@@ -369,6 +400,27 @@ mod tests {
         let mut series = Series::from_result(&no_place, &spec("stacked")).unwrap();
         series.step_kind(&no_place);
         assert_eq!(series.columns.kind, ChartKind::Grouped);
+    }
+
+    #[test]
+    fn next_names_a_kind_past_the_one_that_cannot_draw_the_result() {
+        let no_place = daily(&[Value::Null, Value::Infinity]);
+        let series = Series::from_result(&no_place, &spec("stacked")).unwrap();
+        assert_eq!(series.next().kind, Some(ChartKind::Grouped));
+    }
+
+    #[test]
+    fn next_names_the_other_orientation_for_bars_and_none_for_a_line() {
+        let next_orientation = |kind| Series::from_result(&orders(), &spec(kind)).unwrap().next().orientation;
+        assert_eq!(next_orientation("stacked"), Some(Orientation::Horizontal));
+        assert_eq!(next_orientation("line"), None);
+    }
+
+    #[test]
+    fn shown_as_names_a_line_without_an_orientation() {
+        let shown_as = |kind| Series::from_result(&orders(), &spec(kind)).unwrap().shown_as();
+        assert_eq!(shown_as("stacked"), "stacked, upright");
+        assert_eq!(shown_as("line"), "line");
     }
 
     #[test]

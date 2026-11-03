@@ -1,6 +1,7 @@
 //! Every action of the TUI in one table: its default keys, the pane they work in, its line in the `?` help and its
 //! hint in the footer.
 //! The key handling, the help and the footer all read it from here.
+use crate::chart::ChartNext;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use vtui::help::{Row as HelpRow, Section};
 use vtui::usage::Group as UsageGroup;
@@ -384,7 +385,7 @@ const FIND_KEY: &str = "find a saved query, as ^p";
 const SWITCH_TAB: &[KeyEvent] = &[key(KeyCode::Left), key(KeyCode::Right), key(KeyCode::Char('[')), key(KeyCode::Char(']'))];
 
 /// The actions whose footer hint stays when the others no longer fit, the one kept longest first.
-const FOOTER_KEPT_LONGEST: [Act; 3] = [Act::Quit, Act::Help, Act::Close];
+const FOOTER_KEPT_LONGEST: [Act; 5] = [Act::Quit, Act::Help, Act::Close, Act::ChartKind, Act::ChartFlip];
 
 /// Every action, in the order the help and the footer list them; where two rows share a key in a pane, the first wins.
 pub(crate) const ROWS: &[Row] = &[
@@ -430,10 +431,10 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Chart, Pane::Result, &[key(KeyCode::Char('v'))]).help("v", "the result as a grid or a chart").footer("v", "chart"),
     row(Act::ChartKind, Pane::Result, &[key(KeyCode::Char('t'))])
         .help("t", "on a chart: its next kind, grouped, stacked or line")
-        .footer("t", "kind"),
+        .footer("t", ""),
     row(Act::ChartFlip, Pane::Result, &[key(KeyCode::Char('r'))])
         .help("r", "on a chart: its bars upright, or on their side")
-        .footer("r", "flip"),
+        .footer("r", ""),
     row(Act::StepFormat, Pane::Result, &[key(KeyCode::Char('f'))])
         .help("f", "the column in its next format: raw, then readable ones")
         .footer("f", "format"),
@@ -672,15 +673,27 @@ fn rows_with_a_hint(pane: Pane) -> impl Iterator<Item = &'static Row> {
 /// The footer's hints for `pane` that fit in `columns`, in the footer's order; `width` says what each hint takes.
 /// The way out and the way to every other key are the last to go; the others go from the end.
 pub(crate) fn footer_within(pane: Pane, columns: usize, width: impl Fn(Hint) -> usize) -> Vec<Hint> {
-    fit_hints(&footer_rows(pane).collect::<Vec<_>>(), columns, width)
+    fit_hints(&footer_rows(pane).copied().collect::<Vec<_>>(), columns, width)
 }
 
-/// The footer's hints while the result pane has the keys and shows a chart: the chart's keys, without those of the hidden grid.
-pub(crate) fn chart_footer_within(columns: usize, width: impl Fn(Hint) -> usize) -> Vec<Hint> {
-    fit_hints(&rows_with_a_hint(Pane::Result).filter(|row| !row.act.is_grid()).collect::<Vec<_>>(), columns, width)
+/// The footer's hints while the result pane has the keys and shows a chart: the chart's keys, each naming where `next`
+/// says it leads and left out where it leads nowhere, without those of the hidden grid.
+pub(crate) fn chart_footer_within(next: ChartNext, columns: usize, width: impl Fn(Hint) -> usize) -> Vec<Hint> {
+    let rows: Vec<Row> = rows_with_a_hint(Pane::Result).filter(|row| !row.act.is_grid()).filter_map(|row| with_next(row, next)).collect();
+    fit_hints(&rows, columns, width)
 }
 
-fn fit_hints(rows: &[&Row], columns: usize, width: impl Fn(Hint) -> usize) -> Vec<Hint> {
+fn with_next(row: &Row, next: ChartNext) -> Option<Row> {
+    let does = match row.act {
+        Act::ChartKind => next.kind?.name(),
+        Act::ChartFlip => next.orientation?.shown_name(),
+        Act::Chart => "grid",
+        _ => return Some(*row),
+    };
+    Some(Row { footer: row.footer.map(|hint| Hint { does, ..hint }), ..*row })
+}
+
+fn fit_hints(rows: &[Row], columns: usize, width: impl Fn(Hint) -> usize) -> Vec<Hint> {
     let mut by_priority: Vec<usize> = (0..rows.len()).collect();
     by_priority
         .sort_by_key(|&index| FOOTER_KEPT_LONGEST.iter().position(|&act| act == rows[index].act).unwrap_or(FOOTER_KEPT_LONGEST.len()));
@@ -771,6 +784,7 @@ fn help_rows(pane: Pane) -> Vec<HelpRow> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chart::{ChartKind, Orientation};
     use strum::IntoEnumIterator;
 
     fn hint_width(hint: Hint) -> usize {
@@ -792,11 +806,24 @@ mod tests {
 
     #[test]
     fn the_chart_keys_are_hinted_on_a_chart_and_not_on_the_grid() {
-        let does = |hints: Vec<Hint>| hints.iter().map(|hint| hint.does).collect::<Vec<_>>();
-        let on_chart = does(chart_footer_within(500, hint_width));
-        let on_grid = does(footer_within(Pane::Result, 500, hint_width));
-        assert!(on_chart.contains(&"kind") && on_chart.contains(&"flip") && !on_chart.contains(&"rows"), "{on_chart:?}");
-        assert!(!on_grid.contains(&"kind") && !on_grid.contains(&"flip") && on_grid.contains(&"rows"), "{on_grid:?}");
+        let next = ChartNext { kind: Some(ChartKind::Stacked), orientation: Some(Orientation::Vertical) };
+        let on_chart = chart_footer_within(next, 500, hint_width);
+        let on_grid = footer_within(Pane::Result, 500, hint_width);
+        let has = |hints: &[Hint], keys, does| hints.contains(&Hint { keys, does });
+        assert!(has(&on_chart, "t", "stacked") && has(&on_chart, "r", "upright") && !has(&on_chart, "j/k", "rows"), "{on_chart:?}");
+        assert!(!on_grid.iter().any(|hint| ["t", "r"].contains(&hint.keys)) && has(&on_grid, "j/k", "rows"), "{on_grid:?}");
+    }
+
+    #[test]
+    fn v_on_a_chart_names_the_grid_it_goes_back_to() {
+        let hints = chart_footer_within(ChartNext::default(), 500, hint_width);
+        assert!(hints.contains(&Hint { keys: "v", does: "grid" }), "{hints:?}");
+    }
+
+    #[test]
+    fn a_chart_key_that_leads_nowhere_has_no_hint() {
+        let keys: Vec<&str> = chart_footer_within(ChartNext::default(), 500, hint_width).iter().map(|hint| hint.keys).collect();
+        assert!(!keys.contains(&"t") && !keys.contains(&"r") && keys.contains(&"v"), "{keys:?}");
     }
 
     #[test]
