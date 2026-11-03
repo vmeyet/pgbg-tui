@@ -78,6 +78,7 @@ These invariants hold across every flow; a change that breaks one is a bug.
 - The tables it points to come in detail, then every other table by name alone, in search-path order, until the 16 KiB cap; the whole schema in detail is never sent.
 - The history only orders those tables: `tui/backend/schema.rs` counts the runs naming each table after a schema read and hands `TableUse` to the app, so within one reason the most used comes first; no history text, statement or count goes into a prompt, and a missing or unreadable history means catalog order.
 - Asked from the result pane, an AI prompt is about the statement that gave the result and also holds the names and types of its columns, a name holding a secret left out, while the editor still holds that statement.
+- A prompt says to join only along a foreign key it lists and use only the columns it lists; a command that cannot answers `-- cannot: <what is missing>`, and those words show on the status line as an answer with no statement, never in the log.
 - An AI answer is a suggestion: taking it and running it are two keys, and the run goes through the guard; taking one gives the editor the keys.
 - An answer asked to chart leads its statement with a `-- chart:` line, which stays a comment: it is sent with the statement, so a server's position still counts from the statement's first byte, and a prompt never holds it.
 - A `-- chart:` line leading a statement draws that statement's result; without one, the file header's draws it, so a file of several statements keeps one chart each.

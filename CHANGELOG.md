@@ -49,6 +49,7 @@ Each entry says what changed, then where, then how to use it.
 
 ### Fixed
 
+- **The AI no longer guesses a join**, in `ctrl-g`: it joins only along a listed foreign key and uses only listed columns, and when what it needs is not listed, the status line shows its reason in place of a statement.
 - **Common words no longer pull tables into the AI prompt**: `for` does not bring a table `forms`, and a column such as `name` or `created_at` does not bring every table holding one.
 - **A rewrite waits for `ctrl-g`**, in the TUI with `[ai] ghost = true`: when the answer rewrites what you typed instead of continuing it, the footer reads `^g rewrite waiting`.
   `ctrl-g` then shows it as a diff, with no new ask, and `tab` takes it; any other key drops it.

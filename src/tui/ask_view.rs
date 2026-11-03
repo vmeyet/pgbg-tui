@@ -89,7 +89,7 @@ mod tests {
     use super::super::app::idle_ghost::tests::{UNMASKABLE_COMMENT, ghosted, idle_on};
     use super::super::app::{Answer, AskFailure, AskId};
     use super::super::{styled, ui};
-    use crate::ai::CommandError;
+    use crate::ai::{AnswerError, CommandError};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -156,6 +156,14 @@ mod tests {
         let mut app = idle_on(UNMASKABLE_COMMENT);
         app.ask_idle_ghost();
         insta::assert_snapshot!("comment_left_out", render(&app, 120, 6).backend());
+    }
+
+    #[test]
+    fn an_answer_without_a_statement_shows_its_reason_in_the_status_line() {
+        let mut app = waiting("SELECT * FROM orders", "join the invoices");
+        let answer = Err(AskFailure::Answer(AnswerError::Cannot("no key links orders and invoices".into())));
+        app.apply(Answer::Asked { ask: AskId::FIRST, answer });
+        insta::assert_snapshot!("ask_cannot", render(&app, 120, 6).backend());
     }
 
     #[test]

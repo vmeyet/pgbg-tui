@@ -22,6 +22,11 @@ const COLUMNS_CUT_NOTE: &str = "(The columns were cut to fit: more exist.)\n";
 const MASKING_NOTE: &str = "Values are masked: keep each '<literal n>', <number n> and \"<name n>\" where its value stays, and pgbg puts \
                             the values back. Never write a marker the instruction or the statement does not hold.\n";
 
+/// A join comes from declared foreign keys and real column names, never a guess from a name.
+const JOIN_RULE: &str = "Join tables only along a foreign key the schema lists, and use only the columns it lists: never guess a key or a \
+                         column from a name, as `<table>_id`. When the key or the columns you need are not listed, write no statement \
+                         and answer with the one line `-- cannot: <what is missing>`, in a few words.\n";
+
 const FIX: &str = "Fix the statement under the cursor, so the server no longer fails it.";
 
 /// Whether a prompt may tell of a server's error (`[ai] errors`): nothing, the default, or its SQLSTATE and position.
@@ -158,6 +163,7 @@ fn head(input: &PromptInput<'_>, instruction: &str, statement: &str) -> String {
     let fault = fault_section(input);
     format!(
         "You write PostgreSQL for pgbg, a SQL editor. Answer with SQL statements only, in one ```sql fence.\n\
+         {JOIN_RULE}\
          {masking}\
          Keep each {{{{name}}}} parameter as it is.\n\
          When the instruction asks for a chart, start the statement with the line `-- chart: <kind> x=<column> y=<column>,<column>`, \
@@ -167,7 +173,7 @@ fn head(input: &PromptInput<'_>, instruction: &str, statement: &str) -> String {
          Statement under the cursor:\n{statement}\n\n\
          {fault}\
          {columns}\
-         Schema, where a line with a name alone is a table whose columns are left out:\n",
+         Schema, where a line with a name alone is a table whose columns are unknown:\n",
         input.tier
     )
 }
@@ -376,7 +382,31 @@ mod tests {
     #[test]
     fn a_table_nothing_points_to_is_still_named() {
         let text = text("SELECT * FROM customers", "");
-        assert!(text.contains("name alone is a table whose columns are left out:\n") && text.contains("\nbilling.invoices\n"), "{text}");
+        assert!(text.contains("name alone is a table whose columns are unknown:\n") && text.contains("\nbilling.invoices\n"), "{text}");
+    }
+
+    #[test]
+    fn the_prompt_says_to_join_only_along_a_listed_key_and_to_say_when_one_is_missing() {
+        let text = text("SELECT * FROM customers", "join the invoices");
+        assert!(
+            text.contains("Join tables only along a foreign key the schema lists") && text.contains("only the columns it lists"),
+            "{text}"
+        );
+        assert!(text.contains("never guess") && text.contains("-- cannot:"), "{text}");
+    }
+
+    #[test]
+    fn a_table_the_instruction_asks_for_and_those_a_key_away_show_their_columns() {
+        let text = text("", "the invoices");
+        assert!(text.contains("billing.invoices(id integer, order_id integer references public.orders(id))\n"), "{text}");
+        assert!(text.contains("public.orders(id integer,") && text.contains("\npublic.customers\n"), "{text}");
+    }
+
+    #[test]
+    fn an_answer_saying_what_is_missing_reads_as_no_statement_with_its_reason() {
+        let prompt = prompt_for("SELECT 1", "", &shop_catalog()).unwrap();
+        let answer = prompt.answer("```sql\n-- cannot: the columns of invoices are not listed\n```");
+        assert_eq!(answer, Err(AnswerError::Cannot("the columns of invoices are not listed".into())));
     }
 
     #[test]

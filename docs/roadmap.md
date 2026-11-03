@@ -142,7 +142,7 @@ The review of #260 to #285 found these, most severe first.
 - [x] `v` on a table's description after a chart never panics: `left_chart` moves into `Run::Done`, so it cannot outlive its result
 - [x] The idle ask sends no secret from a comment: `PGPASSWORD=x`, `pwd x`, `api_key x` and `token x` count as secrets, as any `KEY=value` does
 - [x] With literals masked, a double-quoted, backticked or curly-quoted span in a comment is masked, and a quoted name the catalog does not hold is masked or refused in a statement
-- [ ] The prompt says to join only along a listed foreign key and use only listed columns, and to say so when what it needs is not listed
+- [x] The prompt says to join only along a listed foreign key and use only listed columns, and to say so when what it needs is not listed
 - [x] A read is not sent again once the session's settings may have changed, as after a confirmed `SET search_path` or `SET ROLE`, or a read calling `set_config`
 - [x] A read is sent again on its own only when it calls no function outside a short safe list; any other says the link was lost and `⏎` runs it again
 - [ ] A read-only rollback also releases session-level advisory locks, and the docs stop saying that everything is rolled back

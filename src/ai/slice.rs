@@ -91,8 +91,9 @@ pub(super) fn slice<'a>(
 }
 
 fn kept<'a>(catalog: &'a Catalog, named: &[String], asked: &[String], table_use: &TableUse) -> Vec<Entry<'a>> {
-    let column_words: Vec<&str> = asked.iter().map(String::as_str).filter(|word| !GENERIC_COLUMNS.contains(word)).collect();
-    let ranked = |entry: Entry<'a>| Some((reason(entry.1, named, asked, &column_words)?, Reverse(table_use.of(entry.1)), entry));
+    let pointing: Vec<&str> = asked.iter().map(String::as_str).filter(|word| points_past_its_spelling(word)).collect();
+    let column_words: Vec<&str> = pointing.iter().copied().filter(|word| !GENERIC_COLUMNS.contains(word)).collect();
+    let ranked = |entry: Entry<'a>| Some((reason(entry.1, named, asked, &pointing, &column_words)?, Reverse(table_use.of(entry.1)), entry));
     let mut kept: Vec<_> = tables(catalog).filter_map(ranked).collect();
     kept.sort_by_key(|&(reason, used, _)| (reason, used));
     kept.into_iter().map(|(_, _, entry)| entry).collect()
@@ -102,15 +103,15 @@ fn tables(catalog: &Catalog) -> impl Iterator<Item = Entry<'_>> {
     catalog.schema.schemas.iter().flat_map(|node| node.tables.iter().map(move |table| (node, table)))
 }
 
-fn reason(table: &Table, named: &[String], asked: &[String], column_words: &[&str]) -> Option<Reason> {
+fn reason(table: &Table, named: &[String], asked: &[String], pointing: &[&str], column_words: &[&str]) -> Option<Reason> {
     let name = table.name.to_lowercase();
     let is_long_name = name.chars().count() >= MIN_WORD;
-    let is_asked = |word: &String| name.starts_with(word.as_str()) || (is_long_name && word.starts_with(name.as_str()));
+    let is_named_by_start = |word: &&str| name.starts_with(*word) || (is_long_name && word.starts_with(name.as_str()));
     let is_asked_column = |column: &SchemaColumn| column_words.contains(&column.name.to_lowercase().as_str());
     let has_asked_column = !column_words.is_empty() && table.columns.iter().any(is_asked_column);
     match () {
         () if named.contains(&name) => Some(Reason::NamedByStatement),
-        () if asked.iter().any(is_asked) => Some(Reason::NamedByInstruction),
+        () if asked.contains(&name) || pointing.iter().any(is_named_by_start) => Some(Reason::NamedByInstruction),
         () if has_asked_column => Some(Reason::ColumnNamedByInstruction),
         () => None,
     }
@@ -165,8 +166,13 @@ fn statement_names(statement: &str) -> Vec<String> {
 
 fn instruction_words(instruction: &str) -> Vec<String> {
     let words = instruction.split(|c: char| !(c.is_alphanumeric() || c == '_'));
-    let lowercase = words.filter(|word| word.chars().count() >= MIN_WORD).map(str::to_lowercase);
-    lowercase.filter(|word| !STOP_WORDS.contains(&word.as_str())).collect()
+    words.map(str::to_lowercase).collect()
+}
+
+/// Whether a lowercase instruction `word` may name what it starts or a column: too short or too common a one only names a
+/// table spelt just as it is, so a table `io` or `list` stays reachable.
+fn points_past_its_spelling(word: &str) -> bool {
+    word.chars().count() >= MIN_WORD && !STOP_WORDS.contains(&word)
 }
 
 /// `schema.table(...)` with each column, then each foreign key no single column carries, then the table's comment.
@@ -488,6 +494,23 @@ mod tests {
     #[test]
     fn a_short_instruction_word_names_nothing() {
         assert!(lines_of(&shop_catalog(), "", "an id of it").eq(lines_of(&shop_catalog(), "", "")));
+    }
+
+    #[test]
+    fn a_table_spelt_as_a_short_or_common_word_comes_in_detail_when_asked_for() {
+        for name in ["io", "list"] {
+            let mut catalog = shop_catalog();
+            catalog.schema.schemas[1].tables.push(schema_table(name, vec![schema_column("id", "integer", None)]));
+            assert_eq!(tables_in(&catalog, "", &format!("rows of {name}"))[0], format!("public.{name}"));
+            assert!(lines_of(&catalog, "", &format!("rows of {name}")).any(|line| line == format!("public.{name}(id integer)")));
+        }
+    }
+
+    #[test]
+    fn a_table_shown_by_name_alone_comes_in_detail_once_the_instruction_asks_for_it() {
+        let catalog = shop_catalog();
+        assert!(lines_of(&catalog, "SELECT * FROM customers", "").any(|line| line == "billing.invoices"));
+        assert!(lines_of(&catalog, "SELECT * FROM customers", "join the invoices").any(|line| line.starts_with("billing.invoices(")));
     }
 
     #[test]
