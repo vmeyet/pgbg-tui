@@ -237,6 +237,16 @@ pub(crate) fn wide_orders() -> ResultSet {
     ResultSet::whole(names.iter().map(|name| column(name, ColumnKind::Text)).collect(), vec![row(7), row(12)])
 }
 
+/// One row of a customer and `columns` numeric columns, `series_0` first.
+pub(crate) fn wide_chart(columns: usize) -> ResultSet {
+    let names = (0..columns).map(|at| column(&format!("series_{at}"), ColumnKind::Int));
+    let values = (0..columns).map(|at| Value::Int(at as i64 + 1));
+    ResultSet::whole(
+        std::iter::once(column("customer", ColumnKind::Text)).chain(names).collect(),
+        vec![std::iter::once(Value::Text("nina".into())).chain(values).collect()],
+    )
+}
+
 /// Two rows of one column of a type pgbg does not decode, `shape`.
 pub(crate) fn undecoded() -> ResultSet {
     ResultSet::whole(vec![column("shape", ColumnKind::Other)], vec![vec![Value::Unsupported]; 2])

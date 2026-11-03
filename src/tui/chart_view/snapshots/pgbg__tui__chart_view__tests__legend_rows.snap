@@ -1,6 +1,6 @@
 ---
 source: src/tui/chart_view/mod.rs
-expression: "render(&series(&wide(5), \"bar\"), 28, 12).backend()"
+expression: "render(&series(&wide_chart(5), \"bar\"), 28, 12).backend()"
 ---
 "■ series_0  ■ series_1      "
 "■ series_2  ■ series_3      "

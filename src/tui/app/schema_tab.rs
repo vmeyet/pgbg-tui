@@ -287,10 +287,11 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::super::fixtures::{app, app_on, click_at, every_pane, shop, to_shop};
+    use super::super::fixtures::{app, app_on, click_at, every_pane, shop, to_shop, view};
     use super::super::sheet::{SchemaState, SessionState};
-    use super::super::{Answer, Fit, Incoming, Run, RunId, SessionId};
+    use super::super::{Answer, Fit, Incoming, Run, RunId, SessionId, View};
     use super::*;
+    use crate::chart::ChartError;
     use crate::connection::WritePolicy;
     use crate::db::model::Params;
     use crate::db::{guard, lex};
@@ -605,6 +606,23 @@ mod tests {
         assert_eq!(app.sheet().shown.as_deref(), Some("public.orders · 3 columns · 1 index"));
         press(&mut app, KeyCode::Char('p'));
         assert_eq!(app.sheet().shown, None);
+    }
+
+    #[test]
+    fn v_on_a_table_shown_after_a_chart_draws_from_the_table_not_from_the_old_chart() {
+        let mut app = on_orders();
+        press(&mut app, KeyCode::Char('p'));
+        // Its last numeric column sits at index 4, past the four columns of a table's description.
+        let result = fixtures::wide_chart(4);
+        app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result, took: Duration::ZERO }));
+        press(&mut app, KeyCode::BackTab);
+        press(&mut app, KeyCode::Char('v'));
+        press(&mut app, KeyCode::Char('v'));
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Char('d'));
+        press(&mut app, KeyCode::BackTab);
+        press(&mut app, KeyCode::Char('v'));
+        assert_eq!(view(&app), &View::Chart(Err(ChartError::NoY)));
     }
 
     #[test]

@@ -98,11 +98,14 @@ pub(in crate::tui) enum Run {
     },
     Done {
         run: RunId,
-        result: ResultSet,
+        /// Boxed, as `grid` is.
+        result: Box<ResultSet>,
         took: Duration,
         /// Boxed, so the other states of a run stay small.
         grid: Box<Grid>,
         view: View,
+        /// The chart last left for the grid, so `v` comes back to the kind and orientation it had.
+        left_chart: Option<ChartColumns>,
         /// The next page was asked for and has not come yet.
         is_page_asked: bool,
     },
@@ -168,8 +171,6 @@ pub(in crate::tui) struct Sheet {
     tried_to_write: Option<ToRun>,
     /// The last table browsed, replaced by the next one while the editor still holds exactly what browsing wrote.
     browsed: Option<Browsed>,
-    /// The chart last left for the grid, so `v` comes back to the kind and orientation it had, until the next result.
-    left_chart: Option<ChartColumns>,
     /// What was chosen for the columns of the last statement's result, kept while the next one runs.
     kept_columns: Option<KeptColumns>,
 }
@@ -209,18 +210,17 @@ impl Sheet {
             bar: ParamBar::default(),
             tried_to_write: None,
             browsed: None,
-            left_chart: None,
             kept_columns: None,
         }
     }
 
     /// Shows the result as its plan or a chart, or as the grid again.
     pub(super) fn switch_view(&mut self) {
-        if let Run::Done { result, view, .. } = &mut self.run {
+        if let Run::Done { result, view, left_chart, .. } = &mut self.run {
             if let View::Chart(Ok(series)) = view {
-                self.left_chart = Some(series.columns.clone());
+                *left_chart = Some(series.columns.clone());
             }
-            *view = match (&*view, &self.left_chart) {
+            *view = match (&*view, &*left_chart) {
                 (View::Grid, Some(columns)) => View::Chart(Series::from_columns(result, columns.clone())),
                 (View::Grid, None) => plan_view_of(result)
                     .unwrap_or_else(|| View::Chart(chart::asked_or_inferred_series(chart_asked(self.sent.as_ref(), &self.header), result))),
@@ -479,7 +479,15 @@ impl Sheet {
         let run = self.next_run();
         self.shown = Some(title);
         let grid = Box::new(Grid::new(&result, format::opening(result.columns(), &[], reading.mode), Keys::default(), &reading.clock));
-        self.run = Run::Done { run, grid, result, took: Duration::ZERO, view: View::Grid, is_page_asked: false };
+        self.run = Run::Done {
+            run,
+            grid,
+            result: Box::new(result),
+            took: Duration::ZERO,
+            view: View::Grid,
+            left_chart: None,
+            is_page_asked: false,
+        };
     }
 
     /// A new run's id; the marks of the last run are dropped, and what was chosen for the columns of a statement's result
@@ -567,10 +575,9 @@ impl Sheet {
             Incoming::Result { run, .. } | Incoming::Failed { run, .. } if !self.is_answer_to_running(run) => {}
             Incoming::Result { run, result, took } => {
                 self.add_sent_to_history_index(reading.clock.now);
-                self.left_chart = None;
                 let view = plan_view_of(&result).unwrap_or_else(|| self.asked_view(&result));
                 let grid = Box::new(self.grid_on(&result, reading));
-                self.run = Run::Done { run, grid, result, took, view, is_page_asked: false };
+                self.run = Run::Done { run, grid, result: Box::new(result), took, view, left_chart: None, is_page_asked: false };
             }
             Incoming::Page { run, .. } | Incoming::PageFailed { run, .. } if !self.is_waiting_on_page(run) => {}
             Incoming::Page { page, .. } => self.push_page(page, &reading.clock),

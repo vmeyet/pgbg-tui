@@ -41,6 +41,8 @@ pub(crate) enum ChartError {
     /// Several columns answer to the name, like `count` or `?column?`.
     AmbiguousColumn(String),
     NotNumeric(ColumnName),
+    /// An index past the last column of the result.
+    NoColumnAt(usize),
     /// No x was given and the result has no text, date or time column.
     NoX,
     /// No y was given and the result has no numeric column.
@@ -55,6 +57,7 @@ impl fmt::Display for ChartError {
             Self::UnknownColumn(name) => write!(f, "the result has no column `{name}`"),
             Self::AmbiguousColumn(name) => write!(f, "the result has several columns `{name}`: give them an alias"),
             Self::NotNumeric(name) => write!(f, "column `{name}` does not hold numbers"),
+            Self::NoColumnAt(index) => write!(f, "the result has no column at index {index}"),
             Self::NoX => f.write_str("no text, date or time column to put on x"),
             Self::NoY => f.write_str("no numeric column to put on y"),
             Self::Empty => f.write_str("no row has a value to draw"),
@@ -79,6 +82,7 @@ impl Series {
     /// The points of `result` for the columns picked by index.
     /// A line over dates, times or integers is placed on their scale and sorted; anything else keeps the result's order.
     pub(crate) fn from_columns(result: &ResultSet, columns: ChartColumns) -> Result<Self, ChartError> {
+        check_columns_exist(result, &columns)?;
         let ChartColumns { kind, x, ref y, .. } = columns;
         let axis = XAxis::of(kind, &result.columns()[x].kind);
         let placed = place(result, x, axis);
@@ -130,6 +134,13 @@ impl Series {
     fn has_no_value(&self) -> bool {
         self.y.iter().all(|column| column.values.iter().all(Option::is_none))
     }
+}
+
+/// Refuses an index past the last column: a panic aborts pgbg, and the editor's unsaved text goes with it.
+fn check_columns_exist(result: &ResultSet, columns: &ChartColumns) -> Result<(), ChartError> {
+    let count = result.columns().len();
+    let missing = std::iter::once(columns.x).chain(columns.y.iter().copied()).find(|&index| index >= count);
+    missing.map_or(Ok(()), |index| Err(ChartError::NoColumnAt(index)))
 }
 
 fn place(result: &ResultSet, x: usize, axis: XAxis) -> Vec<Placed> {
@@ -259,6 +270,20 @@ mod tests {
     #[test]
     fn a_y_that_does_not_hold_numbers_is_refused() {
         assert_eq!(Series::from_result(&orders(), &spec("bar y=customer")), Err(ChartError::NotNumeric(ColumnName::new("customer"))));
+    }
+
+    fn grouped(x: usize, y: Vec<usize>) -> ChartColumns {
+        ChartColumns { kind: ChartKind::Grouped, orientation: Orientation::Vertical, x, y }
+    }
+
+    #[test]
+    fn an_x_past_the_last_column_is_refused() {
+        assert_eq!(Series::from_columns(&orders(), grouped(3, vec![1])), Err(ChartError::NoColumnAt(3)));
+    }
+
+    #[test]
+    fn a_y_past_the_last_column_is_refused() {
+        assert_eq!(Series::from_columns(&orders(), grouped(0, vec![1, 7])), Err(ChartError::NoColumnAt(7)));
     }
 
     #[test]
