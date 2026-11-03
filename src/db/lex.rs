@@ -220,6 +220,20 @@ fn param(sql: &str, at: usize) -> (Kind, Option<&str>) {
     (Kind::Token(token), Some(next))
 }
 
+/// The name a closed quoted name, as written, stands for; none for any other text.
+pub(crate) fn unquoted_name(written: &str) -> Option<String> {
+    let quoted = written.strip_prefix('"')?.strip_suffix('"')?;
+    Some(quoted.replace("\"\"", "\""))
+}
+
+/// The byte after the `{{name}}` opening at byte `at` of `text`; none when it is unreadable.
+pub(crate) fn param_end(text: &str, at: usize) -> Option<usize> {
+    match param(text, at) {
+        (Kind::Token(Token::Param(_)), Some(next)) => Some(text.len() - next.len()),
+        _ => None,
+    }
+}
+
 /// Whether `name` can name a parameter: a letter or `_`, then letters, digits or `_`.
 pub(crate) fn is_param_name(name: &str) -> bool {
     let mut chars = name.chars();
@@ -233,7 +247,7 @@ fn opens_fraction(before: &str, after: &str) -> bool {
 }
 
 /// The text after the number at the start of `rest`; what follows it, `::int` or a second `.`, is left to the next token.
-fn after_number(rest: &str) -> &str {
+pub(crate) fn after_number(rest: &str) -> &str {
     let radix_digits = ["0x", "0X", "0o", "0O", "0b", "0B"]
         .into_iter()
         .find_map(|prefix| rest.strip_prefix(prefix).filter(|digits| digits.starts_with(|c: char| c.is_ascii_hexdigit())));

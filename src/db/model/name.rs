@@ -28,6 +28,11 @@ pub(crate) fn sql_name(name: &str) -> Cow<'_, str> {
     if needs_quotes(name) { Cow::Owned(format!("\"{}\"", name.replace('"', "\"\""))) } else { Cow::Borrowed(name) }
 }
 
+/// `value` as a string literal, its quotes doubled.
+pub(crate) fn sql_string(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
 /// `schema.table`, each part as a statement must write it.
 pub(crate) fn qualified(schema: &str, table: &str) -> String {
     format!("{}.{}", sql_name(schema), sql_name(table))

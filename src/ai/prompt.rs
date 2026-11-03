@@ -19,8 +19,8 @@ const MAX_BYTES: usize = 16 * 1024;
 const MAX_COLUMN_BYTES: usize = 2 * 1024;
 const CUT_NOTE: &str = "(The schema was cut to fit: more tables exist.)\n";
 const COLUMNS_CUT_NOTE: &str = "(The columns were cut to fit: more exist.)\n";
-const MASKING_NOTE: &str = "Values are masked: keep each '<literal n>' and <number n> where its value stays, and pgbg puts the values \
-                            back. Never write a marker the instruction or the statement does not hold.\n";
+const MASKING_NOTE: &str = "Values are masked: keep each '<literal n>', <number n> and \"<name n>\" where its value stays, and pgbg puts \
+                            the values back. Never write a marker the instruction or the statement does not hold.\n";
 
 const FIX: &str = "Fix the statement under the cursor, so the server no longer fails it.";
 
@@ -85,8 +85,8 @@ pub(crate) enum NotSent {
     UnclosedQuote,
     /// The instruction and the statement alone pass the cap.
     TooLong,
-    /// The comment read as the instruction opens a quote or a `{{` it never closes, or holds a quote it cannot pair, so
-    /// its values cannot be masked; an apostrophe inside a word is no quote.
+    /// The comment read as the instruction holds a quote or a `{{` that cannot be told apart from a value, so its values
+    /// cannot be masked; an apostrophe inside a word is no quote.
     UnmaskableComment,
 }
 
@@ -129,7 +129,7 @@ impl Instruction {
 pub(crate) fn prompt(input: &PromptInput<'_>) -> Result<Prompt, NotSent> {
     let sql = input.statement.map_or("", Statement::as_str);
     refuse_unsafe(sql)?;
-    let statement = masked(sql, input.literals);
+    let statement = masked(sql, input.literals, input.catalog);
     let instruction = input.instruction.masked(statement.literals, input.literals)?;
     let head = head(input, &instruction.text, &statement.text);
     let room = MAX_BYTES.checked_sub(head.len() + CUT_NOTE.len()).ok_or(NotSent::TooLong)?;
@@ -176,7 +176,7 @@ fn head(input: &PromptInput<'_>, instruction: &str, statement: &str) -> String {
 fn fault_section(input: &PromptInput<'_>) -> String {
     let Some(fault) = input.fault else { return String::new() };
     let sql = input.statement.map_or("", Statement::as_str);
-    let position = fault.at.and_then(|at| masked_position(sql, at, input.literals));
+    let position = fault.at.and_then(|at| masked_position(sql, at, input.literals, input.catalog));
     let place = position.map_or(String::new(), |position| format!(", at its character {position}"));
     format!("The server failed it with SQLSTATE {}{place}.\n\n", fault.code)
 }
@@ -236,7 +236,7 @@ impl fmt::Display for NotSent {
             Self::UnreadableParam => "the statement holds a `{{` that opens no parameter: close it as `{{name}}` first",
             Self::UnclosedQuote => "the statement opens a quote it never closes: close it first",
             Self::TooLong => "the instruction and the statement pass 16 KiB: shorten one of them",
-            Self::UnmaskableComment => "comment left out: it has an unclosed quote or `{{`",
+            Self::UnmaskableComment => "comment left out: it has an unpaired quote or `{{`",
         })
     }
 }
@@ -444,9 +444,37 @@ mod tests {
 
     #[test]
     fn a_comment_instruction_opening_a_quote_is_unmaskable() {
-        for comment in ["'nina", "it's 'nina", "orders' of nina", "note'nina' and 'bob' 'x", "a 'nina'y"] {
+        for comment in
+            ["'nina", "it's 'nina", "orders' of nina", "note'nina' and 'bob' 'x", "a 'nina'y", "5' tall '1 Main St.' x'", "'' nina ''"]
+        {
             assert_eq!(under_comment(comment, LiteralPolicy::Masked).unwrap_err(), NotSent::UnmaskableComment, "{comment}");
         }
+    }
+
+    #[test]
+    fn a_comment_instruction_in_any_quote_never_shows_its_value() {
+        for quoted in ["\"nina smith\"", "`nina smith`", "“nina smith”", "‘nina smith’"] {
+            let text = under_comment(&format!("for {quoted} only"), LiteralPolicy::Masked).unwrap().text().to_owned();
+            assert!(text.contains("Instruction:\nfor '<literal 1>' only\n") && !text.contains("nina"), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_statement_with_a_quoted_name_the_catalog_does_not_hold_never_shows_it() {
+        let text = text("SELECT * FROM customers WHERE name = \"nina@example.com\"", "");
+        assert!(text.contains("WHERE name = \"<name 1>\"\n") && !text.contains("nina"), "{text}");
+    }
+
+    #[test]
+    fn a_statement_with_a_quoted_name_of_the_catalog_keeps_it_and_its_param() {
+        let text = text("SELECT \"total\" FROM \"orders\" WHERE id = {{order_id}}", "");
+        assert!(text.contains("SELECT \"total\" FROM \"orders\" WHERE id = {{order_id}}\n"), "{text}");
+    }
+
+    #[test]
+    fn the_answer_gets_back_a_quoted_name_this_prompt_masked() {
+        let prompt = prompt_for("SELECT \"Nina\" FROM orders", "", &shop_catalog()).unwrap();
+        assert_eq!(prompt.answer("```sql\nSELECT \"<name 1>\" FROM orders\n```").unwrap(), [Statement::new("SELECT \"Nina\" FROM orders")]);
     }
 
     #[test]

@@ -144,8 +144,7 @@ fn resolved(text: &str, placed: &Placed) -> Option<String> {
     if placed.token == Token::Word {
         return Some(written.to_ascii_lowercase());
     }
-    let quoted = written.strip_prefix('"')?.strip_suffix('"')?;
-    Some(quoted.replace("\"\"", "\""))
+    lex::unquoted_name(written)
 }
 
 /// Whether a table name goes after `previous`: a `FROM` or `JOIN`, or a `,` in a `FROM` list.

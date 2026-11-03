@@ -70,9 +70,10 @@ impl std::error::Error for AnswerError {}
 mod tests {
     use super::*;
     use crate::ai::mask::{LiteralPolicy, masked};
+    use crate::db::model::Catalog;
 
     fn statements(sql: &str, reply: &str) -> Result<Vec<String>, AnswerError> {
-        let statements = read(reply, &masked(sql, LiteralPolicy::Masked).literals)?;
+        let statements = read(reply, &masked(sql, LiteralPolicy::Masked, &Catalog::default()).literals)?;
         Ok(statements.iter().map(|statement| statement.as_str().to_owned()).collect())
     }
 

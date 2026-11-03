@@ -550,6 +550,12 @@ pub(in crate::tui) mod tests {
     }
 
     #[test]
+    fn a_value_in_double_quotes_never_reaches_the_prompt() {
+        let text = prompt_text(&mut idle_on("-- for \"nina smith\" only\nSELECT * FROM orders WHERE "));
+        assert!(text.contains("Instruction:\nfor '<literal 1>' only\n") && !text.contains("nina"), "{text}");
+    }
+
+    #[test]
     fn a_value_quoted_after_an_apostrophe_inside_a_word_is_masked() {
         let text = prompt_text(&mut idle_on("-- it's 'nina'\nSELECT * FROM orders WHERE "));
         assert!(text.contains("Instruction:\nit's '<literal 1>'\n") && !text.contains("nina"), "{text}");

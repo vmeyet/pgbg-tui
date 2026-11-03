@@ -141,7 +141,7 @@ The review of #260 to #285 found these, most severe first.
 
 - [x] `v` on a table's description after a chart never panics: `left_chart` moves into `Run::Done`, so it cannot outlive its result
 - [x] The idle ask sends no secret from a comment: `PGPASSWORD=x`, `pwd x`, `api_key x` and `token x` count as secrets, as any `KEY=value` does
-- [ ] With literals masked, a double-quoted, backticked or curly-quoted span in a comment is masked, and a quoted name the catalog does not hold is masked or refused in a statement
+- [x] With literals masked, a double-quoted, backticked or curly-quoted span in a comment is masked, and a quoted name the catalog does not hold is masked or refused in a statement
 - [ ] The prompt says to join only along a listed foreign key and use only listed columns, and to say so when what it needs is not listed
 - [x] A read is not sent again once the session's settings may have changed, as after a confirmed `SET search_path` or `SET ROLE`, or a read calling `set_config`
 - [x] A read is sent again on its own only when it calls no function outside a short safe list; any other says the link was lost and `⏎` runs it again
@@ -151,7 +151,7 @@ The review of #260 to #285 found these, most severe first.
 - [ ] A plan's result never overwrites the hidden and frozen columns of the statement before it
 - [ ] The timeout covers a login's follow-up round trips, so a tunnel gone silent after login is replaced and stalls no job
 - [ ] A save `⌥s` refuses keeps the prompt open with the path typed and the refusal in it
-- [ ] A comment whose quotes pair wrongly is refused: `5' tall '1 Main St.' x'` and `'' nina ''` sent their value in clear
+- [x] A comment whose quotes pair wrongly is refused: `5' tall '1 Main St.' x'` and `'' nina ''` sent their value in clear
 - [ ] Only the user's words choose the schema slice: pgbg's own instruction text pulled in tables named by `server` or `statement`
 - [ ] `:` and `^g` work on a plan, with a test that every pane with no text field has a `:` row
 - [ ] The palette says when an act cannot run on what the pane shows, as a grid act on a chart, or `t` and `r` on a grid
