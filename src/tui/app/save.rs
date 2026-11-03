@@ -1,10 +1,11 @@
 //! Saving the editor's text as a query, and the questions on the footer line: the path of a new query, opening another
 //! query over unsaved text, and sending a write.
+use super::editor::edit_line;
 use super::{Action, App, Overlay, WriteToSend};
 use crate::act::{self, Act, Pane};
 use crate::connection::ConnectionName;
 use crate::query::{Query, QueryPath};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::KeyEvent;
 use vtui::field::Field;
 
 const EXTENSION: &str = ".sql";
@@ -43,16 +44,6 @@ impl Prompt {
 fn with_extension(typed: &str) -> String {
     let typed = typed.trim();
     if typed.ends_with(EXTENSION) { typed.to_owned() } else { format!("{typed}{EXTENSION}") }
-}
-
-pub(super) fn typed_into(path: &mut Field, key: KeyEvent) {
-    match key.code {
-        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => path.insert(c),
-        KeyCode::Backspace => path.backspace(),
-        KeyCode::Left => path.left(),
-        KeyCode::Right => path.right(),
-        _ => {}
-    }
 }
 
 impl App {
@@ -111,7 +102,7 @@ impl App {
             (Some(Act::Open), Prompt::OpenOverUnsaved(opening)) => (None, self.open(opening)),
             (Some(Act::Open), Prompt::SaveAs { path, .. }) => self.save_as(path),
             (_, Prompt::SaveAs { mut path, error }) => {
-                typed_into(&mut path, key);
+                edit_line(&mut path, key);
                 (Some(Prompt::SaveAs { path, error }), vec![])
             }
             (_, prompt) => (Some(prompt), vec![]),
@@ -150,6 +141,7 @@ mod tests {
     use super::super::queries::tests::{query, with_queries};
     use super::super::{Answer, Focus, QueryAnswer};
     use super::*;
+    use crossterm::event::{KeyCode, KeyModifiers};
 
     fn press(app: &mut App, key: impl Into<KeyEvent>) -> Vec<Action> {
         app.handle_key(key.into())
@@ -223,6 +215,23 @@ mod tests {
         app.apply(Answer::Queries(QueryAnswer::Opened { connection: shop(), query: query("da\x1bily.sql"), text: "SELECT 1".into() }));
         alt_s(&mut app);
         assert_eq!(prompted_path(&app), "da\x1bily.sql");
+    }
+
+    #[test]
+    fn alt_b_in_the_path_moves_a_word_and_types_nothing() {
+        let mut app = opened("SELECT 1");
+        alt_s(&mut app);
+        press(&mut app, KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT));
+        press(&mut app, KeyCode::Char('x'));
+        assert_eq!(prompted_path(&app), "xdaily.sql");
+    }
+
+    #[test]
+    fn a_modified_enter_adds_no_new_line_to_the_path() {
+        let mut app = opened("SELECT 1");
+        alt_s(&mut app);
+        press(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
+        assert_eq!(prompted_path(&app), "daily.sql");
     }
 
     #[test]

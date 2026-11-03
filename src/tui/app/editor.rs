@@ -280,9 +280,13 @@ fn change_of(key: KeyEvent) -> Change {
     }
 }
 
-/// Applies `key` to `field` as the editor does: keys that type, delete or move the cursor, those of a shell line
-/// included; `⌥b` `⌥f` are what a macOS terminal sends for `⌥←` `⌥→` unless its option key is set as meta.
-pub(super) fn apply(field: &mut Field, key: KeyEvent) {
+/// Applies `key` to `field`, one line of text, as the editor does: keys that type, delete or move the cursor, those of a
+/// shell line included, but `⏎` with any modifier and `↑` `↓` do nothing; `⌥b` `⌥f` are what a macOS terminal sends for
+/// `⌥←` `⌥→` unless its option key is set as meta.
+pub(super) fn edit_line(field: &mut Field, key: KeyEvent) {
+    if matches!(key.code, KeyCode::Enter | KeyCode::Up | KeyCode::Down) {
+        return;
+    }
     if !move_cursor(field, key) {
         edit_text(field, key);
     }
@@ -556,6 +560,103 @@ mod tests {
     #[test]
     fn a_control_key_types_nothing() {
         assert_eq!(press("FROM", &[with(KeyCode::Char('x'), KeyModifiers::CONTROL)]), "FROM|");
+    }
+
+    fn line_after(text: &str, keys: &[KeyEvent]) -> String {
+        let mut editor = Editor::new(text);
+        for &key in keys {
+            edit_line(&mut editor.field, key);
+        }
+        shown(&editor)
+    }
+
+    #[test]
+    fn alt_b_in_a_line_moves_a_word_and_types_nothing() {
+        assert_eq!(line_after("late orders", &[with(KeyCode::Char('b'), KeyModifiers::ALT)]), "late |orders");
+    }
+
+    #[test]
+    fn alt_f_in_a_line_moves_a_word_and_types_nothing() {
+        let keys = [KeyEvent::from(KeyCode::Home), with(KeyCode::Char('f'), KeyModifiers::ALT)];
+        assert_eq!(line_after("late orders", &keys), "late| orders");
+    }
+
+    #[test]
+    fn alt_and_an_arrow_in_a_line_move_a_word() {
+        let keys =
+            [with(KeyCode::Left, KeyModifiers::ALT), with(KeyCode::Left, KeyModifiers::ALT), with(KeyCode::Right, KeyModifiers::ALT)];
+        assert_eq!(line_after("late orders", &keys), "late| orders");
+    }
+
+    #[test]
+    fn home_goes_to_the_start_of_a_line() {
+        assert_eq!(line_after("orders", &[KeyEvent::from(KeyCode::Home)]), "|orders");
+    }
+
+    #[test]
+    fn end_goes_to_the_end_of_a_line() {
+        assert_eq!(line_after("orders", &[KeyEvent::from(KeyCode::Home), KeyEvent::from(KeyCode::End)]), "orders|");
+    }
+
+    #[test]
+    fn ctrl_a_goes_to_the_start_of_a_line() {
+        assert_eq!(line_after("orders", &[with(KeyCode::Char('a'), KeyModifiers::CONTROL)]), "|orders");
+    }
+
+    #[test]
+    fn ctrl_e_goes_to_the_end_of_a_line() {
+        let keys = [KeyEvent::from(KeyCode::Home), with(KeyCode::Char('e'), KeyModifiers::CONTROL)];
+        assert_eq!(line_after("orders", &keys), "orders|");
+    }
+
+    #[test]
+    fn delete_takes_the_character_under_the_cursor_of_a_line() {
+        assert_eq!(line_after("orders", &[KeyEvent::from(KeyCode::Home), KeyEvent::from(KeyCode::Delete)]), "|rders");
+    }
+
+    #[test]
+    fn ctrl_w_deletes_the_word_before_the_cursor_of_a_line() {
+        assert_eq!(line_after("late orders", &[with(KeyCode::Char('w'), KeyModifiers::CONTROL)]), "late |");
+    }
+
+    #[test]
+    fn alt_backspace_deletes_the_word_before_the_cursor_of_a_line() {
+        assert_eq!(line_after("late orders", &[with(KeyCode::Backspace, KeyModifiers::ALT)]), "late |");
+    }
+
+    #[test]
+    fn ctrl_u_deletes_to_the_start_of_a_line() {
+        let keys = [KeyEvent::from(KeyCode::Left), with(KeyCode::Char('u'), KeyModifiers::CONTROL)];
+        assert_eq!(line_after("orders", &keys), "|s");
+    }
+
+    #[test]
+    fn ctrl_k_deletes_to_the_end_of_a_line() {
+        let keys = [KeyEvent::from(KeyCode::Left), with(KeyCode::Char('k'), KeyModifiers::CONTROL)];
+        assert_eq!(line_after("orders", &keys), "order|");
+    }
+
+    #[test]
+    fn enter_with_any_modifier_adds_no_new_line_to_a_line() {
+        for modifiers in [KeyModifiers::NONE, KeyModifiers::ALT, KeyModifiers::SHIFT, KeyModifiers::CONTROL] {
+            assert_eq!(line_after("orders", &[with(KeyCode::Enter, modifiers)]), "orders|", "{modifiers:?}");
+        }
+    }
+
+    #[test]
+    fn up_does_nothing_in_a_line_a_paste_broke_in_two() {
+        assert_eq!(line_after("orders\ncustomers", &[KeyEvent::from(KeyCode::Up)]), "orders\ncustomers|");
+    }
+
+    #[test]
+    fn down_does_nothing_in_a_line_a_paste_broke_in_two() {
+        let keys = [KeyEvent::from(KeyCode::Home), KeyEvent::from(KeyCode::Down)];
+        assert_eq!(line_after("orders\ncustomers", &keys), "|orders\ncustomers");
+    }
+
+    #[test]
+    fn an_option_character_other_than_b_and_f_types_in_a_line() {
+        assert_eq!(line_after("order", &[with(KeyCode::Char('@'), KeyModifiers::ALT)]), "order@|");
     }
 
     #[test]

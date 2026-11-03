@@ -1,5 +1,5 @@
 //! The sidebar's schema tab: the schemas and tables of the sheet on screen, which fold and filter, and its cursor.
-use super::save::typed_into;
+use super::editor::edit_line;
 use super::{Action, App, Focus, Overlay};
 use crate::act::{self, Act, Pane};
 use crate::db::model::{
@@ -276,7 +276,7 @@ impl App {
             Some(Act::Open) => return vec![],
             Some(Act::Close) => _ = self.schema_tab.filter.take(),
             _ => {
-                typed_into(&mut self.schema_tab.filter, key);
+                edit_line(&mut self.schema_tab.filter, key);
                 self.overlay = Some(Overlay::SchemaFilter);
             }
         }
@@ -287,7 +287,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::super::fixtures::{app, app_on, click_at, every_pane, shop, to_shop, view};
+    use super::super::fixtures::{app, app_on, click_at, control, every_pane, shop, to_shop, view};
     use super::super::sheet::{SchemaState, SessionState};
     use super::super::{Answer, Fit, Incoming, Run, RunId, SessionId, View};
     use super::*;
@@ -298,7 +298,7 @@ mod tests {
     use crate::failure::Failure;
     use crate::fixtures::{self, shop_catalog};
     use crate::query::params::ParamInput;
-    use crossterm::event::KeyCode;
+    use crossterm::event::{KeyCode, KeyModifiers};
     use ratatui::layout::Rect;
     use std::sync::Arc;
     use std::time::Duration;
@@ -334,7 +334,7 @@ mod tests {
     #[test]
     fn ctrl_k_in_the_schema_tab_finds_a_query() {
         let mut app = on_the_schema_tab();
-        app.handle_key(super::super::fixtures::control('k'));
+        app.handle_key(control('k'));
         assert!(matches!(app.overlay, Some(Overlay::Finder(_))));
     }
 
@@ -661,6 +661,28 @@ mod tests {
     #[test]
     fn a_filter_keeps_the_tables_whose_name_holds_it() {
         assert_eq!(shown(&filtered("CUST")), ["public/", "customers"]);
+    }
+
+    #[test]
+    fn alt_b_in_the_filter_moves_a_word_and_types_nothing() {
+        let mut app = filtered("ord");
+        app.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT));
+        press(&mut app, KeyCode::Char('c'));
+        assert_eq!(app.schema_tab.filter.text(), "cord");
+    }
+
+    #[test]
+    fn ctrl_w_in_the_filter_shows_every_table_again() {
+        let mut app = filtered("ord");
+        app.handle_key(control('w'));
+        assert_eq!(shown(&app).len(), 5);
+    }
+
+    #[test]
+    fn a_modified_enter_keeps_the_filter_open_with_no_new_line() {
+        let mut app = filtered("ord");
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
+        assert_eq!((app.schema_tab.filter.text(), app.overlay.is_some()), ("ord", true));
     }
 
     #[test]

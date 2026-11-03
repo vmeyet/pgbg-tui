@@ -1,7 +1,7 @@
 //! Which rows of a result the grid shows, and in which order: those holding what `/` typed, sorted by the column `s`
 //! picked, among the rows loaded.
 //! An index over the result's rows, so filtering and sorting never copy a row.
-use super::save::typed_into;
+use super::editor::edit_line;
 use super::{Action, App, Overlay, Run};
 use crate::act::{self, Act, Pane};
 use crate::db::model::{ResultSet, Value};
@@ -139,7 +139,7 @@ impl App {
             Some(Act::Close) => self.filter_rows(String::new()),
             _ => {
                 let before = filter.text().to_owned();
-                typed_into(&mut filter, key);
+                edit_line(&mut filter, key);
                 if filter.text() != before {
                     self.filter_rows(filter.text().to_owned());
                 }
@@ -175,11 +175,11 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::super::fixtures::{on_the_result, press};
+    use super::super::fixtures::{control, on_the_result, press};
     use super::*;
     use crate::db::model::{ColumnKind, Extent};
     use crate::fixtures::{column, orders, page, undecoded};
-    use crossterm::event::KeyCode;
+    use crossterm::event::{KeyCode, KeyModifiers};
 
     fn shown(filter: &str, sort: Option<Sort>, result: &ResultSet) -> Vec<usize> {
         let shown = ShownRows::new(filter.to_owned(), sort, result, |_, value| value.to_string());
@@ -275,6 +275,33 @@ mod tests {
         let mut app = pressed(orders(), "/no");
         press(&mut app, KeyCode::Esc);
         assert_eq!((app.overlay.is_none(), shown_count(&app)), (true, 4));
+    }
+
+    fn typed_filter(app: &App) -> &str {
+        let Some(Overlay::RowFilter(filter)) = &app.overlay else { panic!("{:?}", app.overlay) };
+        filter.text()
+    }
+
+    #[test]
+    fn ctrl_u_in_the_filter_shows_every_row_again() {
+        let mut app = pressed(orders(), "/no");
+        app.handle_key(control('u'));
+        assert_eq!(shown_count(&app), 4);
+    }
+
+    #[test]
+    fn alt_b_in_the_filter_moves_a_word_and_types_nothing() {
+        let mut app = pressed(orders(), "/no");
+        app.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT));
+        press(&mut app, KeyCode::Char('x'));
+        assert_eq!(typed_filter(&app), "xno");
+    }
+
+    #[test]
+    fn a_modified_enter_keeps_the_filter_open_with_no_new_line() {
+        let mut app = pressed(orders(), "/no");
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
+        assert_eq!(typed_filter(&app), "no");
     }
 
     #[test]

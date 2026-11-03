@@ -2,7 +2,7 @@
 use super::editor;
 use crate::db::model::ParamValue;
 use crate::query::params::{Given, ParamName};
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::KeyEvent;
 use std::collections::BTreeMap;
 use vtui::field::Field;
 
@@ -31,12 +31,9 @@ impl ParamBar {
         true
     }
 
-    /// Applies `key` to the field of `name`; a value is one line, so `⏎` with any modifier types nothing.
+    /// Applies `key` to the field of `name`.
     pub(super) fn edit(&mut self, name: &ParamName, key: KeyEvent) {
-        if key.code == KeyCode::Enter {
-            return;
-        }
-        editor::apply(self.field_mut(name), key);
+        editor::edit_line(self.field_mut(name), key);
     }
 
     /// Pastes `text` in the field of `name`, with its line ends turned into spaces.
@@ -81,7 +78,7 @@ mod tests {
     use super::super::{Action, App, Focus, RunId};
     use super::*;
     use crate::query::params::ParamInput;
-    use crossterm::event::KeyModifiers;
+    use crossterm::event::{KeyCode, KeyModifiers};
 
     fn press(app: &mut App, code: KeyCode) -> Vec<Action> {
         app.handle_key(KeyEvent::from(code))
