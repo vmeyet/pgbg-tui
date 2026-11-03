@@ -175,6 +175,12 @@ The review of #260 to #285 found these, most severe first.
 - [ ] CI runs a plain `cargo test` without `PGBG_TEST_DATABASE_URL`, so a test reading it un-ignored fails there
 - [ ] The tunnel examples add `ExitOnForwardFailure=yes`, as a live ssh that failed to bind still counts as ready when something else answers on its port
 
+## 26. One palette across the TUIs
+
+pgbg, revu and slack read the same keys and share the plumbing in vtui.
+
+- [x] `⌘k` finds in all three, and `^k` does too in pgbg wherever no text takes it
+
 ## Later
 
 - revu and slack run `update` and the brew check through `vtui::update`, as pgbg does

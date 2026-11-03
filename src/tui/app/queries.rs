@@ -133,7 +133,7 @@ impl Sheet {
 
 #[cfg(test)]
 pub(in crate::tui) mod tests {
-    use super::super::fixtures::{app, every_pane, shop, to_shop, typed};
+    use super::super::fixtures::{app, control, every_pane, on_the_result, shop, to_shop, typed, with_focus};
     use super::super::{Answer, Fit, Incoming, QueryAnswer, Room, Run, RunId, View};
     use super::*;
     use crate::chart::Series;
@@ -168,6 +168,42 @@ pub(in crate::tui) mod tests {
         for c in typed.chars() {
             press(app, KeyCode::Char(c));
         }
+    }
+
+    #[test]
+    fn ctrl_k_on_the_result_finds_a_query() {
+        let mut app = on_the_result(orders());
+        press(&mut app, control('k'));
+        assert!(matches!(app.overlay, Some(Overlay::Finder(_))));
+    }
+
+    #[test]
+    fn ctrl_k_in_the_sidebar_finds_a_query() {
+        let mut app = with_focus(with_queries(), Focus::Queries);
+        press(&mut app, control('k'));
+        assert!(matches!(app.overlay, Some(Overlay::Finder(_))));
+    }
+
+    #[test]
+    fn command_k_in_the_editor_finds_a_query() {
+        let mut app = with_queries();
+        press(&mut app, KeyEvent::new(KeyCode::Char('k'), KeyModifiers::SUPER));
+        assert!(matches!(app.overlay, Some(Overlay::Finder(_))));
+    }
+
+    #[test]
+    fn ctrl_k_in_the_editor_deletes_to_the_end_of_the_line() {
+        let mut app = typed("SELECT 1");
+        press(&mut app, control('a'));
+        press(&mut app, control('k'));
+        assert_eq!((app.overlay.is_none(), app.sheet().editor.text()), (true, ""));
+    }
+
+    #[test]
+    fn ctrl_k_in_the_parameter_bar_finds_nothing() {
+        let mut app = with_focus(typed("SELECT {{id}}"), Focus::Params);
+        press(&mut app, control('k'));
+        assert!(app.overlay.is_none());
     }
 
     #[test]

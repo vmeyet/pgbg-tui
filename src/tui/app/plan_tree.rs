@@ -78,6 +78,13 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_k_on_a_plan_finds_a_query() {
+        let mut app = on_the_plan();
+        app.handle_key(super::super::fixtures::control('k'));
+        assert!(matches!(app.overlay, Some(super::super::Overlay::Finder(_))));
+    }
+
+    #[test]
     fn a_plan_the_user_explained_opens_as_a_tree() {
         let mut app = typed("EXPLAIN (FORMAT JSON) SELECT 1");
         enter(&mut app);

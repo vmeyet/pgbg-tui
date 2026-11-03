@@ -378,6 +378,7 @@ const HELP_KEYS: &str = "these keys; again for every key";
 
 /// The command palette's line in the panes where `:` types nothing.
 const COMMANDS_KEY: &str = "every command, as ^l";
+const FIND_KEY: &str = "find a saved query, as ^p";
 
 /// The keys that switch the sidebar's tab: `←` `→` for keyboards where `[` `]` take a modifier, as AZERTY.
 const SWITCH_TAB: &[KeyEvent] = &[key(KeyCode::Left), key(KeyCode::Right), key(KeyCode::Char('[')), key(KeyCode::Char(']'))];
@@ -508,6 +509,10 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Commands, Pane::Result, &[key(KeyCode::Char(':'))]).help(":", COMMANDS_KEY),
     row(Act::Commands, Pane::Queries, &[key(KeyCode::Char(':'))]).help(":", COMMANDS_KEY),
     row(Act::Commands, Pane::Schema, &[key(KeyCode::Char(':'))]).help(":", COMMANDS_KEY),
+    row(Act::Find, Pane::Result, &[control('k')]).help("^k", FIND_KEY),
+    row(Act::Find, Pane::Queries, &[control('k')]).help("^k", FIND_KEY),
+    row(Act::Find, Pane::Schema, &[control('k')]).help("^k", FIND_KEY),
+    row(Act::Find, Pane::Plan, &[control('k')]).help("^k", FIND_KEY),
     row(Act::Down, Pane::Commands, &[key(KeyCode::Down), control('n')]).help("↓ ^n", "next, previous command").footer("↑↓", "pick"),
     row(Act::Up, Pane::Commands, &[key(KeyCode::Up), control('p')]),
     row(Act::Open, Pane::Commands, &[key(KeyCode::Enter)]).help("⏎", "run it, or keep the theme").footer("⏎", "runs"),
