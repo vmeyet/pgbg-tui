@@ -54,6 +54,7 @@ Each entry says what changed, then where, then how to use it.
   `ctrl-g` then shows it as a diff, with no new ask, and `tab` takes it; any other key drops it.
 - **An apostrophe inside a word no longer loses the comment**, in the AI completion with literals masked: `-- what's the total` is now the instruction, and a quoted value after it is still masked.
 - **A comment left out of the AI completion says why**, on the status line until the next key, and not only in the log.
+- **A secret in a comment stays out of the AI completion**: a comment naming `PGPASSWORD`, `pwd`, `passwd`, `token`, `api_key` or `secret`, or holding any `KEY=value`, is left out of the ask, and the status line says so.
 - **A tunnel that still runs but no longer forwards is started anew**, on every connection with a tunnel: a run after a lost link no longer fails over and over until the connection is closed.
 - **The history gives the real time of a run whose session did not open**, in `ctrl-r`: it said `0 ms` whatever the wait.
 - **`v` comes back to the chart of the `-- chart:` header**, in the TUI: it went to the chart pgbg picks by itself.
