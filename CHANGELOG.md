@@ -6,6 +6,11 @@ Each entry says what changed, then where, then how to use it.
 
 ## Unreleased
 
+### Fixed
+
+- **One-line fields move and delete as the editor does**, in the TUI's `ctrl-g` instruction, save-as path, row filter and schema filter.
+  `⌥←` `⌥→` and `⌥b` `⌥f` move by word, `Home` `End` `^a` `^e` go to the ends, and `Delete` `^w` `^u` `^k` `⌥⌫` delete; `⌥b` and `⌥f` no longer type a letter, and other option characters still do.
+
 ## 0.3.0 - 2026-11-03
 
 ### New

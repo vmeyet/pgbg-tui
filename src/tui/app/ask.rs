@@ -3,9 +3,8 @@
 //! From the result pane the ask is about the statement that gave the result, and adds its columns' names and types.
 //! A blank instruction after a server's error asks for a fix, under `[ai] errors = "code"`, with its code and position.
 use super::diff::{self, DiffLine};
-use super::editor::{Edited, Revision};
+use super::editor::{Edited, Revision, edit_line};
 use super::idle_ghost::IdleAsk;
-use super::save::typed_into;
 use super::{Action, App, AskFailure, AskId, Focus, Overlay, Sheet};
 use crate::act::{self, Act, Pane};
 use crate::ai::{self, Fault, Instruction, LiteralPolicy, NotSent, Prompt, ServerErrors};
@@ -113,7 +112,7 @@ impl App {
                 vec![]
             }
             (_, AskStep::Instruction(mut instruction)) => {
-                typed_into(&mut instruction, key);
+                edit_line(&mut instruction, key);
                 self.overlay = Some(Overlay::Ask(AskStep::Instruction(instruction)));
                 vec![]
             }
@@ -376,6 +375,28 @@ pub(in crate::tui) mod tests {
             Some(Overlay::Ask(step)) => Some(step),
             _ => None,
         }
+    }
+
+    fn instruction_after(keys: &[KeyEvent]) -> String {
+        let mut app = asking_on("SELECT * FROM orders");
+        ctrl_g(&mut app);
+        type_in(&mut app, "late orders");
+        for &key in keys {
+            app.handle_key(key);
+        }
+        let Some(AskStep::Instruction(instruction)) = step(&app) else { panic!("{:?}", step(&app)) };
+        instruction.text().to_owned()
+    }
+
+    #[test]
+    fn alt_b_in_the_instruction_moves_a_word_and_types_nothing() {
+        let keys = [KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT), KeyEvent::from(KeyCode::Char('x'))];
+        assert_eq!(instruction_after(&keys), "late xorders");
+    }
+
+    #[test]
+    fn a_modified_enter_adds_no_new_line_to_the_instruction() {
+        assert_eq!(instruction_after(&[KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT)]), "late orders");
     }
 
     #[test]
