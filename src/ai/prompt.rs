@@ -12,8 +12,6 @@ use crate::secret;
 use serde::Deserialize;
 use std::fmt;
 
-/// The most bytes a prompt holds, so a big schema never makes a slow or costly ask.
-const MAX_BYTES: usize = 16 * 1024;
 /// The most bytes a prompt spends on a result's columns: a chart needs a few, the schema slice needs the room, and a wide
 /// result must not make the ask too long to send.
 const MAX_COLUMN_BYTES: usize = 2 * 1024;
@@ -54,6 +52,24 @@ pub(crate) struct Instruction {
     text: String,
 }
 
+/// The most a prompt holds, so a big schema never makes a slow or costly ask.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PromptCap {
+    /// An ask of `ctrl-g`, which someone waits for: room for a whole schema of some tens of tables.
+    Ask,
+    /// An idle ask, which goes out while someone types and must answer quickly.
+    IdleAsk,
+}
+
+impl PromptCap {
+    const fn bytes(self) -> usize {
+        match self {
+            Self::Ask => 64 * 1024,
+            Self::IdleAsk => 16 * 1024,
+        }
+    }
+}
+
 /// What one ask is built from.
 #[derive(Debug)]
 pub(crate) struct PromptInput<'a> {
@@ -68,6 +84,7 @@ pub(crate) struct PromptInput<'a> {
     pub(crate) table_use: &'a TableUse,
     pub(crate) tier: Tier,
     pub(crate) literals: LiteralPolicy,
+    pub(crate) cap: PromptCap,
 }
 
 /// The text for the command's stdin, and the literals it masked, to put back in the answer.
@@ -137,8 +154,8 @@ pub(crate) fn prompt(input: &PromptInput<'_>) -> Result<Prompt, NotSent> {
     let statement = masked(sql, input.literals, input.catalog);
     let instruction = input.instruction.masked(statement.literals, input.literals)?;
     let head = head(input, &instruction.text, &statement.text);
-    let room = MAX_BYTES.checked_sub(head.len() + CUT_NOTE.len()).ok_or(NotSent::TooLong)?;
-    let schema = fitted(slice(input.catalog, sql, &input.instruction.whole(), input.table_use), room, CUT_NOTE);
+    let room = input.cap.bytes().checked_sub(head.len() + CUT_NOTE.len()).ok_or(NotSent::TooLong)?;
+    let schema = fitted(slice(input.catalog, sql, &input.instruction.whole(), input.table_use, room), room, CUT_NOTE);
     Ok(Prompt { text: head + &schema, literals: instruction.literals })
 }
 
@@ -241,7 +258,7 @@ impl fmt::Display for NotSent {
             Self::CommentHoldsSecret => "comment left out: it may hold a secret",
             Self::UnreadableParam => "the statement holds a `{{` that opens no parameter: close it as `{{name}}` first",
             Self::UnclosedQuote => "the statement opens a quote it never closes: close it first",
-            Self::TooLong => "the instruction and the statement pass 16 KiB: shorten one of them",
+            Self::TooLong => "the instruction and the statement pass 64 KiB: shorten one of them",
             Self::UnmaskableComment => "comment left out: it has an unpaired quote or `{{`",
         })
     }
@@ -253,9 +270,19 @@ impl std::error::Error for NotSent {}
 mod tests {
     use super::*;
     use crate::db::model::{ColumnKind, SchemaNode, TypeName};
-    use crate::fixtures::{column, schema_table, shop_catalog};
+    use crate::fixtures::{accounts_catalog, column, schema_column, schema_table, shop_catalog};
 
     fn prompt_with(statement: &str, instruction: &str, catalog: &Catalog, literals: LiteralPolicy) -> Result<Prompt, NotSent> {
+        capped_prompt(statement, instruction, catalog, literals, PromptCap::Ask)
+    }
+
+    fn capped_prompt(
+        statement: &str,
+        instruction: &str,
+        catalog: &Catalog,
+        literals: LiteralPolicy,
+        cap: PromptCap,
+    ) -> Result<Prompt, NotSent> {
         let instruction = Instruction::new(instruction);
         let statement = Statement::new(statement);
         prompt(&PromptInput {
@@ -267,6 +294,7 @@ mod tests {
             table_use: &TableUse::default(),
             tier: Tier::Production,
             literals,
+            cap,
         })
     }
 
@@ -358,14 +386,75 @@ mod tests {
         let mut catalog = shop_catalog();
         let columns = catalog.schema.schemas[1].tables[0].columns.clone();
         let table = |n: usize| schema_table(&format!("orders_{n}"), columns.clone());
-        catalog.schema.schemas.push(SchemaNode { name: "archive".into(), tables: (0..400).map(table).collect() });
+        catalog.schema.schemas.push(SchemaNode { name: "archive".into(), tables: (0..2000).map(table).collect() });
         catalog
+    }
+
+    fn prompt_under(cap: PromptCap, instruction: &str, catalog: &Catalog) -> Result<Prompt, NotSent> {
+        capped_prompt("", instruction, catalog, LiteralPolicy::Masked, cap)
+    }
+
+    fn text_under(cap: PromptCap, instruction: &str, catalog: &Catalog) -> String {
+        prompt_under(cap, instruction, catalog).unwrap().text().to_owned()
+    }
+
+    const USERS_LINE: &str = "public.users(id integer, email text)\n";
+
+    #[test]
+    fn each_cap_holds_a_big_schema_within_its_bytes() {
+        for (cap, bytes) in [(PromptCap::Ask, 64 * 1024), (PromptCap::IdleAsk, 16 * 1024)] {
+            let text = text_under(cap, "orders", &wide_catalog());
+            assert!(text.len() <= bytes && text.len() > bytes - 200 && text.ends_with(CUT_NOTE), "{}", text.len());
+        }
+    }
+
+    #[test]
+    fn a_table_two_keys_away_reaches_the_prompt_uncut() {
+        let text = text_under(PromptCap::Ask, "which accounts does nina belong to", &accounts_catalog(0));
+        assert!(text.contains(USERS_LINE) && !text.contains(CUT_NOTE), "{text}");
+    }
+
+    #[test]
+    fn a_table_many_point_to_leaves_room_for_what_a_kept_table_points_to() {
+        let catalog = accounts_catalog(60);
+        let text = text_under(PromptCap::IdleAsk, "accounts where nina is a member", &catalog);
+        assert!(text.ends_with(CUT_NOTE), "{}", text.len());
+        assert!(text.contains(USERS_LINE), "{text}");
+    }
+
+    #[test]
+    fn a_schema_past_the_idle_cap_fits_the_cap_of_an_ask_all_detailed() {
+        let catalog = accounts_catalog(60);
+        let text = text_under(PromptCap::Ask, "the accounts", &catalog);
+        assert!(text.len() > PromptCap::IdleAsk.bytes() && !text.contains(CUT_NOTE), "{}", text.len());
+        assert!(text.contains(USERS_LINE) && text.contains("public.invoices_59(account_id integer"), "{text}");
+    }
+
+    #[test]
+    fn a_table_nothing_points_to_is_detailed_when_the_schema_fits() {
+        assert!(text("SELECT * FROM customers", "").contains("\nbilling.invoices(id integer, order_id integer"));
+    }
+
+    #[test]
+    fn no_default_of_a_table_detailed_only_because_the_schema_fits_reaches_the_prompt() {
+        let mut catalog = shop_catalog();
+        catalog.schema.schemas[0].tables[0].columns[0].default = Some("'nina-default'".into());
+        let text = prompt_for("", "", &catalog).unwrap().text().to_owned();
+        assert!(text.contains("billing.invoices(") && !text.contains("nina-default"), "{text}");
+    }
+
+    #[test]
+    fn a_comment_holding_a_secret_stays_out_of_a_table_detailed_only_because_the_schema_fits() {
+        let mut catalog = shop_catalog();
+        catalog.schema.schemas[0].tables[0].comment = Some("password of nina".into());
+        let text = prompt_for("", "", &catalog).unwrap().text().to_owned();
+        assert!(text.contains("billing.invoices(") && !text.contains("password"), "{text}");
     }
 
     #[test]
     fn a_slice_past_the_cap_is_cut_table_by_table_and_says_so() {
         let text = prompt_for("SELECT * FROM orders", "orders", &wide_catalog()).unwrap().text().to_owned();
-        assert!(text.len() <= MAX_BYTES && text.ends_with(CUT_NOTE));
+        assert!(text.len() <= PromptCap::Ask.bytes() && text.ends_with(CUT_NOTE));
         assert!(text.contains("public.orders(id integer, customer_id integer references public.customers(id), total numeric(10,2))\n"));
     }
 
@@ -373,16 +462,19 @@ mod tests {
     fn past_the_cap_the_names_alone_go_first_and_the_detailed_lines_stay() {
         let table = |n: usize| schema_table(&format!("archived_{n}"), vec![]);
         let mut catalog = shop_catalog();
-        catalog.schema.schemas.push(SchemaNode { name: "archive".into(), tables: (0..2000).map(table).collect() });
+        catalog.schema.schemas.push(SchemaNode { name: "archive".into(), tables: (0..10_000).map(table).collect() });
         let text = prompt_for("SELECT * FROM customers", "", &catalog).unwrap().text().to_owned();
-        assert!(text.len() <= MAX_BYTES && text.ends_with(CUT_NOTE));
+        assert!(text.len() <= PromptCap::Ask.bytes() && text.ends_with(CUT_NOTE));
         assert!(text.contains("public.customers(id integer, name text)\n") && text.contains("archive.archived_0\n"), "{text}");
     }
 
     #[test]
-    fn a_table_nothing_points_to_is_still_named() {
-        let text = text("SELECT * FROM customers", "");
-        assert!(text.contains("name alone is a table whose columns are unknown:\n") && text.contains("\nbilling.invoices\n"), "{text}");
+    fn past_the_cap_a_table_nothing_points_to_is_still_named() {
+        let mut catalog = shop_catalog();
+        let padding = |n: usize| schema_table(&format!("archived_{n}"), vec![schema_column("note", "text", None); 50]);
+        catalog.schema.schemas[1].tables.extend((0..40).map(padding));
+        let text = text_under(PromptCap::IdleAsk, "orders", &catalog);
+        assert!(text.contains("name alone is a table whose columns are unknown:\n") && text.contains("\npublic.archived_0\n"), "{text}");
     }
 
     #[test]
@@ -399,7 +491,7 @@ mod tests {
     fn a_table_the_instruction_asks_for_and_those_a_key_away_show_their_columns() {
         let text = text("", "the invoices");
         assert!(text.contains("billing.invoices(id integer, order_id integer references public.orders(id))\n"), "{text}");
-        assert!(text.contains("public.orders(id integer,") && text.contains("\npublic.customers\n"), "{text}");
+        assert!(text.contains("public.orders(id integer,"), "{text}");
     }
 
     #[test]
@@ -423,7 +515,20 @@ mod tests {
 
     #[test]
     fn an_instruction_past_the_cap_is_refused() {
-        assert_eq!(prompt_for("SELECT 1", &"x".repeat(MAX_BYTES), &shop_catalog()).unwrap_err(), NotSent::TooLong);
+        let refused = prompt_for("SELECT 1", &"x".repeat(PromptCap::Ask.bytes()), &shop_catalog()).unwrap_err();
+        assert_eq!(refused, NotSent::TooLong);
+    }
+
+    #[test]
+    fn an_instruction_past_the_idle_cap_alone_is_refused_only_there() {
+        let instruction = "x".repeat(PromptCap::IdleAsk.bytes());
+        assert_eq!(prompt_under(PromptCap::IdleAsk, &instruction, &shop_catalog()).unwrap_err(), NotSent::TooLong);
+        assert!(prompt_under(PromptCap::Ask, &instruction, &shop_catalog()).is_ok());
+    }
+
+    #[test]
+    fn a_refusal_as_too_long_names_the_cap_of_the_ask_that_shows_it() {
+        assert!(NotSent::TooLong.to_string().contains(&format!("{} KiB", PromptCap::Ask.bytes() / 1024)));
     }
 
     #[test]
@@ -445,6 +550,7 @@ mod tests {
             table_use: &TableUse::default(),
             tier: Tier::Production,
             literals,
+            cap: PromptCap::Ask,
         })
     }
 
@@ -550,6 +656,7 @@ mod tests {
             table_use: &TableUse::default(),
             tier: Tier::Production,
             literals: LiteralPolicy::Masked,
+            cap: PromptCap::Ask,
         };
         prompt(&input).unwrap().text().to_owned()
     }
@@ -615,6 +722,7 @@ mod tests {
             table_use: &TableUse::default(),
             tier: Tier::Production,
             literals,
+            cap: PromptCap::Ask,
         };
         prompt(&input).unwrap().text().to_owned()
     }

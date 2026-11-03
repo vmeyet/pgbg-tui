@@ -361,9 +361,11 @@ With `errors = "code"`, a server's error puts `^g ⏎ ask for a fix` on the foot
 Only the SQLSTATE and the character position go along, never the server's message.
 The answer shows as a diff, `⇥` takes it and `⏎` runs it; words you type instead make an ordinary ask, which tells nothing of the error.
 
-The statement under the cursor goes along with the tables it needs: those it or your words name, then those one foreign key away, each with its columns, types, enum labels, foreign keys and comments, then the name alone of every other table, within 16 KiB.
+The statement under the cursor goes along with your schema's tables, the ones it needs first: those it or your words name, then those up to two foreign keys away, each with its columns, types, enum labels, foreign keys and comments.
+Every other table goes the same way when the whole schema fits in the cap: 64 KiB for `ctrl-g`, 16 KiB for the AI completion, which must stay quick.
+Past the cap, it goes by name alone.
 A comment holding a password is left out.
-When nothing names a table, as in `SELECT * FROM `, the names of the tables go alone.
+When nothing names a table, as in `SELECT * FROM `, and the schema does not fit, the names of the tables go alone.
 
 The `--` lines right above the statement tell the AI completion what you want; header lines such as `-- name:` are left out.
 Their values are masked as the statement's are: strings, numbers and any word holding an `@`, such as an email.

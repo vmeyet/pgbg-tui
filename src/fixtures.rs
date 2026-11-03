@@ -294,6 +294,26 @@ pub(crate) fn shop_catalog() -> Catalog {
     Catalog { schema: shop_schema(), search_path: vec!["public".to_owned()], is_cut: false }
 }
 
+/// A catalog whose one schema, `public`, links `accounts` to `users` through `members`, which points to both, and holds
+/// `pointing` more tables, `invoices_0` on, each pointing to `accounts` and wide enough that 60 pass 16 KiB.
+pub(crate) fn accounts_catalog(pointing: usize) -> Catalog {
+    let account_id = || schema_column("account_id", "integer", None);
+    let to_accounts = || key_to_id("account_id", "public", "accounts");
+    let amounts = (0..20).map(|n| schema_column(&format!("amount_{n}"), "numeric", None));
+    let invoice_columns: Vec<SchemaColumn> = std::iter::once(account_id()).chain(amounts).collect();
+    let invoices = (0..pointing)
+        .map(|n| Table { foreign_keys: vec![to_accounts()], ..schema_table(&format!("invoices_{n}"), invoice_columns.clone()) });
+    let members = Table {
+        foreign_keys: vec![to_accounts(), key_to_id("user_id", "public", "users")],
+        ..schema_table("members", vec![account_id(), schema_column("user_id", "integer", None)])
+    };
+    let accounts = schema_table("accounts", vec![schema_column("id", "integer", None), schema_column("name", "text", None)]);
+    let users = schema_table("users", vec![schema_column("id", "integer", None), schema_column("email", "text", None)]);
+    let tables = [accounts].into_iter().chain(invoices).chain([members, users]).collect();
+    let schema = Schema { schemas: vec![SchemaNode { name: "public".to_owned(), tables }] };
+    Catalog { schema, search_path: vec!["public".to_owned()], is_cut: false }
+}
+
 /// The schema of `shop`: `orders` and `customers` in `public`, `invoices` in `billing`; `orders` has its key, a
 /// default and a row estimate; `orders.customer_id` points to `customers` and `invoices.order_id` to `orders`; their
 /// oids are 1 for `invoices`, 2 for `orders` and 3 for `customers`.

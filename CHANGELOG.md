@@ -12,6 +12,9 @@ Each entry says what changed, then where, then how to use it.
   `⌥←` `⌥→` and `⌥b` `⌥f` move by word, `Home` `End` `^a` `^e` go to the ends, and `Delete` `^w` `^u` `^k` `⌥⌫` delete; `⌥b` and `⌥f` no longer type a letter, and other option characters still do.
 - **`ctrl-g` waits for the schema**, in the TUI: an instruction sent before the schema is read shows `reading schema…` and goes by itself once it arrives, and `esc` drops it.
   The read starts as soon as the session opens, a failed read says why on the status line instead of asking without tables, and `schema = "off"` still asks at once.
+- **`ctrl-g` no longer answers `-- cannot:` for a table it can reach**, in the AI's schema slice: every table comes in detail when the schema fits in 64 KiB.
+  Past that, it follows foreign keys two steps, what a table points to first, so a table many others point to no longer crowds out the one you need.
+  The AI completion keeps its 16 KiB, and details a schema that fits in it too.
 
 ## 0.3.0 - 2026-11-03
 
