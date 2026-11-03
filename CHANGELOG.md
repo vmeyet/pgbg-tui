@@ -6,6 +6,8 @@ Each entry says what changed, then where, then how to use it.
 
 ## Unreleased
 
+## 0.3.1 - 2026-11-03
+
 ### Fixed
 
 - **One-line fields move and delete as the editor does**, in the TUI's `ctrl-g` instruction, save-as path, row filter and schema filter.
