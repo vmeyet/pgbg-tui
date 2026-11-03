@@ -8,6 +8,8 @@ Each entry says what changed, then where, then how to use it.
 
 ### New
 
+- **`^k` finds a saved query**, in the TUI on the result, the sidebar, the schema and a plan, as `⌘k` does everywhere and as it finds in revu and slack.
+  In the editor and the fields it still deletes to the end of the line.
 - **Ask for a fix**, in the TUI after a server's error: with `errors = "code"` in `[ai]`, the footer offers `^g ⏎`, and a blank instruction asks to fix the statement that failed.
   Only the SQLSTATE and the character position go along, never the server's message; off by default.
 - **Ask for a chart**, in the TUI's `ctrl-g`: say `orders per week as a line`, take the answer with `⇥`, run it with `⏎`, and the result opens as that chart.

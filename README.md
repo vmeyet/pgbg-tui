@@ -226,7 +226,7 @@ In the TUI, a bar above the editor shows one field per parameter.
 | `→` `tab` | In the editor: take the suggestion after the cursor, a completion, a past statement or the AI completion. |
 | `^space` `^n` | List the names that fit at the cursor; `^n` where macOS takes `^space`. |
 | `^o` | Pick another connection; sessions stay open. |
-| `^p` | Find a saved query. |
+| `^p` `⌘k` | Find a saved query; `^k` too outside the editor and the fields, where it deletes to the line's end. |
 | `^t` | Find a table of the schema. |
 | `^l` `:` | The command palette: every command and theme, filtered as you type; `:` where it types nothing, so not in the editor nor in a field. |
 | `⏎` `d` | In the schema tab: a table's first rows, written in the editor to refine, a click doing the same; its columns and indexes. |

@@ -332,6 +332,13 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_k_in_the_schema_tab_finds_a_query() {
+        let mut app = on_the_schema_tab();
+        app.handle_key(super::super::fixtures::control('k'));
+        assert!(matches!(app.overlay, Some(Overlay::Finder(_))));
+    }
+
+    #[test]
     fn the_schema_tab_reads_the_schema_the_first_time_it_shows() {
         let mut app = app();
         on_the_sidebar(&mut app);
