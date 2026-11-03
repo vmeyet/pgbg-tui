@@ -12,7 +12,7 @@ The code is the contract; this page describes it, and changes in the MR that cha
 | `commands/` | One module per subcommand, each with a `run`; plain output through `render.rs`, JSON with `--json`; `doctor/` is named checks, pure verdicts and a report |
 | `config/` | `config.toml`: load, validate, refuse secrets; `ai.rs` the `[ai]` table; `tui.rs` the `[tui]` table, its `theme` the palette; `write.rs` rewrites key by key with `toml_edit` through a temp file only its owner reads; `keychain.rs` which keychain items a config names; `left_behind.rs` the files an earlier pgbg kept in folders it no longer reads, warned of on stderr and on the TUI's status line with where each goes |
 | `connection/` | `Connection`, parsed once from config: name, tier, `Target`, tunnel, secret source, write policy, TLS, timeout, schema and AI switches |
-| `secret/` | `Secret` (prints `<redacted>`, never cloned, wiped on drop) and its sources; `holds_secret`, the one rule for a text holding a password |
+| `secret/` | `Secret` (prints `<redacted>`, never cloned, wiped on drop) and its sources; `holds_secret`, the one rule for a text holding a password, and `comment_holds_secret`, stricter, for a comment an ask reads |
 | `tunnel/` | `Tunnel`: a child process forwarding a free `127.0.0.1` port; start, wait for the port, stop |
 | `groups.rs` | The process groups pgbg owns, killed whole when dropped and by a panic hook; `output` and `exchange` run a command with capped pipes |
 | `db/` | The only module that sees `tokio_postgres`: connect over rustls, open a session along its route, run, page, cancel |
@@ -73,6 +73,7 @@ These invariants hold across every flow; a change that breaks one is a bug.
 - An AI prompt never holds a row, a value, a default, the history, a server's words, nor the connection's name, host or URL; literals are masked unless `literals = "sent"`, and a statement or comment holding a secret is never sent.
 - Under `[ai] errors = "code"`, off by default, a blank instruction after a server's error asks for a fix, whose prompt adds the SQLSTATE and the position alone, counted in the statement as the prompt shows it; the server's words stay out, as they can hold values.
 - Of the schema, an AI prompt holds names, types, enum labels, foreign keys and comments; a label goes through the same secret check and cut as a comment, since a label is written by whoever made the type, not read from a row.
+- A `--` comment read as the instruction counts as holding a secret when a word of it names one or it holds any `KEY=value`, and the idle ask then leaves it out and says so.
 - The tables it points to come in detail, then every other table by name alone, in search-path order, until the 16 KiB cap; the whole schema in detail is never sent.
 - The history only orders those tables: `tui/backend/schema.rs` counts the runs naming each table after a schema read and hands `TableUse` to the app, so within one reason the most used comes first; no history text, statement or count goes into a prompt, and a missing or unreadable history means catalog order.
 - Asked from the result pane, an AI prompt is about the statement that gave the result and also holds the names and types of its columns, a name holding a secret left out, while the editor still holds that statement.

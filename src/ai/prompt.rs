@@ -77,6 +77,8 @@ pub(crate) struct Prompt {
 pub(crate) enum NotSent {
     /// The statement holds a secret, by the rule the history keeps: `secret::holds_secret`.
     HoldsSecret,
+    /// The comment read as the instruction may hold a secret: `secret::comment_holds_secret`.
+    CommentHoldsSecret,
     /// The statement holds a `{{` that opens no parameter, which no marker masks.
     UnreadableParam,
     /// The statement opens a quoted name or a string it never closes, which no marker masks whole.
@@ -112,8 +114,8 @@ impl Instruction {
     /// counted on from the statement's `before` literals; the literals of both come back.
     fn masked(&self, before: Literals, policy: LiteralPolicy) -> Result<Masked, NotSent> {
         let Some(comment) = &self.comment else { return Ok(Masked { text: self.text.clone(), literals: before }) };
-        if secret::holds_secret(comment) {
-            return Err(NotSent::HoldsSecret);
+        if secret::comment_holds_secret(comment) {
+            return Err(NotSent::CommentHoldsSecret);
         }
         let comment = match policy {
             LiteralPolicy::Masked => masked_comment(comment, before).ok_or(NotSent::UnmaskableComment)?,
@@ -230,6 +232,7 @@ impl fmt::Display for NotSent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::HoldsSecret => "the statement holds a secret, so it is never sent",
+            Self::CommentHoldsSecret => "comment left out: it may hold a secret",
             Self::UnreadableParam => "the statement holds a `{{` that opens no parameter: close it as `{{name}}` first",
             Self::UnclosedQuote => "the statement opens a quote it never closes: close it first",
             Self::TooLong => "the instruction and the statement pass 16 KiB: shorten one of them",
@@ -448,12 +451,24 @@ mod tests {
 
     #[test]
     fn a_comment_instruction_holding_a_secret_after_an_apostrophe_is_never_sent() {
-        assert_eq!(under_comment("what's the password", LiteralPolicy::Masked).unwrap_err(), NotSent::HoldsSecret);
+        assert_eq!(under_comment("what's the password", LiteralPolicy::Masked).unwrap_err(), NotSent::CommentHoldsSecret);
     }
 
     #[test]
     fn a_comment_instruction_holding_a_secret_is_never_sent_even_with_literals_sent() {
-        assert_eq!(under_comment("set the password of nina", LiteralPolicy::Sent).unwrap_err(), NotSent::HoldsSecret);
+        assert_eq!(under_comment("set the password of nina", LiteralPolicy::Sent).unwrap_err(), NotSent::CommentHoldsSecret);
+    }
+
+    #[test]
+    fn a_comment_instruction_naming_a_secret_is_never_sent() {
+        for literals in [LiteralPolicy::Masked, LiteralPolicy::Sent] {
+            assert_eq!(under_comment("PGPASSWORD=hunter2 psql", literals).unwrap_err(), NotSent::CommentHoldsSecret);
+        }
+    }
+
+    #[test]
+    fn a_statement_naming_a_table_after_a_token_is_still_sent() {
+        assert!(text("SELECT token FROM token_usage", "").contains("SELECT token FROM token_usage"));
     }
 
     #[test]

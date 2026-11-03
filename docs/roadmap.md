@@ -140,7 +140,7 @@ The review of #214 to #231 found these, most severe first.
 The review of #260 to #285 found these, most severe first.
 
 - [x] `v` on a table's description after a chart never panics: `left_chart` moves into `Run::Done`, so it cannot outlive its result
-- [ ] The idle ask sends no secret from a comment: `PGPASSWORD=x`, `pwd x`, `api_key x` and `token x` count as secrets, as any `KEY=value` does
+- [x] The idle ask sends no secret from a comment: `PGPASSWORD=x`, `pwd x`, `api_key x` and `token x` count as secrets, as any `KEY=value` does
 - [ ] With literals masked, a double-quoted, backticked or curly-quoted span in a comment is masked, and a quoted name the catalog does not hold is masked or refused in a statement
 - [ ] The prompt says to join only along a listed foreign key and use only listed columns, and to say so when what it needs is not listed
 - [x] A read is not sent again once the session's settings may have changed, as after a confirmed `SET search_path` or `SET ROLE`, or a read calling `set_config`

@@ -35,9 +35,10 @@ fn no_comment() -> Instruction {
     Instruction::new(format!("{NO_COMMENT}\n{KEEP_TYPED}"))
 }
 
-/// The idle ask's prompt, and why it left out the comment above the statement when it did.
+/// The idle ask's prompt, none when it cannot be sent or nothing is left to ask about, and why it left out the comment
+/// above the statement when it did.
 struct IdlePrompt {
-    prompt: Prompt,
+    prompt: Option<Prompt>,
     left_out: Option<NotSent>,
 }
 
@@ -105,16 +106,18 @@ impl App {
         let Some(question) = self.sheet().question().filter(|question| wanted(question)) else { return vec![] };
         let settings = settings.without_passwords_of(&self.connections).for_idle_ghost();
         let editor = self.editor_on_screen();
-        let Some(IdlePrompt { prompt, left_out }) = self.sheet().idle_prompt(&question, settings.literals) else {
-            self.asks.idle = IdleAsk::Asked(editor);
-            return vec![];
-        };
-        let ask = self.asks.take_id();
-        self.asks.idle = IdleAsk::Waiting { ask, editor };
+        let IdlePrompt { prompt, left_out } = self.sheet().idle_prompt(&question, settings.literals);
         if let Some(why) = &left_out {
             self.warning = Some(why.to_string());
         }
-        left_out.map(Action::LogCommentLeftOut).into_iter().chain([Action::Ask { ask, prompt, settings }]).collect()
+        let left_out = left_out.map(Action::LogCommentLeftOut);
+        let Some(prompt) = prompt else {
+            self.asks.idle = IdleAsk::Asked(editor);
+            return left_out.into_iter().collect();
+        };
+        let ask = self.asks.take_id();
+        self.asks.idle = IdleAsk::Waiting { ask, editor };
+        left_out.into_iter().chain([Action::Ask { ask, prompt, settings }]).collect()
     }
 
     /// Whether the idle ask runs, so the footer says it waits on the command.
@@ -189,7 +192,7 @@ impl Sheet {
         let Some(range) = self.range_under_cursor() else { return empty_question(text, tokens, cursor) };
         let typed = || {
             let first = self.editor.lexed().tokens_in(range.start..cursor).first().map_or(cursor, |placed| placed.range.start);
-            Question { typed: &text[range.start..cursor], comment: comment_above(text, tokens, first) }
+            Question { typed: &text[first..cursor], comment: comment_above(text, tokens, first) }
         };
         match cursor.cmp(&range.end) {
             Ordering::Less => (range.start <= cursor && is_blank(&text[cursor..range.end])).then(typed),
@@ -199,16 +202,15 @@ impl Sheet {
     }
 
     /// The prompt asking for the rest of `question`'s statement, with the comment above it as the instruction; with the
-    /// default instruction when `literals` masks it and it cannot be masked; none when it cannot be sent, as when the
-    /// comment holds a secret.
-    fn idle_prompt(&self, question: &Question<'_>, literals: LiteralPolicy) -> Option<IdlePrompt> {
+    /// default instruction when the comment may hold a secret, or `literals` masks it and it cannot be masked.
+    fn idle_prompt(&self, question: &Question<'_>, literals: LiteralPolicy) -> IdlePrompt {
         let statement = Statement::new(question.typed);
         let ask = |instruction: &Instruction| self.prompt_about(instruction, Some(&statement), &[], None, literals);
         match ask(&question.instruction()) {
-            Err(NotSent::UnmaskableComment) => {
-                ask(&no_comment()).ok().map(|prompt| IdlePrompt { prompt, left_out: Some(NotSent::UnmaskableComment) })
+            Err(left_out @ (NotSent::UnmaskableComment | NotSent::CommentHoldsSecret)) => {
+                IdlePrompt { prompt: ask(&no_comment()).ok().filter(|_| !question.typed.is_empty()), left_out: Some(left_out) }
             }
-            asked => asked.ok().map(|prompt| IdlePrompt { prompt, left_out: None }),
+            asked => IdlePrompt { prompt: asked.ok(), left_out: None },
         }
     }
 
@@ -483,9 +485,10 @@ pub(in crate::tui) mod tests {
     }
 
     #[test]
-    fn a_comment_holding_a_secret_is_never_sent() {
-        let mut app = idle_on("-- set the password of nina\n");
-        assert_eq!(app.ask_idle_ghost(), []);
+    fn a_comment_left_out_with_nothing_typed_asks_nothing_and_says_so() {
+        let mut app = idle_on("-- PGPASSWORD=hunter2 psql\n").with_ai(Some(AiSettings { ghost: true, ..ai_settings() }));
+        assert_eq!(app.ask_idle_ghost(), [Action::LogCommentLeftOut(NotSent::CommentHoldsSecret)]);
+        assert_eq!(app.warning(), Some(NotSent::CommentHoldsSecret.to_string().as_str()));
     }
 
     const PERSONAL_COMMENT: &str = "-- orders of nina@example.com, order 4412\nSELECT * FROM orders WHERE ";
@@ -515,19 +518,29 @@ pub(in crate::tui) mod tests {
     #[test]
     fn a_comment_holding_a_secret_is_never_sent_with_literals_sent() {
         let sent = AiSettings { ghost: true, literals: LiteralPolicy::Sent, ..ai_settings() };
-        let mut app = idle_on("-- set the password of nina@example.com\n").with_ai(Some(sent));
-        assert_eq!(app.ask_idle_ghost(), []);
+        let mut app = idle_on("-- set the password of nina@example.com\nSELECT * FROM orders WHERE ").with_ai(Some(sent));
+        let asked = app.ask_idle_ghost();
+        let [Action::LogCommentLeftOut(NotSent::CommentHoldsSecret), Action::Ask { prompt, .. }] = &*asked else { panic!("{asked:?}") };
+        assert!(!prompt.text().contains("nina") && !prompt.text().contains("password"), "{}", prompt.text());
+    }
+
+    #[test]
+    fn a_statement_holding_a_secret_under_a_comment_asks_nothing() {
+        assert_eq!(idle_on("-- the orders\nALTER ROLE nina PASSWORD ").ask_idle_ghost(), []);
     }
 
     pub(in crate::tui) const UNMASKABLE_COMMENT: &str = "-- show 'nina\nSELECT * FROM orders WHERE ";
+    const SECRET_COMMENT: &str = "-- show PGPASSWORD=nina\nSELECT * FROM orders WHERE ";
 
     #[test]
     fn a_comment_left_out_says_why_on_the_status_line_until_the_next_key() {
-        let mut app = idle_on(UNMASKABLE_COMMENT);
-        app.ask_idle_ghost();
-        assert_eq!(app.warning(), Some(NotSent::UnmaskableComment.to_string().as_str()));
-        app.handle_key(KeyEvent::from(KeyCode::Left));
-        assert_eq!(app.warning(), None);
+        for (comment, why) in [(UNMASKABLE_COMMENT, NotSent::UnmaskableComment), (SECRET_COMMENT, NotSent::CommentHoldsSecret)] {
+            let mut app = idle_on(comment);
+            app.ask_idle_ghost();
+            assert_eq!(app.warning(), Some(why.to_string().as_str()));
+            app.handle_key(KeyEvent::from(KeyCode::Left));
+            assert_eq!(app.warning(), None);
+        }
     }
 
     #[test]
@@ -543,10 +556,17 @@ pub(in crate::tui) mod tests {
     }
 
     #[test]
-    fn a_comment_that_cannot_be_masked_is_left_out_and_logged() {
-        let sent = idle_on(UNMASKABLE_COMMENT).ask_idle_ghost();
-        let [Action::LogCommentLeftOut(NotSent::UnmaskableComment), Action::Ask { prompt, .. }] = &*sent else { panic!("{sent:?}") };
-        assert!(prompt.text().contains(&format!("Instruction:\n{NO_COMMENT}\n")) && !prompt.text().contains("nina"), "{}", prompt.text());
+    fn a_comment_that_cannot_be_sent_is_left_out_and_logged() {
+        for (comment, why) in [(UNMASKABLE_COMMENT, NotSent::UnmaskableComment), (SECRET_COMMENT, NotSent::CommentHoldsSecret)] {
+            let sent = idle_on(comment).ask_idle_ghost();
+            let [Action::LogCommentLeftOut(logged), Action::Ask { prompt, .. }] = &*sent else { panic!("{sent:?}") };
+            assert_eq!(*logged, why);
+            assert!(
+                prompt.text().contains(&format!("Instruction:\n{NO_COMMENT}\n")) && !prompt.text().contains("nina"),
+                "{}",
+                prompt.text()
+            );
+        }
     }
 
     #[test]
