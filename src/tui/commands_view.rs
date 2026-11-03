@@ -13,12 +13,16 @@ fn written(command: &Command) -> (String, String) {
         Command::Act(listing) if listing.runs => (listing.does.clone(), listing.keys.clone()),
         Command::Act(listing) => (listing.does.clone(), format!("{} · {}", listing.keys, listing.pane.title())),
         Command::Theme(palette) => (format!("theme {}", palette.name), String::new()),
+        Command::Go(connection) => (connection.name().to_string(), String::new()),
+        Command::Open(query) => (query.path.to_string(), String::new()),
+        Command::Typed { line, .. } => (format!(":{}", line.trim_start_matches(':')), "⏎ runs".to_owned()),
     }
 }
 
 fn pick<'a>(theme: &Theme, command: &Command, (label, detail): &'a (String, String)) -> Pick<'a> {
     let (icon, colour) = match command {
         Command::Act(listing) if listing.runs => ("›", theme.accent),
+        Command::Go(_) | Command::Open(_) | Command::Typed { .. } => ("›", theme.accent),
         Command::Act(_) => ("·", theme.faded),
         Command::Theme(_) => ("◐", theme.accent),
     };
@@ -35,7 +39,8 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) {
     let picks: Vec<Pick<'_>> = in_view.iter().zip(&written).map(|(command, text)| pick(theme, command, text)).collect();
     let selected = search.palette.selected - search.first_in_view(MAX_SHOWN);
     let footer = palette_footer::text(Pane::Commands, f.area());
-    let popup = Popup { title: "Commands", prompt: view::prompt(theme, &search.palette, "", |_| vec![]), footer: &footer };
+    let popup =
+        Popup { title: "Commands", prompt: view::prompt(theme, &search.palette, "", |line| app.completions_for(line)), footer: &footer };
     view::draw(f, theme, f.area(), popup, |room| view::pick_lines(theme, &picks, selected, room));
 }
 
@@ -71,6 +76,18 @@ mod tests {
     fn a_list_with_no_match_says_so() {
         let app = opened_on(app(), "zzzz");
         insta::assert_snapshot!("commands_no_match", render(&app).backend());
+    }
+
+    #[test]
+    fn a_typed_command_draws_on_top_with_the_rest_of_its_word_faded() {
+        let app = opened_on(app(), "set theme=no");
+        insta::assert_snapshot!("commands_typed_ghost", render(&app).backend());
+    }
+
+    #[test]
+    fn a_typed_command_that_parses_shows_its_row() {
+        let app = opened_on(app(), "set theme=nord");
+        insta::assert_snapshot!("commands_typed", render(&app).backend());
     }
 
     #[test]

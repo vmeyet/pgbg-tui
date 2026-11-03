@@ -8,6 +8,9 @@ Each entry says what changed, then where, then how to use it.
 
 ### New
 
+- **Typed commands**, in the TUI's command palette: `:set theme=nord`, `:go shop`, `:open orders/daily.sql`, `:run`, `:save`, `:copy`, `:help` and `:quit`, with the words revu and slack use.
+  Typing still filters the list, and a line that reads as a command shows on top of it, so `⏎` runs it and `↓` picks a row below; `⇥` completes, `→` takes the faded rest.
+  `↑` on an empty line, with the top row highlighted, brings back the last command you ran, and the arrows walk them until you type.
 - **`^k` finds a saved query**, in the TUI on the result, the sidebar, the schema and a plan, as `⌘k` does everywhere and as it finds in revu and slack.
   In the editor and the fields it still deletes to the end of the line.
 - **Ask for a fix**, in the TUI after a server's error: with `errors = "code"` in `[ai]`, the footer offers `^g ⏎`, and a blank instruction asks to fix the statement that failed.

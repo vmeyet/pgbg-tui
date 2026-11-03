@@ -79,6 +79,7 @@ mod sheet;
 mod shown_columns;
 mod shown_rows;
 mod table_finder;
+mod typed;
 mod undo;
 mod usage;
 pub(super) mod versions;
@@ -202,6 +203,8 @@ pub(super) struct App {
     asks: Asks,
     /// The last press of the mouse, so the next one can make a double or triple click.
     clicks: Clicks,
+    /// The lines typed in the command palette that ran, oldest first, for `↑` to recall.
+    typed_lines: Vec<String>,
 }
 
 impl App {
@@ -230,6 +233,7 @@ impl App {
             reading: Reading { mode: Mode::Raw, clock: grid::clock_at_epoch() },
             asks: Asks::new(None),
             clicks: Clicks::default(),
+            typed_lines: vec![],
         }
     }
 

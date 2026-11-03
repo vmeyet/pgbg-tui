@@ -8,7 +8,7 @@ expression: render(&app).backend()
 "││ saves one        │ › zzzz▌                                                  │                  ││"
 "││                  │                                                          │                  ││"
 "││                  │   no match                                               │                  ││"
-"││                  │   ↑↓ pick · ⏎ runs · esc closes                          │                  ││"
+"││                  │   ↑↓ pick · ⇥ completes · ⏎ runs · esc closes            │                  ││"
 "││                  │                                                          │                  ││"
 "││                  │                                                          │──────────────────╯│"
 "││                  │                                                          │──────────────────╮│"

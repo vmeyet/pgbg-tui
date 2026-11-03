@@ -181,6 +181,7 @@ The review of #260 to #285 found these, most severe first.
 
 pgbg, revu and slack read the same keys and share the plumbing in vtui.
 
+- [x] Typed commands in the command palette, with tab completion, a ghost and a history, on top of the list that still filters
 - [x] `↑` `↓` move the highlight in the list that shows, and `↑` on an empty line at the top recalls a line, by vtui's one rule
 - [x] `Search`, `Searched` and `PlainSearch` live in vtui
 - [x] `⌘k` finds in all three, and `^k` does too in pgbg wherever no text takes it

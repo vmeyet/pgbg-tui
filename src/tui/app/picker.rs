@@ -120,7 +120,7 @@ impl App {
     }
 
     /// Shows the sheet of `connection`, and lists its queries when it uses another folder than the sheet it replaces.
-    fn show(&mut self, connection: Connection) -> Vec<Action> {
+    pub(super) fn show(&mut self, connection: Connection) -> Vec<Action> {
         let listed = self.queries_folder().clone();
         let opened = self.bring_up(connection);
         opened.into_iter().chain(self.follow_queries_folder(&listed)).collect()

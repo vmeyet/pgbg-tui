@@ -516,6 +516,10 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Find, Pane::Plan, &[control('k')]).help("^k", FIND_KEY),
     row(Act::Down, Pane::Commands, &[key(KeyCode::Down), control('n')]).help("↓ ^n", "next, previous command").footer("↑↓", "pick"),
     row(Act::Up, Pane::Commands, &[key(KeyCode::Up), control('p')]),
+    row(Act::Complete, Pane::Commands, &[key(KeyCode::Tab), key(KeyCode::BackTab)])
+        .help("⇥ ⇧⇥", "complete a typed command, as :set theme=nord")
+        .footer("⇥", "completes"),
+    row(Act::TakeGhost, Pane::Commands, &[key(KeyCode::Right), key(KeyCode::End)]).help("→", "take the faded rest of a typed command"),
     row(Act::Open, Pane::Commands, &[key(KeyCode::Enter)]).help("⏎", "run it, or keep the theme").footer("⏎", "runs"),
     row(Act::Close, Pane::Commands, &[key(KeyCode::Esc), control('l')])
         .help("esc ^l", "close it, with the theme as it was")
