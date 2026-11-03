@@ -187,6 +187,18 @@ pgbg, revu and slack read the same keys and share the plumbing in vtui.
 - [x] `Search`, `Searched` and `PlainSearch` live in vtui
 - [x] `⌘k` finds in all three, and `^k` does too in pgbg wherever no text takes it
 
+## 27. Review of the `ctrl-g` fixes
+
+The review of #299 to #301 left these.
+
+- [ ] `⌥b` `⌥f` move by word in the command palette and the finders, which still type the letter
+- [ ] The connection form's fields take the keys of `editor::edit_line`
+- [ ] A paste into the instruction or a filter stays on one line
+- [ ] `⌥b` `⌥f` in a path stop at `/`, not only at blanks
+- [ ] Past the cap, the slice fills the room left with detail by rank, so a schema just over 64 KiB sends more than its two hops
+- [ ] Past the cap, a kept table with many wide tables pointing to it no longer crowds out a table two keys away
+- [ ] An ask whose schema read fails keeps the typed instruction
+
 ## Later
 
 - revu and slack run `update` and the brew check through `vtui::update`, as pgbg does
