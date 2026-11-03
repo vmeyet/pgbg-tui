@@ -2,7 +2,7 @@
 //! Pure: the drawing lives in `tui/chart_view/`.
 pub(crate) use bars::{Bars, Lane};
 pub(crate) use grouped::bars as grouped_bars;
-pub(crate) use series::{ChartError, Series, YColumn};
+pub(crate) use series::{ChartError, ChartNext, Series, YColumn};
 pub(crate) use spec::ChartSpec;
 pub(crate) use stacked::bars as stacked_bars;
 
@@ -74,6 +74,14 @@ pub(crate) enum Orientation {
 }
 
 impl Orientation {
+    /// What the TUI calls it, on the chart's title and in its footer.
+    pub(crate) const fn shown_name(self) -> &'static str {
+        match self {
+            Self::Vertical => "upright",
+            Self::Horizontal => "on its side",
+        }
+    }
+
     /// The word a `-- chart:` header uses for it.
     fn named(word: &str) -> Option<Self> {
         match word {

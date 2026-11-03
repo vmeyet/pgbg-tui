@@ -114,8 +114,8 @@ fn hints(app: &App, pane: Pane, columns: usize) -> Line<'static> {
         .then_some(REWRITE_HINT)
         .or_else(|| (matches!(pane, Pane::Editor | Pane::Result) && app.offers_fix()).then_some(FIX_HINT));
     let room = columns.saturating_sub(offered.map_or(0, width));
-    let is_on_chart = pane == Pane::Result && app.sheet().is_chart_shown();
-    let shown = if is_on_chart { act::chart_footer_within(room, width) } else { act::footer_within(pane, room, width) };
+    let chart_next = app.sheet().chart_next().filter(|_| pane == Pane::Result);
+    let shown = chart_next.map_or_else(|| act::footer_within(pane, room, width), |next| act::chart_footer_within(next, room, width));
     let spans = offered.into_iter().chain(shown).flat_map(|hint| {
         let [keys, what] = hint_text(hint);
         [Span::styled(keys, key), Span::styled(what, does)]
@@ -302,10 +302,37 @@ mod tests {
     fn the_footer_of_a_chart_names_its_keys_at_sixty_columns() {
         let mut app = a_result_in(dracula());
         app.handle_key(KeyEvent::from(KeyCode::Tab));
-        assert!(!footer_of(&render(&app, 60, 14)).contains("t kind"));
+        assert!(!footer_of(&render(&app, 60, 14)).contains("t stacked"));
         app.handle_key(KeyEvent::from(KeyCode::Char('v')));
         let footer = footer_of(&render(&app, 60, 14));
-        assert!(footer.contains("t kind") && footer.contains("r flip"), "{footer}");
+        assert!(footer.contains("t stacked") && footer.contains("r upright"), "{footer}");
+    }
+
+    fn a_chart_after(keys: &str) -> Terminal<TestBackend> {
+        let mut app = a_result_in(dracula());
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        format!("v{keys}").chars().for_each(|c| _ = app.handle_key(KeyEvent::from(KeyCode::Char(c))));
+        render(&app, 60, 14)
+    }
+
+    #[test]
+    fn grouped_bars_on_their_side_name_stacked_and_upright_next() {
+        insta::assert_snapshot!("chart_grouped", a_chart_after("").backend());
+    }
+
+    #[test]
+    fn stacked_bars_on_their_side_name_line_and_upright_next() {
+        insta::assert_snapshot!("chart_stacked", a_chart_after("t").backend());
+    }
+
+    #[test]
+    fn upright_stacked_bars_name_on_its_side_next() {
+        insta::assert_snapshot!("chart_stacked_upright", a_chart_after("tr").backend());
+    }
+
+    #[test]
+    fn a_line_names_grouped_next_and_leaves_out_the_flip() {
+        insta::assert_snapshot!("chart_line", a_chart_after("tt").backend());
     }
 
     #[test]

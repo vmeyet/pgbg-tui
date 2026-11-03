@@ -8,7 +8,7 @@ use super::plan_tree::PlanTree;
 use super::shown_columns::KeptColumns;
 use super::{Action, Confirmed, Grid, Incoming, RunId, SessionId, TunnelState};
 use crate::ai::{Fault, TableUse};
-use crate::chart::{self, ChartColumns, ChartError, ChartSpec, Series};
+use crate::chart::{self, ChartColumns, ChartError, ChartNext, ChartSpec, Series};
 use crate::complete::Index;
 use crate::connection::{Connection, ConnectionName, WritePolicy};
 use crate::db::explain::Explain;
@@ -299,7 +299,13 @@ impl Sheet {
 
     /// Whether the result pane shows a chart instead of the grid that the cursor keys move.
     pub(in crate::tui) fn is_chart_shown(&self) -> bool {
-        matches!(self.run, Run::Done { view: View::Chart(_), .. })
+        self.chart_next().is_some()
+    }
+
+    /// Where the chart's keys lead, while the result pane shows a chart: nowhere when the chart could not be drawn.
+    pub(in crate::tui) fn chart_next(&self) -> Option<ChartNext> {
+        let Run::Done { view: View::Chart(chart), .. } = &self.run else { return None };
+        Some(chart.as_ref().map_or_else(|_| ChartNext::default(), Series::next))
     }
 
     /// Whether the result pane shows a plan, whose keys then take over from the grid's.

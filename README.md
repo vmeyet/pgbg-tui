@@ -235,7 +235,7 @@ In the TUI, a bar above the editor shows one field per parameter.
 | `^d` `⌥s` | Save the text under a new path, starting from the open query's. |
 | `F2` `⌥c` | In the editor: copy the statement under the cursor. |
 | `v` | Show the result as a chart, or as a grid again. |
-| `t` `r` | On a chart: its next kind, grouped, stacked or line; its bars upright or on their side. |
+| `t` `r` | On a chart: its next kind, grouped, stacked or line; its bars upright or on their side. The footer names what comes next, as `t stacked` and `r upright`, with no `r` on a line, and the pane's title names what shows now. |
 | `z` `Z` | Keep the primary key the result starts with, or else its first column, on the left while the grid scrolls, or nothing: on by default; keep the columns up to the cursor's. |
 | `x` `X` | Hide the column under the cursor from the grid; show every column again. |
 | `y` `Y` `c` | Copy the cell; the row as CSV; the result as CSV, JSON or Markdown. |

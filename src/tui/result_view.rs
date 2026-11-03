@@ -85,14 +85,15 @@ fn filtered_count(result: &ResultSet, shown: &ShownRows) -> String {
     }
 }
 
-/// `[grid] chart` or `grid [chart]`: the view shown is in brackets, the other is the one `v` switches to, a plan's tree
-/// for a result that holds one.
-fn view_switch(view: &View, result: &ResultSet) -> &'static str {
+/// `[grid] chart` or `grid [stacked, upright]`: the view shown is in brackets, the other is the one `v` switches
+/// to, a plan's tree for a result that holds one.
+fn view_switch(view: &View, result: &ResultSet) -> String {
     match view {
-        View::Grid if plan::holds_a_plan(result) => "[grid] plan",
-        View::Grid => "[grid] chart",
-        View::Chart(_) => "grid [chart]",
-        View::Plan(_) => "[plan] grid",
+        View::Grid if plan::holds_a_plan(result) => "[grid] plan".to_owned(),
+        View::Grid => "[grid] chart".to_owned(),
+        View::Chart(Ok(series)) => format!("grid [{}]", series.shown_as()),
+        View::Chart(Err(_)) => "grid [chart]".to_owned(),
+        View::Plan(_) => "[plan] grid".to_owned(),
     }
 }
 

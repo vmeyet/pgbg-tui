@@ -1,0 +1,18 @@
+---
+source: src/tui/ui.rs
+expression: "a_chart_after(\"\").backend()"
+---
+"╭ ● shop · local ──────────────────────────────────────────╮"
+"│╭ Editor ─ READ ONLY ────────────────────────────────────╮│"
+"││ SELECT id, customer FROM orders                        ││"
+"││                                                        ││"
+"│╰────────────────────────────────────────────────────────╯│"
+"│╭ Result ─ 4 rows · 38 ms ─ grid [grouped, on its side] ─╮│"
+"││ ■ id  ■ total                                          ││"
+"││ nina 7                                                 ││"
+"││      12.5                                              ││"
+"││                                                        ││"
+"││ +3 more                                                ││"
+"│╰────────────────────────────────────────────────────────╯│"
+"│ v grid  t stacked  r upright  F1 keys  ^c quit connected │"
+"╰──────────────────────────────────────────────────────────╯"

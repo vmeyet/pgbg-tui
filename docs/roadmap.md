@@ -135,6 +135,7 @@ The review of #214 to #231 found these, most severe first.
 - [x] Ask for a fix after a server's error, with `[ai] errors = "code"`: the SQLSTATE and the position go along, never the server's words
 - [x] Ask for a chart: the answer leads with a `-- chart:` line, its statement's own, and `ctrl-g` on the result pane sends the columns' names and types
 - [x] The `⌥` keys have a key beside them that needs no terminal setting, on any layout: `^d` save as, `^b` plan, `^f` plan as it ran, `F2` copy the statement
+- [x] A chart's footer names what `t` and `r` lead to, with no `r` on a line, and the pane's title names the kind and orientation shown
 
 ## 25. Review of the week-of-use batch
 
