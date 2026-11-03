@@ -2,7 +2,7 @@
 //! columns with their types, enum labels, foreign keys and comments; then the name alone of every other table, so the
 //! model can name a table nothing pointed to.
 use crate::db::lex::{self, Token};
-use crate::db::model::{Catalog, ForeignKey, SchemaColumn, SchemaNode, Table, qualified, sql_name};
+use crate::db::model::{Catalog, ForeignKey, SchemaColumn, SchemaNode, Table, qualified, sql_name, sql_string};
 use crate::secret;
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
@@ -199,7 +199,7 @@ fn labels_part(labels: &[String]) -> String {
 
 /// `label` as a string literal on one line.
 fn label_literal(label: &str) -> String {
-    format!("'{}'", on_one_line(label).replace('\'', "''"))
+    sql_string(&on_one_line(label))
 }
 
 /// Whether `key` is made of one column of `table`, which then carries it.

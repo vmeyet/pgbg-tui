@@ -1,5 +1,6 @@
 use super::{ColumnNumber, TableOid, TypeName};
 use serde::Serialize;
+use std::collections::HashSet;
 
 /// Every schema the role can see, with its tables, their columns, their indexes and their foreign keys.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
@@ -16,6 +17,22 @@ pub(crate) struct Catalog {
     /// It logs in as the statement session does, so the two share a search path unless a statement changed it.
     pub(crate) search_path: Vec<String>,
     pub(crate) is_cut: bool,
+}
+
+impl Catalog {
+    /// Those of `names` that a schema, a table, a column or an index bears exactly, as a quoted name must; one walk of the
+    /// catalog however many names, since a statement may quote hundreds.
+    pub(crate) fn held_among(&self, names: &HashSet<String>) -> HashSet<String> {
+        if names.is_empty() {
+            return HashSet::new();
+        }
+        let tables = || self.schema.schemas.iter().flat_map(|node| &node.tables);
+        let schema_names = self.schema.schemas.iter().map(|node| &node.name);
+        let table_names = tables().map(|table| &table.name);
+        let column_names = tables().flat_map(|table| &table.columns).map(|column| &column.name);
+        let index_names = tables().flat_map(|table| &table.indexes).map(|index| &index.name);
+        schema_names.chain(table_names).chain(column_names).chain(index_names).filter(|name| names.contains(*name)).cloned().collect()
+    }
 }
 
 /// One schema and the tables in it the role can read.
@@ -114,6 +131,13 @@ impl SchemaNode {
 mod tests {
     use super::*;
     use crate::fixtures::shop_schema as shop;
+
+    #[test]
+    fn the_catalog_holds_each_kind_of_name_exactly_as_written() {
+        let names: HashSet<String> = ["public", "orders", "total", "orders_pkey", "Total", "nina"].map(str::to_owned).into();
+        let expected: HashSet<String> = ["public", "orders", "total", "orders_pkey"].map(str::to_owned).into();
+        assert_eq!(crate::fixtures::shop_catalog().held_among(&names), expected);
+    }
 
     #[test]
     fn a_table_holds_a_filter_on_its_schema_and_name_together() {

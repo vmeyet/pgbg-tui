@@ -53,6 +53,7 @@ Each entry says what changed, then where, then how to use it.
 - **A rewrite waits for `ctrl-g`**, in the TUI with `[ai] ghost = true`: when the answer rewrites what you typed instead of continuing it, the footer reads `^g rewrite waiting`.
   `ctrl-g` then shows it as a diff, with no new ask, and `tab` takes it; any other key drops it.
 - **An apostrophe inside a word no longer loses the comment**, in the AI completion with literals masked: `-- what's the total` is now the instruction, and a quoted value after it is still masked.
+- **Every quoted value stays out of an AI prompt with literals masked**: in a comment, `"..."`, backticks and curly quotes are masked too, and a comment whose quotes pair wrongly is left out; in a statement, a double-quoted name the schema does not hold is masked, and pgbg puts it back in the answer.
 - **A comment left out of the AI completion says why**, on the status line until the next key, and not only in the log.
 - **A secret in a comment stays out of the AI completion**: a comment naming `PGPASSWORD`, `pwd`, `passwd`, `token`, `api_key` or `secret`, or holding any `KEY=value`, is left out of the ask, and the status line says so.
 - **A tunnel that still runs but no longer forwards is started anew**, on every connection with a tunnel: a run after a lost link no longer fails over and over until the connection is closed.

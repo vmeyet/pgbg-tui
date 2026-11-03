@@ -3,7 +3,7 @@ pub(crate) use cancel::CancelToken;
 pub(crate) use error::{ErrorCode, InsideUserTransaction, ServerError, TriedToWrite, UnknownType};
 pub(crate) use interval::Interval;
 pub(crate) use json::{JsonText, string_end as json_string_end};
-pub(crate) use name::{needs_quotes, qualified, sql_name};
+pub(crate) use name::{needs_quotes, qualified, sql_name, sql_string};
 pub(crate) use origin::{ColumnNumber, Origin, TableOid};
 pub(crate) use result::{Extent, Page, ResultSet};
 pub(crate) use route::{LocalPort, Route};
