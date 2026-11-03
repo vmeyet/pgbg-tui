@@ -1,5 +1,5 @@
-//! `y`, `Y` and `c` on the grid: copy the cell, the row or the whole result to the clipboard, with raw values; `⌥c` in
-//! the editor: copy the statement under the cursor; letting go of the mouse or `⌘c` there: copy the selection.
+//! `y`, `Y` and `c` on the grid: copy the cell, the row or the whole result to the clipboard, with raw values; `F2` or `⌥c`
+//! in the editor: copy the statement under the cursor; letting go of the mouse or `⌘c` there: copy the selection.
 use super::{Action, App, Overlay, Run};
 use crate::act::{self, Act, Pane};
 use crate::db::model::{ResultSet, Value};

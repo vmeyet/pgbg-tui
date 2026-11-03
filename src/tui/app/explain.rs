@@ -1,4 +1,4 @@
-//! `⌥e` and `⌥a` in the editor: the `EXPLAIN` of the statement under the cursor, sent as a run.
+//! `^b` and `^f` in the editor, or `⌥e` and `⌥a`: the `EXPLAIN` of the statement under the cursor, sent as a run.
 use super::{Action, App};
 use crate::db::explain::Explain;
 

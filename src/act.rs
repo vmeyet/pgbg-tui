@@ -389,8 +389,8 @@ const FOOTER_KEPT_LONGEST: [Act; 3] = [Act::Quit, Act::Help, Act::Close];
 /// Every action, in the order the help and the footer list them; where two rows share a key in a pane, the first wins.
 pub(crate) const ROWS: &[Row] = &[
     row(Act::Run, Pane::Editor, &[key(KeyCode::Enter)]).help("⏎", "run the statement under the cursor").footer("⏎", "run"),
-    row(Act::Explain, Pane::Editor, &[alt('e')]).help("⌥e", "the plan of the statement under the cursor, without running it"),
-    row(Act::ExplainAnalyze, Pane::Editor, &[alt('a')]).help("⌥a", "the plan as it ran: a read runs, read only and rolled back"),
+    row(Act::Explain, Pane::Editor, &[control('b'), alt('e')]).help("^b ⌥e", "the plan, without running the statement"),
+    row(Act::ExplainAnalyze, Pane::Editor, &[control('f'), alt('a')]).help("^f ⌥a", "the plan as it ran: a read runs, read only and rolled back"),
     row(
         Act::NewLine,
         Pane::Editor,
@@ -404,7 +404,7 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Ask, Pane::Editor, &[control('g')]).help("^g", "ask the [ai] command for SQL"),
     row(Act::Undo, Pane::Editor, &[control('z')]).help("^z", "undo the last change"),
     row(Act::Redo, Pane::Editor, &[control('Z'), control('y')]).help("⇧^z ^y", "redo the change undone"),
-    row(Act::CopyStatement, Pane::Editor, &[alt('c')]).help("⌥c", "copy the statement under the cursor"),
+    row(Act::CopyStatement, Pane::Editor, &[key(KeyCode::F(2)), alt('c')]).help("F2 ⌥c", "copy the statement under the cursor"),
     row(Act::CopySelection, Pane::Editor, &[command('c')]).help("⌘c", "copy the selection, else the statement"),
     row(Act::Paste, Pane::Editor, &[command('v')]).help("⌘v", "paste the clipboard"),
     row(Act::Run, Pane::Params, &[key(KeyCode::Enter)]).help("⏎", "run the statement with these values").footer("⏎", "run"),
@@ -596,7 +596,7 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Quit, Pane::CopyAs, &[control('c')]).help("^c", "quit"),
     row(Act::EditOutside, Pane::Editor, &[control('x')]).help("^x", "edit the saved query in $EDITOR"),
     row(Act::Save, Pane::Anywhere, &[control('s')]).help("^s", "save the query, naming a new one").footer("^s", "save"),
-    row(Act::SaveAs, Pane::Anywhere, &[alt('s')]).help("⌥s", "save the text under a new path, the open query left as it is"),
+    row(Act::SaveAs, Pane::Anywhere, &[control('d'), alt('s')]).help("^d ⌥s", "save the text under a new path, the open query left as it is"),
     row(Act::NewQuery, Pane::Anywhere, &[control('q')]).help("^q", "a new, empty query"),
     row(Act::History, Pane::Anywhere, &[control('r')]).help("^r", "search the statements run on this connection"),
     row(Act::Versions, Pane::Anywhere, &[control('v')]).help("^v", "the versions of the saved query its saves replaced"),
@@ -894,8 +894,25 @@ mod tests {
     }
 
     #[test]
+    fn every_option_key_has_a_key_beside_it_that_needs_no_option_setting() {
+        let is_option = |pressed: &KeyEvent| pressed.modifiers.contains(KeyModifiers::ALT);
+        for row in ROWS.iter().filter(|row| row.keys.iter().any(is_option)) {
+            assert!(!row.keys.iter().all(is_option), "{:?}", row.act);
+        }
+    }
+
+    #[test]
+    fn the_keys_beside_option_work_from_the_editor() {
+        let pressed = [control('b'), control('f'), control('d'), key(KeyCode::F(2))];
+        let acts = [Act::Explain, Act::ExplainAnalyze, Act::SaveAs, Act::CopyStatement].map(Some);
+        assert_eq!(pressed.map(|key| act_for(key, Pane::Editor)), acts);
+    }
+
+    #[test]
     fn the_shell_keys_of_a_line_are_left_to_the_editor() {
-        for key in [control('a'), control('e'), control('k'), control('u'), KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT)] {
+        for key in
+            [control('a'), control('e'), control('k'), control('u'), control('w'), KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT)]
+        {
             assert_eq!(act_for(key, Pane::Editor), None, "{key:?}");
         }
     }
