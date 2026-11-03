@@ -1,5 +1,5 @@
 //! `ctrl-r`: the statements run on the connection on screen, narrowed as fzf does; picking one puts it in the editor.
-use super::search::{Search, Searching};
+use super::search::{self, Search, Searching};
 use super::{Action, App, Overlay};
 use crate::act::Pane;
 use crate::connection::ConnectionName;
@@ -35,7 +35,7 @@ impl App {
     /// The search after `key`: a picked statement goes in the editor, below the text already there.
     pub(super) fn recall_key(&mut self, recall: Recall, key: KeyEvent) -> Vec<Action> {
         let Recall { connection, all, search } = recall;
-        match search.after(key, Pane::Finder, &all) {
+        match search::after(search, key, Pane::Finder, &all) {
             Searching::Typed(search) | Searching::Unhandled(search, _) => {
                 self.overlay = Some(Overlay::Recall(Recall { connection, all, search }));
             }

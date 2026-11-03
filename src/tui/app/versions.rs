@@ -1,7 +1,7 @@
 //! `ctrl-v`: the versions of the saved query on screen that its saves replaced, newest first; picking one puts it in
 //! the editor as unsaved text, which the user saves with `ctrl-s` to make it the query again.
 use super::diff::{self, Change};
-use super::search::{Search, Searching};
+use super::search::{self, Search, Searching};
 use super::{Action, App, Overlay};
 use crate::act::Pane;
 use crate::query::{Query, Version};
@@ -67,7 +67,7 @@ impl App {
     /// The list after `key`: a picked version replaces the editor's text, unsaved.
     pub(super) fn versions_key(&mut self, list: VersionList, key: KeyEvent) -> Vec<Action> {
         let VersionList { query, all, search } = list;
-        match search.after(key, Pane::Finder, &all) {
+        match search::after(search, key, Pane::Finder, &all) {
             Searching::Typed(search) | Searching::Unhandled(search, _) => {
                 self.overlay = Some(Overlay::Versions(VersionList { query, all, search }));
             }

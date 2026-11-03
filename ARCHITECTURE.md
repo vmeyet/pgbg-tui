@@ -36,7 +36,7 @@ The code is the contract; this page describes it, and changes in the MR that cha
 | `tui/app/` | `App`, the pure state machine: keys in, `Action`s out, `Answer`s applied; `protocol.rs` what the app and the backend say; one `Overlay` at most takes the keys |
 | `tui/backend/` | `Backend::dispatch` hands each `Action` to its part without waiting: one session task per connection, queries, config, history, AI, clipboard |
 | `tui/ui.rs`, `tui/*_view.rs`, `tui/grid_view/`, `tui/chart_view/`, `tui/theme.rs` | Drawing: one view per pane or overlay, in the vtui palette `[tui] theme` names, with the tier colours mixed from it |
-| `vtui` (git dependency) | Shared with the sibling TUIs: terminal, palette, fields, completion index, help, fuzzy matching, usage |
+| `vtui` (git dependency) | Shared with the sibling TUIs: terminal, palette and its `Search`, the `↑` `↓` rule, fields, completion index, help, fuzzy matching, usage |
 | `failure.rs` | Why a session did not open, was lost, or gave no result; the history's `Outcome` derives from it |
 | `files.rs` | `make_private_dir`, folders for their owner alone (`0700`), and `write_whole`, a whole file through a synced temp file and a rename; every file pgbg writes whole goes through it |
 | `lock.rs` | A file opened to append under an exclusive `flock`, so two pgbg never lose each other's writes |

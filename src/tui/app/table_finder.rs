@@ -1,6 +1,6 @@
 //! `ctrl-t`: every table in the schema of the sheet on screen, narrowed as fzf does, with the schema tab's actions.
 use super::schema_tab::PickedTable;
-use super::search::{Search, Searched, Searching};
+use super::search::{self, Search, Searched, Searching};
 use super::{Action, App, Overlay};
 use crate::act::{Act, Pane};
 use crate::db::model::Catalog;
@@ -50,7 +50,7 @@ impl App {
     /// the editor; each closes the finder.
     pub(super) fn table_finder_key(&mut self, finder: TableFinder, key: KeyEvent) -> Vec<Action> {
         let TableFinder { all, search } = finder;
-        match search.after(key, Pane::TableFinder, &all) {
+        match search::after(search, key, Pane::TableFinder, &all) {
             Searching::Typed(search) => self.overlay = Some(Overlay::TableFinder(Box::new(TableFinder { all, search }))),
             Searching::Unhandled(search, act) => return self.act_on_found(TableFinder { all, search }, act),
             Searching::Picked(table) => return self.preview_table(&table),

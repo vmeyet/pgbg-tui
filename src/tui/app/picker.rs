@@ -1,6 +1,6 @@
 //! `ctrl-o`, the connection picker: typing narrows the connections as fzf does.
 //! Picking one shows its sheet, and opens its session the first time.
-use super::search::{Search, Searching};
+use super::search::{self, Search, Searching};
 use super::{Action, App, ConfigChangeId, Form, Overlay, SessionState, Sheet};
 use crate::act::{Act, Pane};
 use crate::connection::{Connection, ConnectionName};
@@ -79,7 +79,7 @@ impl App {
             let is_yes = key.code == KeyCode::Char('y');
             return if is_yes { Picked::Remove(name) } else { Picked::Stay(Picker { search, note: None }) };
         }
-        match search.after(key, Pane::Picker, &self.connections) {
+        match search::after(search, key, Pane::Picker, &self.connections) {
             Searching::Typed(search) => Picked::Stay(Picker { search, note: None }),
             Searching::Closed => Picked::Close,
             Searching::Picked(connection) => Picked::Show(connection),

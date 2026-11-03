@@ -1,6 +1,6 @@
 //! `ctrl-l`, or `:` where it types nothing: the command palette, every act and every theme narrowed as fzf does.
 //! An act runs as its key does, so a write still asks; a theme shows while highlighted, and `⏎` keeps it.
-use super::search::{Search, Searched, Searching};
+use super::search::{self, Search, Searched, Searching};
 use super::{Action, App, Overlay};
 use crate::act::{self, Act, Listing, Pane};
 use crate::tui::theme::Theme;
@@ -64,7 +64,7 @@ impl App {
     /// The palette after `key`: it closes with the theme it opened on, or `⏎` runs the highlighted command.
     pub(super) fn commands_key(&mut self, commands: Commands, key: KeyEvent) -> Vec<Action> {
         let Commands { all, search, kept } = commands;
-        match search.after(key, Pane::Commands, &all) {
+        match search::after(search, key, Pane::Commands, &all) {
             Searching::Typed(search) | Searching::Unhandled(search, _) => self.keep_commands(Commands { all, search, kept }),
             Searching::Closed => self.theme = kept,
             Searching::Picked(command) => return self.run_command(command),
