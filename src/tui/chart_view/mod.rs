@@ -76,7 +76,7 @@ mod tests {
     use super::*;
     use crate::chart::ChartSpec;
     use crate::db::model::{ColumnKind, ResultSet, Value};
-    use crate::fixtures::column;
+    use crate::fixtures::{column, wide_chart};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -120,24 +120,14 @@ mod tests {
         )
     }
 
-    /// A customer and `columns` numeric columns, `series_0` first.
-    pub(super) fn wide(columns: usize) -> ResultSet {
-        let names = (0..columns).map(|at| column(&format!("series_{at}"), ColumnKind::Int));
-        let values = (0..columns).map(|at| Value::Int(at as i64 + 1));
-        ResultSet::whole(
-            std::iter::once(column("customer", ColumnKind::Text)).chain(names).collect(),
-            vec![std::iter::once(Value::Text("nina".into())).chain(values).collect()],
-        )
-    }
-
     #[test]
     fn a_legend_too_wide_for_one_row_goes_on_to_the_next() {
-        insta::assert_snapshot!("legend_rows", render(&series(&wide(5), "bar"), 28, 12).backend());
+        insta::assert_snapshot!("legend_rows", render(&series(&wide_chart(5), "bar"), 28, 12).backend());
     }
 
     #[test]
     fn the_legend_never_takes_the_pane_from_the_plot() {
-        let drawn = render(&series(&wide(6), "bar"), 12, 2).backend().to_string();
+        let drawn = render(&series(&wide_chart(6), "bar"), 12, 2).backend().to_string();
         assert_eq!(drawn.matches('■').count(), 0, "{drawn}");
     }
 

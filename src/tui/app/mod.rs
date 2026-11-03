@@ -535,9 +535,10 @@ mod tests {
             Run::Done {
                 run: RunId::FIRST,
                 grid: Box::new(Grid::raw(&orders())),
-                result: orders(),
+                result: Box::new(orders()),
                 took: Duration::from_millis(38),
                 view: View::Grid,
+                left_chart: None,
                 is_page_asked: false
             }
         );

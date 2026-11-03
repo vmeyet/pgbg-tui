@@ -328,7 +328,7 @@ mod tests {
 
     #[test]
     fn hundreds_of_columns_draw_in_a_small_pane() {
-        let wide = super::super::tests::wide(300);
+        let wide = crate::fixtures::wide_chart(300);
         for kind in KINDS {
             render(&series(&wide, kind), 20, 6);
         }
