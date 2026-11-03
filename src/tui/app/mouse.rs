@@ -49,8 +49,7 @@ impl App {
     /// The place in the editor's text drawn at `at`, as the last frame drew it.
     fn editor_place(&self, at: Position) -> Place {
         let inside = self.fit.editor_text;
-        let first_line = self.sheet().editor.first_line();
-        Place { line: first_line + usize::from(at.y.saturating_sub(inside.y)), column: usize::from(at.x.saturating_sub(inside.x)) }
+        self.sheet().editor.place_drawn_at(usize::from(at.y.saturating_sub(inside.y)), usize::from(at.x.saturating_sub(inside.x)))
     }
 }
 
@@ -125,7 +124,7 @@ mod tests {
         draw_ten_rows(&mut app);
         click(&mut app, MouseEventKind::Drag(LEFT), 31, 3);
         draw_ten_rows(&mut app);
-        assert_eq!((selected(&app), app.sheet().editor.first_line()), (Some("line 20\n"), 20));
+        assert_eq!((selected(&app), app.sheet().editor.first_row().line), (Some("line 20\n"), 20));
     }
 
     #[test]
@@ -133,7 +132,37 @@ mod tests {
         let mut app = thirty_lines();
         (0..25).for_each(|_| _ = app.handle_key(crossterm::event::KeyEvent::from(crossterm::event::KeyCode::Up)));
         draw_ten_rows(&mut app);
-        assert_eq!(app.sheet().editor.first_line(), 4);
+        assert_eq!(app.sheet().editor.first_row().line, 4);
+    }
+
+    /// One line of 140 columns, over three rows of the 48 columns drawn, the cursor at its start.
+    fn one_wrapped_line() -> App {
+        let mut app = editing(&"orders ".repeat(20));
+        app.handle_key(crossterm::event::KeyEvent::from(crossterm::event::KeyCode::Home));
+        app.fit(Fit { panes: every_pane(), editor_text: Rect::new(31, 2, 48, 7), ..Fit::default() });
+        app
+    }
+
+    #[test]
+    fn a_click_on_a_wrapped_row_puts_the_cursor_on_the_character_drawn_there() {
+        let mut app = one_wrapped_line();
+        click(&mut app, MouseEventKind::Down(LEFT), 33, 3);
+        assert_eq!(app.sheet().editor.split().0.len(), 50);
+    }
+
+    #[test]
+    fn a_drag_across_wrapped_rows_selects_the_text_with_no_line_break() {
+        let mut app = one_wrapped_line();
+        click(&mut app, MouseEventKind::Down(LEFT), 77, 2);
+        click(&mut app, MouseEventKind::Drag(LEFT), 33, 3);
+        assert_eq!(selected(&app), Some("rs o"));
+    }
+
+    #[test]
+    fn a_triple_click_on_a_wrapped_row_selects_the_whole_line() {
+        let mut app = one_wrapped_line();
+        presses(&mut app, 3, 33, 3);
+        assert_eq!(selected(&app), Some("orders ".repeat(20).as_str()));
     }
 
     #[test]

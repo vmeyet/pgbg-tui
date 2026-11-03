@@ -1,5 +1,6 @@
 //! The SQL editor pane: the text in its syntax colours, the cursor kept in view, the server's error position, and
 //! whether the connection takes writes.
+use super::app::wrap::{self, InView, Row};
 use super::app::{App, Focus};
 use crate::connection::{ConnectionName, Tier, WritePolicy};
 use crate::render;
@@ -8,7 +9,7 @@ use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Paragraph};
+use ratatui::widgets::Paragraph;
 use std::ops::Range;
 use vtui::pane;
 use vtui::theme::Theme;
@@ -22,9 +23,9 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) -> Rect {
     f.render_widget(block, area);
     let sheet = app.sheet();
     let (before, _, _) = sheet.editor.split();
-    let Place { row, column, scroll } = place(app, inside);
     let mark = Style::default().fg(app.theme().danger).add_modifier(Modifier::UNDERLINED);
-    let window = Window { first: scroll, rows: usize::from(inside.height) };
+    let size = inside.as_size();
+    let window = Window { first: sheet.editor.first_row_in_view(size), rows: usize::from(size.height), columns: usize::from(size.width) };
     let ghost = sheet.ghost.as_ref().filter(|_| focused).map(|ghost| Ghost { at: before.len(), rest: &ghost.rest });
     let paint = Paint {
         colours: sheet.editor.colours(),
@@ -36,48 +37,30 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) -> Rect {
     };
     let text = coloured(sheet.editor.text(), &paint, window);
     f.render_widget(Paragraph::new(text), inside);
-    let row_in_view = row.checked_sub(scroll).filter(|&row| row < window.rows);
-    if focused && let Some(row) = row_in_view {
-        f.set_cursor_position(cursor_position(inside, column, row));
+    if focused && let Some(cursor) = sheet.editor.cursor_in_view(size) {
+        f.set_cursor_position(cursor_position(inside, cursor));
     }
     inside
 }
 
-/// The line and column of the cursor in the text, and the first line in view in `inside`, chosen so the cursor's line
-/// shows, unless a server error's line takes its place.
-struct Place {
-    row: usize,
-    column: usize,
-    scroll: usize,
+/// The position of the terminal's cursor in the editor whose text is drawn in `inside`; its corner when it is out of view.
+pub(super) fn cursor_at(app: &App, inside: Rect) -> Position {
+    app.sheet().editor.cursor_in_view(inside.as_size()).map_or_else(|| inside.as_position(), |cursor| cursor_position(inside, cursor))
 }
 
-fn place(app: &App, inside: Rect) -> Place {
-    let editor = &app.sheet().editor;
-    let (before, _, _) = editor.split();
-    let row = before.matches('\n').count();
-    let column = Line::from(before.rsplit('\n').next().unwrap_or_default()).width();
-    Place { row, column, scroll: editor.first_line_in_view(inside.height) }
-}
-
-/// The position of the terminal's cursor in the editor pane drawn in `area`.
-pub(super) fn cursor_at(app: &App, area: Rect) -> Position {
-    let inside = Block::bordered().inner(area);
-    let Place { row, column, scroll } = place(app, inside);
-    cursor_position(inside, column, row.saturating_sub(scroll).min(usize::from(inside.height).saturating_sub(1)))
-}
-
-/// The screen position of the cursor at `column` of the `row`th line in view, kept inside `inside`.
-fn cursor_position(inside: Rect, column: usize, row: usize) -> Position {
+/// The screen position of `cursor`, kept inside `inside`.
+fn cursor_position(inside: Rect, cursor: InView) -> Position {
     let offset = |at: usize| u16::try_from(at).unwrap_or(u16::MAX);
-    let x = inside.x.saturating_add(offset(column)).min(inside.right().saturating_sub(1));
-    Position { x, y: inside.y.saturating_add(offset(row)) }
+    let x = inside.x.saturating_add(offset(cursor.column)).min(inside.right().saturating_sub(1));
+    Position { x, y: inside.y.saturating_add(offset(cursor.row)) }
 }
 
-/// The lines of the editor in view.
+/// The rows of the editor in view: `rows` of them from `first`, each `columns` wide.
 #[derive(Clone, Copy, Debug)]
 struct Window {
-    first: usize,
+    first: Row,
     rows: usize,
+    columns: usize,
 }
 
 /// How the text is painted: its colours per line, the bytes of `selection` reversed, the bytes of `mark` drawn on top in
@@ -108,15 +91,18 @@ impl<'a> Ghost<'a> {
     }
 }
 
-/// The lines of `text` in `window`, each token in its colour, the selection reversed and the mark on top; a mark at a
+/// The rows of `text` in `window`, each token in its colour, the selection reversed and the mark on top; a mark at a
 /// line's end draws a space there.
 /// The ghost's lines past its first push the text under the cursor's line down, as many as the window holds.
 fn coloured<'a>(text: &'a str, paint: &Paint<'_>, window: Window) -> Text<'a> {
     let faded = Style::default().fg(paint.theme.faded);
     let mut line_start = 0;
-    let mut lines = Vec::new();
-    for (index, line) in text.split('\n').enumerate().take(window.first + window.rows) {
-        if index >= window.first {
+    let mut rows = Vec::new();
+    for (index, line) in text.split('\n').enumerate() {
+        if rows.len() >= window.rows {
+            break;
+        }
+        if index >= window.first.line {
             let marked = paint.mark.as_ref().and_then(|mark| mark_within_line(mark, line_start, line.len()));
             let spans = paint.colours.get(index).map_or(&[][..], Vec::as_slice);
             let ghost = paint
@@ -125,33 +111,74 @@ fn coloured<'a>(text: &'a str, paint: &Paint<'_>, window: Window) -> Text<'a> {
                 .filter(|ghost| ghost.at <= line.len());
             let (ghost, below) = ghost.map(Ghost::first_line).unzip();
             let selected = paint.selection.as_ref().and_then(|selection| within_line(selection, line_start, line.len()));
-            let drawn = coloured_line(line, spans, Cuts { mark: marked, selected, ghost }, paint);
-            match below {
-                Some(below) => {
-                    let room = (window.first + window.rows).saturating_sub(index + 1);
-                    lines.extend(with_lines_below(drawn, &below, room, faded));
-                }
-                None => lines.push(drawn),
-            }
+            let room = window.rows - rows.len();
+            let skip = if index == window.first.line { window.first.row } else { 0 };
+            let drawn = text_rows(
+                coloured_line(line, spans, Cuts { mark: marked, selected, ghost }, paint),
+                line.len(),
+                window.columns,
+                skip,
+                room,
+            );
+            let left = room.saturating_sub(drawn.len());
+            rows.extend(with_lines_below(drawn, &below.unwrap_or_default(), left, faded, window.columns));
         }
         line_start += line.len() + 1;
     }
-    Text::from(lines)
+    Text::from(rows)
 }
 
-/// `line`, then each of `below` in `style`, as many as `room` rows hold; the last row says how many did not fit.
-fn with_lines_below<'a>(line: Line<'a>, below: &[&str], room: usize, style: Style) -> Vec<Line<'a>> {
-    let shown = below.len().min(room);
-    let more = below.len() - shown;
-    let below = below[..shown].iter().map(|text| Line::from(Span::styled(render::printable(text).into_owned(), style)));
-    let mut lines: Vec<Line<'a>> = std::iter::once(line).chain(below).collect();
+/// The rows of `drawn`, a line of the text of `line_len` bytes as painted, past the first `skip` and at most `room`.
+/// A line painted as it is keeps the empty row after a full last one, which the ghost or a mark's space fills otherwise.
+fn text_rows(drawn: Line<'_>, line_len: usize, columns: usize, skip: usize, room: usize) -> Vec<Line<'_>> {
+    let whole = drawn.to_string();
+    let cuts = if whole.len() == line_len { wrap::rows_of(&whole, columns) } else { wrap::cuts_of(&whole, columns) };
+    rows_within(drawn, &cuts, skip, room)
+}
+
+/// `line` cut at `cuts`, past the first `skip` rows and at most `room`, each part in its style.
+fn rows_within<'a>(line: Line<'a>, cuts: &[Range<usize>], skip: usize, room: usize) -> Vec<Line<'a>> {
+    if cuts.len() == 1 && skip == 0 {
+        return vec![line];
+    }
+    let starts: Vec<usize> = line.spans.iter().scan(0, |end, span| Some(std::mem::replace(end, *end + span.content.len()))).collect();
+    cuts.iter().skip(skip).take(room).map(|row| Line::from(spans_within(&line.spans, &starts, row))).collect()
+}
+
+/// The parts of `spans`, which start at the bytes `starts`, that fall in the bytes `row` of their joined text.
+fn spans_within(spans: &[Span<'_>], starts: &[usize], row: &Range<usize>) -> Vec<Span<'static>> {
+    let first = starts.partition_point(|&start| start <= row.start).saturating_sub(1);
+    let in_row = spans.iter().zip(starts).skip(first).take_while(|&(_, &start)| start < row.end);
+    let part = |(span, &start): (&Span<'_>, &usize)| {
+        let bytes = row.start.max(start) - start..row.end.min(start + span.content.len()) - start;
+        Span::styled(span.content[bytes].to_owned(), span.style)
+    };
+    in_row.map(part).collect()
+}
+
+/// `rows`, then each of `below` cut into rows in `style`, as many as `room` rows hold; the last row says how many lines
+/// did not fit.
+fn with_lines_below<'a>(mut rows: Vec<Line<'a>>, below: &[&str], mut room: usize, style: Style, columns: usize) -> Vec<Line<'a>> {
+    let mut more = 0;
+    for (index, text) in below.iter().enumerate() {
+        if room == 0 {
+            more += below.len() - index;
+            break;
+        }
+        let printable = render::printable(text).into_owned();
+        let cuts = wrap::cuts_of(&printable, columns);
+        more += usize::from(cuts.len() > room);
+        let cut = rows_within(Line::from(Span::styled(printable, style)), &cuts, 0, room);
+        room -= cut.len();
+        rows.extend(cut);
+    }
     if more > 0
-        && let Some(last) = lines.last_mut()
+        && let Some(last) = rows.last_mut()
     {
         let unit = if more == 1 { "line" } else { "lines" };
         last.push_span(Span::styled(format!("  +{more} {unit}"), style));
     }
-    lines
+    rows
 }
 
 /// The part of `mark` that falls in the line starting at byte `line_start`; an empty mark stays empty, at the line's end.
@@ -309,16 +336,23 @@ mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
     use ratatui::backend::{Backend as _, TestBackend};
+    use ratatui::layout::Size;
 
-    const EVERY_LINE: Window = Window { first: 0, rows: usize::MAX / 2 };
+    const TWO_ROWS: Size = Size { width: 28, height: 2 };
+    const EVERY_LINE: Window = Window { first: Row { line: 0, row: 0 }, rows: usize::MAX / 2, columns: 0 };
 
     /// The lines drawn with each reversed run in brackets.
     fn reversed_runs(text: &str, mark: Option<Range<usize>>, selection: Option<Range<usize>>) -> Vec<String> {
+        reversed_rows(text, mark, selection, EVERY_LINE)
+    }
+
+    /// The rows of `window` drawn with each reversed run in brackets.
+    fn reversed_rows(text: &str, mark: Option<Range<usize>>, selection: Option<Range<usize>>, window: Window) -> Vec<String> {
         let style = Style::default().add_modifier(Modifier::REVERSED);
         let shown = |span: &Span<'_>| if span.style == style { format!("[{}]", span.content) } else { span.content.to_string() };
         let theme = Theme::default();
         let paint = Paint { colours: &[], mark, mark_style: style, selection, ghost: None, theme: &theme };
-        coloured(text, &paint, EVERY_LINE).lines.iter().map(|line| line.spans.iter().map(shown).collect()).collect()
+        coloured(text, &paint, window).lines.iter().map(|line| line.spans.iter().map(shown).collect()).collect()
     }
 
     fn marked_text(text: &str, mark: Range<usize>) -> Vec<String> {
@@ -411,13 +445,13 @@ mod tests {
 
     #[test]
     fn the_last_row_of_a_cut_ghost_says_how_many_lines_did_not_fit() {
-        let shown = ghosted_in("SELECT *", 8, " FROM orders\nWHERE paid\nORDER BY id\nLIMIT 10", Window { first: 0, rows: 2 });
+        let shown = ghosted_in("SELECT *", 8, " FROM orders\nWHERE paid\nORDER BY id\nLIMIT 10", Window { rows: 2, ..EVERY_LINE });
         assert_eq!(shown, ["SELECT *< FROM orders>", "<WHERE paid><  +2 lines>"]);
     }
 
     #[test]
     fn a_ghost_on_the_last_row_says_how_many_lines_did_not_fit_on_it() {
-        let shown = ghosted_in("SELECT *", 8, " FROM orders\nWHERE paid", Window { first: 0, rows: 1 });
+        let shown = ghosted_in("SELECT *", 8, " FROM orders\nWHERE paid", Window { rows: 1, ..EVERY_LINE });
         assert_eq!(shown, ["SELECT *< FROM orders><  +1 line>"]);
     }
 
@@ -507,16 +541,143 @@ mod tests {
         let app = failed_run("SELECT ordrs\nFROM orders", 8);
         let mut terminal = drawn(&app, 30, 4);
         assert_eq!(terminal.backend_mut().get_cursor_position().unwrap(), Position { x: 13, y: 2 });
-        assert_eq!(app.sheet().editor.first_line_in_view(2), 0);
+        assert_eq!(app.sheet().editor.first_row_in_view(TWO_ROWS).line, 0);
     }
 
     #[test]
     fn moving_the_cursor_scrolls_back_to_it_and_keeps_the_mark() {
         let mut app = failed_far_above_the_cursor(8);
-        assert_eq!(app.sheet().editor.first_line_in_view(2), 0);
+        assert_eq!(app.sheet().editor.first_row_in_view(TWO_ROWS).line, 0);
         app.handle_key(KeyEvent::from(KeyCode::Left));
-        assert_eq!(app.sheet().editor.first_line_in_view(2), 6);
+        assert_eq!(app.sheet().editor.first_row_in_view(TWO_ROWS).line, 6);
         assert_eq!(app.sheet().error_mark, Some(7..12));
+    }
+
+    fn cursor(terminal: &mut Terminal<TestBackend>) -> Position {
+        terminal.backend_mut().get_cursor_position().unwrap()
+    }
+
+    /// The rows inside the frame and its padding; the second cell of a wide character shows as a space.
+    fn rows_drawn(terminal: &Terminal<TestBackend>) -> Vec<String> {
+        let buffer = terminal.backend().buffer();
+        let row = |y: u16| (2..buffer.area.width - 2).map(|x| buffer[(x, y)].symbol()).collect::<String>().trim_end().to_owned();
+        (1..buffer.area.height - 1).map(row).collect()
+    }
+
+    #[test]
+    fn a_line_wider_than_the_pane_goes_on_to_the_next_row() {
+        let app = typed("SELECT id FROM orders WHERE total > 10");
+        let mut terminal = drawn(&app, 24, 5);
+        assert_eq!(rows_drawn(&terminal), ["SELECT id FROM order", "s WHERE total > 10", ""]);
+        assert_eq!(cursor(&mut terminal), Position { x: 20, y: 2 });
+    }
+
+    #[test]
+    fn the_popup_finds_the_cursor_on_a_wrapped_row() {
+        let app = typed("SELECT id FROM orders WHERE total > 10");
+        let mut terminal = drawn(&app, 24, 5);
+        assert_eq!(cursor_at(&app, Rect::new(2, 1, 20, 3)), cursor(&mut terminal));
+    }
+
+    #[test]
+    fn wrapping_changes_no_text() {
+        let text = "SELECT id FROM orders WHERE total > 10";
+        let app = typed(text);
+        drawn(&app, 12, 6);
+        assert_eq!(app.sheet().editor.text(), text);
+    }
+
+    #[test]
+    fn a_cursor_after_the_last_cell_of_a_row_is_at_the_start_of_the_next() {
+        let mut terminal = drawn(&typed("SELECT id FROM order"), 24, 5);
+        assert_eq!(rows_drawn(&terminal), ["SELECT id FROM order", "", ""]);
+        assert_eq!(cursor(&mut terminal), Position { x: 2, y: 2 });
+    }
+
+    #[test]
+    fn a_cursor_on_a_later_row_counts_a_decomposed_letter_as_it_draws() {
+        let mut terminal = drawn(&typed("SELECT 'Zoe\u{308}' AS nina"), 16, 5);
+        assert_eq!(rows_drawn(&terminal), ["SELECT 'Zoe\u{308}'", " AS nina", ""]);
+        assert_eq!(cursor(&mut terminal), Position { x: 10, y: 2 });
+    }
+
+    #[test]
+    fn a_wide_character_that_does_not_fit_moves_to_the_next_row_and_the_cursor_follows() {
+        let mut terminal = drawn(&typed("SELECT '日本語'"), 14, 5);
+        assert_eq!(rows_drawn(&terminal), ["SELECT '日", "本 語 '", ""]);
+        assert_eq!(cursor(&mut terminal), Position { x: 7, y: 2 });
+    }
+
+    #[test]
+    fn the_rows_above_a_long_line_scroll_away_to_keep_the_cursor() {
+        let mut terminal = drawn(&typed(&"orders ".repeat(10)), 14, 4);
+        assert_eq!(rows_drawn(&terminal), ["rs orders", ""]);
+        assert_eq!(cursor(&mut terminal), Position { x: 2, y: 2 });
+    }
+
+    #[test]
+    fn a_selection_stays_reversed_on_both_rows_it_crosses() {
+        assert_eq!(reversed_rows("customers", None, Some(4..8), Window { columns: 6, ..EVERY_LINE }), ["cust[om]", "[er]s"]);
+    }
+
+    #[test]
+    fn a_full_line_keeps_an_empty_row_above_the_next_line() {
+        assert_eq!(reversed_rows("orders\nid", None, None, Window { columns: 6, ..EVERY_LINE }), ["orders", "", "id"]);
+    }
+
+    #[test]
+    fn the_space_of_a_mark_at_the_end_of_a_line_adds_no_row_when_it_fits() {
+        assert_eq!(reversed_rows("order\nid", Some(5..5), None, Window { columns: 6, ..EVERY_LINE }), ["order[ ]", "id"]);
+    }
+
+    #[test]
+    fn only_the_rows_of_the_window_are_drawn() {
+        let window = Window { first: Row { line: 0, row: 1 }, rows: 1, columns: 4 };
+        assert_eq!(reversed_rows("customers\nid", None, None, window), ["omer"]);
+    }
+
+    #[test]
+    fn the_mark_is_drawn_on_both_rows_its_token_crosses() {
+        let mut app = failed_run("SELECT id, total FROM ordrs", 23);
+        app.recolour();
+        let terminal = drawn(&app, 16, 5);
+        let buffer = terminal.backend().buffer();
+        assert_eq!(rows_drawn(&terminal), ["SELECT id, t", "otal FROM or", "drs"]);
+        assert!(buffer[(12, 2)].modifier.contains(Modifier::UNDERLINED));
+        assert!(buffer[(2, 3)].modifier.contains(Modifier::UNDERLINED));
+    }
+
+    #[test]
+    fn a_failing_token_on_a_row_above_the_view_scrolls_into_it_with_the_cursor_left_out() {
+        let mut terminal = drawn(&failed_run("SELECT ordrs, id, total, nina FROM orders", 8), 14, 3);
+        assert_eq!(rows_drawn(&terminal), ["SELECT ord"]);
+        assert_eq!(cursor(&mut terminal), Position { x: 0, y: 0 });
+    }
+
+    #[test]
+    fn a_ghost_goes_on_to_the_next_row() {
+        let shown = ghosted_in("SELECT * FROM cu", 16, "stomers", Window { columns: 18, ..EVERY_LINE });
+        assert_eq!(shown, ["SELECT * FROM cu<st>", "<omers>"]);
+    }
+
+    #[test]
+    fn the_later_lines_of_a_ghost_wrap_and_count_their_rows() {
+        let shown = ghosted_in("id", 2, " x\ncustomers\nid", Window { rows: 3, columns: 5, ..EVERY_LINE });
+        assert_eq!(shown, ["id< x>", "<custo>", "<mers><  +1 line>"]);
+    }
+
+    #[test]
+    fn a_later_line_of_a_ghost_that_fills_its_row_adds_no_empty_row() {
+        let shown = ghosted_in("id", 2, " x\nabcde\nf", Window { columns: 5, ..EVERY_LINE });
+        assert_eq!(shown, ["id< x>", "<abcde>", "<f>"]);
+    }
+
+    #[test]
+    fn a_ghost_that_wraps_leaves_the_cursor_where_it_was() {
+        let mut app = idle_ghosted("SELECT * ", "SELECT * FROM orders WHERE total > 10 ORDER BY total DESC");
+        app.recolour();
+        let mut terminal = drawn(&app, 16, 4);
+        assert_eq!(cursor(&mut terminal), Position { x: 11, y: 1 });
     }
 
     #[test]

@@ -84,6 +84,7 @@ mod typed;
 mod undo;
 mod usage;
 pub(super) mod versions;
+pub(super) mod wrap;
 
 /// The pane that has the keys.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -366,10 +367,10 @@ impl App {
     /// leave a sidebar no longer drawn.
     pub(super) fn fit(&mut self, mut fit: Fit) {
         let built = fit.detail.drawn.take();
-        let (room, editor_rows) = (fit.grid, fit.editor_text.height);
+        let (room, editor_size) = (fit.grid, fit.editor_text.as_size());
         self.fit = fit;
         self.schema_tab.keep_first(self.fit.schema_rows.first);
-        self.sheet_mut().editor.keep_in_view(editor_rows);
+        self.sheet_mut().editor.keep_in_view(editor_size);
         if let Run::Done { grid, view: View::Grid, .. } = &mut self.sheet_mut().run {
             grid.keep_in_view(room);
         }
@@ -725,7 +726,7 @@ mod tests {
         enter(&mut app);
         failed_at(&mut app, 8);
         app.handle_key(KeyEvent::from(KeyCode::Delete));
-        assert_eq!(app.sheet().editor.first_line_in_view(1), 3);
+        assert_eq!(app.sheet().editor.first_row_in_view(ratatui::layout::Size::new(30, 1)).line, 3);
     }
 
     #[test]

@@ -1,11 +1,13 @@
 //! The SQL editor: its text, the editing keys and pastes that change it, their undo, and the syntax colours that follow it.
 use super::undo::{Change, Undo};
+use super::wrap::{self, InView, Row};
 use super::{Action, App, Focus, Sheet};
 use crate::db::lex::{Lexed, Token};
 use crate::query::Header;
 use crate::render;
 use crate::syntax::{self, Spans};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::layout::Size;
 use std::ops::Range;
 use vtui::click::Click;
 use vtui::field::{Field, Place};
@@ -21,7 +23,7 @@ pub(super) enum Edited {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(in crate::tui) struct Revision(u64);
 
-/// The editor's text, its tokens, its colours, its undo and the first line in view.
+/// The editor's text, its tokens, its colours, its undo and the first row in view.
 /// The tokens are updated on each change; the colours are rebuilt by `recolour` after the text changes.
 #[derive(Debug, Default)]
 pub(in crate::tui) struct Editor {
@@ -31,15 +33,17 @@ pub(in crate::tui) struct Editor {
     lexed: Lexed,
     colours: Vec<Spans>,
     has_stale_colours: bool,
-    /// The first line the last frame drew: it moves only when the cursor leaves the view, so a click never scrolls.
-    first_line: usize,
+    /// The first row the last frame drew: it moves only when the cursor leaves the view, so a click never scrolls.
+    first_row: Row,
+    /// How wide the last frame drew the text, which `↑` `↓` and the mouse read rows by; 0 before the first frame.
+    columns: usize,
     reveal: Option<Reveal>,
 }
 
-/// A line kept in view in place of the cursor's, as long as the cursor stays at byte `cursor`.
+/// A byte kept in view in place of the cursor, as long as the cursor stays at byte `cursor`.
 #[derive(Clone, Copy, Debug)]
 struct Reveal {
-    line: usize,
+    at: usize,
     cursor: usize,
 }
 
@@ -120,17 +124,21 @@ impl Editor {
         self.field.select_to(place);
     }
 
-    /// The first line in view in a pane `rows` lines high: the one the last frame drew, moved only as far as the line
-    /// being revealed, or else the cursor's, needs to show.
-    pub(in crate::tui) fn first_line_in_view(&self, rows: u16) -> usize {
-        let (before, _, _) = self.split();
-        let line = self.live_reveal().map_or_else(|| before.matches('\n').count(), |reveal| reveal.line);
-        self.first_line.clamp(line.saturating_sub(usize::from(rows.saturating_sub(1))), line)
+    /// The first row in view in a pane of `size`: the one the last frame drew, moved only as far as the byte being
+    /// revealed, or else the cursor, needs to show.
+    pub(in crate::tui) fn first_row_in_view(&self, size: Size) -> Row {
+        let at = self.live_reveal().map_or_else(|| self.split().0.len(), |reveal| reveal.at);
+        wrap::first_row_for(self.text(), self.first_row, at, size)
     }
 
-    /// Scrolls to the line of byte `at` and leaves the cursor where it is, until the cursor moves.
+    /// The cell of the cursor in a pane of `size`; `None` when a reveal keeps it out of view.
+    pub(in crate::tui) fn cursor_in_view(&self, size: Size) -> Option<InView> {
+        wrap::in_view(self.text(), self.first_row_in_view(size), self.split().0.len(), size)
+    }
+
+    /// Scrolls to byte `at` and leaves the cursor where it is, until the cursor moves.
     pub(super) fn reveal(&mut self, at: usize) {
-        self.reveal = Some(Reveal { line: place_of(self.text(), at).line, cursor: self.split().0.len() });
+        self.reveal = Some(Reveal { at, cursor: self.split().0.len() });
     }
 
     /// The reveal in force: a cursor that moved ended it.
@@ -142,18 +150,27 @@ impl Editor {
         self.reveal = None;
     }
 
-    /// Keeps the first line a frame drew in a pane `rows` lines high, which the next frame and the mouse start from; a
-    /// pane not drawn keeps the line it had.
-    pub(super) fn keep_in_view(&mut self, rows: u16) {
+    /// Keeps the first row and the width a frame drew in a pane of `size`, which the next frame and the mouse start from;
+    /// a pane not drawn keeps those it had.
+    pub(super) fn keep_in_view(&mut self, size: Size) {
         self.reveal = self.live_reveal();
-        if rows > 0 {
-            self.first_line = self.first_line_in_view(rows);
+        if size.height > 0 {
+            self.first_row = self.first_row_in_view(size);
+            self.columns = usize::from(size.width);
         }
     }
 
-    /// The first line the last frame drew, under the pane's first row.
-    pub(super) fn first_line(&self) -> usize {
-        self.first_line
+    /// The first row the last frame drew, under the pane's first row.
+    #[cfg(test)]
+    pub(super) const fn first_row(&self) -> Row {
+        self.first_row
+    }
+
+    /// The place in the text the last frame drew `down` rows under the pane's first, at `column`; below the last row, the
+    /// text's end.
+    pub(super) fn place_drawn_at(&self, down: usize, column: usize) -> Place {
+        let at = wrap::byte_under(self.text(), self.first_row, down, column, self.columns);
+        place_of(self.text(), at.unwrap_or(self.text().len()))
     }
 
     /// The colours of each line, as of the last `recolour`.
@@ -175,11 +192,24 @@ impl Editor {
 
     /// Applies `key`; the text is copied for undo only when the key may change it, never for a move.
     pub(super) fn edit(&mut self, key: KeyEvent) -> Edited {
-        if move_cursor(&mut self.field, key) {
+        if self.move_to_row(key) || move_cursor(&mut self.field, key) {
             self.undo.end_typing();
             return Edited::Cursor;
         }
         self.change(change_of(key), |field| edit_text(field, key))
+    }
+
+    /// Moves the cursor to the row drawn above or below it for `↑` `↓`, so a long line can be walked; false for any other
+    /// key.
+    fn move_to_row(&mut self, key: KeyEvent) -> bool {
+        let at = self.split().0.len();
+        let target = match key.code {
+            KeyCode::Up => wrap::byte_above(self.text(), at, self.columns),
+            KeyCode::Down => wrap::byte_below(self.text(), at, self.columns),
+            _ => return false,
+        };
+        self.field.move_to(place_of(self.text(), target));
+        true
     }
 
     /// Inserts `text` at the cursor, cleaned as vtui cleans a paste: line ends become `\n`, tabs become spaces, and other
@@ -284,7 +314,7 @@ fn change_of(key: KeyEvent) -> Change {
 /// shell line included, but `⏎` with any modifier and `↑` `↓` do nothing; `⌥b` `⌥f` are what a macOS terminal sends for
 /// `⌥←` `⌥→` unless its option key is set as meta.
 pub(super) fn edit_line(field: &mut Field, key: KeyEvent) {
-    if matches!(key.code, KeyCode::Enter | KeyCode::Up | KeyCode::Down) {
+    if key.code == KeyCode::Enter {
         return;
     }
     if !move_cursor(field, key) {
@@ -305,8 +335,6 @@ fn move_cursor(field: &mut Field, key: KeyEvent) -> bool {
         KeyCode::Right if alt => field.word_right(),
         KeyCode::Left => field.left(),
         KeyCode::Right => field.right(),
-        KeyCode::Up => field.up(),
-        KeyCode::Down => field.down(),
         KeyCode::Home => field.start(),
         KeyCode::End => field.end(),
         _ => return false,
@@ -413,11 +441,13 @@ fn sql_word_around(text: &str, at: usize) -> Range<usize> {
     start..end
 }
 
-/// Where byte `offset` of `text` shows: its line, and the terminal columns before it on that line.
+/// Where byte `offset` of `text` is, as `Field` reads a place: its line, and the columns of the characters before it on
+/// that line, each measured alone, a control character as none.
 fn place_of(text: &str, offset: usize) -> Place {
     let before = &text[..offset];
     let line_start = before.rfind('\n').map_or(0, |newline| newline + 1);
-    Place { line: before.matches('\n').count(), column: render::width(&before[line_start..]) }
+    let printable = before[line_start..].chars().filter(|c| !c.is_control());
+    Place { line: before.matches('\n').count(), column: printable.map(|c| render::width(c.encode_utf8(&mut [0; 4]))).sum() }
 }
 
 #[cfg(test)]
@@ -480,6 +510,63 @@ mod tests {
         assert_eq!(press("SELECT *\nFROM orders", &[KeyEvent::from(KeyCode::Up)]), "SELECT *|\nFROM orders");
     }
 
+    /// `text` drawn `columns` wide and two rows high, the cursor at its end, then `keys`.
+    fn drawn_then_pressed(text: &str, columns: u16, keys: &[KeyCode]) -> Editor {
+        let mut editor = Editor::new(text);
+        let size = Size::new(columns, 2);
+        editor.keep_in_view(size);
+        for &key in keys {
+            editor.edit(KeyEvent::from(key));
+            editor.keep_in_view(size);
+        }
+        editor
+    }
+
+    #[test]
+    fn up_goes_to_the_row_above_on_a_wrapped_line_and_changes_no_text() {
+        let editor = drawn_then_pressed("customers", 4, &[KeyCode::Up]);
+        assert_eq!(shown(&editor), "custo|mers");
+    }
+
+    #[test]
+    fn down_goes_to_the_row_below_on_a_wrapped_line() {
+        assert_eq!(shown(&drawn_then_pressed("customers", 4, &[KeyCode::Up, KeyCode::Up, KeyCode::Down])), "custo|mers");
+    }
+
+    #[test]
+    fn up_and_down_are_moves_that_leave_the_colours_fresh() {
+        let mut editor = Editor::new("customers\nid");
+        editor.recolour();
+        assert_eq!(editor.edit(KeyEvent::from(KeyCode::Up)), Edited::Cursor);
+        assert_eq!(editor.edit(KeyEvent::from(KeyCode::Down)), Edited::Cursor);
+        assert!(!editor.has_stale_colours());
+    }
+
+    #[test]
+    fn up_finds_its_place_past_a_tab_and_a_wide_character() {
+        assert_eq!(shown(&drawn_then_pressed("\t日本語\nid", 8, &[KeyCode::Up])), "\t日|本語\nid");
+    }
+
+    #[test]
+    fn going_up_past_the_view_scrolls_a_long_line_by_one_row() {
+        let long = "orders ".repeat(10);
+        assert_eq!(drawn_then_pressed(&long, 10, &[]).first_row(), Row { line: 0, row: 6 });
+        assert_eq!(drawn_then_pressed(&long, 10, &[KeyCode::Up]).first_row(), Row { line: 0, row: 6 });
+        assert_eq!(drawn_then_pressed(&long, 10, &[KeyCode::Up, KeyCode::Up]).first_row(), Row { line: 0, row: 5 });
+    }
+
+    #[test]
+    fn home_scrolls_a_long_line_back_to_its_first_row() {
+        assert_eq!(drawn_then_pressed(&"orders ".repeat(10), 10, &[KeyCode::Home]).first_row(), Row::default());
+    }
+
+    #[test]
+    fn a_reveal_scrolls_back_to_the_row_of_its_byte() {
+        let mut editor = drawn_then_pressed("customers", 4, &[]);
+        editor.reveal(0);
+        assert_eq!(editor.first_row_in_view(Size::new(4, 2)), Row::default());
+    }
+
     #[test]
     fn ctrl_w_and_alt_backspace_delete_the_word_before_the_cursor() {
         assert_eq!(press("FROM orders", &[with(KeyCode::Char('w'), KeyModifiers::CONTROL)]), "FROM |");
@@ -521,8 +608,6 @@ mod tests {
         let moves = [
             KeyEvent::from(KeyCode::Left),
             KeyEvent::from(KeyCode::Right),
-            KeyEvent::from(KeyCode::Up),
-            KeyEvent::from(KeyCode::Down),
             KeyEvent::from(KeyCode::Home),
             KeyEvent::from(KeyCode::End),
             with(KeyCode::Left, alt),

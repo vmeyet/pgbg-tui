@@ -6,6 +6,11 @@ Each entry says what changed, then where, then how to use it.
 
 ## Unreleased
 
+### Fixed
+
+- **Long lines wrap**, in the TUI's editor: a line wider than the pane goes on to the next row, and the saved text keeps it as one line.
+  `↑` `↓` and the mouse move by the rows drawn, so a query on one line can be walked; `^a` `^e` still go to the ends of the whole line.
+
 ## 0.3.1 - 2026-11-03
 
 ### Fixed
