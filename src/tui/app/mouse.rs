@@ -33,10 +33,10 @@ impl App {
     fn press(&mut self, at: Position, now: Instant) -> Vec<Action> {
         self.sheet_mut().editor.deselect();
         let Some(focus) = self.fit.panes.under(at) else { return vec![] };
+        let place = self.editor_place(at);
         self.focus_on(focus);
         let click = self.clicks.press(at, now);
         if focus == Focus::Editor {
-            let place = self.editor_place(at);
             let sheet = self.sheet_mut();
             sheet.ghost = None;
             sheet.rewrite = None;
@@ -46,16 +46,20 @@ impl App {
         self.drop_idle_ask().into_iter().chain(picked).collect()
     }
 
-    /// The place in the editor's text drawn at `at`, as the last frame drew it.
+    /// The place in the editor's text drawn at `at`, as the last frame drew it: the ghost shows only while the editor has
+    /// the keys.
     fn editor_place(&self, at: Position) -> Place {
         let inside = self.fit.editor_text;
-        self.sheet().editor.place_drawn_at(usize::from(at.y.saturating_sub(inside.y)), usize::from(at.x.saturating_sub(inside.x)))
+        let (down, column) = (usize::from(at.y.saturating_sub(inside.y)), usize::from(at.x.saturating_sub(inside.x)));
+        let rest = self.sheet().ghost.as_ref().filter(|_| self.focus == Focus::Editor).map(|ghost| ghost.rest.as_str());
+        self.sheet().editor.place_drawn_at(down, column, rest)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::fixtures::{every_pane, with_every_pane};
+    use super::super::ghost::Ghost;
     use super::super::{Fit, Focus, Overlay};
     use super::*;
     use crossterm::event::KeyModifiers;
@@ -155,6 +159,62 @@ mod tests {
         let mut app = one_wrapped_line();
         click(&mut app, MouseEventKind::Down(LEFT), 77, 2);
         assert_eq!(app.sheet().editor.split().0.len(), 41);
+    }
+
+    #[test]
+    fn a_click_past_a_row_that_ends_on_a_tab_lands_on_that_row() {
+        let mut app = editing("a\tbcdef");
+        app.handle_key(crossterm::event::KeyEvent::from(crossterm::event::KeyCode::Home));
+        app.fit(Fit { panes: every_pane(), editor_text: Rect::new(31, 2, 4, 7), ..Fit::default() });
+        click(&mut app, MouseEventKind::Down(LEFT), 34, 2);
+        assert_eq!(app.sheet().editor.split().0, "");
+    }
+
+    /// `text` with the cursor at byte `at` and `rest` as its ghost, the editor 48 columns wide and having the keys.
+    fn ghosted(text: &str, at: usize, rest: &str) -> App {
+        let mut app = editing(text);
+        app.sheet_mut().editor.move_cursor_to(at);
+        app.sheet_mut().ghost = Ghost::at_cursor(at, rest);
+        app.fit(Fit { panes: every_pane(), editor_text: Rect::new(31, 2, 48, 7), ..Fit::default() });
+        app
+    }
+
+    fn before_click(app: &mut App, column: u16, row: u16) -> String {
+        click(app, MouseEventKind::Down(LEFT), column, row);
+        app.sheet().editor.split().0.to_owned()
+    }
+
+    #[test]
+    fn a_click_under_a_ghost_that_wraps_lands_on_the_character_drawn_there() {
+        let mut app = ghosted("SELECT * FROM cu\nWHERE x", 16, &"x".repeat(100));
+        assert_eq!(before_click(&mut app, 33, 5), "SELECT * FROM cu\nWH");
+    }
+
+    #[test]
+    fn a_click_under_the_later_lines_of_a_ghost_lands_on_the_character_drawn_there() {
+        let mut app = ghosted("SELECT * FROM cu\nWHERE x", 16, "stomers\nLIMIT 1\nOFFSET 2");
+        assert_eq!(before_click(&mut app, 33, 5), "SELECT * FROM cu\nWH");
+    }
+
+    #[test]
+    fn a_click_on_the_ghost_leaves_the_cursor_where_the_ghost_starts() {
+        let mut app = ghosted("SELECT * FROM cu\nWHERE x", 16, "stomers\nLIMIT 1");
+        assert_eq!(before_click(&mut app, 50, 2), "SELECT * FROM cu");
+        let mut app = ghosted("SELECT * FROM cu\nWHERE x", 16, "stomers\nLIMIT 1");
+        assert_eq!(before_click(&mut app, 33, 3), "SELECT * FROM cu");
+    }
+
+    #[test]
+    fn a_click_on_the_text_after_a_ghost_lands_on_the_character_drawn_there() {
+        let mut app = ghosted("SELECT id FROM orders", 7, "total,");
+        assert_eq!(before_click(&mut app, 45, 2), "SELECT i");
+    }
+
+    #[test]
+    fn a_click_with_the_editor_out_of_focus_ignores_the_ghost_it_did_not_draw() {
+        let mut app = ghosted("SELECT * FROM cu\nWHERE x", 16, &"x".repeat(100));
+        app.focus = Focus::Result;
+        assert_eq!(before_click(&mut app, 33, 3), "SELECT * FROM cu\nWH");
     }
 
     #[test]

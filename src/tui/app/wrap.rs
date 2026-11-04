@@ -6,6 +6,7 @@
 //! A line that fills its last row exactly gets one more, empty, for the cursor after its last character.
 use crate::render;
 use ratatui::layout::Size;
+use std::borrow::Cow;
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation as _;
 
@@ -28,6 +29,34 @@ struct Spot {
 pub(in crate::tui) struct InView {
     pub(in crate::tui) row: usize,
     pub(in crate::tui) column: usize,
+}
+
+/// The rest of a name or a statement, drawn faded at byte `at` of the text, where the cursor is: its first line after
+/// the cursor, the others under the cursor's line.
+#[derive(Clone, Copy)]
+pub(in crate::tui) struct Ghost<'a> {
+    pub(in crate::tui) at: usize,
+    pub(in crate::tui) rest: &'a str,
+}
+
+impl<'a> Ghost<'a> {
+    /// The ghost of its first line only, drawn after the cursor, and the lines after it.
+    pub(in crate::tui) fn first_line(self) -> (Self, Vec<&'a str>) {
+        let mut lines = self.rest.split('\n');
+        let first = lines.next().unwrap_or_default();
+        (Self { rest: first, ..self }, lines.collect())
+    }
+
+    /// The ghost with `at` counted from the line starting at byte `line_start`; `None` when it is on another line.
+    pub(in crate::tui) fn within_line(self, line_start: usize, line_len: usize) -> Option<Self> {
+        let at = self.at.checked_sub(line_start).filter(|&at| at <= line_len)?;
+        Some(Self { at, ..self })
+    }
+
+    /// The text as drawn, its control characters escaped.
+    pub(in crate::tui) fn shown(self) -> Cow<'a, str> {
+        render::printable(self.rest)
+    }
 }
 
 /// The cells `grapheme` takes when drawn; ratatui draws nothing for a control character.
@@ -66,7 +95,7 @@ fn flowed(pieces: impl Iterator<Item = Piece>, len: usize, columns: usize, keep_
             rows.push(start..end);
             (start, used) = (end, used - cells);
         }
-        if used + width > columns && bytes.start > start {
+        if used + width > columns && used > 0 {
             rows.push(start..bytes.start);
             (start, used) = (bytes.start, 0);
         }
@@ -111,7 +140,7 @@ pub(in crate::tui) fn cuts_of(line: &str, columns: usize) -> Vec<Range<usize>> {
 }
 
 /// The bytes of a line of the text on each of its rows, with the empty row after a full last one.
-pub(in crate::tui) fn rows_of(line: &str, columns: usize) -> Vec<Range<usize>> {
+fn rows_of(line: &str, columns: usize) -> Vec<Range<usize>> {
     let mut rows = cuts_of(line, columns);
     if let Some(last) = rows.last()
         && columns > 0
@@ -127,21 +156,31 @@ fn row_holding(rows: &[Range<usize>], at: usize) -> usize {
     rows.iter().rposition(|row| row.start <= at).unwrap_or(0)
 }
 
-/// The rows of `painted`, which is `line` as drawn: with a ghost at byte `ghost_at`, and maybe a mark's space at its end.
-/// Everything up to the ghost stays on the row `line` alone gives it, so the ghost starts at the cursor whatever it holds,
-/// and what follows it flows from there; a mark's space goes on the last row, which always has room for it.
-pub(in crate::tui) fn painted_rows(line: &str, painted: &str, ghost_at: Option<usize>, columns: usize) -> Vec<Range<usize>> {
+/// The rows of `line` as drawn with no ghost, `painted_len` bytes long: a mark's space goes on the last row, which always
+/// has room for it.
+pub(in crate::tui) fn plain_rows(line: &str, painted_len: usize, columns: usize) -> Vec<Range<usize>> {
     let mut rows = rows_of(line, columns);
-    let Some(ghost_at) = ghost_at else {
-        if let Some(last) = rows.last_mut() {
-            last.end = painted.len();
-        }
-        return rows;
-    };
+    if let Some(last) = rows.last_mut() {
+        last.end = painted_len;
+    }
+    rows
+}
+
+/// The rows of `painted`, which is `line` as drawn with a ghost at byte `ghost_at`.
+/// Everything up to the ghost stays on the row `line` alone gives it, so the ghost starts at the cursor whatever it holds,
+/// and what follows it flows from there.
+pub(in crate::tui) fn ghosted_rows(line: &str, painted: &str, ghost_at: usize, columns: usize) -> Vec<Range<usize>> {
+    let rows = rows_of(line, columns);
     let held = row_holding(&rows, ghost_at);
     let start = rows[held].start;
     let flowing = flow(&painted[start..], columns, ghost_at - start);
     rows[..held].iter().cloned().chain(flowing.into_iter().map(|row| start + row.start..start + row.end)).collect()
+}
+
+/// Whether the end of a `ghost` that shows, with `at` counted in its line, lies at or past row `rows` of the `cuts` of
+/// that line.
+pub(in crate::tui) fn ghost_ends_past(cuts: &[Range<usize>], ghost: Ghost<'_>, rows: usize) -> bool {
+    row_holding(cuts, ghost.at + ghost.shown().len() - 1) >= rows
 }
 
 /// Where byte `at` of `text` is drawn.
@@ -198,51 +237,104 @@ pub(super) fn in_view(text: &str, first: Row, at: usize, size: Size) -> Option<I
 }
 
 /// The byte drawn at `column` of row `row` of `line`: the grapheme whose cells hold it, else the end of a line's last
-/// row, or the last grapheme of a row that goes on below, since its end is drawn on the next row.
+/// row, or the last grapheme with cells of a row that goes on below: its end is drawn on the next row, and a `Place` cannot
+/// name a grapheme with none.
 fn byte_in_row(line: &str, rows: &[Range<usize>], row: usize, column: usize) -> usize {
     let bytes = rows[row].clone();
     let mut used = 0;
     let mut last = bytes.start;
     for (at, grapheme) in line[bytes.clone()].grapheme_indices(true) {
-        used += cells(grapheme);
+        let width = cells(grapheme);
+        used += width;
         if used > column {
             return bytes.start + at;
         }
-        last = bytes.start + at;
+        if width > 0 {
+            last = bytes.start + at;
+        }
     }
     if row + 1 < rows.len() { last } else { bytes.end }
 }
 
-/// The byte of `text` drawn `down` rows under `first`, at `column`; `None` below the last row.
-pub(super) fn byte_under(text: &str, first: Row, down: usize, column: usize, columns: usize) -> Option<usize> {
+/// What a row counted down from the first row of a line finds there.
+enum InLine {
+    /// The byte of the line drawn at the cell asked for.
+    Byte(usize),
+    /// The row lies below the line, which takes this many rows.
+    RowsTaken(usize),
+}
+
+/// What `line` draws at `column` of its row `row`, with no ghost.
+fn under_in_line(line: &str, row: usize, column: usize, columns: usize) -> InLine {
+    let rows = rows_of(line, columns);
+    if row < rows.len() { InLine::Byte(byte_in_row(line, &rows, row, column)) } else { InLine::RowsTaken(rows.len()) }
+}
+
+/// What `line` draws at `column` of its row `row` under `ghost`, with `at` counted in the line; every cell of the ghost
+/// finds the byte the ghost is drawn at.
+fn under_in_ghosted_line(line: &str, ghost: Ghost<'_>, row: usize, column: usize, columns: usize) -> InLine {
+    let (first, below) = ghost.first_line();
+    let (at, shown) = (first.at, first.shown());
+    let painted = format!("{}{shown}{}", &line[..at], &line[at..]);
+    let rows = if shown.is_empty() { rows_of(line, columns) } else { ghosted_rows(line, &painted, at, columns) };
+    if row < rows.len() {
+        let drawn = byte_in_row(&painted, &rows, row, column);
+        return InLine::Byte(if drawn < at { drawn } else { at.max(drawn.saturating_sub(shown.len())) });
+    }
+    let rows_below: usize = below.iter().map(|text| cuts_of(&render::printable(text), columns).len()).sum();
+    let taken = rows.len() + rows_below;
+    if row < taken { InLine::Byte(at) } else { InLine::RowsTaken(taken) }
+}
+
+/// The byte of `text` drawn `down` rows under `first`, at `column`, under `ghost` when one is drawn; `None` below the last
+/// row.
+pub(super) fn byte_drawn_under(
+    text: &str,
+    first: Row,
+    down: usize,
+    column: usize,
+    columns: usize,
+    ghost: Option<Ghost<'_>>,
+) -> Option<usize> {
     let mut left = first.row + down;
     let mut start: usize = text.split('\n').take(first.line).map(|line| line.len() + 1).sum();
     for line in text.get(start..)?.split('\n') {
-        let rows = rows_of(line, columns);
-        if left < rows.len() {
-            return Some(start + byte_in_row(line, &rows, left, column));
+        let found = match ghost.and_then(|ghost| ghost.within_line(start, line.len())) {
+            Some(ghost) => under_in_ghosted_line(line, ghost, left, column, columns),
+            None => under_in_line(line, left, column, columns),
+        };
+        match found {
+            InLine::Byte(at) => return Some(start + at),
+            InLine::RowsTaken(rows) => left -= rows,
         }
-        left -= rows.len();
         start += line.len() + 1;
     }
     None
 }
 
-/// The byte of `text` drawn on the row above byte `at`, at its column; `at` itself on the first row.
-pub(super) fn byte_above(text: &str, at: usize, columns: usize) -> usize {
-    let Spot { row, column } = spot_of(text, at, columns);
-    if row.row > 0 {
-        return byte_under(text, Row { row: row.row - 1, ..row }, 0, column, columns).unwrap_or(at);
-    }
-    let Some(line_above) = text[..at].rsplit('\n').nth(1) else { return at };
-    let last_row = Row { line: row.line - 1, row: rows_of(line_above, columns).len() - 1 };
-    byte_under(text, last_row, 0, column, columns).unwrap_or(at)
+/// The byte of `text` drawn `down` rows under `first`, at `column`, with no ghost; `None` below the last row.
+fn byte_under(text: &str, first: Row, down: usize, column: usize, columns: usize) -> Option<usize> {
+    byte_drawn_under(text, first, down, column, columns, None)
 }
 
-/// The byte of `text` drawn on the row below byte `at`, at its column; `at` itself on the last row.
-pub(super) fn byte_below(text: &str, at: usize, columns: usize) -> usize {
-    let Spot { row, column } = spot_of(text, at, columns);
-    byte_under(text, row, 1, column, columns).unwrap_or(at)
+/// The cells before byte `at` of `text` on its row.
+pub(super) fn column_of(text: &str, at: usize, columns: usize) -> usize {
+    spot_of(text, at, columns).column
+}
+
+/// The byte of `text` drawn at `column` of the row above byte `at`; `None` on the first row.
+pub(super) fn byte_above(text: &str, at: usize, column: usize, columns: usize) -> Option<usize> {
+    let row = spot_of(text, at, columns).row;
+    if row.row > 0 {
+        return byte_under(text, Row { row: row.row - 1, ..row }, 0, column, columns);
+    }
+    let line_above = text[..at].rsplit('\n').nth(1)?;
+    byte_under(text, Row { line: row.line - 1, row: rows_of(line_above, columns).len() - 1 }, 0, column, columns)
+}
+
+/// The byte of `text` drawn at `column` of the row below byte `at`; `None` on the last row.
+pub(super) fn byte_below(text: &str, at: usize, column: usize, columns: usize) -> Option<usize> {
+    byte_under(text, spot_of(text, at, columns).row, 1, column, columns)
 }
 
 #[cfg(test)]
@@ -261,6 +353,14 @@ mod tests {
 
     fn row(line: usize, row: usize) -> Row {
         Row { line, row }
+    }
+
+    fn up(text: &str, at: usize, columns: usize) -> usize {
+        byte_above(text, at, column_of(text, at, columns), columns).unwrap_or(at)
+    }
+
+    fn down(text: &str, at: usize, columns: usize) -> usize {
+        byte_below(text, at, column_of(text, at, columns), columns).unwrap_or(at)
     }
 
     #[test]
@@ -325,6 +425,80 @@ mod tests {
     }
 
     #[test]
+    fn no_row_holds_only_a_character_with_no_cell() {
+        assert_eq!(cut("\t日a", 1), ["\t日", "a", ""]);
+    }
+
+    #[test]
+    fn a_cell_past_a_row_that_ends_on_a_control_character_finds_its_last_character_with_cells() {
+        assert_eq!(byte_under("a\tbcdef", row(0, 0), 0, 3, 4), Some(0));
+    }
+
+    #[test]
+    fn nothing_is_above_the_first_row_or_below_the_last() {
+        assert_eq!(byte_above("customers", 2, 2, 4), None);
+        assert_eq!(byte_below("customers", 8, 0, 4), None);
+    }
+
+    #[test]
+    fn a_column_past_a_shorter_row_finds_the_column_on_the_next_one() {
+        assert_eq!(byte_above("abcdefgh\nid", 11, 6, 20), Some(6));
+    }
+
+    const GHOST: Option<Ghost<'static>> = Some(Ghost { at: 7, rest: "stomers\nLIMIT 1" });
+
+    fn drawn_under(text: &str, down: usize, column: usize) -> Option<usize> {
+        byte_drawn_under(text, row(0, 0), down, column, 10, GHOST)
+    }
+
+    #[test]
+    fn a_cell_of_the_ghost_finds_the_byte_it_is_drawn_at() {
+        assert_eq!(drawn_under("FROM cu\nid", 0, 8), Some(7));
+        assert_eq!(drawn_under("FROM cu\nid", 1, 0), Some(7));
+        assert_eq!(drawn_under("FROM cu\nid", 2, 3), Some(7));
+    }
+
+    #[test]
+    fn a_cell_before_the_ghost_finds_its_byte() {
+        assert_eq!(drawn_under("FROM cu\nid", 0, 3), Some(3));
+    }
+
+    #[test]
+    fn a_cell_under_the_ghost_counts_its_rows() {
+        assert_eq!(drawn_under("FROM cu\nid", 3, 1), Some(9));
+    }
+
+    #[test]
+    fn a_cell_past_the_end_of_a_row_under_the_ghost_finds_the_end_of_the_line() {
+        assert_eq!(drawn_under("FROM cu\nid", 3, 7), Some(10));
+    }
+
+    #[test]
+    fn a_cell_below_the_ghost_and_the_text_finds_nothing() {
+        assert_eq!(drawn_under("FROM cu\nid", 4, 0), None);
+    }
+
+    #[test]
+    fn a_cell_after_a_ghost_in_a_line_finds_its_byte_in_the_text() {
+        let ghost = Some(Ghost { at: 2, rest: "xyz" });
+        assert_eq!(byte_drawn_under("id orders", row(0, 0), 0, 6, 20, ghost), Some(3));
+    }
+
+    #[test]
+    fn a_ghost_on_a_line_above_the_first_row_changes_nothing() {
+        let ghost = Some(Ghost { at: 1, rest: "xyz" });
+        assert_eq!(byte_drawn_under("a\nid", row(1, 0), 0, 1, 20, ghost), Some(3));
+    }
+
+    #[test]
+    fn a_ghost_ends_on_the_row_that_holds_its_last_byte() {
+        let cuts = [0..10, 10..14];
+        let ghost = Ghost { at: 7, rest: "stomers" };
+        assert!(!ghost_ends_past(&cuts, ghost, 2));
+        assert!(ghost_ends_past(&cuts, ghost, 1));
+    }
+
+    #[test]
     fn a_control_character_alone_is_no_place_to_end_a_row() {
         assert_eq!(cut("\tabcde", 4), ["\tabcd", "e"]);
     }
@@ -353,7 +527,11 @@ mod tests {
     }
 
     fn painted(line: &str, painted: &str, ghost_at: Option<usize>, columns: usize) -> Vec<String> {
-        painted_rows(line, painted, ghost_at, columns).into_iter().map(|row| painted[row].to_owned()).collect()
+        let rows = match ghost_at {
+            Some(at) => ghosted_rows(line, painted, at, columns),
+            None => plain_rows(line, painted.len(), columns),
+        };
+        rows.into_iter().map(|row| painted[row].to_owned()).collect()
     }
 
     #[test]
@@ -399,12 +577,12 @@ mod tests {
 
     #[test]
     fn down_from_the_whitespace_at_a_break_goes_to_the_cell_below() {
-        assert_eq!(byte_below("FROM orders", 4, 8), 9);
+        assert_eq!(down("FROM orders", 4, 8), 9);
     }
 
     #[test]
     fn up_past_the_end_of_a_shorter_row_stops_on_its_whitespace() {
-        assert_eq!(byte_above("FROM orders", 11, 8), 4);
+        assert_eq!(up("FROM orders", 11, 8), 4);
     }
 
     #[test]
@@ -513,51 +691,51 @@ mod tests {
 
     #[test]
     fn up_goes_to_the_row_above_within_a_line() {
-        assert_eq!(byte_above("customers", 5, 4), 1);
+        assert_eq!(up("customers", 5, 4), 1);
     }
 
     #[test]
     fn up_goes_to_the_last_row_of_the_line_above() {
-        assert_eq!(byte_above("customers\nid", 10, 4), 8);
+        assert_eq!(up("customers\nid", 10, 4), 8);
     }
 
     #[test]
     fn up_on_the_first_row_stays() {
-        assert_eq!(byte_above("customers", 2, 4), 2);
+        assert_eq!(up("customers", 2, 4), 2);
     }
 
     #[test]
     fn up_lands_on_the_cell_above_past_wide_characters() {
-        assert_eq!(byte_above("日本語abc", 12, 4), 6);
+        assert_eq!(up("日本語abc", 12, 4), 6);
     }
 
     #[test]
     fn down_goes_to_the_row_below_within_a_line() {
-        assert_eq!(byte_below("customers", 1, 4), 5);
+        assert_eq!(down("customers", 1, 4), 5);
     }
 
     #[test]
     fn down_goes_to_the_first_row_of_the_line_below() {
-        assert_eq!(byte_below("customers\nid", 8, 4), 10);
+        assert_eq!(down("customers\nid", 8, 4), 10);
     }
 
     #[test]
     fn down_on_the_last_row_stays() {
-        assert_eq!(byte_below("customers", 8, 4), 8);
+        assert_eq!(down("customers", 8, 4), 8);
     }
 
     #[test]
     fn down_keeps_to_the_end_of_a_shorter_last_row() {
-        assert_eq!(byte_below("customers", 7, 4), 9);
+        assert_eq!(down("customers", 7, 4), 9);
     }
 
     #[test]
     fn down_reaches_the_empty_row_of_a_full_line() {
-        assert_eq!(byte_below("orders", 2, 6), 6);
+        assert_eq!(down("orders", 2, 6), 6);
     }
 
     #[test]
     fn a_pane_not_drawn_yet_moves_by_lines() {
-        assert_eq!(byte_above("id\ncustomers", 12, 0), 2);
+        assert_eq!(up("id\ncustomers", 12, 0), 2);
     }
 }

@@ -1,6 +1,6 @@
 //! The SQL editor: its text, the editing keys and pastes that change it, their undo, and the syntax colours that follow it.
 use super::undo::{Change, Undo};
-use super::wrap::{self, InView, Row};
+use super::wrap::{self, Ghost, InView, Row};
 use super::{Action, App, Focus, Sheet};
 use crate::db::lex::{Lexed, Token};
 use crate::query::Header;
@@ -37,6 +37,9 @@ pub(in crate::tui) struct Editor {
     first_row: Row,
     /// How wide the last frame drew the text, which `↑` `↓` and the mouse read rows by; 0 before the first frame.
     columns: usize,
+    /// The column `↑` `↓` aim for, so a shorter row on the way does not pull the cursor left; any other move or edit
+    /// forgets it.
+    goal_column: Option<usize>,
     reveal: Option<Reveal>,
 }
 
@@ -94,6 +97,7 @@ impl Editor {
     /// Puts the cursor at `place`, where the mouse pressed; a double click selects the SQL word there, a triple its line.
     pub(super) fn click(&mut self, place: Place, click: Click) {
         self.undo.end_typing();
+        self.goal_column = None;
         self.field.move_to(place);
         match click {
             Click::Single => {}
@@ -121,6 +125,7 @@ impl Editor {
 
     /// Selects from where the mouse pressed, or the selection started, to `place`.
     pub(super) fn drag_to(&mut self, place: Place) {
+        self.goal_column = None;
         self.field.select_to(place);
     }
 
@@ -166,10 +171,11 @@ impl Editor {
         self.first_row
     }
 
-    /// The place in the text the last frame drew `down` rows under the pane's first, at `column`; below the last row, the
-    /// text's end.
-    pub(super) fn place_drawn_at(&self, down: usize, column: usize) -> Place {
-        let at = wrap::byte_under(self.text(), self.first_row, down, column, self.columns);
+    /// The place in the text the last frame drew `down` rows under the pane's first, at `column`, with the ghost `rest`
+    /// if it drew one; below the last row, the text's end.
+    pub(super) fn place_drawn_at(&self, down: usize, column: usize, rest: Option<&str>) -> Place {
+        let ghost = rest.map(|rest| Ghost { at: self.split().0.len(), rest });
+        let at = wrap::byte_drawn_under(self.text(), self.first_row, down, column, self.columns, ghost);
         place_of(self.text(), at.unwrap_or(self.text().len()))
     }
 
@@ -199,16 +205,23 @@ impl Editor {
         self.change(change_of(key), |field| edit_text(field, key))
     }
 
-    /// Moves the cursor to the row drawn above or below it for `↑` `↓`, so a long line can be walked; false for any other
-    /// key.
+    /// Moves the cursor to the row drawn above or below it for `↑` `↓`, at the column they aim for, so a long line can be
+    /// walked; on the first or last row it stays, selection included; false for any other key, which forgets the column.
     fn move_to_row(&mut self, key: KeyEvent) -> bool {
-        let at = self.split().0.len();
-        let target = match key.code {
-            KeyCode::Up => wrap::byte_above(self.text(), at, self.columns),
-            KeyCode::Down => wrap::byte_below(self.text(), at, self.columns),
-            _ => return false,
+        let step = match key.code {
+            KeyCode::Up => wrap::byte_above,
+            KeyCode::Down => wrap::byte_below,
+            _ => {
+                self.goal_column = None;
+                return false;
+            }
         };
-        self.field.move_to(place_of(self.text(), target));
+        let at = self.split().0.len();
+        let column = self.goal_column.unwrap_or_else(|| wrap::column_of(self.text(), at, self.columns));
+        self.goal_column = Some(column);
+        if let Some(target) = step(self.text(), at, column, self.columns) {
+            self.field.move_to(place_of(self.text(), target));
+        }
         true
     }
 
@@ -292,6 +305,7 @@ impl Editor {
         self.lexed = Lexed::of(self.field.text());
         self.has_stale_colours = true;
         self.reveal = None;
+        self.goal_column = None;
     }
 }
 
@@ -539,10 +553,106 @@ mod tests {
     }
 
     #[test]
-    fn down_from_the_whitespace_at_a_break_goes_to_the_cell_below_and_changes_no_text() {
+    fn down_after_up_returns_to_the_column_up_left_and_changes_no_text() {
         let editor = drawn_then_pressed("FROM orders", 8, &[KeyCode::Up, KeyCode::Down]);
-        assert_eq!(shown(&editor), "FROM orde|rs");
+        assert_eq!(shown(&editor), "FROM orders|");
         assert_eq!(editor.text(), "FROM orders");
+    }
+
+    #[test]
+    fn down_from_the_whitespace_at_a_break_goes_to_the_cell_below() {
+        let keys = [KeyCode::Left, KeyCode::Left, KeyCode::Left, KeyCode::Left, KeyCode::Left, KeyCode::Left, KeyCode::Left, KeyCode::Down];
+        assert_eq!(shown(&drawn_then_pressed("FROM orders", 8, &keys)), "FROM orde|rs");
+    }
+
+    fn with_id_selected() -> Editor {
+        let mut editor = Editor::new("SELECT id");
+        editor.click(Place { line: 0, column: 8 }, Click::Double);
+        editor
+    }
+
+    #[test]
+    fn up_on_the_first_row_keeps_the_selection() {
+        let mut editor = with_id_selected();
+        editor.edit(KeyEvent::from(KeyCode::Up));
+        assert_eq!(editor.selected(), Some("id"));
+    }
+
+    #[test]
+    fn down_on_the_last_row_keeps_the_selection() {
+        let mut editor = with_id_selected();
+        editor.edit(KeyEvent::from(KeyCode::Down));
+        assert_eq!(editor.selected(), Some("id"));
+    }
+
+    #[test]
+    fn up_on_the_first_row_leaves_the_cursor_just_before_a_tab() {
+        assert_eq!(shown(&drawn_then_pressed("a\tb", 8, &[KeyCode::Left, KeyCode::Left, KeyCode::Up])), "a|\tb");
+    }
+
+    #[test]
+    fn down_on_the_last_row_leaves_the_cursor_just_before_a_combining_mark() {
+        assert_eq!(shown(&drawn_then_pressed("e\u{301}x", 8, &[KeyCode::Left, KeyCode::Left, KeyCode::Down])), "e|\u{301}x");
+    }
+
+    #[test]
+    fn up_past_a_row_that_ends_on_a_tab_lands_on_that_row() {
+        let keys = [KeyCode::Left, KeyCode::Left, KeyCode::Left, KeyCode::Up];
+        assert_eq!(shown(&drawn_then_pressed("a\tbcdef", 4, &keys)), "|a\tbcdef");
+    }
+
+    #[test]
+    fn up_and_up_again_keeps_the_column_past_a_shorter_row() {
+        assert_eq!(shown(&drawn_then_pressed("customers\nid\ncustomers", 20, &[KeyCode::Up, KeyCode::Up])), "customers|\nid\ncustomers");
+    }
+
+    #[test]
+    fn down_and_down_again_keeps_the_column_past_a_shorter_row() {
+        let keys = [KeyCode::Up, KeyCode::Up, KeyCode::Down, KeyCode::Down];
+        assert_eq!(shown(&drawn_then_pressed("customers\nid\ncustomers", 20, &keys)), "customers\nid\ncustomers|");
+    }
+
+    #[test]
+    fn another_move_forgets_the_column() {
+        let keys = [KeyCode::Up, KeyCode::Left, KeyCode::Up];
+        assert_eq!(shown(&drawn_then_pressed("customers\nid\ncustomers", 20, &keys)), "c|ustomers\nid\ncustomers");
+    }
+
+    #[test]
+    fn a_move_that_comes_back_still_forgets_the_column() {
+        let keys = [KeyCode::Up, KeyCode::Left, KeyCode::Right, KeyCode::Up];
+        assert_eq!(shown(&drawn_then_pressed("customers\nid\ncustomers", 20, &keys)), "cu|stomers\nid\ncustomers");
+    }
+
+    #[test]
+    fn an_edit_forgets_the_column() {
+        let keys = [KeyCode::Up, KeyCode::Char('x'), KeyCode::Up];
+        assert_eq!(shown(&drawn_then_pressed("customers\nid\ncustomers", 20, &keys)), "cus|tomers\nidx\ncustomers");
+    }
+
+    #[test]
+    fn a_click_forgets_the_column() {
+        let mut editor = drawn_then_pressed("customers\nid\ncustomers", 20, &[KeyCode::Up]);
+        editor.click(Place { line: 1, column: 1 }, Click::Single);
+        editor.edit(KeyEvent::from(KeyCode::Up));
+        assert_eq!(shown(&editor), "c|ustomers\nid\ncustomers");
+    }
+
+    #[test]
+    fn a_paste_forgets_the_column() {
+        let mut editor = drawn_then_pressed("customers\nid\ncustomers", 20, &[KeyCode::Up]);
+        editor.paste("x");
+        editor.edit(KeyEvent::from(KeyCode::Up));
+        assert_eq!(shown(&editor), "cus|tomers\nidx\ncustomers");
+    }
+
+    #[test]
+    fn undo_forgets_the_column() {
+        let mut editor = drawn_then_pressed("customers\nid\nabcde", 20, &[KeyCode::Char('x'), KeyCode::Up]);
+        editor.undo();
+        editor.edit(KeyEvent::from(KeyCode::Up));
+        editor.edit(KeyEvent::from(KeyCode::Up));
+        assert_eq!(shown(&editor), "custo|mers\nid\nabcde");
     }
 
     #[test]

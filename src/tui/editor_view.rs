@@ -1,6 +1,6 @@
 //! The SQL editor pane: the text in its syntax colours, the cursor kept in view, the server's error position, and
 //! whether the connection takes writes.
-use super::app::wrap::{self, InView, Row};
+use super::app::wrap::{self, Ghost, InView, Row};
 use super::app::{App, Focus};
 use crate::connection::{ConnectionName, Tier, WritePolicy};
 use crate::render;
@@ -12,6 +12,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
 use std::ops::Range;
 use vtui::pane;
+use vtui::text;
 use vtui::theme::Theme;
 
 /// The editor in `area`, scrolled so the cursor's line shows, with the terminal's cursor in it when it has the keys;
@@ -74,28 +75,10 @@ struct Paint<'a> {
     theme: &'a Theme,
 }
 
-/// The rest of a name or a statement, drawn faded at byte `at` of the text, where the cursor is: its first line after
-/// the cursor, the others under the cursor's line.
-#[derive(Clone, Copy)]
-struct Ghost<'a> {
-    at: usize,
-    rest: &'a str,
-}
-
-impl<'a> Ghost<'a> {
-    /// The ghost of its first line only, drawn after the cursor, and the lines after it.
-    fn first_line(self) -> (Self, Vec<&'a str>) {
-        let mut lines = self.rest.split('\n');
-        let first = lines.next().unwrap_or_default();
-        (Self { rest: first, ..self }, lines.collect())
-    }
-}
-
 /// The rows of `text` in `window`, each token in its colour, the selection reversed and the mark on top; a mark at a
 /// line's end draws a space there.
 /// The ghost's lines past its first push the text under the cursor's line down, as many as the window holds.
 fn coloured<'a>(text: &'a str, paint: &Paint<'_>, window: Window) -> Text<'a> {
-    let faded = Style::default().fg(paint.theme.faded);
     let mut line_start = 0;
     let mut rows = Vec::new();
     for (index, line) in text.split('\n').enumerate() {
@@ -103,26 +86,40 @@ fn coloured<'a>(text: &'a str, paint: &Paint<'_>, window: Window) -> Text<'a> {
             break;
         }
         if index >= window.first.line {
-            let marked = paint.mark.as_ref().and_then(|mark| mark_within_line(mark, line_start, line.len()));
-            let spans = paint.colours.get(index).map_or(&[][..], Vec::as_slice);
-            let ghost = paint
-                .ghost
-                .and_then(|ghost| Some(Ghost { at: ghost.at.checked_sub(line_start)?, ..ghost }))
-                .filter(|ghost| ghost.at <= line.len());
-            let (ghost, below) = ghost.map(Ghost::first_line).unzip();
-            let selected = paint.selection.as_ref().and_then(|selection| within_line(selection, line_start, line.len()));
             let room = window.rows - rows.len();
-            let skip = if index == window.first.line { window.first.row } else { 0 };
-            let ghost_at = ghost.filter(|ghost| !ghost.rest.is_empty()).map(|ghost| ghost.at);
-            let painted = coloured_line(line, spans, Cuts { mark: marked, selected, ghost }, paint);
-            let cuts = wrap::painted_rows(line, &painted.to_string(), ghost_at, window.columns);
-            let drawn = rows_within(painted, &cuts, skip, room);
-            let left = room.saturating_sub(drawn.len());
-            rows.extend(with_lines_below(drawn, &below.unwrap_or_default(), left, faded, window.columns));
+            rows.extend(rows_of_line(line, TextLine { index, start: line_start }, paint, window, room));
         }
         line_start += line.len() + 1;
     }
     Text::from(rows)
+}
+
+/// Where a line sits in the text: its index, and the byte it starts at.
+#[derive(Clone, Copy)]
+struct TextLine {
+    index: usize,
+    start: usize,
+}
+
+/// The rows `line` draws in `window`, at most `room`, with the ghost's later lines under it and the note of what did not
+/// fit.
+fn rows_of_line<'a>(line: &'a str, place: TextLine, paint: &Paint<'_>, window: Window, room: usize) -> Vec<Line<'a>> {
+    let marked = paint.mark.as_ref().and_then(|mark| mark_within_line(mark, place.start, line.len()));
+    let spans = paint.colours.get(place.index).map_or(&[][..], Vec::as_slice);
+    let ghost = paint.ghost.and_then(|ghost| ghost.within_line(place.start, line.len()));
+    let (ghost, below) = ghost.map(Ghost::first_line).unzip();
+    let selected = paint.selection.as_ref().and_then(|selection| within_line(selection, place.start, line.len()));
+    let skip = if place.index == window.first.line { window.first.row } else { 0 };
+    let shown_ghost = ghost.filter(|ghost| !ghost.rest.is_empty());
+    let painted = coloured_line(line, spans, Cuts { mark: marked, selected, ghost }, paint);
+    let cuts = match shown_ghost {
+        Some(ghost) => wrap::ghosted_rows(line, &painted.to_string(), ghost.at, window.columns),
+        None => wrap::plain_rows(line, painted.spans.iter().map(|span| span.content.len()).sum(), window.columns),
+    };
+    let drawn = rows_within(painted, &cuts, skip, room);
+    let is_ghost_cut = shown_ghost.is_some_and(|ghost| wrap::ghost_ends_past(&cuts, ghost, skip + room));
+    let later = Below { room: room.saturating_sub(drawn.len()), style: Style::default().fg(paint.theme.faded), columns: window.columns };
+    with_lines_below(drawn, &below.unwrap_or_default(), usize::from(is_ghost_cut), later)
 }
 
 /// `line` cut at `cuts`, past the first `skip` rows and at most `room`, each part in its style.
@@ -145,13 +142,22 @@ fn spans_within(spans: &[Span<'_>], starts: &[usize], row: &Range<usize>) -> Vec
     in_row.map(part).collect()
 }
 
-/// `rows`, then each of `below` cut into rows in `style`, as many as `room` rows hold; the last row says how many lines
-/// did not fit.
-fn with_lines_below<'a>(mut rows: Vec<Line<'a>>, below: &[&str], mut room: usize, style: Style, columns: usize) -> Vec<Line<'a>> {
-    let mut more = 0;
-    for (index, text) in below.iter().enumerate() {
+/// How the ghost's later lines fit under its first: the rows left, their style, and the pane's width.
+#[derive(Clone, Copy)]
+struct Below {
+    room: usize,
+    style: Style,
+    columns: usize,
+}
+
+/// `rows`, then each of `lines` cut into rows, as many as the room holds; the last row says how many lines did not fit,
+/// `already_cut` of them above these.
+fn with_lines_below<'a>(mut rows: Vec<Line<'a>>, lines: &[&str], already_cut: usize, below: Below) -> Vec<Line<'a>> {
+    let Below { mut room, style, columns } = below;
+    let mut more = already_cut;
+    for (index, text) in lines.iter().enumerate() {
         if room == 0 {
-            more += below.len() - index;
+            more += lines.len() - index;
             break;
         }
         let printable = render::printable(text).into_owned();
@@ -162,12 +168,22 @@ fn with_lines_below<'a>(mut rows: Vec<Line<'a>>, below: &[&str], mut room: usize
         rows.extend(cut);
     }
     if more > 0
-        && let Some(last) = rows.last_mut()
+        && let Some(last) = rows.pop()
     {
-        let unit = if more == 1 { "line" } else { "lines" };
-        last.push_span(Span::styled(format!("  +{more} {unit}"), style));
+        rows.push(with_note(last, more, style, columns));
     }
     rows
+}
+
+/// `row` with the note of `more` lines that did not fit at its end, its own end cut for the note when a pane `columns`
+/// wide has no room for both.
+fn with_note(row: Line<'_>, more: usize, style: Style, columns: usize) -> Line<'_> {
+    let unit = if more == 1 { "line" } else { "lines" };
+    let note = format!("  +{more} {unit}");
+    let fits = columns == 0 || row.width() + note.len() <= columns;
+    let mut fitted = if fits { row } else { text::truncate_line(&row, columns.saturating_sub(note.len())) };
+    fitted.push_span(Span::styled(note, style));
+    fitted
 }
 
 /// The part of `mark` that falls in the line starting at byte `line_start`; an empty mark stays empty, at the line's end.
@@ -218,7 +234,7 @@ fn coloured_line<'a>(line: &'a str, spans: &[Painted], cuts: Cuts<'_>, paint: &P
             Some(*end)
         });
         let index = at.take_while(|&end| end <= ghost.at).count();
-        pieces.insert(index, Span::styled(render::printable(ghost.rest).into_owned(), Style::default().fg(paint.theme.faded)));
+        pieces.insert(index, Span::styled(ghost.shown().into_owned(), Style::default().fg(paint.theme.faded)));
     }
     if cuts.mark.is_some_and(|range| range.is_empty()) {
         pieces.push(Span::styled(" ", paint.mark_style));
@@ -720,8 +736,14 @@ mod tests {
 
     #[test]
     fn the_later_lines_of_a_ghost_wrap_and_count_their_rows() {
+        let shown = ghosted_in("id", 2, " x\ncustomers_total_id\nid", Window { rows: 3, columns: 14, ..EVERY_LINE });
+        assert_eq!(shown, ["id< x>", "<customers_tota>", "<l_id><  +1 line>"]);
+    }
+
+    #[test]
+    fn the_note_replaces_a_row_too_narrow_for_both() {
         let shown = ghosted_in("id", 2, " x\ncustomers\nid", Window { rows: 3, columns: 5, ..EVERY_LINE });
-        assert_eq!(shown, ["id< x>", "<custo>", "<mers><  +1 line>"]);
+        assert_eq!(shown, ["id< x>", "<custo>", "<  +1 line>"]);
     }
 
     #[test]
@@ -737,6 +759,33 @@ mod tests {
         let mut terminal = drawn(&app, 20, 4);
         assert_eq!(rows_drawn(&terminal), ["SELECT id FROM o", "rders"]);
         assert_eq!(cursor(&mut terminal), Position { x: 17, y: 1 });
+    }
+
+    #[test]
+    fn the_note_of_a_cut_ghost_shows_on_a_full_row() {
+        let shown = ghosted_in("id", 2, " x\nabcdefghijklmn\nf", Window { rows: 2, columns: 14, ..EVERY_LINE });
+        assert_eq!(shown, ["id< x>", "<abcd…><  +1 line>"]);
+    }
+
+    #[test]
+    fn a_one_line_ghost_past_the_last_row_says_so() {
+        let rest = "x".repeat(40);
+        let shown = ghosted_in("id", 2, &rest, Window { rows: 2, columns: 20, ..EVERY_LINE });
+        assert_eq!(shown, [format!("id<{}>", "x".repeat(18)), format!("<{}…><  +1 line>", "x".repeat(10))]);
+    }
+
+    #[test]
+    fn a_one_line_ghost_past_the_last_row_counts_the_lines_after_it_too() {
+        let rest = format!("{}\nLIMIT 1", "x".repeat(40));
+        let shown = ghosted_in("id", 2, &rest, Window { rows: 1, columns: 20, ..EVERY_LINE });
+        assert_eq!(shown, [format!("id<{}…><  +2 lines>", "x".repeat(7))]);
+    }
+
+    #[test]
+    fn the_text_after_a_ghost_past_the_last_row_needs_no_note() {
+        let long = format!("id {}", "z".repeat(40));
+        let shown = ghosted_in(&long, 2, "x", Window { rows: 1, columns: 20, ..EVERY_LINE });
+        assert_eq!(shown, ["id<x> "]);
     }
 
     #[test]
