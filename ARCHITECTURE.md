@@ -33,6 +33,7 @@ The code is the contract; this page describes it, and changes in the MR that cha
 | `syntax/` | SQL colours from tree-sitter, JSON colours by hand |
 | `act.rs` | Every action in one table: name, default keys, help line, pane; the help, the footer and the command palette all read it |
 | `tui/app/typed.rs` | Pure: a typed command read against what the app holds, its words and what its last token completes to |
+| `tui/app/wrap.rs` | Pure: how the editor's text falls into rows of its pane, and which byte each cell shows, a row ending after its last whitespace; display only, as no break ever enters the text, and rows come from the text alone, so a ghost never moves what comes before the cursor |
 | `tui/mod.rs` | The event loop: keys, pastes, clicks, answers and timers in, frames out |
 | `tui/app/` | `App`, the pure state machine: keys in, `Action`s out, `Answer`s applied; `protocol.rs` what the app and the backend say; one `Overlay` at most takes the keys |
 | `tui/backend/` | `Backend::dispatch` hands each `Action` to its part without waiting: one session task per connection, queries, config, history, AI, clipboard |

@@ -199,6 +199,14 @@ The review of #299 to #301 left these.
 - [ ] Past the cap, a kept table with many wide tables pointing to it no longer crowds out a table two keys away
 - [ ] An ask whose schema read fails keeps the typed instruction
 
+## 28. Review of editor wrapping
+
+The review of the wrapping fix left these.
+
+- [ ] A frame lays out the cursor's line once, so a long one-line query does not walk it about five times per key, with a `budget` test
+- [ ] `vtui`'s `Field` moves to a byte, so `place_of` no longer copies how it measures a column
+- [ ] `tui/app/editor.rs` is split, as it has grown to about 900 lines
+
 ## Later
 
 - revu and slack run `update` and the brew check through `vtui::update`, as pgbg does

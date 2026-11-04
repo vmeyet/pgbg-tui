@@ -5,7 +5,7 @@ expression: terminal.backend()
 "╭ ● shop · local ──────────────────────────────────────────╮"
 "│owner nina, who placed the orders of last week  note late │"
 "│╭ Editor ─ READ ONLY ────────────────────────────────────╮│"
-"││ WHERE day > {{since}} AND owner = {{owner}} AND note = ││"
+"││ = {{note}}                                             ││"
 "│╰────────────────────────────────────────────────────────╯│"
 "│╭ Result ────────────────────────────────────────────────╮│"
 "││ ⏎ runs the statement under the cursor                  ││"

@@ -15,10 +15,11 @@ const FRAME_COLUMNS: usize = 3;
 const BORDER_ROWS: usize = 2;
 const NO_MATCH: &str = "no match";
 
-/// The list when it is open, below the cursor of the editor drawn in `editor`, or above it when there is no room below.
-pub(super) fn draw(f: &mut Frame<'_>, app: &App, editor: Rect) {
+/// The list when it is open, below the cursor of the editor whose text is drawn in `editor_text`, or above it when there
+/// is no room below.
+pub(super) fn draw(f: &mut Frame<'_>, app: &App, editor_text: Rect) {
     let Some(Overlay::Completion(completions)) = app.overlay() else { return };
-    let area = popup_area(f.area(), editor_view::cursor_at(app, editor), completions);
+    let area = popup_area(f.area(), editor_view::cursor_at(app, editor_text), completions);
     let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::default().fg(app.theme().accent));
     let inside = block.inner(area);
     f.render_widget(Clear, area);
