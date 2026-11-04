@@ -534,6 +534,18 @@ mod tests {
     }
 
     #[test]
+    fn up_past_the_end_of_a_shorter_row_lands_on_the_whitespace_at_the_break() {
+        assert_eq!(shown(&drawn_then_pressed("FROM orders", 8, &[KeyCode::Up])), "FROM| orders");
+    }
+
+    #[test]
+    fn down_from_the_whitespace_at_a_break_goes_to_the_cell_below_and_changes_no_text() {
+        let editor = drawn_then_pressed("FROM orders", 8, &[KeyCode::Up, KeyCode::Down]);
+        assert_eq!(shown(&editor), "FROM orde|rs");
+        assert_eq!(editor.text(), "FROM orders");
+    }
+
+    #[test]
     fn up_and_down_are_moves_that_leave_the_colours_fresh() {
         let mut editor = Editor::new("customers\nid");
         editor.recolour();
@@ -550,9 +562,9 @@ mod tests {
     #[test]
     fn going_up_past_the_view_scrolls_a_long_line_by_one_row() {
         let long = "orders ".repeat(10);
-        assert_eq!(drawn_then_pressed(&long, 10, &[]).first_row(), Row { line: 0, row: 6 });
-        assert_eq!(drawn_then_pressed(&long, 10, &[KeyCode::Up]).first_row(), Row { line: 0, row: 6 });
-        assert_eq!(drawn_then_pressed(&long, 10, &[KeyCode::Up, KeyCode::Up]).first_row(), Row { line: 0, row: 5 });
+        assert_eq!(drawn_then_pressed(&long, 10, &[]).first_row(), Row { line: 0, row: 8 });
+        assert_eq!(drawn_then_pressed(&long, 10, &[KeyCode::Up]).first_row(), Row { line: 0, row: 8 });
+        assert_eq!(drawn_then_pressed(&long, 10, &[KeyCode::Up, KeyCode::Up]).first_row(), Row { line: 0, row: 7 });
     }
 
     #[test]

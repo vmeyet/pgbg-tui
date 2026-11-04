@@ -113,27 +113,16 @@ fn coloured<'a>(text: &'a str, paint: &Paint<'_>, window: Window) -> Text<'a> {
             let selected = paint.selection.as_ref().and_then(|selection| within_line(selection, line_start, line.len()));
             let room = window.rows - rows.len();
             let skip = if index == window.first.line { window.first.row } else { 0 };
-            let drawn = text_rows(
-                coloured_line(line, spans, Cuts { mark: marked, selected, ghost }, paint),
-                line.len(),
-                window.columns,
-                skip,
-                room,
-            );
+            let ghost_at = ghost.filter(|ghost| !ghost.rest.is_empty()).map(|ghost| ghost.at);
+            let painted = coloured_line(line, spans, Cuts { mark: marked, selected, ghost }, paint);
+            let cuts = wrap::painted_rows(line, &painted.to_string(), ghost_at, window.columns);
+            let drawn = rows_within(painted, &cuts, skip, room);
             let left = room.saturating_sub(drawn.len());
             rows.extend(with_lines_below(drawn, &below.unwrap_or_default(), left, faded, window.columns));
         }
         line_start += line.len() + 1;
     }
     Text::from(rows)
-}
-
-/// The rows of `drawn`, a line of the text of `line_len` bytes as painted, past the first `skip` and at most `room`.
-/// A line painted as it is keeps the empty row after a full last one, which the ghost or a mark's space fills otherwise.
-fn text_rows(drawn: Line<'_>, line_len: usize, columns: usize, skip: usize, room: usize) -> Vec<Line<'_>> {
-    let whole = drawn.to_string();
-    let cuts = if whole.len() == line_len { wrap::rows_of(&whole, columns) } else { wrap::cuts_of(&whole, columns) };
-    rows_within(drawn, &cuts, skip, room)
 }
 
 /// `line` cut at `cuts`, past the first `skip` rows and at most `room`, each part in its style.
@@ -568,8 +557,8 @@ mod tests {
     fn a_line_wider_than_the_pane_goes_on_to_the_next_row() {
         let app = typed("SELECT id FROM orders WHERE total > 10");
         let mut terminal = drawn(&app, 24, 5);
-        assert_eq!(rows_drawn(&terminal), ["SELECT id FROM order", "s WHERE total > 10", ""]);
-        assert_eq!(cursor(&mut terminal), Position { x: 20, y: 2 });
+        assert_eq!(rows_drawn(&terminal), ["SELECT id FROM", "orders WHERE total", "> 10"]);
+        assert_eq!(cursor(&mut terminal), Position { x: 6, y: 3 });
     }
 
     #[test]
@@ -597,27 +586,72 @@ mod tests {
     #[test]
     fn a_cursor_on_a_later_row_counts_a_decomposed_letter_as_it_draws() {
         let mut terminal = drawn(&typed("SELECT 'Zoe\u{308}' AS nina"), 16, 5);
-        assert_eq!(rows_drawn(&terminal), ["SELECT 'Zoe\u{308}'", " AS nina", ""]);
+        assert_eq!(rows_drawn(&terminal), ["SELECT", "'Zoe\u{308}' AS", "nina"]);
+        assert_eq!(cursor(&mut terminal), Position { x: 6, y: 3 });
+    }
+
+    #[test]
+    fn a_wide_word_moves_to_the_next_row_and_the_cursor_follows() {
+        let mut terminal = drawn(&typed("SELECT '日本語'"), 14, 5);
+        assert_eq!(rows_drawn(&terminal), ["SELECT", "'日 本 語 '", ""]);
         assert_eq!(cursor(&mut terminal), Position { x: 10, y: 2 });
     }
 
     #[test]
-    fn a_wide_character_that_does_not_fit_moves_to_the_next_row_and_the_cursor_follows() {
-        let mut terminal = drawn(&typed("SELECT '日本語'"), 14, 5);
-        assert_eq!(rows_drawn(&terminal), ["SELECT '日", "本 語 '", ""]);
+    fn a_wide_character_wider_than_the_room_left_in_a_long_word_starts_the_next_row() {
+        let mut terminal = drawn(&typed("'abcdefghi日本'"), 14, 5);
+        assert_eq!(rows_drawn(&terminal), ["'abcdefghi", "日 本 '", ""]);
         assert_eq!(cursor(&mut terminal), Position { x: 7, y: 2 });
+    }
+
+    #[test]
+    fn typing_at_the_end_of_a_full_row_puts_the_cursor_on_the_empty_row() {
+        let mut terminal = drawn(&typed("SELECT id FROM nin"), 22, 5);
+        assert_eq!(rows_drawn(&terminal), ["SELECT id FROM nin", "", ""]);
+        assert_eq!(cursor(&mut terminal), Position { x: 2, y: 2 });
+    }
+
+    #[test]
+    fn a_word_that_outgrows_its_row_moves_down_whole_with_the_cursor_after_it() {
+        let mut app = typed("SELECT id FROM nin");
+        app.handle_key(KeyEvent::from(KeyCode::Char('a')));
+        let mut terminal = drawn(&app, 22, 5);
+        assert_eq!(rows_drawn(&terminal), ["SELECT id FROM", "nina", ""]);
+        assert_eq!(cursor(&mut terminal), Position { x: 6, y: 2 });
+    }
+
+    /// `SELECT id FROM nina` drawn over two rows, after `lefts` presses of `←`.
+    fn cursor_moved_left(lefts: usize) -> Position {
+        let mut app = typed("SELECT id FROM nina");
+        (0..lefts).for_each(|_| _ = app.handle_key(KeyEvent::from(KeyCode::Left)));
+        cursor(&mut drawn(&app, 22, 5))
+    }
+
+    #[test]
+    fn a_cursor_on_the_whitespace_at_a_break_is_drawn_on_its_cell() {
+        assert_eq!(cursor_moved_left(5), Position { x: 16, y: 1 });
+    }
+
+    #[test]
+    fn a_cursor_after_the_whitespace_at_a_break_is_drawn_at_the_start_of_the_next_row() {
+        assert_eq!(cursor_moved_left(4), Position { x: 2, y: 2 });
     }
 
     #[test]
     fn the_rows_above_a_long_line_scroll_away_to_keep_the_cursor() {
         let mut terminal = drawn(&typed(&"orders ".repeat(10)), 14, 4);
-        assert_eq!(rows_drawn(&terminal), ["rs orders", ""]);
-        assert_eq!(cursor(&mut terminal), Position { x: 2, y: 2 });
+        assert_eq!(rows_drawn(&terminal), ["orders", "orders"]);
+        assert_eq!(cursor(&mut terminal), Position { x: 9, y: 2 });
     }
 
     #[test]
     fn a_selection_stays_reversed_on_both_rows_it_crosses() {
         assert_eq!(reversed_rows("customers", None, Some(4..8), Window { columns: 6, ..EVERY_LINE }), ["cust[om]", "[er]s"]);
+    }
+
+    #[test]
+    fn a_selection_over_a_break_covers_its_whitespace() {
+        assert_eq!(reversed_rows("FROM orders", None, Some(3..7), Window { columns: 8, ..EVERY_LINE }), ["FRO[M ]", "[or]ders"]);
     }
 
     #[test]
@@ -637,20 +671,32 @@ mod tests {
     }
 
     #[test]
-    fn the_mark_is_drawn_on_both_rows_its_token_crosses() {
-        let mut app = failed_run("SELECT id, total FROM ordrs", 23);
+    fn the_mark_is_drawn_on_both_rows_its_token_crosses_and_the_whitespace_between() {
+        let mut app = failed_run("SELECT 'paid orders' AS nina", 8);
+        app.recolour();
+        let terminal = drawn(&app, 16, 6);
+        let buffer = terminal.backend().buffer();
+        assert_eq!(rows_drawn(&terminal), ["SELECT", "'paid", "orders' AS", "nina"]);
+        assert!(buffer[(2, 2)].modifier.contains(Modifier::UNDERLINED));
+        assert!(buffer[(7, 2)].modifier.contains(Modifier::UNDERLINED));
+        assert!(buffer[(2, 3)].modifier.contains(Modifier::UNDERLINED));
+    }
+
+    #[test]
+    fn the_mark_is_drawn_on_both_rows_of_a_word_cut_where_the_pane_ends() {
+        let mut app = failed_run("SELECT customers_orders_total", 8);
         app.recolour();
         let terminal = drawn(&app, 16, 5);
         let buffer = terminal.backend().buffer();
-        assert_eq!(rows_drawn(&terminal), ["SELECT id, t", "otal FROM or", "drs"]);
-        assert!(buffer[(12, 2)].modifier.contains(Modifier::UNDERLINED));
+        assert_eq!(rows_drawn(&terminal), ["SELECT", "customers_or", "ders_total"]);
+        assert!(buffer[(13, 2)].modifier.contains(Modifier::UNDERLINED));
         assert!(buffer[(2, 3)].modifier.contains(Modifier::UNDERLINED));
     }
 
     #[test]
     fn a_failing_token_on_a_row_above_the_view_scrolls_into_it_with_the_cursor_left_out() {
         let mut terminal = drawn(&failed_run("SELECT ordrs, id, total, nina FROM orders", 8), 14, 3);
-        assert_eq!(rows_drawn(&terminal), ["SELECT ord"]);
+        assert_eq!(rows_drawn(&terminal), ["ordrs,"]);
         assert_eq!(cursor(&mut terminal), Position { x: 0, y: 0 });
     }
 
@@ -658,6 +704,18 @@ mod tests {
     fn a_ghost_goes_on_to_the_next_row() {
         let shown = ghosted_in("SELECT * FROM cu", 16, "stomers", Window { columns: 18, ..EVERY_LINE });
         assert_eq!(shown, ["SELECT * FROM cu<st>", "<omers>"]);
+    }
+
+    #[test]
+    fn a_ghost_with_a_space_past_the_pane_keeps_the_word_it_completes_on_the_cursors_row() {
+        let shown = ghosted_in("FROM cu", 7, "stomers AND nina", Window { columns: 14, ..EVERY_LINE });
+        assert_eq!(shown, ["FROM cu<stomers>", "< AND nina>"]);
+    }
+
+    #[test]
+    fn a_ghost_inside_a_word_that_moved_down_stays_at_the_cursor() {
+        let shown = ghosted_in("FROM custom", 7, "x", Window { columns: 8, ..EVERY_LINE });
+        assert_eq!(shown, ["FROM ", "cu<x>stom"]);
     }
 
     #[test]
@@ -670,6 +728,15 @@ mod tests {
     fn a_later_line_of_a_ghost_that_fills_its_row_adds_no_empty_row() {
         let shown = ghosted_in("id", 2, " x\nabcde\nf", Window { columns: 5, ..EVERY_LINE });
         assert_eq!(shown, ["id< x>", "<abcde>", "<f>"]);
+    }
+
+    #[test]
+    fn a_ghost_that_overflows_after_a_whitespace_starts_at_the_cursor_on_its_row() {
+        let mut app = idle_ghosted("SELECT id FROM ", "SELECT id FROM orders");
+        app.recolour();
+        let mut terminal = drawn(&app, 20, 4);
+        assert_eq!(rows_drawn(&terminal), ["SELECT id FROM o", "rders"]);
+        assert_eq!(cursor(&mut terminal), Position { x: 17, y: 1 });
     }
 
     #[test]

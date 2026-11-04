@@ -135,7 +135,7 @@ mod tests {
         assert_eq!(app.sheet().editor.first_row().line, 4);
     }
 
-    /// One line of 140 columns, over three rows of the 48 columns drawn, the cursor at its start.
+    /// One line of 140 columns, whose rows of the 48 columns drawn each hold 42 and end on a space, the cursor at its start.
     fn one_wrapped_line() -> App {
         let mut app = editing(&"orders ".repeat(20));
         app.handle_key(crossterm::event::KeyEvent::from(crossterm::event::KeyCode::Home));
@@ -147,7 +147,14 @@ mod tests {
     fn a_click_on_a_wrapped_row_puts_the_cursor_on_the_character_drawn_there() {
         let mut app = one_wrapped_line();
         click(&mut app, MouseEventKind::Down(LEFT), 33, 3);
-        assert_eq!(app.sheet().editor.split().0.len(), 50);
+        assert_eq!(app.sheet().editor.split().0.len(), 44);
+    }
+
+    #[test]
+    fn a_click_past_the_end_of_a_shorter_row_puts_the_cursor_on_the_whitespace_at_its_break() {
+        let mut app = one_wrapped_line();
+        click(&mut app, MouseEventKind::Down(LEFT), 77, 2);
+        assert_eq!(app.sheet().editor.split().0.len(), 41);
     }
 
     #[test]
@@ -155,7 +162,7 @@ mod tests {
         let mut app = one_wrapped_line();
         click(&mut app, MouseEventKind::Down(LEFT), 77, 2);
         click(&mut app, MouseEventKind::Drag(LEFT), 33, 3);
-        assert_eq!(selected(&app), Some("rs o"));
+        assert_eq!(selected(&app), Some(" or"));
     }
 
     #[test]

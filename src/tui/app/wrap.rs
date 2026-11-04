@@ -1,6 +1,8 @@
 //! How the editor's text falls into rows of a pane, for display only: the text itself never holds a break.
-//! A line is cut at the last grapheme that fits, never at a word: a word break would depend on what follows, so the
-//! ghost or the next key could move the cursor.
+//! A row ends after its last whitespace, which stays on it and takes its cell, so every byte has a cell; a word wider
+//! than the pane is cut at the last grapheme that fits.
+//! The rows come from the line's text alone, and the cursor is drawn at its byte: typing can move a word and the cursor
+//! in it down, but the ghost or a mark's space never moves what comes before the cursor.
 //! A line that fills its last row exactly gets one more, empty, for the cursor after its last character.
 use crate::render;
 use ratatui::layout::Size;
@@ -38,28 +40,74 @@ fn cells_of(row: &str) -> usize {
     row.graphemes(true).map(cells).sum()
 }
 
-/// `line` cut where a pane `columns` wide ends; a pane not drawn yet, 0 wide, cuts nothing.
+/// One grapheme to lay out: its bytes, its cells and whether a row can end after it.
+struct Piece {
+    bytes: Range<usize>,
+    width: usize,
+    is_space: bool,
+}
+
+/// Where a row can end after a whitespace: the byte after it, and the cells of the row up to there.
+struct AfterSpace {
+    end: usize,
+    cells: usize,
+}
+
+/// `pieces`, which make a line of `len` bytes, cut into rows `columns` wide: after the last whitespace of a row that ends
+/// past byte `keep_to`, else where the pane ends.
+fn flowed(pieces: impl Iterator<Item = Piece>, len: usize, columns: usize, keep_to: usize) -> Vec<Range<usize>> {
+    let mut rows = Vec::new();
+    let (mut start, mut used) = (0, 0);
+    let mut after_space = None;
+    for Piece { bytes, width, is_space } in pieces {
+        if used + width > columns
+            && let Some(AfterSpace { end, cells }) = after_space.take()
+        {
+            rows.push(start..end);
+            (start, used) = (end, used - cells);
+        }
+        if used + width > columns && bytes.start > start {
+            rows.push(start..bytes.start);
+            (start, used) = (bytes.start, 0);
+        }
+        used += width;
+        if is_space && used > 0 && bytes.end > keep_to {
+            after_space = Some(AfterSpace { end: bytes.end, cells: used });
+        }
+    }
+    rows.push(start..len);
+    rows
+}
+
+fn ascii_pieces(line: &str) -> impl Iterator<Item = Piece> {
+    line.bytes().enumerate().map(|(at, byte)| Piece { bytes: at..at + 1, width: 1, is_space: byte == b' ' })
+}
+
+fn grapheme_pieces(line: &str) -> impl Iterator<Item = Piece> {
+    line.grapheme_indices(true).map(|(at, grapheme)| Piece {
+        bytes: at..at + grapheme.len(),
+        width: cells(grapheme),
+        is_space: grapheme.chars().all(char::is_whitespace),
+    })
+}
+
+/// `line` cut into rows `columns` wide, none ending at or before byte `keep_to` but where the pane ends; a pane not drawn
+/// yet, 0 wide, cuts nothing.
 /// No grapheme takes more cells than bytes, and a line of printable ASCII takes one cell a byte, so most lines need no
 /// walk through their graphemes.
-pub(in crate::tui) fn cuts_of(line: &str, columns: usize) -> Vec<Range<usize>> {
+fn flow(line: &str, columns: usize, keep_to: usize) -> Vec<Range<usize>> {
     if columns == 0 || line.len() <= columns {
         return std::iter::once(0..line.len()).collect();
     }
     if line.bytes().all(|byte| matches!(byte, b' '..=b'~')) {
-        return (0..line.len()).step_by(columns).map(|start| start..line.len().min(start + columns)).collect();
+        return flowed(ascii_pieces(line), line.len(), columns, keep_to);
     }
-    let mut rows = Vec::new();
-    let (mut start, mut used) = (0, 0);
-    for (at, grapheme) in line.grapheme_indices(true) {
-        let width = cells(grapheme);
-        if used + width > columns && at > start {
-            rows.push(start..at);
-            (start, used) = (at, 0);
-        }
-        used += width;
-    }
-    rows.push(start..line.len());
-    rows
+    flowed(grapheme_pieces(line), line.len(), columns, keep_to)
+}
+
+/// `line` cut into rows `columns` wide, with no empty row after a full last one: for a text no cursor sits in.
+pub(in crate::tui) fn cuts_of(line: &str, columns: usize) -> Vec<Range<usize>> {
+    flow(line, columns, 0)
 }
 
 /// The bytes of a line of the text on each of its rows, with the empty row after a full last one.
@@ -74,14 +122,36 @@ pub(in crate::tui) fn rows_of(line: &str, columns: usize) -> Vec<Range<usize>> {
     rows
 }
 
-/// Where byte `at` of `text` is drawn; at the end of a full row, that is the start of the next.
+/// The row of `rows` that draws byte `at`: at the end of a row that goes on, that is the start of the next.
+fn row_holding(rows: &[Range<usize>], at: usize) -> usize {
+    rows.iter().rposition(|row| row.start <= at).unwrap_or(0)
+}
+
+/// The rows of `painted`, which is `line` as drawn: with a ghost at byte `ghost_at`, and maybe a mark's space at its end.
+/// Everything up to the ghost stays on the row `line` alone gives it, so the ghost starts at the cursor whatever it holds,
+/// and what follows it flows from there; a mark's space goes on the last row, which always has room for it.
+pub(in crate::tui) fn painted_rows(line: &str, painted: &str, ghost_at: Option<usize>, columns: usize) -> Vec<Range<usize>> {
+    let mut rows = rows_of(line, columns);
+    let Some(ghost_at) = ghost_at else {
+        if let Some(last) = rows.last_mut() {
+            last.end = painted.len();
+        }
+        return rows;
+    };
+    let held = row_holding(&rows, ghost_at);
+    let start = rows[held].start;
+    let flowing = flow(&painted[start..], columns, ghost_at - start);
+    rows[..held].iter().cloned().chain(flowing.into_iter().map(|row| start + row.start..start + row.end)).collect()
+}
+
+/// Where byte `at` of `text` is drawn.
 fn spot_of(text: &str, at: usize, columns: usize) -> Spot {
     let before = &text[..at];
     let line = before.matches('\n').count();
     let start = before.rfind('\n').map_or(0, |newline| newline + 1);
     let end = text[at..].find('\n').map_or(text.len(), |newline| at + newline);
     let rows = rows_of(&text[start..end], columns);
-    let row = rows.iter().rposition(|row| row.start <= at - start).unwrap_or(0);
+    let row = row_holding(&rows, at - start);
     Spot { row: Row { line, row }, column: cells_of(&text[start + rows[row].start..at]) }
 }
 
@@ -221,7 +291,120 @@ mod tests {
 
     #[test]
     fn a_line_with_a_control_character_is_not_cut_by_its_bytes() {
-        assert_eq!(cut_alone("a\tbcdef", 4), ["a\tbcd", "ef"]);
+        assert_eq!(cut_alone("a\tbcdef", 4), ["a\t", "bcde", "f"]);
+    }
+
+    #[test]
+    fn a_row_ends_after_its_last_whitespace_so_a_word_moves_whole() {
+        assert_eq!(cut("FROM orders", 8), ["FROM ", "orders"]);
+    }
+
+    #[test]
+    fn a_word_wider_than_the_pane_is_cut_where_the_pane_ends() {
+        assert_eq!(cut("FROM customers_total", 8), ["FROM ", "customer", "s_total"]);
+    }
+
+    #[test]
+    fn a_word_that_ends_at_the_pane_moves_down_so_its_whitespace_has_a_cell() {
+        assert_eq!(cut("FROM id x", 7), ["FROM ", "id x"]);
+    }
+
+    #[test]
+    fn a_whitespace_with_no_room_starts_the_next_row() {
+        assert_eq!(cut("ABCDE FROM", 5), ["ABCDE", " FROM", ""]);
+    }
+
+    #[test]
+    fn a_wide_word_moves_whole_past_the_whitespace() {
+        assert_eq!(cut("日本 語語語", 6), ["日本 ", "語語語", ""]);
+    }
+
+    #[test]
+    fn a_wide_character_after_a_moved_word_still_fits_or_starts_a_row() {
+        assert_eq!(cut(" abc日", 4), [" ", "abc", "日"]);
+    }
+
+    #[test]
+    fn a_control_character_alone_is_no_place_to_end_a_row() {
+        assert_eq!(cut("\tabcde", 4), ["\tabcd", "e"]);
+    }
+
+    #[test]
+    fn the_rows_hold_every_byte_of_the_line_in_order() {
+        for line in ["FROM orders WHERE id = 7", "  a   b  ", "日本 語語語 x", "Zoe\u{308} nina", "a\tb c", "customers", ""] {
+            for columns in 1..12 {
+                let rows = rows_of(line, columns);
+                let joined: String = rows.iter().map(|row| &line[row.clone()]).collect();
+                assert_eq!(joined, line, "{line:?} at {columns}");
+                assert!(rows.windows(2).all(|pair| pair[0].end == pair[1].start), "{line:?} at {columns}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_printable_ascii_line_is_cut_as_its_graphemes_would_be() {
+        for line in ["SELECT id FROM orders WHERE total > 10", "  a   b  ", "customers_total", "a b c d e f g"] {
+            for columns in 1..12 {
+                let by_bytes = flowed(ascii_pieces(line), line.len(), columns, 0);
+                let by_graphemes = flowed(grapheme_pieces(line), line.len(), columns, 0);
+                assert_eq!(by_bytes, by_graphemes, "{line:?} at {columns}");
+            }
+        }
+    }
+
+    fn painted(line: &str, painted: &str, ghost_at: Option<usize>, columns: usize) -> Vec<String> {
+        painted_rows(line, painted, ghost_at, columns).into_iter().map(|row| painted[row].to_owned()).collect()
+    }
+
+    #[test]
+    fn a_ghost_never_moves_the_word_it_completes_to_another_row() {
+        assert_eq!(painted("FROM cu", "FROM customers", Some(7), 10), ["FROM custo", "mers"]);
+    }
+
+    #[test]
+    fn a_whitespace_in_a_ghost_can_end_the_row_past_the_cursor() {
+        assert_eq!(painted("FROM ", "FROM id AND nina", Some(5), 10), ["FROM id ", "AND nina"]);
+    }
+
+    #[test]
+    fn a_ghost_flows_from_the_row_the_text_alone_gives_the_cursor() {
+        assert_eq!(painted("FROM custom", "FROM cuxstom", Some(7), 8), ["FROM ", "cuxstom"]);
+    }
+
+    #[test]
+    fn a_ghost_starts_on_the_empty_row_of_a_full_line() {
+        assert_eq!(painted("orders", "orders id", Some(6), 6), ["orders", " id"]);
+    }
+
+    #[test]
+    fn a_marks_space_goes_on_the_last_row_or_the_empty_one_after_it() {
+        assert_eq!(painted("order", "order ", None, 6), ["order "]);
+        assert_eq!(painted("orders", "orders ", None, 6), ["orders", " "]);
+    }
+
+    #[test]
+    fn a_byte_on_the_whitespace_at_a_break_is_drawn_on_it() {
+        assert_eq!(spot_of("FROM orders", 4, 8), Spot { row: row(0, 0), column: 4 });
+    }
+
+    #[test]
+    fn the_byte_after_the_whitespace_at_a_break_is_drawn_at_the_start_of_the_next_row() {
+        assert_eq!(spot_of("FROM orders", 5, 8), Spot { row: row(0, 1), column: 0 });
+    }
+
+    #[test]
+    fn a_cell_past_the_end_of_a_shorter_row_finds_its_whitespace() {
+        assert_eq!(byte_under("FROM orders", row(0, 0), 0, 7, 8), Some(4));
+    }
+
+    #[test]
+    fn down_from_the_whitespace_at_a_break_goes_to_the_cell_below() {
+        assert_eq!(byte_below("FROM orders", 4, 8), 9);
+    }
+
+    #[test]
+    fn up_past_the_end_of_a_shorter_row_stops_on_its_whitespace() {
+        assert_eq!(byte_above("FROM orders", 11, 8), 4);
     }
 
     #[test]
