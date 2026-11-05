@@ -1,6 +1,7 @@
 //! Wire values to `Value`, by column type; a type pgbg does not know decodes as `Value::Unsupported`.
 use super::model::{Column, ColumnKind, ColumnName, Interval, JsonText, Origin, TypeName, Value};
 use chrono::{DateTime, Utc};
+use serde::{Serialize, Serializer};
 use tokio_postgres::Row;
 use tokio_postgres::types::{FromSql, Kind, Type};
 
@@ -11,6 +12,10 @@ const NUMERIC_INFINITY: u16 = 0xD000;
 const NUMERIC_NEGATIVE_INFINITY: u16 = 0xF000;
 /// The byte a binary `jsonb` starts with, before its text.
 const JSONB_VERSION: u8 = 1;
+/// PostgreSQL's `MAXDIM`; a value claiming more is malformed, and its depth is what `Nested` recurses on.
+const ARRAY_MOST_DIMENSIONS: usize = 6;
+/// The length a binary array gives a NULL element.
+const ARRAY_NULL_LENGTH: i32 = -1;
 
 /// A column as `ResultSet` holds it.
 pub(super) fn column(column: &tokio_postgres::Column) -> Column {
@@ -54,6 +59,7 @@ fn kind(ty: &Type) -> ColumnKind {
         Type::TIMESTAMPTZ => ColumnKind::TimestampTz,
         Type::INTERVAL => ColumnKind::Interval,
         Type::BYTEA => ColumnKind::Bytes,
+        _ if matches!(ty.kind(), Kind::Array(element) if column_kind(element).is_decoded()) => ColumnKind::Array,
         _ if matches!(ty.kind(), Kind::Enum(_)) || ty.name() == "citext" => ColumnKind::Text,
         _ => ColumnKind::Other,
     }
@@ -85,6 +91,7 @@ fn cell(ty: &Type, raw: &[u8]) -> Value {
         ColumnKind::TimestampTz => timestamp(ty, raw, |at: DateTime<Utc>| Value::TimestampTz(at)),
         ColumnKind::Interval => interval(raw),
         ColumnKind::Bytes => typed(ty, raw, |bytes: &[u8]| Value::Bytes(bytes.into())),
+        ColumnKind::Array => array_json(ty, raw).map_or(Value::Unsupported, Value::Array),
         ColumnKind::Other if *ty == Type::VOID => Value::Null,
         ColumnKind::Other => Value::Unsupported,
     }
@@ -98,6 +105,74 @@ fn json(ty: &Type, raw: &[u8]) -> Value {
         _ => raw,
     };
     std::str::from_utf8(sent).ok().and_then(|text| JsonText::compacted(text).ok()).map_or(Value::Unsupported, Value::Json)
+}
+
+/// A binary array of type `ty` as JSON: its dimension count, a flag for NULLs, the element's oid, a length and a lower
+/// bound per dimension, then each element after its own length. Only the lengths nest the elements, so a lower bound
+/// changes nothing. None for bytes that do not read as one, or an element pgbg cannot decode.
+fn array_json(ty: &Type, raw: &[u8]) -> Option<JsonText> {
+    let Kind::Array(element) = ty.kind() else { return None };
+    let mut wire = ArrayWire(raw);
+    let dimension_count = usize::try_from(wire.int()?).ok().filter(|&count| count <= ARRAY_MOST_DIMENSIONS)?;
+    let _has_null = wire.int()?;
+    let _element_oid = wire.int()?;
+    let lengths = (0..dimension_count).map(|_| wire.dimension_length()).collect::<Option<Vec<usize>>>()?;
+    let values = (0..element_count(&lengths)?).map(|_| wire.element(element)).collect::<Option<Vec<Value>>>()?;
+    if !wire.0.is_empty() {
+        return None;
+    }
+    JsonText::serialized(&Nested { lengths: &lengths, values: &values }).ok()
+}
+
+/// How many elements `lengths` hold; none when the count overflows, and zero without a dimension, the empty array.
+fn element_count(lengths: &[usize]) -> Option<usize> {
+    if lengths.is_empty() { Some(0) } else { lengths.iter().try_fold(1_usize, |count, &length| count.checked_mul(length)) }
+}
+
+/// What is left of a binary array to read; every read checks its bytes, whatever the counts before it claimed.
+struct ArrayWire<'a>(&'a [u8]);
+
+impl ArrayWire<'_> {
+    fn int(&mut self) -> Option<i32> {
+        let (int, rest) = self.0.split_first_chunk::<4>()?;
+        self.0 = rest;
+        Some(i32::from_be_bytes(*int))
+    }
+
+    /// The length of a dimension, past its lower bound; the server sends an array without elements as no dimension at all.
+    fn dimension_length(&mut self) -> Option<usize> {
+        let length = usize::try_from(self.int()?).ok().filter(|&length| length > 0)?;
+        let _lower_bound = self.int()?;
+        Some(length)
+    }
+
+    /// The next element as `ty`; none when its bytes are cut or pgbg cannot decode it.
+    fn element(&mut self, ty: &Type) -> Option<Value> {
+        let length = self.int()?;
+        if length == ARRAY_NULL_LENGTH {
+            return Some(Value::Null);
+        }
+        let (bytes, rest) = self.0.split_at_checked(usize::try_from(length).ok()?)?;
+        self.0 = rest;
+        Some(cell(ty, bytes)).filter(|value| !matches!(value, Value::Unsupported))
+    }
+}
+
+/// `values`, in order, as arrays nested by `lengths`: `[2, 2]` makes two arrays of two. Every length is above zero.
+struct Nested<'a> {
+    lengths: &'a [usize],
+    values: &'a [Value],
+}
+
+impl Serialize for Nested<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self.lengths {
+            [] | [_] => serializer.collect_seq(self.values),
+            [_, inner @ ..] => {
+                serializer.collect_seq(self.values.chunks(inner.iter().product()).map(|values| Nested { lengths: inner, values }))
+            }
+        }
+    }
 }
 
 /// A `real` widened through its shortest text, so `0.1` stays `0.1` and does not become `0.10000000149011612`.
@@ -191,8 +266,12 @@ fn numeric_text(raw: &[u8]) -> Option<String> {
 mod tests {
     use super::*;
 
+    fn numeric_bytes(words: &[u16]) -> Vec<u8> {
+        words.iter().flat_map(|word| word.to_be_bytes()).collect()
+    }
+
     fn numeric(words: &[u16]) -> Option<String> {
-        numeric_text(&words.iter().flat_map(|word| word.to_be_bytes()).collect::<Vec<u8>>())
+        numeric_text(&numeric_bytes(words))
     }
 
     #[test]
@@ -229,6 +308,10 @@ mod tests {
 
     fn domain(base: Type) -> Type {
         Type::new("amount".into(), 90002, Kind::Domain(base), "shop".into())
+    }
+
+    fn mood() -> Type {
+        Type::new("mood".into(), 90001, Kind::Enum(vec!["calm".into()]), "shop".into())
     }
 
     #[test]
@@ -299,6 +382,143 @@ mod tests {
         assert_eq!(cell(&Type::INTERVAL, &[0; 12]), Value::Unsupported);
     }
 
+    /// A binary array of `lengths`, each dimension starting at `lower_bound`, its elements given as sent.
+    fn array_from(lower_bound: i32, lengths: &[i32], elements: &[Option<&[u8]>]) -> Vec<u8> {
+        let header = [i32::try_from(lengths.len()).unwrap(), 0, 0];
+        let dimensions = lengths.iter().flat_map(|&length| [length, lower_bound]);
+        let ints = header.into_iter().chain(dimensions).flat_map(i32::to_be_bytes);
+        let sent = elements.iter().flat_map(|element| match element {
+            Some(bytes) => [&i32::try_from(bytes.len()).unwrap().to_be_bytes()[..], bytes].concat(),
+            None => ARRAY_NULL_LENGTH.to_be_bytes().to_vec(),
+        });
+        ints.chain(sent).collect()
+    }
+
+    fn array_of(lengths: &[i32], elements: &[Option<&[u8]>]) -> Vec<u8> {
+        array_from(1, lengths, elements)
+    }
+
+    fn int_array_from(lower_bound: i32, lengths: &[i32], values: &[i32]) -> Vec<u8> {
+        let sent: Vec<[u8; 4]> = values.iter().map(|value| value.to_be_bytes()).collect();
+        array_from(lower_bound, lengths, &sent.iter().map(|bytes| Some(&bytes[..])).collect::<Vec<_>>())
+    }
+
+    fn int_array(lengths: &[i32], values: &[i32]) -> Vec<u8> {
+        int_array_from(1, lengths, values)
+    }
+
+    #[test]
+    fn a_text_array_shows_as_json_strings_escaped() {
+        let sent = array_of(&[2], &[Some(b"nina"), Some(b"say \"hi\", {x}")]);
+        assert_eq!(cell(&Type::TEXT_ARRAY, &sent).to_string(), r#"["nina","say \"hi\", {x}"]"#);
+    }
+
+    #[test]
+    fn an_int_array_shows_as_json_numbers() {
+        let sent = int_array(&[3], &[7, -12, 103]);
+        assert_eq!(cell(&Type::INT4_ARRAY, &sent).to_string(), "[7,-12,103]");
+    }
+
+    #[test]
+    fn a_null_element_shows_as_null() {
+        assert_eq!(cell(&Type::TEXT_ARRAY, &array_of(&[2], &[Some(b"nina"), None])).to_string(), r#"["nina",null]"#);
+    }
+
+    #[test]
+    fn an_array_without_dimensions_shows_as_an_empty_array() {
+        assert_eq!(cell(&Type::INT4_ARRAY, &array_of(&[], &[])).to_string(), "[]");
+    }
+
+    #[test]
+    fn a_two_dimensional_array_shows_as_nested_arrays() {
+        let sent = int_array(&[2, 3], &[1, 2, 3, 4, 5, 6]);
+        assert_eq!(cell(&Type::INT4_ARRAY, &sent).to_string(), "[[1,2,3],[4,5,6]]");
+    }
+
+    #[test]
+    fn a_lower_bound_changes_nothing() {
+        assert_eq!(cell(&Type::INT4_ARRAY, &int_array_from(-3, &[2], &[7, 8])).to_string(), "[7,8]");
+    }
+
+    #[test]
+    fn jsonb_elements_stay_embedded_as_json() {
+        let sent = array_of(&[2], &[Some(b"\x01{\"b\": 2, \"aa\": [1]}"), Some(b"\x01null")]);
+        assert_eq!(cell(&Type::JSONB_ARRAY, &sent).to_string(), r#"[{"b":2,"aa":[1]},null]"#);
+    }
+
+    #[test]
+    fn a_numeric_element_keeps_every_digit_as_a_string() {
+        let sent = numeric_bytes(&[3, 1, 0, 2, 1, 2345, 6700]);
+        assert_eq!(cell(&Type::NUMERIC_ARRAY, &array_of(&[1], &[Some(&sent)])).to_string(), r#"["12345.67"]"#);
+    }
+
+    #[test]
+    fn an_array_of_a_domain_or_an_enum_decodes_each_element_as_its_base() {
+        let of_moods = Type::new("_mood".into(), 90003, Kind::Array(mood()), "shop".into());
+        let of_amounts = Type::new("_amount".into(), 90004, Kind::Array(domain(Type::INT4)), "shop".into());
+        assert_eq!(cell(&of_moods, &array_of(&[1], &[Some(b"calm")])).to_string(), r#"["calm"]"#);
+        assert_eq!(cell(&of_amounts, &int_array(&[1], &[7])).to_string(), "[7]");
+    }
+
+    #[test]
+    fn a_domain_over_an_array_decodes_as_its_array() {
+        let tags = domain(Type::TEXT_ARRAY);
+        assert_eq!(
+            (column_kind(&tags), cell(&tags, &array_of(&[1], &[Some(b"tea")])).to_string()),
+            (ColumnKind::Array, r#"["tea"]"#.to_owned())
+        );
+    }
+
+    #[test]
+    fn an_array_of_a_type_pgbg_does_not_decode_stays_other() {
+        assert_eq!(column_kind(&Type::INET_ARRAY), ColumnKind::Other);
+        assert_eq!(cell(&Type::INET_ARRAY, &array_of(&[], &[])), Value::Unsupported);
+    }
+
+    #[test]
+    fn an_array_cut_anywhere_is_unsupported() {
+        let sent = int_array(&[2, 1], &[7, 8]);
+        assert!((0..sent.len()).all(|end| cell(&Type::INT4_ARRAY, &sent[..end]) == Value::Unsupported));
+    }
+
+    #[test]
+    fn an_array_claiming_more_elements_than_it_sends_is_unsupported() {
+        assert_eq!(cell(&Type::INT4_ARRAY, &int_array(&[3], &[7, 8])), Value::Unsupported);
+    }
+
+    #[test]
+    fn an_array_sending_more_elements_than_it_claims_is_unsupported() {
+        assert_eq!(cell(&Type::INT4_ARRAY, &int_array(&[1], &[7, 8])), Value::Unsupported);
+    }
+
+    #[test]
+    fn an_array_claiming_the_largest_lengths_is_unsupported_without_reserving_them() {
+        assert_eq!(cell(&Type::INT4_ARRAY, &array_of(&[i32::MAX], &[])), Value::Unsupported);
+        assert_eq!(cell(&Type::INT4_ARRAY, &array_of(&[i32::MAX; 6], &[])), Value::Unsupported);
+    }
+
+    #[test]
+    fn an_element_claiming_more_bytes_than_it_sends_is_unsupported() {
+        let sent = [array_of(&[1], &[]), i32::MAX.to_be_bytes().to_vec(), vec![0; 4]].concat();
+        assert_eq!(cell(&Type::INT4_ARRAY, &sent), Value::Unsupported);
+    }
+
+    #[test]
+    fn an_array_of_a_negative_or_zero_length_is_unsupported() {
+        assert_eq!(cell(&Type::INT4_ARRAY, &array_of(&[-1], &[])), Value::Unsupported);
+        assert_eq!(cell(&Type::INT4_ARRAY, &array_of(&[0], &[])), Value::Unsupported);
+    }
+
+    #[test]
+    fn an_array_of_more_dimensions_than_postgresql_allows_is_unsupported() {
+        assert_eq!(cell(&Type::INT4_ARRAY, &int_array(&[1; 7], &[7])), Value::Unsupported);
+    }
+
+    #[test]
+    fn an_element_pgbg_cannot_decode_makes_the_whole_array_unsupported() {
+        assert_eq!(cell(&Type::INT4_ARRAY, &array_of(&[2], &[Some(&7_i32.to_be_bytes()), Some(&[0, 1])])), Value::Unsupported);
+    }
+
     #[tokio::test]
     #[ignore = "needs PGBG_TEST_DATABASE_URL"]
     async fn an_interval_reads_as_the_server_prints_it() {
@@ -320,6 +540,6 @@ mod tests {
     #[test]
     fn enums_decode_as_text_and_unknown_types_as_other() {
         assert_eq!(kind(&Type::INET), ColumnKind::Other);
-        assert_eq!(kind(&Type::new("mood".into(), 90001, Kind::Enum(vec!["calm".into()]), "shop".into())), ColumnKind::Text);
+        assert_eq!(kind(&mood()), ColumnKind::Text);
     }
 }

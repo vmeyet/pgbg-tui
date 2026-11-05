@@ -15,6 +15,9 @@ pub(crate) enum Value {
     Numeric(Box<str>),
     Text(Box<str>),
     Json(JsonText),
+    /// An array as the JSON of its elements, which reads as JSON everywhere but no parameter can bind: the server reads
+    /// `{a,b}` for an array, never `["a","b"]`.
+    Array(JsonText),
     Uuid(uuid::Uuid),
     Date(NaiveDate),
     Time(NaiveTime),
@@ -41,7 +44,7 @@ impl fmt::Display for Value {
                 None => write!(f, "{value}"),
             },
             Self::Numeric(text) | Self::Text(text) => f.write_str(text),
-            Self::Json(json) => f.write_str(json.as_str()),
+            Self::Json(json) | Self::Array(json) => f.write_str(json.as_str()),
             Self::Uuid(value) => write!(f, "{value}"),
             Self::Date(value) => write!(f, "{value}"),
             Self::Time(value) => write!(f, "{value}"),
@@ -66,10 +69,10 @@ impl Value {
     }
 
     /// The text a parameter binds it as, for the server to read with the column's type; none for NULL, which no `=`
-    /// matches, and for a value pgbg could not decode.
+    /// matches, for a value pgbg could not decode, and for an array, whose JSON the server does not read.
     pub(crate) fn as_param(&self) -> Option<ParamValue> {
         match self {
-            Self::Null | Self::Unsupported => None,
+            Self::Null | Self::Unsupported | Self::Array(_) => None,
             other => Some(ParamValue::new(other.to_string())),
         }
     }
@@ -77,7 +80,7 @@ impl Value {
     /// Like [`Value::prefix`], with JSON indented over several lines so a row's detail can show its shape.
     pub(crate) fn pretty_prefix(&self, chars: usize) -> String {
         match self {
-            Self::Json(json) => json.pretty_prefix(chars),
+            Self::Json(json) | Self::Array(json) => json.pretty_prefix(chars),
             other => other.prefix(chars),
         }
     }
@@ -93,7 +96,7 @@ impl Value {
             }
             (Self::Bool(a), Self::Bool(b)) => a.cmp(b),
             (Self::Text(a), Self::Text(b)) => a.cmp(b),
-            (Self::Json(a), Self::Json(b)) => a.as_str().cmp(b.as_str()),
+            (Self::Json(a), Self::Json(b)) | (Self::Array(a), Self::Array(b)) => a.as_str().cmp(b.as_str()),
             (Self::Uuid(a), Self::Uuid(b)) => a.cmp(b),
             (Self::Date(a), Self::Date(b)) => a.cmp(b),
             (Self::Time(a), Self::Time(b)) => a.cmp(b),
@@ -239,7 +242,7 @@ impl Serialize for Value {
                 Some(spelled) => serializer.serialize_str(spelled),
                 None => serializer.serialize_f64(*value),
             },
-            Self::Json(json) => json.serialize(serializer),
+            Self::Json(json) | Self::Array(json) => json.serialize(serializer),
             other => serializer.collect_str(other),
         }
     }
@@ -252,6 +255,14 @@ mod tests {
     #[test]
     fn a_cell_holds_no_more_than_its_widest_inline_value_a_uuid() {
         assert!(size_of::<Value>() <= 24, "{} bytes", size_of::<Value>());
+    }
+
+    #[test]
+    fn an_array_prints_and_serializes_as_its_json_and_binds_no_parameter() {
+        let array = Value::Array(JsonText::of(&serde_json::json!(["tea", null])));
+        assert_eq!(array.to_string(), r#"["tea",null]"#);
+        assert_eq!(serde_json::to_string(&[&array]).unwrap(), r#"[["tea",null]]"#);
+        assert_eq!(array.as_param(), None);
     }
 
     #[test]

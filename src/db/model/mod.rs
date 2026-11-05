@@ -121,6 +121,7 @@ pub(crate) enum ColumnKind {
     TimestampTz,
     Interval,
     Bytes,
+    Array,
     /// A type pgbg does not decode yet; its values show as `Value::Unsupported`, a `void` one as `Value::Null`.
     Other,
 }
