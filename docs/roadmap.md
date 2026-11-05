@@ -207,6 +207,23 @@ The review of the wrapping fix left these.
 - [ ] `vtui`'s `Field` moves to a byte, so `place_of` no longer copies how it measures a column
 - [ ] `tui/app/editor.rs` is split, as it has grown to about 900 lines
 
+## 29. Review of arrays, the footer cursor and the detail's copy
+
+The review of #305 to #307 left these.
+
+- [ ] Sorting and column stats compare an array by its elements, so `[9]` comes before `[10]`, or refuse it
+- [ ] An empty `oidvector` or `int2vector` reads `[]`, not `<unsupported>`
+- [ ] `=` and `!` bind an array as a `{a,b}` literal, so they can compare it
+- [ ] Following a key on an array column says why, not "this key is NULL"
+- [ ] A key whose columns are all taken by earlier keys stays reachable with `⇥` in the detail
+- [ ] `y copy` no longer pushes `e join` and `⇥ keys` off a narrow detail footer
+- [ ] `tui/app/detail/mod.rs` is split, as it has grown past 800 lines
+- [ ] Moving left in a long input line shows the text to the right of the cursor
+- [ ] The cursor column counts each grapheme as drawn, so a lam-alef does not shift it
+- [ ] An input line past 65,535 columns keeps scrolling
+- [ ] The schema filter does not take keys while the sidebar is hidden
+- [ ] The connection form's fields draw through `field_line`
+
 ## Later
 
 - revu and slack run `update` and the brew check through `vtui::update`, as pgbg does
