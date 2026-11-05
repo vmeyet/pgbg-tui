@@ -17,9 +17,14 @@ impl JsonText {
         RawValue::from_string(compact).map(Self)
     }
 
+    /// `value` written as compact JSON; what it holds as JSON stays as it is.
+    pub(crate) fn serialized(value: &impl Serialize) -> serde_json::Result<Self> {
+        serde_json::value::to_raw_value(value).map(Self)
+    }
+
     #[cfg(test)]
     pub(crate) fn of(json: &serde_json::Value) -> Self {
-        Self(serde_json::value::to_raw_value(json).unwrap())
+        Self::serialized(json).unwrap()
     }
 
     pub(crate) fn as_str(&self) -> &str {

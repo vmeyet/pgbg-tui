@@ -6,6 +6,11 @@ Each entry says what changed, then where, then how to use it.
 
 ## Unreleased
 
+### New
+
+- **Array columns show their values**, as `text[]`, `int[]` or `jsonb[]`, in the TUI's grid and row detail, its copies and `pgbg run`: where they said `<unsupported>`, they read as JSON, `["tea",null]`, nested for several dimensions.
+  A `numeric` element is a string, so it keeps every digit, and `=` and `!` refuse an array, as the server would not read it.
+
 ### Fixed
 
 - **Long lines wrap**, in the TUI's editor: a line wider than the pane goes on to the next row, between words where it can, and the saved text keeps it as one line.

@@ -719,6 +719,17 @@ mod tests {
         assert_eq!(shown, ["infinity", "-infinity", "NaN", "NULL", "7"]);
     }
 
+    #[tokio::test]
+    #[ignore = "needs PGBG_TEST_DATABASE_URL"]
+    async fn arrays_decode_as_json_with_their_real_type_name() {
+        let sql = r#"SELECT ARRAY['nina', NULL]::text[], '{{1,2},{3,4}}'::int4[], '{}'::int4[], '[3:4]={7,8}'::int4[],
+                     ARRAY['{"b": 2, "aa": 1}'::jsonb], ARRAY[12345678901234567890.50]::numeric[]"#;
+        let result = run(WritePolicy::ReadOnly, sql).await.unwrap();
+        let shown: Vec<String> = result.rows()[0].iter().map(Value::to_string).collect();
+        assert_eq!(shown, [r#"["nina",null]"#, "[[1,2],[3,4]]", "[]", "[7,8]", r#"[{"b":2,"aa":1}]"#, r#"["12345678901234567890.50"]"#]);
+        assert_eq!(result.columns()[0].type_name.as_str(), "_text");
+    }
+
     async fn run_with(writes: WritePolicy, sql: &str, values: &[Option<&str>]) -> Result<ResultSet> {
         let params = Params::new(values.iter().map(|value| value.map(ParamValue::new)).collect(), vec![]);
         session(writes).await.run(&guard::admit(Statement::new(sql), params, writes).unwrap()).await

@@ -200,7 +200,9 @@ impl App {
         let Some(value) = result.rows().get(grid.row).and_then(|values| values.get(grid.column)) else { return };
         let column = result.columns()[grid.column].name.clone();
         match value {
-            Value::Json(json) => self.overlay = Some(Overlay::JsonTree(Box::new(JsonTree::new(column, grid.row + 1, json.clone())))),
+            Value::Json(json) | Value::Array(json) => {
+                self.overlay = Some(Overlay::JsonTree(Box::new(JsonTree::new(column, grid.row + 1, json.clone()))));
+            }
             _ => self.note = Some(format!("{column} holds no JSON here")),
         }
     }
@@ -329,6 +331,14 @@ mod tests {
         press(&mut app, KeyCode::Char('l'));
         press(&mut app, KeyCode::Char('o'));
         assert!(matches!(&app.overlay, Some(Overlay::JsonTree(tree)) if tree.column.as_str() == "data"));
+    }
+
+    #[test]
+    fn o_on_an_array_cell_opens_its_tree() {
+        let tags = Value::Array(JsonText::compacted(r#"["tea"]"#).unwrap());
+        let mut app = on_the_result(ResultSet::whole(vec![column("tags", ColumnKind::Array)], vec![vec![tags]]));
+        press(&mut app, KeyCode::Char('o'));
+        assert!(matches!(&app.overlay, Some(Overlay::JsonTree(tree)) if tree.column.as_str() == "tags"));
     }
 
     #[test]

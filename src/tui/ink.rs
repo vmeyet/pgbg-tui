@@ -25,7 +25,7 @@ pub(super) fn ink(text: &str, value: &Value, colouring: Colouring, theme: &Theme
         Value::Uuid(_) => split(text, text.char_indices().nth(SHORT_UUID_DIGITS).map(|(at, _)| at), theme),
         Value::Timestamp(_) | Value::TimestampTz(_) if colouring == Colouring::DateTime => split(text, text.find(' '), theme),
         Value::Interval(_) if colouring == Colouring::DateTime => split(text, time_of_day_at(text), theme),
-        Value::Json(_) => Ink::Json,
+        Value::Json(_) | Value::Array(_) => Ink::Json,
         _ => Ink::Whole(Style::default()),
     }
 }

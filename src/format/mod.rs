@@ -100,7 +100,7 @@ pub(crate) fn allowed(kind: &ColumnKind) -> &'static [Format] {
         ColumnKind::Bytes => &[Format::Raw, Format::Bytes],
         ColumnKind::Bool => &[Format::Raw, Format::Check],
         ColumnKind::Interval => &[Format::Raw, Format::Duration],
-        ColumnKind::Text | ColumnKind::Json | ColumnKind::Time | ColumnKind::Other => &[Format::Raw],
+        ColumnKind::Text | ColumnKind::Json | ColumnKind::Array | ColumnKind::Time | ColumnKind::Other => &[Format::Raw],
     }
 }
 

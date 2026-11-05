@@ -12,29 +12,32 @@ enum Compared {
 }
 
 impl Compared {
-    /// None for a value pgbg could not decode, which no text binds.
-    fn of(value: &Value) -> Option<Self> {
+    /// What it compares as, or the words saying why no text binds it.
+    fn of(value: &Value) -> Result<Self, &'static str> {
         match value {
-            Value::Null => Some(Self::Null),
-            other => other.as_param().map(Self::Bound),
+            Value::Null => Ok(Self::Null),
+            Value::Array(_) => Err("holds an array, which `=` and `!` do not compare"),
+            other => other.as_param().map(Self::Bound).ok_or("holds a value pgbg could not decode"),
         }
     }
 }
 
 impl App {
     /// Adds the cell under the grid's cursor to the statement under the editor's cursor, and says so on the status line;
-    /// the keys stay on the grid. A value pgbg could not decode is refused, as a lookup refuses it.
+    /// the keys stay on the grid. A value pgbg could not decode is refused, as a lookup refuses it, and so is an array.
     pub(super) fn add_condition(&mut self, comparison: Comparison) {
         let Some((column, compared)) = self.cell_under_cursor() else { return };
-        let Some(compared) = compared else {
-            self.note = Some(format!("{column} holds a value pgbg could not decode"));
-            return;
+        let note = match compared {
+            Err(refusal) => format!("{column} {refusal}"),
+            Ok(compared) => self
+                .sheet_mut()
+                .add_condition(&column, compared, comparison)
+                .map_or_else(|| "no statement under the editor's cursor".to_owned(), |added| format!("added {added}")),
         };
-        let added = self.sheet_mut().add_condition(&column, compared, comparison);
-        self.note = Some(added.map_or_else(|| "no statement under the editor's cursor".to_owned(), |added| format!("added {added}")));
+        self.note = Some(note);
     }
 
-    fn cell_under_cursor(&self) -> Option<(ColumnName, Option<Compared>)> {
+    fn cell_under_cursor(&self) -> Option<(ColumnName, Result<Compared, &'static str>)> {
         let Run::Done { result, grid, .. } = &self.sheet().run else { return None };
         let value = result.rows().get(grid.row)?.get(grid.column)?;
         Some((result.columns()[grid.column].name.clone(), Compared::of(value)))
@@ -67,7 +70,8 @@ mod tests {
     use super::super::fixtures::{enter, on_the_result, press, to_shop, typed};
     use super::super::{Action, Focus, Incoming, RunId};
     use super::*;
-    use crate::fixtures::{orders, undecoded};
+    use crate::db::model::{ColumnKind, JsonText, ResultSet};
+    use crate::fixtures::{column, orders, undecoded};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::time::Duration;
 
@@ -141,6 +145,25 @@ mod tests {
         let mut app = on_the_result(undecoded());
         press(&mut app, KeyCode::Char('='));
         assert_eq!((app.sheet().editor.text(), app.note()), ("SELECT 1", Some("shape holds a value pgbg could not decode")));
+    }
+
+    fn tags(cell: Value) -> App {
+        on_the_result(ResultSet::whole(vec![column("tags", ColumnKind::Array)], vec![vec![cell]]))
+    }
+
+    #[test]
+    fn an_array_cell_adds_no_condition_and_says_so() {
+        let mut app = tags(Value::Array(JsonText::of(&serde_json::json!(["tea"]))));
+        press(&mut app, KeyCode::Char('='));
+        assert_eq!((app.sheet().editor.text(), app.note()), ("SELECT 1", Some("tags holds an array, which `=` and `!` do not compare")));
+    }
+
+    #[test]
+    fn a_null_array_cell_still_compares_with_is_null() {
+        let mut app = tags(Value::Null);
+        app.sheet_mut().editor.rewrite("SELECT * FROM orders");
+        press(&mut app, KeyCode::Char('='));
+        assert_eq!(app.sheet().editor.text(), "SELECT * FROM orders WHERE tags IS NULL");
     }
 
     #[test]
