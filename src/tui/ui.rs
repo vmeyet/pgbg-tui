@@ -495,6 +495,15 @@ mod tests {
     }
 
     #[test]
+    fn a_schema_filter_keeps_the_cursor_after_a_resize_hid_the_sidebar() {
+        let mut app = on_the_schema_tab(false);
+        type_in(&mut app, "/ord");
+        let mut narrow = Terminal::new(TestBackend::new(60, 10)).unwrap();
+        narrow.draw(|f| app.fit(draw(f, &app))).unwrap();
+        assert_eq!(render(&app, 80, 10).backend().cursor_position(), Position { x: 7, y: 2 });
+    }
+
+    #[test]
     fn a_schema_filter_that_was_kept_leaves_the_cursor_hidden() {
         let mut app = on_the_schema_tab(false);
         type_in(&mut app, "/ord");

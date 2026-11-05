@@ -38,7 +38,9 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) -> Rect {
     };
     let text = coloured(sheet.editor.text(), &paint, window);
     f.render_widget(Paragraph::new(text), inside);
-    if focused && let Some(cursor) = sheet.editor.cursor_in_view(size) {
+    if app.editor_takes_keys()
+        && let Some(cursor) = sheet.editor.cursor_in_view(size)
+    {
         f.set_cursor_position(cursor_position(inside, cursor));
     }
     inside

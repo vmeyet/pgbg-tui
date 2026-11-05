@@ -85,6 +85,15 @@ mod tests {
     }
 
     #[test]
+    fn the_cursor_stays_in_the_editor_while_the_list_is_open() {
+        let mut app = typed("SELECT o");
+        app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL));
+        let mut terminal = Terminal::new(TestBackend::new(60, 20)).unwrap();
+        terminal.draw(|f| _ = ui::draw(f, &app)).unwrap();
+        assert!(terminal.backend().cursor_visible());
+    }
+
+    #[test]
     fn an_empty_list_says_nothing_matches() {
         let mut app = typed("SELECT zz");
         app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL));
