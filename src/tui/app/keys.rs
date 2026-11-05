@@ -8,6 +8,7 @@ use crate::act::{self, Act, Pane};
 use crate::db::explain::Explain;
 use crate::query::condition::Comparison;
 use crossterm::event::{KeyCode, KeyEvent};
+use vtui::click::Clicks;
 use vtui::help::Help;
 use vtui::toward::Toward;
 
@@ -37,6 +38,8 @@ impl App {
     }
 
     fn take_key(&mut self, key: KeyEvent) -> Vec<Action> {
+        // A key can change what a cell shows, so a click after it never counts with the one before.
+        self.clicks = Clicks::default();
         self.config_failure = None;
         self.warning = None;
         self.note = None;

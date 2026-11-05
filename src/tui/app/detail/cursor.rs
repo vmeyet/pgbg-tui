@@ -122,8 +122,8 @@ impl App {
 mod tests {
     use super::*;
     use crate::db::model::{ColumnKind, JsonText, ResultSet, Statement, Value};
-    use crate::fixtures::{column, keyed_customer, orders};
-    use crate::tui::app::fixtures::{click_at, copied, detail, mouse_at, on_a_key, on_the_keyed_orders, on_the_result, to_shop};
+    use crate::fixtures::{column, keyed_customer, keyed_orders, orders};
+    use crate::tui::app::fixtures::{click_at, copied, detail, mouse_at, on_a_key, on_keyed, on_the_keyed_orders, on_the_result, to_shop};
     use crate::tui::app::{Fit, Incoming, LookId};
     use crate::tui::detail_view;
     use crossterm::event::{KeyCode, KeyEvent};
@@ -184,15 +184,29 @@ mod tests {
         app
     }
 
+    /// A text of [`TALL_LINES`] lines, taller than the detail.
+    fn tall_text() -> Value {
+        Value::Text((0..TALL_LINES).map(|line| format!("line {line}")).collect::<Vec<_>>().join("\n").into())
+    }
+
     /// `id`, a text of [`TALL_LINES`] lines, then `total`: the middle value is taller than the detail.
     fn with_a_tall_value() -> App {
-        let text = (0..TALL_LINES).map(|line| format!("line {line}")).collect::<Vec<_>>().join("\n");
         let columns = vec![column("id", ColumnKind::Int), column("note", ColumnKind::Text), column("total", ColumnKind::Numeric)];
-        open_on(ResultSet::whole(columns, vec![vec![Value::Int(7), Value::Text(text.into()), Value::Numeric("12.50".into())]]))
+        open_on(ResultSet::whole(columns, vec![vec![Value::Int(7), tall_text(), Value::Numeric("12.50".into())]]))
     }
 
     fn first_line(app: &App) -> usize {
         app.fit.detail.first_line
+    }
+
+    /// Whether the last frame drew the line `line` of the detail.
+    fn line_in_view(app: &App, line: usize) -> bool {
+        (first_line(app)..first_line(app) + usize::from(app.fit.detail.body.height)).contains(&line)
+    }
+
+    /// Whether the last frame drew the first line of the value at `column`.
+    fn value_in_view(app: &App, column: usize) -> bool {
+        line_in_view(app, app.drawn_detail.as_ref().unwrap().lines_of(column).start)
     }
 
     const LEFT_PRESS: MouseEventKind = MouseEventKind::Down(MouseButton::Left);
@@ -201,6 +215,63 @@ mod tests {
     fn on_line(app: &App, down: u16) -> Position {
         let body = app.fit.detail.body;
         Position::new(body.x + 2, body.y + down)
+    }
+
+    #[test]
+    fn a_followed_row_opens_with_its_first_key_in_view_below_a_tall_value() {
+        let mut app = on_a_key();
+        let customer = keyed_customer().with_cell(0, 1, tall_text());
+        app.apply(to_shop(Incoming::LookedUp { look: LookId::FIRST, rows: Ok(customer) }));
+        frame(&mut app);
+        assert!(value_in_view(&app, 2), "first line {}", first_line(&app));
+    }
+
+    #[test]
+    fn backspace_after_scrolling_during_a_lookup_brings_the_key_followed_back_into_view() {
+        let mut app = on_keyed("SELECT * FROM orders", keyed_orders().with_cell(0, 2, tall_text()));
+        press(&mut app, KeyCode::Char('l'));
+        press(&mut app, KeyCode::Enter);
+        frame(&mut app);
+        (0..5).for_each(|_| _ = key(&mut app, KeyCode::Char('j')));
+        assert!(!value_in_view(&app, 1));
+        app.apply(to_shop(Incoming::LookedUp { look: LookId::FIRST, rows: Ok(keyed_customer()) }));
+        frame(&mut app);
+        key(&mut app, KeyCode::Backspace);
+        assert!(value_in_view(&app, 1), "first line {}", first_line(&app));
+    }
+
+    #[test]
+    fn shift_tab_onto_a_later_table_on_a_short_pane_brings_that_table_into_view() {
+        let mut app = open_on_keyed_orders();
+        let Some(Overlay::Detail(open)) = &mut app.overlay else { panic!("no detail open") };
+        let invoices = open.referrers[0].clone();
+        open.referrers = vec![invoices; 4];
+        press(&mut app, KeyCode::BackTab);
+        frame_at(&mut app, SHORT_SCREEN_HEIGHT);
+        assert_eq!(detail(&app).under, Under::Table(3));
+        let lines = app.drawn_detail.as_ref().unwrap().lines.len();
+        assert!(line_in_view(&app, lines + 1 + 3), "first line {}", first_line(&app));
+    }
+
+    #[test]
+    fn a_click_a_key_and_a_click_on_the_same_cell_copy_nothing() {
+        let mut app = with_a_tall_value();
+        let (at, start) = (on_line(&app, 0), Instant::now());
+        mouse_at(&mut app, LEFT_PRESS, at.x, at.y, start);
+        key(&mut app, KeyCode::Char('j'));
+        assert_eq!(first_line(&app), 1);
+        assert_eq!(mouse_at(&mut app, LEFT_PRESS, at.x, at.y, start + Duration::from_millis(100)), []);
+    }
+
+    #[test]
+    fn a_click_a_row_arriving_and_a_click_on_the_same_cell_copy_nothing() {
+        let mut app = on_a_key();
+        frame(&mut app);
+        let (at, start) = (on_line(&app, 0), Instant::now());
+        mouse_at(&mut app, LEFT_PRESS, at.x, at.y, start);
+        app.apply(to_shop(Incoming::LookedUp { look: LookId::FIRST, rows: Ok(keyed_customer()) }));
+        frame(&mut app);
+        assert_eq!(mouse_at(&mut app, LEFT_PRESS, at.x, at.y, start + Duration::from_millis(100)), []);
     }
 
     #[test]

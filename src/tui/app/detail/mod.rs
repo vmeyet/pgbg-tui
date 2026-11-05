@@ -13,6 +13,7 @@ use crossterm::event::KeyEvent;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 use std::ops::Range;
+use vtui::click::Clicks;
 
 mod cursor;
 
@@ -80,14 +81,15 @@ struct Spot {
     referrers: Vec<Counted>,
 }
 
-/// A lookup sent, what it reads, the table whose row it reads, and the key's column it left from: the cursor can move on
-/// before the row comes.
+/// A lookup sent, what it reads, the table whose row it reads, and where the detail stood on the key it left from: the
+/// cursor can move on before the row comes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Waiting {
     look: LookId,
     lookup: Lookup,
     hop: Hop,
     from: Under,
+    scroll: DetailScroll,
 }
 
 /// A table whose key points to the row shown, and how many of its rows do.
@@ -419,7 +421,7 @@ impl App {
     fn look_up(&mut self, detail: Detail, hop: Hop, lookup: Lookup) -> (Detail, Vec<Action>) {
         let look = self.new_look();
         let action = Action::LookUp { connection: self.sheet().name().clone(), look, lookup: lookup.clone() };
-        (Detail { waiting: Some(Waiting { look, lookup, hop, from: detail.under }), ..detail }, vec![action])
+        (Detail { waiting: Some(Waiting { look, lookup, hop, from: detail.under, scroll: detail.scroll }), ..detail }, vec![action])
     }
 
     pub(super) fn new_look(&mut self) -> LookId {
@@ -440,11 +442,13 @@ impl App {
             }
         };
         let Some(Overlay::Detail(mut detail)) = self.overlay.take() else { return vec![] };
-        let Some(Waiting { hop, from, .. }) = detail.waiting.take() else { return vec![] };
+        let Some(Waiting { hop, from, scroll, .. }) = detail.waiting.take() else { return vec![] };
         match rows {
             Ok(result) if !result.rows().is_empty() => {
-                let back_to = Spot { scroll: detail.scroll, under: from, referrers: std::mem::take(&mut detail.referrers) };
+                let back_to = Spot { scroll, under: from, referrers: std::mem::take(&mut detail.referrers) };
                 detail.trail.push(Followed { look, hop, result, keys, back_to });
+                // The cell of a first click now shows another row, so a second one there is no double click.
+                self.clicks = Clicks::default();
                 let detail = self.at_first_key(detail);
                 return self.show_detail(detail);
             }
@@ -454,10 +458,10 @@ impl App {
         self.count_on(detail)
     }
 
-    /// `detail` at the top of the row it shows, the cursor on its first key, else on its first value.
+    /// `detail` with the cursor on the first key of the row it shows, else on its first value, scrolled to it.
     fn at_first_key(&self, detail: Detail) -> Detail {
-        let column = self.shown_row(&detail).and_then(|shown| shown.key_columns().first().copied());
-        Detail { scroll: DetailScroll::ToColumn(0), under: Under::Value(column.unwrap_or(0)), ..detail }
+        let column = self.shown_row(&detail).and_then(|shown| shown.key_columns().first().copied()).unwrap_or(0);
+        Detail { scroll: DetailScroll::ToColumn(column), under: Under::Value(column), ..detail }
     }
 
     /// The keys the catalog gives the columns of a row a lookup read.

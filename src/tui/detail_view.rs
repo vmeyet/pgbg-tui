@@ -46,15 +46,18 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> DetailFit {
     let lines = &drawn_lines.lines;
     let pointing = pointing_lines(app.theme(), &detail.referrers, body.width);
     let last_scroll = (lines.len() + pointing.len()).saturating_sub(usize::from(body.height));
-    let wanted = match detail.scroll {
-        DetailScroll::ToColumn(column) => drawn_lines.lines_of(column).start,
-        DetailScroll::Lines(line) => line,
-    };
-    let first_line = wanted.min(last_scroll);
     let (value_lines, table) = match detail.under {
         Under::Value(column) => (drawn_lines.lines_of(column), None),
         Under::Table(table) => (0..0, Some(lines.len() + 1 + table)),
     };
+    let wanted = match detail.scroll {
+        DetailScroll::ToColumn(column) => {
+            let table_in_view = table.map_or(0, |line| (line + 1).saturating_sub(usize::from(body.height)));
+            drawn_lines.lines_of(column).start.max(table_in_view)
+        }
+        DetailScroll::Lines(line) => line,
+    };
+    let first_line = wanted.min(last_scroll);
     let lit = |(at, line): (usize, &Line<'static>)| {
         if value_lines.contains(&at) {
             with_name_lit(line)

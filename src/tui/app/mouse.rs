@@ -231,6 +231,16 @@ mod tests {
     }
 
     #[test]
+    fn a_key_between_two_clicks_on_one_cell_keeps_them_from_being_a_double_click() {
+        let mut app = editing("SELECT id");
+        let start = Instant::now();
+        mouse_at(&mut app, MouseEventKind::Down(LEFT), 33, 2, start);
+        app.handle_key(crossterm::event::KeyEvent::from(crossterm::event::KeyCode::Right));
+        mouse_at(&mut app, MouseEventKind::Down(LEFT), 33, 2, start + Duration::from_millis(100));
+        assert_eq!(selected(&app), None);
+    }
+
+    #[test]
     fn a_click_alone_selects_and_copies_nothing() {
         let mut app = editing("SELECT id");
         assert_eq!(presses(&mut app, 1, 33, 2), []);
