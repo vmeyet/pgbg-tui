@@ -1,7 +1,8 @@
 //! The mouse: a left click on a pane gives it the keys, as `tab` would; in the editor it also places the cursor, a
 //! double click selects a word and a triple click a line, a drag selects, and letting go copies the selection, as tmux
-//! does; in the schema tab it picks the row as `⏎` does. The wheel does nothing yet.
-use super::{Action, App, Focus};
+//! does; in the schema tab it picks the row as `⏎` does; the row's detail takes its own clicks. The wheel does nothing
+//! yet.
+use super::{Action, App, Focus, Overlay};
 use crate::act::Pane;
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Position;
@@ -9,11 +10,13 @@ use std::time::Instant;
 use vtui::field::Place;
 
 impl App {
-    /// Takes one mouse event read at `now`, which tells a double click from two; a click while an overlay is open does
-    /// nothing, since the overlay has the keys.
+    /// Takes one mouse event read at `now`, which tells a double click from two; a click while an overlay other than the
+    /// row's detail is open does nothing, since the overlay has the keys.
     pub(in crate::tui) fn handle_mouse(&mut self, mouse: MouseEvent, now: Instant) -> Vec<Action> {
-        if self.overlay.is_some() {
-            return vec![];
+        match self.overlay {
+            Some(Overlay::Detail(_)) => return self.detail_mouse(mouse, now),
+            Some(_) => return vec![],
+            None => {}
         }
         let at = Position::new(mouse.column, mouse.row);
         match mouse.kind {
@@ -58,20 +61,15 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::super::fixtures::{every_pane, with_every_pane};
+    use super::super::fixtures::{every_pane, mouse_at, with_every_pane};
     use super::super::ghost::Ghost;
-    use super::super::{Fit, Focus, Overlay};
+    use super::super::{Fit, Focus};
     use super::*;
-    use crossterm::event::KeyModifiers;
     use ratatui::layout::Rect;
     use std::time::Duration;
     use vtui::help::Help;
 
     const LEFT: MouseButton = MouseButton::Left;
-
-    fn mouse_at(app: &mut App, kind: MouseEventKind, column: u16, row: u16, now: Instant) -> Vec<Action> {
-        app.handle_mouse(MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE }, now)
-    }
 
     fn click(app: &mut App, kind: MouseEventKind, column: u16, row: u16) {
         mouse_at(app, kind, column, row, Instant::now());
@@ -230,6 +228,16 @@ mod tests {
         let mut app = one_wrapped_line();
         presses(&mut app, 3, 33, 3);
         assert_eq!(selected(&app), Some("orders ".repeat(20).as_str()));
+    }
+
+    #[test]
+    fn a_key_between_two_clicks_on_one_cell_keeps_them_from_being_a_double_click() {
+        let mut app = editing("SELECT id");
+        let start = Instant::now();
+        mouse_at(&mut app, MouseEventKind::Down(LEFT), 33, 2, start);
+        app.handle_key(crossterm::event::KeyEvent::from(crossterm::event::KeyCode::Right));
+        mouse_at(&mut app, MouseEventKind::Down(LEFT), 33, 2, start + Duration::from_millis(100));
+        assert_eq!(selected(&app), None);
     }
 
     #[test]

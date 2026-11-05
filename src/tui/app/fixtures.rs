@@ -1,5 +1,5 @@
 //! Invented fixtures the app's tests and the views' tests share: the app on `shop`, typed text, and its answers.
-use super::{Action, Answer, App, Fit, Focus, Grid, Incoming, Panes, Room, Run, RunId, SessionId, View};
+use super::{Action, Answer, App, Detail, Fit, Focus, Grid, Incoming, Overlay, Panes, Room, Run, RunId, SessionId, View};
 use crate::connection::{Connection, ConnectionName};
 use crate::db::model::{ColumnKind, ResultSet, Statement, Value};
 use crate::failure::Failure;
@@ -134,8 +134,31 @@ pub(in crate::tui) fn grid(app: &App) -> &Grid {
 
 /// A left click at `column` and `row`, now.
 pub(in crate::tui) fn click_at(app: &mut App, column: u16, row: u16) -> Vec<Action> {
-    let mouse = MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column, row, modifiers: KeyModifiers::NONE };
-    app.handle_mouse(mouse, Instant::now())
+    mouse_at(app, MouseEventKind::Down(MouseButton::Left), column, row, Instant::now())
+}
+
+/// A mouse event of `kind` at `column` and `row`, read at `now`.
+pub(in crate::tui) fn mouse_at(app: &mut App, kind: MouseEventKind, column: u16, row: u16, now: Instant) -> Vec<Action> {
+    app.handle_mouse(MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE }, now)
+}
+
+/// The open detail.
+pub(in crate::tui) fn detail(app: &App) -> &Detail {
+    let Some(Overlay::Detail(detail)) = &app.overlay else { panic!("no detail open") };
+    detail
+}
+
+/// The keyed orders with the cursor on order 7's customer and `⏎` pressed.
+pub(in crate::tui) fn on_a_key() -> App {
+    let mut app = on_the_keyed_orders();
+    press(&mut app, KeyCode::Char('l'));
+    press(&mut app, KeyCode::Enter);
+    app
+}
+
+/// The copy of `text`, whose note says `done`.
+pub(in crate::tui) fn copied(text: &str, done: &str) -> Vec<Action> {
+    vec![Action::Copy { text: text.to_owned(), done: done.to_owned() }]
 }
 
 /// `keys` pressed on `app`, a frame having given the grid its room.

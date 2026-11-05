@@ -1,4 +1,5 @@
-//! `⏎` on the grid: the row under the cursor shown over the screen, one column after another, scrolled with `j`/`k`.
+//! `⏎` on the grid: the row under the cursor shown over the screen, one column after another; `cursor.rs` moves its
+//! cursor over the values.
 //! `⏎` on a foreign key's cell opens the row it points to instead, read on the session; in a row, `⇥` steps through
 //! its keys and the tables pointing to it, `⏎` goes one row deeper or runs the rows that point to it, and `⌫` walks
 //! the trail back.
@@ -9,17 +10,22 @@ use crate::db::model::{Column, ResultSet, Value};
 use crate::failure::Failure;
 use crate::keys::{self, Hop, Keys, Lookup, Prefilled, Referrer, TableRead, Target};
 use crossterm::event::KeyEvent;
+use ratatui::layout::Rect;
 use ratatui::text::Line;
+use std::ops::Range;
+use vtui::click::Clicks;
+
+mod cursor;
 
 const NULL_KEY: &str = "this key is NULL: it points to no row";
+const NO_KEY: &str = "no key here: ⇥ goes to one";
 const NOT_COUNTED: &str = "not counted, as no index starts with its key: ⏎ runs its rows";
 
 /// The open detail: the grid's row or the rows followed from it, where it is scrolled to, and the key under its cursor.
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::tui) struct Detail {
     pub(in crate::tui) scroll: DetailScroll,
-    /// The key under the cursor, by its place among the targets of the row shown, then the tables pointing to it.
-    pub(in crate::tui) key: usize,
+    pub(in crate::tui) under: Under,
     /// The rows followed from the grid's through their keys, the one shown last.
     pub(in crate::tui) trail: Vec<Followed>,
     /// The tables whose keys point to the row shown, and how many of their rows do.
@@ -28,6 +34,25 @@ pub(in crate::tui) struct Detail {
     waiting: Option<Waiting>,
     /// Why the last key followed nothing, until the next key.
     pub(in crate::tui) note: Option<String>,
+}
+
+/// What the cursor of the detail is on, which is what `y` copies and `⏎` acts on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::tui) enum Under {
+    /// The value at this column of the row shown; `⏎` follows the key of that column, when it holds one.
+    Value(usize),
+    /// The table at this place among those pointing to the row shown.
+    Table(usize),
+}
+
+impl Under {
+    /// The column of the value under the cursor; none on a table.
+    pub(super) fn value(self) -> Option<usize> {
+        match self {
+            Self::Value(column) => Some(column),
+            Self::Table(_) => None,
+        }
+    }
 }
 
 /// Where the detail starts: at a column until a frame has drawn it, then at a line, which `j`/`k` move.
@@ -52,16 +77,19 @@ pub(in crate::tui) struct Followed {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Spot {
     scroll: DetailScroll,
-    key: usize,
+    under: Under,
     referrers: Vec<Counted>,
 }
 
-/// A lookup sent, what it reads, and the table whose row it reads.
+/// A lookup sent, what it reads, the table whose row it reads, and where the detail stood on the key it left from: the
+/// cursor can move on before the row comes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Waiting {
     look: LookId,
     lookup: Lookup,
     hop: Hop,
+    from: Under,
+    scroll: DetailScroll,
 }
 
 /// A table whose key points to the row shown, and how many of its rows do.
@@ -103,12 +131,13 @@ pub(in crate::tui) enum RowOf {
     Followed(LookId),
 }
 
-/// Where the detail just drawn started, how far it can scroll before its last line reaches the bottom, and its lines
-/// when that frame had to build them.
+/// Where the detail just drawn started, how far it can scroll before its last line reaches the bottom, the area of its
+/// lines, and its lines when that frame had to build them.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(in crate::tui) struct DetailFit {
     pub(in crate::tui) first_line: usize,
     pub(in crate::tui) last_scroll: usize,
+    pub(in crate::tui) body: Rect,
     pub(in crate::tui) drawn: Option<DrawnDetail>,
 }
 
@@ -130,14 +159,32 @@ pub(in crate::tui) struct DrawnRow {
     pub(in crate::tui) width: u16,
 }
 
+impl DrawnDetail {
+    /// The lines of the column at `column`; none past its last column.
+    pub(in crate::tui) fn lines_of(&self, column: usize) -> Range<usize> {
+        let line_of = |column: usize| self.column_starts.get(column).copied().unwrap_or(self.lines.len());
+        line_of(column)..line_of(column + 1)
+    }
+}
+
 impl Detail {
     fn at_column(column: usize) -> Self {
-        Self { scroll: DetailScroll::ToColumn(column), key: 0, trail: vec![], referrers: vec![], waiting: None, note: None }
+        Self {
+            scroll: DetailScroll::ToColumn(column),
+            under: Under::Value(column),
+            trail: vec![],
+            referrers: vec![],
+            waiting: None,
+            note: None,
+        }
     }
 
-    /// The table pointing to the row at `key`, which counts the row's `targets` first, then the tables.
-    fn referrer_at(&self, key: usize, targets: usize) -> Option<&Counted> {
-        self.referrers.get(key.checked_sub(targets)?)
+    /// The table pointing to the row under the cursor.
+    fn table_under(&self) -> Option<&Counted> {
+        match self.under {
+            Under::Table(table) => self.referrers.get(table),
+            Under::Value(_) => None,
+        }
     }
 
     /// The count of the first table of the row shown still queued, marked as counting by `look`; none while a count is
@@ -182,6 +229,19 @@ impl<'a> ShownRow<'a> {
         self.keys.columns().get(column)?.points_to.as_ref()
     }
 
+    /// The place among [`Self::targets`] of the key of the column at `column`.
+    fn key_of(&self, column: usize) -> Option<usize> {
+        let held = self.points_to(column)?;
+        self.targets().iter().position(|&target| target == held)
+    }
+
+    /// The first column of each of [`Self::targets`] that points to it, which `⇥` lands on: a column points to one key
+    /// alone, so the key of that column is that target, even when two keys share a column.
+    fn key_columns(&self) -> Vec<usize> {
+        let first_of = |target: &Target| self.keys.columns().iter().position(|key| key.points_to.as_ref() == Some(target));
+        self.targets().into_iter().filter_map(first_of).collect()
+    }
+
     /// Where the row's keys point, each key once, in the order of their columns.
     pub(in crate::tui) fn targets(&self) -> Vec<&'a Target> {
         let mut targets: Vec<&'a Target> = vec![];
@@ -216,7 +276,7 @@ impl App {
     }
 
     /// The grid's row under the cursor, with the keys of its columns.
-    fn grid_row(&self) -> Option<ShownRow<'_>> {
+    pub(super) fn grid_row(&self) -> Option<ShownRow<'_>> {
         let Run::Done { run, result, grid, .. } = &self.sheet().run else { return None };
         let (row, of) = (result.rows().get(grid.row)?, RowOf::Grid { run: *run, row: grid.row });
         Some(ShownRow { columns: result.columns(), row, keys: grid.keys(), trail: vec![], of })
@@ -228,23 +288,27 @@ impl App {
         let column = grid.column;
         let detail = Detail::at_column(column);
         let Some(shown) = self.shown_row(&detail) else { return vec![] };
-        match shown.targets().iter().position(|target| target.pairs.iter().any(|pair| pair.at == column)) {
-            Some(key) => self.follow(self.with_referrers(Detail { key, ..detail })),
+        match shown.points_to(column) {
+            Some(_) => self.follow(self.with_referrers(detail)),
             None => self.show_detail(detail),
         }
     }
 
-    /// The detail after `key`: it scrolls within what the frame drew, steps through the keys of its row, follows one,
-    /// goes back along the trail, and `esc` closes it.
+    /// The detail after `key`: its cursor moves over the values, within what the frame drew, and copies one or the row; it
+    /// steps through the keys of its row, follows one, goes back along the trail, and `esc` closes it.
     pub(super) fn detail_key(&mut self, detail: Detail, key: KeyEvent) -> Vec<Action> {
         let detail = Detail { note: None, ..detail };
-        let line = match detail.scroll {
-            DetailScroll::Lines(line) => line,
-            DetailScroll::ToColumn(_) => self.fit.detail.first_line,
-        };
         let detail = match act::act_for(key, Pane::Detail) {
-            Some(Act::Down) => Detail { scroll: DetailScroll::Lines((line + 1).min(self.fit.detail.last_scroll)), ..detail },
-            Some(Act::Up) => Detail { scroll: DetailScroll::Lines(line.saturating_sub(1)), ..detail },
+            Some(Act::Down) => self.cursor_down(detail),
+            Some(Act::Up) => self.cursor_up(detail),
+            Some(Act::CopyCell) => {
+                let copy = self.copy_detail_value(&detail);
+                return self.keep_open(detail, copy);
+            }
+            Some(Act::CopyRow) => {
+                let copy = self.copy_detail_row(&detail);
+                return self.keep_open(detail, copy);
+            }
             Some(Act::Right) => self.on_key(detail, 1),
             Some(Act::Left) => self.on_key(detail, -1),
             Some(Act::Open) => return self.follow(detail),
@@ -254,42 +318,58 @@ impl App {
             Some(Act::Close) => return vec![],
             _ => detail,
         };
+        self.keep_open(detail, vec![])
+    }
+
+    /// Leaves `detail` open, with what its key or click asked for.
+    fn keep_open(&mut self, detail: Detail, actions: Vec<Action>) -> Vec<Action> {
         self.overlay = Some(Overlay::Detail(detail));
-        vec![]
+        actions
     }
 
     /// `detail` with the cursor `step` places further, round the row's keys and the tables pointing to it, scrolled to it;
-    /// on a table not counted, or whose count failed, the note says why.
+    /// from a plain value, on the nearest key that way; on a table not counted, or whose count failed, the note says why.
     fn on_key(&self, detail: Detail, step: isize) -> Detail {
         let Some(shown) = self.shown_row(&detail) else { return detail };
-        let targets = shown.targets();
-        let count = targets.len() + detail.referrers.len();
+        let key_columns = shown.key_columns();
+        let count = key_columns.len() + detail.referrers.len();
         if count == 0 {
             return detail;
         }
-        let key = (detail.key + count).saturating_add_signed(step) % count;
-        let column = targets.get(key).map_or(shown.columns.len(), |target| target.first_column());
-        let note = match detail.referrer_at(key, targets.len()).map(|counted| &counted.count) {
+        let here = match detail.under {
+            Under::Table(table) => key_columns.len() + table,
+            Under::Value(column) => shown.key_of(column).unwrap_or_else(|| {
+                let keys_before = key_columns.iter().filter(|&&key_column| key_column < column).count();
+                if step > 0 { keys_before + count - 1 } else { keys_before }
+            }),
+        };
+        let place = (here + count).saturating_add_signed(step) % count;
+        let (under, column) = match key_columns.get(place) {
+            Some(&column) => (Under::Value(column), column),
+            None => (Under::Table(place - key_columns.len()), shown.columns.len()),
+        };
+        let moved = Detail { under, scroll: DetailScroll::ToColumn(column), ..detail };
+        let note = match moved.table_under().map(|counted| &counted.count) {
             Some(Count::NotCounted) => Some(NOT_COUNTED.to_owned()),
             Some(Count::Failed(why)) => Some(format!("the count failed: {why}")),
             _ => None,
         };
-        Detail { key, scroll: DetailScroll::ToColumn(column), note, ..detail }
+        Detail { note, ..moved }
     }
 
     /// Follows what is under the cursor of `detail`: reads the row its key points to, or runs the rows of a table
-    /// pointing to it; notes why a key points to no row.
+    /// pointing to it; notes why a key points to no row, or that a plain value holds no key.
     fn follow(&mut self, detail: Detail) -> Vec<Action> {
         let shown = self.shown_row(&detail);
-        let targets = shown.as_ref().map(ShownRow::targets).unwrap_or_default();
-        let lookup = targets.get(detail.key).zip(shown.as_ref()).map(|(target, shown)| (target.hop(), target.lookup(shown.row)));
-        let referrer = detail.referrer_at(detail.key, targets.len());
-        if let Some(prefilled) = referrer.and_then(|counted| counted.referrer.rows()) {
+        let target = detail.under.value().zip(shown.as_ref()).and_then(|(column, shown)| shown.points_to(column));
+        let lookup = target.zip(shown.as_ref()).map(|(target, shown)| (target.hop(), target.lookup(shown.row)));
+        if let Some(prefilled) = detail.table_under().and_then(|counted| counted.referrer.rows()) {
             return self.run_prefilled(prefilled);
         }
         let (detail, actions) = match lookup {
             Some((table, Some(lookup))) => self.look_up(detail, table, lookup),
             Some((_, None)) => (Detail { note: Some(NULL_KEY.to_owned()), ..detail }, vec![]),
+            None if detail.under.value().is_some() => (Detail { note: Some(NO_KEY.to_owned()), ..detail }, vec![]),
             None => (detail, vec![]),
         };
         self.overlay = Some(Overlay::Detail(detail));
@@ -341,7 +421,7 @@ impl App {
     fn look_up(&mut self, detail: Detail, hop: Hop, lookup: Lookup) -> (Detail, Vec<Action>) {
         let look = self.new_look();
         let action = Action::LookUp { connection: self.sheet().name().clone(), look, lookup: lookup.clone() };
-        (Detail { waiting: Some(Waiting { look, lookup, hop }), ..detail }, vec![action])
+        (Detail { waiting: Some(Waiting { look, lookup, hop, from: detail.under, scroll: detail.scroll }), ..detail }, vec![action])
     }
 
     pub(super) fn new_look(&mut self) -> LookId {
@@ -362,17 +442,26 @@ impl App {
             }
         };
         let Some(Overlay::Detail(mut detail)) = self.overlay.take() else { return vec![] };
-        let Some(Waiting { hop, .. }) = detail.waiting.take() else { return vec![] };
+        let Some(Waiting { hop, from, scroll, .. }) = detail.waiting.take() else { return vec![] };
         match rows {
             Ok(result) if !result.rows().is_empty() => {
-                let back_to = Spot { scroll: detail.scroll, key: detail.key, referrers: std::mem::take(&mut detail.referrers) };
+                let back_to = Spot { scroll, under: from, referrers: std::mem::take(&mut detail.referrers) };
                 detail.trail.push(Followed { look, hop, result, keys, back_to });
-                return self.show_detail(Detail { scroll: DetailScroll::ToColumn(0), key: 0, ..detail });
+                // The cell of a first click now shows another row, so a second one there is no double click.
+                self.clicks = Clicks::default();
+                let detail = self.at_first_key(detail);
+                return self.show_detail(detail);
             }
             Ok(_) => detail.note = Some(format!("no row of {} has this key", hop.table)),
             Err(failure) => detail.note = Some(failure.to_string()),
         }
         self.count_on(detail)
+    }
+
+    /// `detail` with the cursor on the first key of the row it shows, else on its first value, scrolled to it.
+    fn at_first_key(&self, detail: Detail) -> Detail {
+        let column = self.shown_row(&detail).and_then(|shown| shown.key_columns().first().copied()).unwrap_or(0);
+        Detail { scroll: DetailScroll::ToColumn(column), under: Under::Value(column), ..detail }
     }
 
     /// The keys the catalog gives the columns of a row a lookup read.
@@ -394,10 +483,7 @@ impl App {
     /// Puts at the end of the editor, unsaved, the statement joining the tables of `detail`'s trail from the grid's
     /// table, its row picked by its primary key, else by the key it was left by, the values in the parameter bar.
     fn write_join(&mut self, detail: Detail) -> Vec<Action> {
-        let Some(prefilled) = self.trail_join(&detail) else {
-            self.overlay = Some(Overlay::Detail(detail));
-            return vec![];
-        };
+        let Some(prefilled) = self.trail_join(&detail) else { return self.keep_open(detail, vec![]) };
         self.put_in_editor(&prefilled.text);
         self.sheet_mut().bar.fill(prefilled.values);
         vec![]
@@ -426,20 +512,20 @@ fn trail_start<'a>(grid: &ShownRow<'a>, detail: &Detail) -> Option<&'a TableRead
 
 /// The key of `grid`, the grid's row, that the trail of `detail` first followed; none with no trail.
 fn first_followed<'a>(grid: &ShownRow<'a>, detail: &Detail) -> Option<&'a Target> {
-    grid.targets().get(detail.trail.first()?.back_to.key).copied()
+    grid.points_to(detail.trail.first()?.back_to.under.value()?)
 }
 
 /// The detail of the row before the last one followed, where it stood, with the counts it had; none on the grid's row,
 /// which `⌫` leaves.
 fn back(detail: Detail) -> Option<Detail> {
     let mut trail = detail.trail;
-    let Spot { scroll, key, referrers } = trail.pop()?.back_to;
-    Some(Detail { scroll, key, trail, referrers, waiting: None, note: None })
+    let Spot { scroll, under, referrers } = trail.pop()?.back_to;
+    Some(Detail { scroll, under, trail, referrers, waiting: None, note: None })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::fixtures::{on_keyed, on_the_keyed_orders, on_the_result, shop, to_shop, typed};
+    use super::super::fixtures::{detail, on_a_key, on_keyed, on_the_keyed_orders, on_the_result, shop, to_shop, typed};
     use super::super::{Answer, Fit, Incoming, RunId, SessionId};
     use super::*;
     use crate::db::model::{Catalog, Table, TableOid};
@@ -452,19 +538,6 @@ mod tests {
 
     fn press(app: &mut App, code: KeyCode) -> Vec<Action> {
         app.handle_key(KeyEvent::from(code))
-    }
-
-    fn detail(app: &App) -> &Detail {
-        let Some(Overlay::Detail(detail)) = &app.overlay else { panic!("no detail open") };
-        detail
-    }
-
-    /// The keyed orders with the cursor on order 7's customer and `⏎` pressed.
-    fn on_a_key() -> App {
-        let mut app = on_the_keyed_orders();
-        press(&mut app, KeyCode::Char('l'));
-        press(&mut app, KeyCode::Enter);
-        app
     }
 
     #[test]
@@ -572,7 +645,7 @@ mod tests {
     fn backspace_goes_back_to_the_row_before_where_it_stood() {
         let mut app = on_the_customer();
         press(&mut app, KeyCode::Backspace);
-        assert_eq!((detail(&app).trail.len(), detail(&app).key, detail(&app).scroll), (0, 0, DetailScroll::ToColumn(1)));
+        assert_eq!((detail(&app).trail.len(), detail(&app).under, detail(&app).scroll), (0, Under::Value(1), DetailScroll::ToColumn(1)));
     }
 
     #[test]
@@ -614,6 +687,48 @@ mod tests {
     }
 
     #[test]
+    fn e_on_the_grids_row_with_no_key_followed_picks_that_row_and_joins_nothing() {
+        let mut app = on_the_keyed_orders();
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('e'));
+        assert!(app.sheet().editor.text().ends_with("FROM public.orders o\nWHERE o.id = {{id}}"), "{}", app.sheet().editor.text());
+    }
+
+    #[test]
+    fn enter_on_a_plain_column_of_a_row_just_opened_follows_nothing_and_says_so() {
+        let mut app = on_the_keyed_orders();
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(press(&mut app, KeyCode::Enter), []);
+        assert_eq!(detail(&app).note.as_deref(), Some(NO_KEY));
+    }
+
+    #[test]
+    fn enter_again_on_a_key_that_found_no_row_reads_it_again() {
+        let mut app = on_a_key();
+        app.apply(to_shop(Incoming::LookedUp { look: LookId::FIRST, rows: Ok(ResultSet::whole(vec![], vec![])) }));
+        let Action::LookUp { lookup, .. } = press(&mut app, KeyCode::Enter).remove(0) else { panic!("no lookup") };
+        assert_eq!(lookup.statement, Statement::new("SELECT * FROM public.customers WHERE id = $1"));
+    }
+
+    #[test]
+    fn the_cursor_moved_while_a_key_is_followed_leaves_the_trail_on_that_key() {
+        let mut app = on_a_key();
+        press(&mut app, KeyCode::BackTab);
+        app.apply(to_shop(Incoming::LookedUp { look: LookId::FIRST, rows: Ok(keyed_customer()) }));
+        press(&mut app, KeyCode::Char('e'));
+        assert_eq!(app.sheet().editor.text(), ORDER_7_WITH_ITS_CUSTOMER);
+    }
+
+    #[test]
+    fn backspace_after_the_cursor_moved_while_following_returns_to_the_key_followed() {
+        let mut app = on_a_key();
+        press(&mut app, KeyCode::BackTab);
+        app.apply(to_shop(Incoming::LookedUp { look: LookId::FIRST, rows: Ok(keyed_customer()) }));
+        press(&mut app, KeyCode::Backspace);
+        assert_eq!(detail(&app).under, Under::Value(1));
+    }
+
+    #[test]
     fn the_join_written_is_one_step_undo_takes_back() {
         let mut app = on_the_customer();
         press(&mut app, KeyCode::Char('e'));
@@ -633,9 +748,11 @@ mod tests {
         let mut app = on_the_keyed_orders();
         press(&mut app, KeyCode::Enter);
         press(&mut app, KeyCode::Tab);
-        assert_eq!((detail(&app).key, detail(&app).scroll), (1, DetailScroll::ToColumn(3)));
+        assert_eq!((detail(&app).under, detail(&app).scroll), (Under::Value(1), DetailScroll::ToColumn(1)));
         press(&mut app, KeyCode::Tab);
-        assert_eq!((detail(&app).key, detail(&app).scroll), (0, DetailScroll::ToColumn(1)));
+        assert_eq!((detail(&app).under, detail(&app).scroll), (Under::Table(0), DetailScroll::ToColumn(3)));
+        press(&mut app, KeyCode::Tab);
+        assert_eq!((detail(&app).under, detail(&app).scroll), (Under::Value(1), DetailScroll::ToColumn(1)));
     }
 
     #[test]
@@ -686,7 +803,7 @@ mod tests {
     #[test]
     fn tab_on_a_failed_count_says_why_it_failed() {
         let mut app = with_a_failed_count();
-        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::BackTab);
         assert_eq!(detail(&app).note.as_deref(), Some("the count failed: canceling statement due to statement timeout"));
     }
 
@@ -728,6 +845,7 @@ mod tests {
         app.apply(to_shop(Incoming::Result { run: RunId::FIRST, result: keyed_orders(), took: Duration::ZERO }));
         press(&mut app, KeyCode::Tab);
         press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Tab);
         press(&mut app, KeyCode::Enter);
         app
     }
@@ -777,7 +895,7 @@ mod tests {
     fn enter_on_a_table_pointing_to_the_row_runs_its_rows_with_the_value_bound() {
         let mut app = on_the_keyed_orders();
         press(&mut app, KeyCode::Enter);
-        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::BackTab);
         let Action::Run { statement, input, .. } = press(&mut app, KeyCode::Enter).remove(0) else { panic!("no run") };
         assert_eq!(statement, Statement::new("SELECT * FROM billing.invoices WHERE order_id = {{order_id}}"));
         assert_eq!(input.given, Given::typed([("order_id".parse().unwrap(), ParamValue::new("7"))].into()));

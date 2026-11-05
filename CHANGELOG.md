@@ -10,6 +10,9 @@ Each entry says what changed, then where, then how to use it.
 
 - **Array columns show their values**, as `text[]`, `int[]` or `jsonb[]`, in the TUI's grid and row detail, its copies and `pgbg run`: where they said `<unsupported>`, they read as JSON, `["tea",null]`, nested for several dimensions.
   A `numeric` element is a string, so it keeps every digit, and `=` and `!` refuse an array, as the server would not read it.
+- **Copy from the row's detail**, in the TUI: a cursor sits on one value, and `j` `k` or a click move it.
+  `y` or a double click copies that value raw, `Y` copies the row as CSV, on the row the detail shows, a followed one too.
+  `⏎` now acts only on what the cursor is on: `tab` goes to the next key after it, `⇧tab` to the one before, and on a plain value `⏎` says so instead of following a key out of sight.
 
 ### Fixed
 

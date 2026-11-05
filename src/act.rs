@@ -553,12 +553,16 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Run, Pane::Confirm, &[key(KeyCode::Char('y'))]).help("y", "send the write").footer("y", "sends"),
     row(Act::Close, Pane::Confirm, &[key(KeyCode::Esc)]).help("esc", "send nothing, as any other key").footer("any other key", "cancels"),
     row(Act::Quit, Pane::Confirm, &[control('c')]).help("^c", "quit, sending nothing"),
-    row(Act::Down, Pane::Detail, &[key(KeyCode::Char('j')), key(KeyCode::Down)]).help("j k", "scroll down, up").footer("j/k", "scroll"),
+    row(Act::Down, Pane::Detail, &[key(KeyCode::Char('j')), key(KeyCode::Down)])
+        .help("j k", "next, previous value, line by line through one too tall to fit")
+        .footer("j/k", "values"),
     row(Act::Up, Pane::Detail, &[key(KeyCode::Char('k')), key(KeyCode::Up)]),
+    row(Act::CopyCell, Pane::Detail, &[key(KeyCode::Char('y'))]).help("y", "copy the value under the cursor; a double click does too").footer("y", "copy"),
+    row(Act::CopyRow, Pane::Detail, &[key(KeyCode::Char('Y'))]).help("Y", "copy the row as CSV"),
     row(Act::Right, Pane::Detail, &[key(KeyCode::Tab)]).help("⇥ ⇧⇥", "next, previous key or table pointing here").footer("⇥", "keys"),
     row(Act::Left, Pane::Detail, &[key(KeyCode::BackTab)]),
     row(Act::Open, Pane::Detail, &[key(KeyCode::Enter)])
-        .help("⏎", "the row the key points to, or the rows pointing here")
+        .help("⏎", "under the cursor: the row its key points to, or the rows pointing here")
         .footer("⏎", "follow"),
     row(Act::Edit, Pane::Detail, &[key(KeyCode::Char('e'))]).help("e", "write the join of the trail into the editor").footer("e", "join"),
     row(Act::Back, Pane::Detail, &[key(KeyCode::Backspace)]).help("⌫", "back to the row before").footer("⌫", "back"),
