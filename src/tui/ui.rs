@@ -105,6 +105,23 @@ fn footer(f: &mut Frame<'_>, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(status), status_area);
 }
 
+/// A label on the footer row, in bold accent.
+pub(super) fn footer_label(app: &App, text: &'static str) -> Span<'static> {
+    Span::styled(text, Style::default().fg(app.theme().accent).add_modifier(Modifier::BOLD))
+}
+
+/// Every key of `pane`, muted, for a line on the footer that says something first.
+pub(super) fn muted_hints(app: &App, pane: Pane) -> impl Iterator<Item = Span<'static>> {
+    let muted = Style::default().fg(app.theme().muted);
+    act::footer(pane).map(move |hint| Span::styled(hint_text(hint).concat(), muted))
+}
+
+/// `spans` on the footer row in `area`, followed by the keys of `pane`.
+pub(super) fn draw_with_hints(f: &mut Frame<'_>, app: &App, spans: Vec<Span<'static>>, pane: Pane, area: Rect) {
+    let line: Line<'static> = spans.into_iter().chain(muted_hints(app, pane)).collect();
+    f.render_widget(Paragraph::new(line), area);
+}
+
 fn hints(app: &App, pane: Pane, columns: usize) -> Line<'static> {
     let key = Style::default().fg(app.theme().accent).add_modifier(Modifier::BOLD);
     let does = Style::default().fg(app.theme().muted);
@@ -193,6 +210,7 @@ fn failure(app: &App, err: &str, width: usize) -> Line<'static> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::app::ask::tests::{press, type_in};
     use super::super::app::fixtures::{app, app_on, connection, every_pane, on_the_result, to_shop, typed};
     use super::super::app::queries::tests::{listed, query, with_queries};
     use super::super::app::{Answer, App, Incoming, QueryAnswer, RunId};
@@ -205,6 +223,7 @@ mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::layout::Position;
     use ratatui::style::Color;
     use std::sync::Arc;
     use std::time::Duration;
@@ -455,6 +474,32 @@ mod tests {
         let mut app = on_the_schema_tab(false);
         "/ord".chars().for_each(|c| _ = app.handle_key(KeyEvent::from(KeyCode::Char(c))));
         insta::assert_snapshot!("schema_filter", render(&app, 80, 10).backend());
+    }
+
+    #[test]
+    fn the_schema_filter_cursor_follows_the_arrows_into_the_filter() {
+        let mut app = on_the_schema_tab(false);
+        type_in(&mut app, "/ord");
+        press(&mut app, KeyCode::Left);
+        let terminal = render(&app, 80, 10);
+        assert!(terminal.backend().cursor_visible());
+        assert_eq!(terminal.backend().cursor_position(), Position { x: 6, y: 2 });
+    }
+
+    #[test]
+    fn a_schema_filter_wider_than_the_sidebar_keeps_the_cursor_inside_it() {
+        let mut app = on_the_schema_tab(false);
+        type_in(&mut app, &format!("/{}", "orders ".repeat(8)));
+        let terminal = render(&app, 80, 10);
+        assert_eq!(terminal.backend().cursor_position(), Position { x: 28, y: 2 });
+    }
+
+    #[test]
+    fn a_schema_filter_that_was_kept_leaves_the_cursor_hidden() {
+        let mut app = on_the_schema_tab(false);
+        type_in(&mut app, "/ord");
+        press(&mut app, KeyCode::Enter);
+        assert!(!render(&app, 80, 10).backend().cursor_visible());
     }
 
     #[test]

@@ -1,7 +1,8 @@
 //! `ctrl-g` as drawn: the instruction and the wait on the footer line, and the answer over the result pane as a diff of
 //! the statement it would replace, each write named first in the failure colour.
 use super::app::{App, AskStep, Change, Overlay, Suggestion};
-use crate::act;
+use super::field_line;
+use super::ui::{draw_with_hints, footer_label, muted_hints};
 use crate::render::printable;
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -13,23 +14,17 @@ use vtui::pane;
 /// The ask over the footer in `area`, followed by its keys.
 pub(super) fn footer(f: &mut Frame<'_>, app: &App, step: &AskStep, area: Rect) {
     let theme = app.theme();
-    let mut spans = match step {
-        AskStep::Instruction(instruction) => vec![
-            Span::styled(" ask › ", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
-            Span::raw(instruction.text().to_owned()),
-            Span::styled("▌ ", Style::default().fg(theme.accent)),
-            Span::styled(blank_means(app, instruction.text()), Style::default().fg(theme.muted)),
-        ],
+    let spans = match step {
+        AskStep::Instruction(instruction) => {
+            let note = Span::styled(blank_means(app, instruction.text()), Style::default().fg(theme.muted));
+            let after = std::iter::once(note).chain(muted_hints(app, step.pane()));
+            return field_line::draw(f, footer_label(app, " ask › "), instruction, after, area);
+        }
         AskStep::WaitingForSchema { .. } => vec![Span::styled(" reading schema… ", Style::default().fg(theme.warn))],
         AskStep::Waiting { .. } => vec![Span::styled(asking(app), Style::default().fg(theme.warn))],
-        AskStep::Answered(_) => {
-            vec![Span::styled(" the [ai] command answered: ", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))]
-        }
+        AskStep::Answered(_) => vec![footer_label(app, " the [ai] command answered: ")],
     };
-    let hints =
-        act::footer(step.pane()).map(|hint| Span::styled(format!(" {} {} ", hint.keys, hint.does), Style::default().fg(theme.muted)));
-    spans.extend(hints);
-    f.render_widget(Paragraph::new(Line::from(spans)), area);
+    draw_with_hints(f, app, spans, step.pane(), area);
 }
 
 /// What `⏎` does on an instruction still blank, when it does anything.
@@ -86,21 +81,35 @@ fn cut_to(mut lines: Vec<Line<'static>>, height: usize, style: Style) -> Vec<Lin
 
 #[cfg(test)]
 mod tests {
-    use super::super::app::ask::tests::{answered, asking_on, ctrl_g, waiting};
+    use super::super::app::ask::tests::{answered, asking_on, ctrl_g, failed_on, press, type_in, waiting};
     use super::super::app::ask_schema::tests::{held_for_the_schema, schema_refused};
     use super::super::app::fixtures::to_shop;
     use super::super::app::idle_ghost::tests::{UNMASKABLE_COMMENT, ghosted, idle_on};
     use super::super::app::{Answer, AskFailure, AskId, Incoming};
     use super::super::{styled, ui};
-    use crate::ai::{AnswerError, CommandError};
+    use crate::ai::{AnswerError, CommandError, ServerErrors};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::layout::Position;
 
     fn render(app: &super::App, width: u16, height: u16) -> Terminal<TestBackend> {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|f| _ = ui::draw(f, app)).unwrap();
         terminal
+    }
+
+    fn instruction(typed: &str) -> super::App {
+        let mut app = asking_on("SELECT * FROM orders");
+        ctrl_g(&mut app);
+        type_in(&mut app, typed);
+        app
+    }
+
+    /// What the cell under the terminal's cursor shows, on a screen 60 by 6.
+    fn under_cursor(app: &super::App) -> String {
+        let terminal = render(app, 60, 6);
+        terminal.backend().buffer()[terminal.backend().cursor_position()].symbol().to_owned()
     }
 
     #[test]
@@ -109,6 +118,50 @@ mod tests {
         app.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
         "only the ids".chars().for_each(|c| _ = app.handle_key(KeyEvent::from(KeyCode::Char(c))));
         insta::assert_snapshot!("ask_instruction", render(&app, 60, 6).backend());
+    }
+
+    #[test]
+    fn the_cursor_shows_while_the_instruction_is_typed() {
+        assert!(render(&instruction("only"), 60, 6).backend().cursor_visible());
+    }
+
+    #[test]
+    fn the_cursor_follows_the_arrows_into_the_middle_of_the_instruction() {
+        let mut app = instruction("only");
+        press(&mut app, KeyCode::Left);
+        assert_eq!(under_cursor(&app), "y");
+    }
+
+    #[test]
+    fn a_letter_typed_in_the_middle_sits_just_before_the_cursor() {
+        let mut app = instruction("only");
+        press(&mut app, KeyCode::Left);
+        press(&mut app, KeyCode::Char('x'));
+        let terminal = render(&app, 60, 6);
+        let Position { x, y } = terminal.backend().cursor_position();
+        assert_eq!(terminal.backend().buffer()[(x - 1, y)].symbol(), "x");
+    }
+
+    #[test]
+    fn a_character_drawn_escaped_counts_for_the_columns_it_is_drawn_on() {
+        let mut app = instruction("");
+        app.paste("\nx");
+        press(&mut app, KeyCode::Left);
+        assert_eq!(under_cursor(&app), "x");
+    }
+
+    #[test]
+    fn an_instruction_wider_than_the_footer_scrolls_to_keep_the_cursor_on_screen() {
+        let terminal = render(&instruction(&"orders ".repeat(12)), 60, 6);
+        assert_eq!(terminal.backend().cursor_position(), Position { x: 58, y: 4 });
+        insta::assert_snapshot!("ask_scrolled", terminal.backend());
+    }
+
+    #[test]
+    fn a_blank_instruction_says_it_asks_for_a_fix_and_keeps_its_keys() {
+        let mut app = failed_on("SELECT nope", ServerErrors::Code, Some(8));
+        ctrl_g(&mut app);
+        insta::assert_snapshot!("ask_blank_means_fix", render(&app, 80, 6).backend());
     }
 
     #[test]

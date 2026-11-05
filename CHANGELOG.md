@@ -15,6 +15,8 @@ Each entry says what changed, then where, then how to use it.
 
 - **Long lines wrap**, in the TUI's editor: a line wider than the pane goes on to the next row, between words where it can, and the saved text keeps it as one line.
   `↑` `↓` and the mouse move by the rows drawn, so a query on one line can be walked; `^a` `^e` still go to the ends of the whole line.
+- **The cursor shows where you type**, in the TUI's `ctrl-g` instruction, save-as path, row filter and schema filter.
+  Move with the arrows and edit in place, and a line too long for its row scrolls to keep the cursor on screen.
 
 ## 0.3.1 - 2026-11-03
 
