@@ -238,7 +238,7 @@ In the TUI, a bar above the editor shows one field per parameter.
 | `t` `r` | On a chart: its next kind, grouped, stacked or line; its bars upright or on their side. The footer names what comes next, as `t stacked` and `r upright`, with no `r` on a line, and the pane's title names what shows now. |
 | `z` `Z` | Keep the primary key the result starts with, or else its first column, on the left while the grid scrolls, or nothing: on by default; keep the columns up to the cursor's. |
 | `x` `X` | Hide the column under the cursor from the grid; show every column again. |
-| `y` `Y` `c` | Copy the cell; the row as CSV; the result as CSV, JSON or Markdown. |
+| `y` `Y` `c` | Copy the cell; the row as CSV; the result as CSV, JSON or Markdown. In the row's detail, `y` copies the value under its cursor and `Y` the row it shows. |
 | `o` | A JSON cell as a tree: `⏎` folds, `y` copies the value, `Y` its path as `.items[0].sku`. |
 | `F1` `?` | Every key of the pane you are in: filter, sort, formats, mouse, undo and the rest. |
 | `^c` | Quit. |
@@ -316,7 +316,8 @@ A time adds up every loop and every parallel worker, so it can pass the wall clo
 ### Following keys
 
 `⏎` on a cell of a column marked `→` opens the row it points to; its own keys say where they point, as `user_id → users`.
-In it, `tab` steps through its keys, `⏎` goes one row deeper and the title shows the trail, as `orders › customers › users`; `⌫` goes back one row, `esc` closes them all.
+In it, `j` `k` or a click move a cursor over the values, line by line through one too tall to fit; `y` or a double click copies the value raw, and `Y` the row as CSV.
+`tab` goes to the next key after the cursor and `⇧tab` to the one before, `⏎` on a key goes one row deeper and the title shows the trail, as `orders › customers › users`; `⌫` goes back one row, `esc` closes them all.
 Each row is read with the key's values bound, in a read-only transaction whatever the connection allows, and never goes to the history.
 Under its columns, a row lists the tables that point to it, each with how many of its rows do; `⏎` on one runs those rows, its statement at the end of the editor and the row's values in the parameter bar.
 A table is counted only when an index starts with its key, one count at a time, each stopped after 2 seconds; one without such an index shows `—`, and a count that failed shows `!`, its reason on the footer once `tab` reaches it.

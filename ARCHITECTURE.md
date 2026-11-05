@@ -96,6 +96,8 @@ These invariants hold across every flow; a change that breaks one is a bug.
 - The command palette runs an act through the path its key takes, and only an act whose row works in the pane it opened on, so a write still asks; a theme shows while highlighted, and only `⏎` sends the `Action` that writes `[tui] theme`.
 - A typed command is read on each key against the connections and queries the app holds; only a line that reads as a command gets a row, and `⏎` runs the highlighted row, so the row a key moved to always wins; the lines that ran are kept for `↑` in memory, never written, and no statement is one.
 - The grid's cursor and every act on it name a column by its index in the result, never a hidden one; only `tui/app/shown_columns.rs` knows where a column is drawn.
+- The row's detail copies from `shown_row`, the row it shows, never the grid's; its clicks find a value through the `DetailFit` the last frame gave, and it is the one overlay the mouse reaches.
+- The detail's cursor is one `Under`, a value or a table, and `⏎` acts only on it: a value's key comes from its column, so no key is ever followed unlit.
 
 ## Boundaries
 

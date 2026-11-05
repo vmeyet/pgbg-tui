@@ -658,6 +658,14 @@ mod tests {
     }
 
     #[test]
+    fn a_copy_from_the_row_detail_shows_its_note_in_the_status_line_under_the_popup() {
+        let mut app = on_the_result(orders());
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        app.apply(Answer::Copied("copied total of row 1".into()));
+        assert!(footer_of(&render(&app, 100, 24)).contains("✓ copied total of row 1"));
+    }
+
+    #[test]
     fn a_warning_given_at_start_shows_in_the_status_line_until_a_key() {
         let mut app = app().with_warning(Some("old.toml sits in a folder pgbg no longer reads".into()));
         assert!(footer_of(&render(&app, 100, 8)).contains("✗ old.toml sits in a folder pgbg no longer reads"));

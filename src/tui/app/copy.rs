@@ -1,5 +1,7 @@
-//! `y`, `Y` and `c` on the grid: copy the cell, the row or the whole result to the clipboard, with raw values; `F2` or `⌥c`
-//! in the editor: copy the statement under the cursor; letting go of the mouse or `⌘c` there: copy the selection.
+//! `y`, `Y` and `c` on the grid: copy the cell, the row or the whole result to the clipboard, with raw values; `y`, `Y` or
+//! a double click in the row's detail: copy the value under its cursor or the row it shows; `F2` or `⌥c` in the editor:
+//! copy the statement under the cursor; letting go of the mouse or `⌘c` there: copy the selection.
+use super::detail::{Detail, RowOf, ShownRow};
 use super::{Action, App, Overlay, Run};
 use crate::act::{self, Act, Pane};
 use crate::db::model::{ResultSet, Value};
@@ -15,6 +17,29 @@ fn undecodable<'v>(values: impl IntoIterator<Item = &'v Value>) -> String {
     }
 }
 
+impl ShownRow<'_> {
+    /// The words a copy's note names this row by: its number on the grid; a row a key led to has only its table.
+    fn name(&self) -> String {
+        match self.of {
+            RowOf::Grid { row, .. } => format!("row {}", row + 1),
+            RowOf::Followed(_) => format!("the {} row", self.trail.last().copied().unwrap_or_default()),
+        }
+    }
+
+    /// Copies the value at `column`.
+    fn copy_value(&self, column: usize) -> Option<Action> {
+        let (name, value) = (&self.columns.get(column)?.name, self.row.get(column)?);
+        let done = format!("copied {name} of {}{}", self.name(), undecodable([value]));
+        Some(Action::Copy { text: export::cell(value), done })
+    }
+
+    /// Copies the row as a CSV line.
+    fn copy_row(&self) -> Action {
+        let done = format!("copied {} as CSV{}", self.name(), undecodable(self.row));
+        Action::Copy { text: export::row(self.row), done }
+    }
+}
+
 impl App {
     fn shown_result(&self) -> Option<&ResultSet> {
         match &self.sheet().run {
@@ -23,24 +48,26 @@ impl App {
         }
     }
 
-    /// The row under the grid's cursor, counted from 1, and its values.
-    fn current_row(&self) -> Option<(usize, &[Value])> {
-        let Run::Done { result, grid, .. } = &self.sheet().run else { return None };
-        result.rows().get(grid.row).map(|values| (grid.row + 1, values.as_slice()))
-    }
-
     /// Copies the value of the cell under the cursor.
     pub(super) fn copy_cell(&self) -> Vec<Action> {
-        let Run::Done { result, grid, .. } = &self.sheet().run else { return vec![] };
-        let Some(value) = result.rows().get(grid.row).and_then(|values| values.get(grid.column)) else { return vec![] };
-        let done = format!("copied {} of row {}{}", result.columns()[grid.column].name, grid.row + 1, undecodable([value]));
-        vec![Action::Copy { text: export::cell(value), done }]
+        let Run::Done { grid, .. } = &self.sheet().run else { return vec![] };
+        self.grid_row().and_then(|shown| shown.copy_value(grid.column)).into_iter().collect()
     }
 
     /// Copies the cursor's row as a CSV line.
     pub(super) fn copy_row(&self) -> Vec<Action> {
-        let Some((number, values)) = self.current_row() else { return vec![] };
-        vec![Action::Copy { text: export::row(values), done: format!("copied row {number} as CSV{}", undecodable(values)) }]
+        self.grid_row().map(|shown| shown.copy_row()).into_iter().collect()
+    }
+
+    /// Copies the value under the cursor of `detail`, from the row it shows; nothing on a table pointing to the row.
+    pub(super) fn copy_detail_value(&self, detail: &Detail) -> Vec<Action> {
+        let Some(column) = detail.under.value() else { return vec![] };
+        self.shown_row(detail).and_then(|shown| shown.copy_value(column)).into_iter().collect()
+    }
+
+    /// Copies the row `detail` shows as a CSV line.
+    pub(super) fn copy_detail_row(&self, detail: &Detail) -> Vec<Action> {
+        self.shown_row(detail).map(|shown| shown.copy_row()).into_iter().collect()
     }
 
     /// Copies the editor's selection; nothing when none.
@@ -107,7 +134,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::super::Answer;
-    use super::super::fixtures::{on_the_result, typed};
+    use super::super::fixtures::{copied, on_the_result, typed};
     use super::*;
     use crate::fixtures::orders;
     use crossterm::event::{KeyCode, KeyModifiers};
@@ -151,10 +178,6 @@ mod tests {
 
     fn press(app: &mut App, c: char) -> Vec<Action> {
         app.handle_key(KeyEvent::from(KeyCode::Char(c)))
-    }
-
-    fn copied(text: &str, done: &str) -> Vec<Action> {
-        vec![Action::Copy { text: text.to_owned(), done: done.to_owned() }]
     }
 
     #[test]

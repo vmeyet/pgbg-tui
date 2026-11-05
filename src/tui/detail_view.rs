@@ -2,7 +2,8 @@
 //! itself, in the grid's format and colours, then the tables pointing to the row.
 //! Every piece of text is drawn through `render::printable`.
 use super::app::{
-    App, Clock, Colouring, Count, Counted, Detail, DetailFit, DetailScroll, DrawnDetail, DrawnRow, GAP, Grid, Overlay, RowOf, Run, ShownRow,
+    App, Clock, Colouring, Count, Counted, Detail, DetailFit, DetailScroll, DrawnDetail, DrawnRow, GAP, Grid, Overlay, RowOf, Run,
+    ShownRow, Under,
 };
 use super::ink::{Ink, ink};
 use super::palette_footer;
@@ -41,21 +42,27 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> DetailFit {
     let of = DrawnRow { connection: app.sheet().name().clone(), row: shown.of, width: body.width };
     let kept = app.drawn_detail().filter(|drawn| drawn.of == of);
     let built = kept.is_none().then(|| drawn(app, detail, &shown, of));
-    let Some(DrawnDetail { lines, column_starts, .. }) = kept.or(built.as_ref()) else { return DetailFit::default() };
+    let Some(drawn_lines) = kept.or(built.as_ref()) else { return DetailFit::default() };
+    let lines = &drawn_lines.lines;
     let pointing = pointing_lines(app.theme(), &detail.referrers, body.width);
     let last_scroll = (lines.len() + pointing.len()).saturating_sub(usize::from(body.height));
     let wanted = match detail.scroll {
-        DetailScroll::ToColumn(column) => column_starts.get(column).copied().unwrap_or(lines.len()),
+        DetailScroll::ToColumn(column) => drawn_lines.lines_of(column).start,
         DetailScroll::Lines(line) => line,
     };
     let first_line = wanted.min(last_scroll);
-    let targets = shown.targets();
-    let on_key = match targets.get(detail.key) {
-        Some(target) => column_starts.get(target.first_column()).copied(),
-        None => Some(lines.len() + 1 + detail.key - targets.len()),
+    let (value_lines, table) = match detail.under {
+        Under::Value(column) => (drawn_lines.lines_of(column), None),
+        Under::Table(table) => (0..0, Some(lines.len() + 1 + table)),
     };
     let lit = |(at, line): (usize, &Line<'static>)| {
-        if Some(at) == on_key { line.clone().patch_style(Style::default().add_modifier(Modifier::REVERSED)) } else { line.clone() }
+        if value_lines.contains(&at) {
+            with_name_lit(line)
+        } else if Some(at) == table {
+            line.clone().patch_style(lit_style())
+        } else {
+            line.clone()
+        }
     };
     let every_line = lines.iter().chain(&pointing).enumerate();
     let visible: Vec<Line<'static>> = every_line.skip(first_line).take(usize::from(body.height)).map(lit).collect();
@@ -63,7 +70,21 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App) -> DetailFit {
     f.render_widget(block.style(Style::default().bg(app.theme().surface)), area);
     f.render_widget(Paragraph::new(visible), body);
     f.render_widget(Paragraph::new(footer_line(app.theme(), detail.note.as_deref(), footer.width)), footer);
-    DetailFit { first_line, last_scroll, drawn: built }
+    DetailFit { first_line, last_scroll, body, drawn: built }
+}
+
+/// `line` of the value under the cursor with the column of names lit, down the whole value so a scroll never loses the
+/// cursor, and the value itself left in its colours.
+fn with_name_lit(line: &Line<'static>) -> Line<'static> {
+    let mut lit = line.clone();
+    if let Some(name) = lit.spans.first_mut() {
+        name.style = name.style.patch(lit_style());
+    }
+    lit
+}
+
+fn lit_style() -> Style {
+    Style::default().add_modifier(Modifier::REVERSED)
 }
 
 /// A faint rule headed `Pointing to it`, then the tables whose keys point to the row, each with how many of its rows do
@@ -254,7 +275,7 @@ fn share_of_screen(cells: u16) -> u16 {
 
 #[cfg(test)]
 mod tests {
-    use super::super::app::fixtures::{on_the_keyed_orders, to_shop, typed};
+    use super::super::app::fixtures::{on_a_key, on_the_keyed_orders, to_shop, typed};
     use super::super::app::{Fit, Incoming, LookId, RunId};
     use super::super::styled;
     use super::*;
@@ -391,14 +412,6 @@ mod tests {
         assert_eq!(centred(Rect::new(0, 0, 1000, 50)), Rect::new(100, 5, 800, 40));
     }
 
-    /// The keyed orders with `⏎` pressed on order 7's customer.
-    fn on_a_key() -> App {
-        let mut app = on_the_keyed_orders();
-        app.handle_key(KeyEvent::from(KeyCode::Char('l')));
-        app.handle_key(KeyEvent::from(KeyCode::Enter));
-        app
-    }
-
     #[test]
     fn a_followed_row_shows_the_trail_that_led_to_it_where_its_keys_point_and_what_points_to_it() {
         let mut app = on_a_key();
@@ -412,7 +425,7 @@ mod tests {
         app.handle_key(KeyEvent::from(KeyCode::Enter));
         let count = ResultSet::whole(vec![column("count", ColumnKind::Int)], vec![vec![Value::Int(1001)]]);
         app.apply(to_shop(Incoming::LookedUp { look: LookId::FIRST, rows: Ok(count) }));
-        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        app.handle_key(KeyEvent::from(KeyCode::BackTab));
         insta::assert_snapshot!("detail_pointing", render(&app, 60, 16).0.backend());
     }
 
@@ -425,8 +438,30 @@ mod tests {
     }
 
     #[test]
+    fn the_value_under_the_cursor_is_the_only_one_lit_down_all_its_lines() {
+        let mut app = detail_of(a_note());
+        let (_, fit) = render(&app, 60, 14);
+        let body = fit.body;
+        app.fit(Fit { detail: fit, ..Fit::default() });
+        (0..3).for_each(|_| _ = app.handle_key(KeyEvent::from(KeyCode::Char('j'))));
+        let buffer = render(&app, 60, 14).0.backend().buffer().clone();
+        let lit_rows: Vec<u16> = (0..14).filter(|&y| (0..60).any(|x| buffer[(x, y)].modifier.contains(Modifier::REVERSED))).collect();
+        assert_eq!(lit_rows, [body.y + 3, body.y + 4]);
+    }
+
+    #[test]
+    fn a_table_under_the_cursor_is_lit_and_no_value_is() {
+        let mut app = on_the_keyed_orders();
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        app.handle_key(KeyEvent::from(KeyCode::BackTab));
+        let runs = styled::runs(render(&app, 60, 16).0.backend().buffer());
+        assert!(runs.contains("REVERSED \"  invoices") && !runs.contains("REVERSED \"id"), "{runs}");
+    }
+
+    #[test]
     fn the_name_of_a_primary_key_is_bold() {
         let mut app = on_the_keyed_orders();
+        (0..2).for_each(|_| _ = app.handle_key(KeyEvent::from(KeyCode::Char('l'))));
         app.handle_key(KeyEvent::from(KeyCode::Enter));
         let runs = styled::runs(render(&app, 60, 16).0.backend().buffer());
         assert!(runs.contains("BOLD \"id ") && !runs.contains("BOLD \"total"), "{runs}");

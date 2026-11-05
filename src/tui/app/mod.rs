@@ -18,7 +18,7 @@ pub(super) use column_stats::ColumnStats;
 pub(super) use commands::{Command, Commands};
 pub(super) use completion::Completions;
 pub(super) use confirm::{Confirmed, WriteToSend};
-pub(super) use detail::{Count, Counted, Detail, DetailFit, DetailScroll, DrawnDetail, DrawnRow, RowOf, ShownRow};
+pub(super) use detail::{Count, Counted, Detail, DetailFit, DetailScroll, DrawnDetail, DrawnRow, RowOf, ShownRow, Under};
 pub(super) use diff::Change;
 pub(super) use folds::Mark;
 pub(super) use form::{Form, PasswordFrom, Slot};
