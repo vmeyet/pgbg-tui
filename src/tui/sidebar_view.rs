@@ -1,6 +1,7 @@
 //! The sidebar: the saved queries with `▾` and `▸` folders and `●` on the one in the editor, or the schemas and tables
 //! of the sheet on screen.
 use super::app::{App, Focus, Overlay, SchemaFit, SchemaRow, SchemaState, SidebarTab};
+use super::field_line;
 use crate::connection::SchemaReading;
 use crate::query::TreeRow;
 use crate::render::printable;
@@ -85,13 +86,11 @@ fn draw_schema(f: &mut Frame<'_>, app: &App, inside: Rect, focused: bool) -> Sch
     let is_filtering = app.overlay() == Some(&Overlay::SchemaFilter);
     let has_filter_line = is_filtering || !app.schema_tab().filter.text().is_empty();
     let [filter_area, rows_area] = Layout::vertical([Constraint::Length(u16::from(has_filter_line)), Constraint::Fill(1)]).areas(inside);
-    if has_filter_line {
-        let cursor = if is_filtering { "▌" } else { "" };
-        let filter = Span::raw(format!("/{}", printable(app.schema_tab().filter.text())));
-        f.render_widget(
-            Paragraph::new(Line::from(vec![filter, Span::styled(cursor, Style::default().fg(app.theme().accent))])),
-            filter_area,
-        );
+    let filter = &app.schema_tab().filter;
+    if is_filtering {
+        field_line::draw(f, Span::raw("/"), filter, [], filter_area);
+    } else if has_filter_line {
+        f.render_widget(Paragraph::new(format!("/{}", printable(filter.text()))), filter_area);
     }
     let rows = app.schema_tab().rows(catalog);
     if rows.is_empty() {

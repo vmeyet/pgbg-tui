@@ -1,13 +1,14 @@
 //! The prompt on the footer line: the path of a new query as it is typed, whether to open a query over unsaved text,
 //! whether to send a write and how many rows it would touch, or the grid's filter.
 use super::app::{App, Opening, Prompt};
-use crate::act::{self, Pane};
+use super::field_line;
+use super::ui::{draw_with_hints, footer_label, muted_hints};
+use crate::act::Pane;
 use crate::render;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::text::Span;
 use vtui::field::Field;
 
 /// The prompt over the footer in `area`, followed by its keys.
@@ -15,13 +16,9 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, prompt: &Prompt, area: Rect) {
     let theme = app.theme();
     let spans = match prompt {
         Prompt::SaveAs { path, error } => {
-            let mut spans = vec![
-                Span::styled(" save as › ", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
-                Span::raw(render::printable(path.text()).into_owned()),
-                Span::styled("▌ ", Style::default().fg(theme.accent)),
-            ];
-            spans.extend(error.iter().map(|error| Span::styled(format!("{error} "), Style::default().fg(theme.danger))));
-            spans
+            let error = error.iter().map(|error| Span::styled(format!("{error} "), Style::default().fg(theme.danger)));
+            let after = error.chain(muted_hints(app, prompt.pane()));
+            return field_line::draw(f, footer_label(app, " save as › "), path, after, area);
         }
         Prompt::OpenOverUnsaved(opening) => {
             let what = match opening {
@@ -43,32 +40,62 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, prompt: &Prompt, area: Rect) {
 
 /// The grid's filter over the footer in `area`, as it is typed, followed by its keys.
 pub(super) fn draw_row_filter(f: &mut Frame<'_>, app: &App, filter: &Field, area: Rect) {
-    let accent = Style::default().fg(app.theme().accent);
-    let spans = vec![
-        Span::styled(" filter › ", accent.add_modifier(Modifier::BOLD)),
-        Span::raw(render::printable(filter.text()).into_owned()),
-        Span::styled("▌ ", accent),
-    ];
-    draw_with_hints(f, app, spans, Pane::RowFilter, area);
-}
-
-fn draw_with_hints(f: &mut Frame<'_>, app: &App, mut spans: Vec<Span<'static>>, pane: Pane, area: Rect) {
-    let muted = Style::default().fg(app.theme().muted);
-    spans.extend(act::footer(pane).map(|hint| Span::styled(format!(" {} {} ", hint.keys, hint.does), muted)));
-    f.render_widget(Paragraph::new(Line::from(spans)), area);
+    field_line::draw(f, footer_label(app, " filter › "), filter, muted_hints(app, Pane::RowFilter), area);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::app::fixtures::{app_on, connection, shop, to_shop};
+    use super::super::app::ask::tests::type_in;
+    use super::super::app::fixtures::{app_on, connection, control, press, pressed, shop, to_shop, typed};
     use super::super::app::queries::tests::query;
-    use super::super::app::{Answer, Incoming, LookId, QueryAnswer};
+    use super::super::app::{Answer, App, Incoming, LookId, QueryAnswer};
     use super::super::ui;
     use crate::db::model::{ColumnKind, ResultSet, Value};
-    use crate::fixtures::column;
+    use crate::fixtures::{column, orders};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::layout::Position;
+
+    fn render(app: &App, width: u16) -> Terminal<TestBackend> {
+        let mut terminal = Terminal::new(TestBackend::new(width, 6)).unwrap();
+        terminal.draw(|f| _ = ui::draw(f, app)).unwrap();
+        terminal
+    }
+
+    fn save_as(path: &str) -> App {
+        let mut app = typed("SELECT 1");
+        app.handle_key(control('s'));
+        type_in(&mut app, path);
+        app
+    }
+
+    fn cursor_on(app: &App) -> Position {
+        let terminal = render(app, 60);
+        assert!(terminal.backend().cursor_visible());
+        terminal.backend().cursor_position()
+    }
+
+    #[test]
+    fn the_save_as_cursor_follows_the_arrows_into_the_path() {
+        let mut app = save_as("orders/");
+        press(&mut app, KeyCode::Left);
+        assert_eq!(cursor_on(&app), Position { x: 18, y: 4 });
+    }
+
+    #[test]
+    fn the_row_filter_cursor_follows_the_arrows_into_the_filter() {
+        let mut app = pressed(orders(), "/na");
+        press(&mut app, KeyCode::Left);
+        assert_eq!(cursor_on(&app), Position { x: 12, y: 4 });
+    }
+
+    #[test]
+    fn the_refusal_of_a_path_still_shows_after_it() {
+        let mut app = save_as("../orders");
+        press(&mut app, KeyCode::Enter);
+        insta::assert_snapshot!("save_as_refused", render(&app, 120).backend());
+    }
 
     #[test]
     fn the_save_as_prompt_escapes_a_control_character_of_the_open_querys_path() {

@@ -280,6 +280,12 @@ impl App {
         self.overlay.as_ref()
     }
 
+    /// Whether the next key typed lands in the editor: it has the focus and no overlay takes the keys, but for the
+    /// completion list, which is typed past.
+    pub(super) fn editor_takes_keys(&self) -> bool {
+        self.focus == Focus::Editor && matches!(self.overlay, None | Some(Overlay::Completion(_)))
+    }
+
     pub(super) fn queries(&self) -> &Queries {
         &self.queries
     }

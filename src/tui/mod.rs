@@ -8,6 +8,7 @@ mod commands_view;
 mod completion_view;
 mod detail_view;
 mod editor_view;
+mod field_line;
 mod finder_view;
 mod form_view;
 mod grid_view;

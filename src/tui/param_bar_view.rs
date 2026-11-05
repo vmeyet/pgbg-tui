@@ -1,13 +1,13 @@
 //! The parameter bar above the editor: each `{{name}}` of the statement under the cursor and the value it runs with.
 use super::app::{App, Focus};
+use super::field_line::{self, before_cursor_width};
 use crate::query::params::{Fallback, ParamName};
 use crate::render;
 use ratatui::Frame;
-use ratatui::layout::{Position, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use vtui::field::Field;
 
 const REQUIRED: &str = "required";
 const OPTIONAL: &str = "NULL";
@@ -20,12 +20,9 @@ struct Focused {
 }
 
 impl Focused {
-    /// How many columns the line scrolls by in `width`, so the field shows from its name when it fits, and the cursor
-    /// always shows.
+    /// How many columns the line scrolls by in `width`, so the field shows from its name when it fits.
     fn scroll(&self, width: usize) -> usize {
-        let shows_field = self.end.saturating_sub(width).min(self.start);
-        let shows_cursor = (self.cursor + 1).saturating_sub(width);
-        shows_field.max(shows_cursor)
+        self.end.saturating_sub(width).min(self.start)
     }
 }
 
@@ -51,26 +48,16 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, area: Rect) {
             focused = Some(Focused { start, cursor, end: Line::from(spans.clone()).width() });
         }
     }
-    let scroll = focused.as_ref().map_or(0, |focused| focused.scroll(usize::from(area.width)));
-    f.render_widget(Paragraph::new(Line::from(spans)).scroll((0, to_cells(scroll))), area);
-    if let Some(focused) = focused {
-        let x = area.x.saturating_add(to_cells(focused.cursor - scroll)).min(area.right().saturating_sub(1));
-        f.set_cursor_position(Position { x, y: area.y });
+    let line = Line::from(spans);
+    match focused {
+        Some(focused) => field_line::draw_scrolled(f, line, focused.scroll(usize::from(area.width)), focused.cursor, area),
+        None => f.render_widget(Paragraph::new(line), area),
     }
-}
-
-fn to_cells(columns: usize) -> u16 {
-    u16::try_from(columns).unwrap_or(u16::MAX)
 }
 
 fn value_style(app: &App, is_focused: bool) -> Style {
     let style = Style::default().add_modifier(Modifier::UNDERLINED);
     if is_focused { style.fg(app.theme().accent) } else { style }
-}
-
-fn before_cursor_width(field: &Field) -> usize {
-    let (before, _, _) = field.split();
-    Line::from(render::printable(before).into_owned()).width()
 }
 
 /// What an empty field runs with, as its header says: the default, NULL, or nothing.
@@ -93,6 +80,7 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::{Backend as _, TestBackend};
     use ratatui::buffer::Buffer;
+    use ratatui::layout::Position;
 
     const STATEMENT: &str = "-- param: since date = 2024-01-01\n-- param: note text optional\nSELECT * FROM orders\n\
                              WHERE day > {{since}} AND owner = {{owner}} AND note = {{note}}";

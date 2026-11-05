@@ -6,5 +6,5 @@ expression: terminal.backend()
 "│╭ [Queries] Schema ──────────╮╭ Editor · da\u{1b}[2Kily.sql ─ READ ONLY ─────╮│"
 "││ no saved query yet: ctrl-s │╭ Result ──────────────────────────────────────╮│"
 "│╰────────────────────────────╯╰──────────────────────────────────────────────╯│"
-"│ save as › da\u{1b}[2Kily.sql▌  ⏎ ok  esc cancel                              │"
+"│ save as › da\u{1b}[2Kily.sql   ⏎ ok  esc cancel                              │"
 "╰──────────────────────────────────────────────────────────────────────────────╯"
