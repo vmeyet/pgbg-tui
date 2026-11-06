@@ -142,7 +142,7 @@ pub(super) enum Overlay {
     Recall(Recall),
     /// The `ctrl-v` list of the versions of the query on screen.
     Versions(VersionList),
-    /// A question on the footer line: the path of a new query, or whether to open one over unsaved text.
+    /// A question on the footer line, as the path of a new query or whether to delete one.
     Prompt(Prompt),
     /// The row under the grid's cursor, one column per line.
     Detail(Detail),
@@ -456,6 +456,8 @@ impl App {
                 return vec![self.list_queries()];
             }
             Answer::Queries(QueryAnswer::NotSaved { connection, path, error }) => self.not_saved(&connection, &path, &error),
+            Answer::Queries(QueryAnswer::Deleted { connection, query }) => return self.deleted(&connection, &query),
+            Answer::Queries(QueryAnswer::NotDeleted { connection, path, error }) => self.not_deleted(&connection, &path, &error),
             Answer::Config { id, answer: ConfigAnswer::Changed { connections, warning } } => {
                 return self.take_connections(id, connections, warning);
             }

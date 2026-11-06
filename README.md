@@ -178,6 +178,7 @@ The sidebar and `ctrl-p` show the queries of the connection on screen.
 `queries = "prod"` on another connection, as a replica, makes it use the folder of `prod` instead of its own.
 `ctrl-s` on a new query saves it in that folder, and `ctrl-x` opens the query in `$EDITOR`.
 `^d` or `⌥s` saves the editor's text under a new path, leaves the open query as it is, and the editor then stands for the new query; a path that holds other text is refused.
+`d` on a query in the sidebar deletes its file once you press `y`, its text kept under `versions/`; an editor showing it keeps the text, unsaved, and a folder is never deleted.
 
 Each save over a query, from `ctrl-s` or `$EDITOR`, keeps the text it replaced under `versions/` in pgbg's data folder: the newest 50 of each query.
 `ctrl-v` lists them, and `⏎` puts one back in the editor, unsaved until you press `ctrl-s`.

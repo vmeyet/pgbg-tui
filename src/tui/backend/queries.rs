@@ -1,4 +1,4 @@
-//! The saved queries on disk: listed and read off the loop, each answer sent back as `Answer::Queries`.
+//! The saved queries on disk: listed, read, written and deleted off the loop, each answer sent back as `Answer::Queries`.
 use super::super::app::{Answer, Listed, QueryAnswer};
 use super::send;
 use crate::connection::ConnectionName;
@@ -63,6 +63,19 @@ impl QueryFiles {
             let path = query.path.clone();
             let saved = roots.write(&query, &text, Write::Replace).map(|()| query);
             send(&answers, Answer::Queries(saved_answer(Saving { connection, path, saved, text })));
+        });
+    }
+
+    /// Deletes the file of `query` on a blocking thread; `QueryAnswer::Deleted` or the error comes back for the sheet
+    /// of `connection`.
+    pub(in crate::tui) fn delete(&self, connection: ConnectionName, query: Query) {
+        let (roots, answers) = (self.roots.clone(), self.answers.clone());
+        tokio::task::spawn_blocking(move || {
+            let answer = match roots.delete(&query) {
+                Ok(()) => QueryAnswer::Deleted { connection, query },
+                Err(err) => QueryAnswer::NotDeleted { connection, path: query.path, error: format!("{err:#}") },
+            };
+            send(&answers, Answer::Queries(answer));
         });
     }
 

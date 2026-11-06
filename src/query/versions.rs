@@ -270,6 +270,15 @@ mod tests {
     }
 
     #[test]
+    fn deleting_a_query_keeps_its_text() {
+        let data = tempfile::tempdir().unwrap();
+        let roots = kept(&data);
+        roots.write(&daily(), "SELECT 1", Write::Create).unwrap();
+        roots.delete(&daily()).unwrap();
+        assert_eq!(version_texts(&roots), ["SELECT 1"]);
+    }
+
+    #[test]
     fn an_edit_in_the_users_editor_keeps_the_text_it_replaced() {
         let data = tempfile::tempdir().unwrap();
         let roots = kept(&data);

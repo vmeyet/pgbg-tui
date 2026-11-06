@@ -201,6 +201,7 @@ impl App {
                 self.sheet_mut().switch_every_format(&clock);
             }
             Act::Open => return self.open_in_sidebar(),
+            Act::DeleteQuery => self.ask_delete_in_sidebar(),
             Act::Save => return self.save(),
             Act::SaveAs => self.ask_save_as(),
             Act::NewQuery => return self.ask_open(Opening::New),
@@ -227,7 +228,7 @@ impl App {
             Act::Paste => return vec![Action::PasteClipboard],
             Act::CopyResult => self.ask_copy_format(),
             Act::SwitchTab => return self.switch_tab(),
-            Act::Close | Act::Delete | Act::CloseSession | Act::Add | Act::Edit | Act::CopyCsv | Act::CopyJson | Act::CopyMarkdown => {}
+            Act::Close | Act::CloseSession | Act::Add | Act::Edit | Act::Delete | Act::CopyCsv | Act::CopyJson | Act::CopyMarkdown => {}
             Act::ReadAgain | Act::Preview | Act::Insert | Act::TakeGhost | Act::DropGhost | Act::Back | Act::CopyPath => {}
         }
         vec![]

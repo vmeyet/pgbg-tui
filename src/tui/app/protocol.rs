@@ -105,6 +105,8 @@ pub(in crate::tui) enum Action {
     SaveQuery { connection: ConnectionName, query: Query, text: String },
     /// Write the text of the connection's editor as a new query at this path in `folder`, never over another one.
     SaveNewQuery { connection: ConnectionName, folder: ConnectionName, path: QueryPath, text: String },
+    /// Delete the file of this query; one already gone is no error.
+    DeleteQuery { connection: ConnectionName, query: Query },
     /// Lend the terminal to the user's editor on this query's file, then read the file again into the connection's sheet.
     /// The loop runs it, not the backend.
     EditOutside { connection: ConnectionName, query: Query },
@@ -254,6 +256,17 @@ pub(in crate::tui) enum QueryAnswer {
         text: String,
     },
     NotSaved {
+        connection: ConnectionName,
+        path: QueryPath,
+        error: String,
+    },
+    /// The file of `query` is gone, for the sheet of `connection`, which asked for it.
+    Deleted {
+        connection: ConnectionName,
+        query: Query,
+    },
+    /// The file at `path` could not be deleted, for the sheet of `connection`, which asked for it.
+    NotDeleted {
         connection: ConnectionName,
         path: QueryPath,
         error: String,

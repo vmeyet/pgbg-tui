@@ -1,11 +1,14 @@
-//! The saved queries in the app: the sidebar's tree and its cursor, the `ctrl-p` finder, and the query opened in the editor.
+//! The saved queries in the app: the sidebar's tree and its cursor, the `ctrl-p` finder, the query opened in the editor,
+//! and deleting one.
 use super::search::{self, Search, Searching};
-use super::{Action, App, Focus, Opening, Overlay, Sheet};
+use super::{Action, App, Focus, Opening, Overlay, Prompt, Sheet};
 use crate::act::Pane;
 use crate::connection::ConnectionName;
-use crate::query::{Query, TreeRow, tree_rows};
+use crate::query::{Query, QueryPath, TreeRow, tree_rows};
 use crossterm::event::KeyEvent;
 use std::collections::BTreeSet;
+
+const FOLDER_NOT_DELETED: &str = "a folder is not deleted: delete its queries one by one";
 
 /// The `ctrl-p` finder over every saved query, by its path.
 pub(in crate::tui) type Finder = Search<Query>;
@@ -87,6 +90,36 @@ impl App {
         vec![]
     }
 
+    /// Asks whether to delete the query under the sidebar's cursor; a folder is never deleted, and the status line says so.
+    pub(super) fn ask_delete_in_sidebar(&mut self) {
+        match self.queries.rows().into_iter().nth(self.queries.selected) {
+            Some(TreeRow::Query { query, .. }) => self.overlay = Some(Overlay::Prompt(Prompt::DeleteQuery(query))),
+            Some(TreeRow::Folder { .. }) => self.note = Some(FOLDER_NOT_DELETED.to_owned()),
+            None => {}
+        }
+    }
+
+    pub(super) fn delete_query(&self, query: Query) -> Action {
+        Action::DeleteQuery { connection: self.sheet().name().clone(), query }
+    }
+
+    /// The file of `query` is gone, as the sheet of `connection` asked: each editor that stood for it keeps its text, now
+    /// unsaved, and the queries are listed again.
+    pub(super) fn deleted(&mut self, connection: &ConnectionName, query: &Query) -> Vec<Action> {
+        if let Some(sheet) = self.sheet_of_mut(connection) {
+            sheet.query_error = None;
+        }
+        self.sheets.iter_mut().filter(|sheet| sheet.opened.as_ref() == Some(query)).for_each(Sheet::stand_for_no_file);
+        self.note = Some(format!("deleted {}", query.path));
+        vec![self.list_queries()]
+    }
+
+    pub(super) fn not_deleted(&mut self, connection: &ConnectionName, path: &QueryPath, error: &str) {
+        if let Some(sheet) = self.sheet_of_mut(connection) {
+            sheet.query_error = Some(format!("could not delete {path}: {error}"));
+        }
+    }
+
     /// The finder after `key`, `None` once it closes, and the actions to run: a picked query opens in the editor.
     pub(super) fn finder_after(&mut self, finder: Finder, key: KeyEvent) -> (Option<Finder>, Vec<Action>) {
         match search::after(finder, key, Pane::Finder, &self.queries.all) {
@@ -129,6 +162,12 @@ impl Sheet {
         self.text_changed();
         self.is_dirty = false;
     }
+
+    /// Keeps the editor's text, which now stands for no saved query, so it is unsaved.
+    fn stand_for_no_file(&mut self) {
+        self.opened = None;
+        self.is_dirty = true;
+    }
 }
 
 #[cfg(test)]
@@ -139,7 +178,6 @@ pub(in crate::tui) mod tests {
     use crate::chart::Series;
     use crate::fixtures::orders;
     use crate::format::Format;
-    use crate::query::QueryPath;
     use crossterm::event::{KeyCode, KeyModifiers};
     use std::time::Duration;
 
@@ -347,6 +385,81 @@ pub(in crate::tui) mod tests {
         (0..5).for_each(|_| _ = press(&mut app, KeyCode::Char('j')));
         app.apply(listed(vec![query("customers.sql")]));
         assert_eq!(app.queries.selected, 0);
+    }
+
+    /// The app asking whether to delete `orders/daily.sql`, after `d` on it in the sidebar.
+    pub(in crate::tui) fn asked_to_delete_daily() -> App {
+        let mut app = with_queries();
+        to_sidebar(&mut app);
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(press(&mut app, KeyCode::Char('d')), []);
+        app
+    }
+
+    #[test]
+    fn y_after_d_on_a_query_in_the_sidebar_deletes_it() {
+        let mut app = asked_to_delete_daily();
+        assert_eq!(app.overlay, Some(Overlay::Prompt(Prompt::DeleteQuery(query("orders/daily.sql")))));
+        assert_eq!(press(&mut app, KeyCode::Char('y')), [Action::DeleteQuery { connection: shop(), query: query("orders/daily.sql") }]);
+        assert_eq!(app.overlay, None);
+    }
+
+    #[test]
+    fn any_other_key_than_y_keeps_the_query() {
+        let mut app = asked_to_delete_daily();
+        assert_eq!(press(&mut app, KeyCode::Char('n')), []);
+        assert_eq!(app.overlay, None);
+    }
+
+    #[test]
+    fn d_on_a_folder_deletes_nothing_and_says_why() {
+        let mut app = with_queries();
+        to_sidebar(&mut app);
+        assert_eq!(press(&mut app, KeyCode::Char('d')), []);
+        assert_eq!((app.overlay.as_ref(), app.note.as_deref()), (None, Some(FOLDER_NOT_DELETED)));
+    }
+
+    #[test]
+    fn a_deleted_query_lists_the_queries_again() {
+        let mut app = with_queries();
+        assert_eq!(
+            app.apply(Answer::Queries(QueryAnswer::Deleted { connection: shop(), query: query("orders/daily.sql") })),
+            [Action::ListQueries(shop())]
+        );
+    }
+
+    #[test]
+    fn the_editor_of_a_deleted_query_keeps_its_text_unsaved_and_stands_for_no_query() {
+        let mut app = with_queries();
+        app.apply(Answer::Queries(QueryAnswer::Opened { connection: shop(), query: query("customers.sql"), text: "SELECT 1".into() }));
+        app.apply(Answer::Queries(QueryAnswer::Deleted { connection: shop(), query: query("customers.sql") }));
+        let sheet = app.sheet();
+        assert_eq!((sheet.editor.text(), sheet.opened.as_ref(), sheet.is_dirty), ("SELECT 1", None, true));
+    }
+
+    #[test]
+    fn the_editor_of_another_query_is_left_as_it_is_when_one_is_deleted() {
+        let mut app = with_queries();
+        app.apply(Answer::Queries(QueryAnswer::Opened { connection: shop(), query: query("customers.sql"), text: "SELECT 1".into() }));
+        app.apply(Answer::Queries(QueryAnswer::Deleted { connection: shop(), query: query("orders/daily.sql") }));
+        assert_eq!((app.sheet().opened.as_ref(), app.sheet().is_dirty), (Some(&query("customers.sql")), false));
+    }
+
+    #[test]
+    fn a_query_that_cannot_be_deleted_says_why() {
+        let mut app = with_queries();
+        let (path, error) = (QueryPath::parse("customers.sql").unwrap(), "permission denied".into());
+        app.apply(Answer::Queries(QueryAnswer::NotDeleted { connection: shop(), path, error }));
+        assert_eq!(app.sheet().query_error.as_deref(), Some("could not delete customers.sql: permission denied"));
+    }
+
+    #[test]
+    fn a_query_deleted_after_all_drops_the_error_of_the_last_try() {
+        let mut app = with_queries();
+        let (path, error) = (QueryPath::parse("customers.sql").unwrap(), "permission denied".into());
+        app.apply(Answer::Queries(QueryAnswer::NotDeleted { connection: shop(), path, error }));
+        app.apply(Answer::Queries(QueryAnswer::Deleted { connection: shop(), query: query("customers.sql") }));
+        assert_eq!(app.sheet().query_error, None);
     }
 
     fn opened_and_run(text: &str) -> (App, Vec<Action>) {

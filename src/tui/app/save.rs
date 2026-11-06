@@ -1,5 +1,5 @@
 //! Saving the editor's text as a query, and the questions on the footer line: the path of a new query, opening another
-//! query over unsaved text, and sending a write.
+//! query over unsaved text, sending a write, and deleting a query.
 use super::editor::edit_line;
 use super::{Action, App, Overlay, WriteToSend};
 use crate::act::{self, Act, Pane};
@@ -20,6 +20,8 @@ pub(in crate::tui) enum Prompt {
     OpenOverUnsaved(Opening),
     /// A write waiting for a `y`; any other key drops it.
     SendWrite(Box<WriteToSend>),
+    /// A saved query waiting for a `y` to be deleted; any other key keeps it.
+    DeleteQuery(Query),
 }
 
 /// What the editor opens in place of its text.
@@ -36,6 +38,7 @@ impl Prompt {
         match self {
             Self::SaveAs { .. } | Self::OpenOverUnsaved(_) => Pane::Prompt,
             Self::SendWrite(_) => Pane::Confirm,
+            Self::DeleteQuery(_) => Pane::ConfirmDelete,
         }
     }
 }
@@ -98,7 +101,8 @@ impl App {
             (Some(Act::Quit), _) => (None, self.quit()),
             (Some(Act::Close), _) => (None, vec![]),
             (Some(Act::Run), Prompt::SendWrite(waiting)) => (None, self.send_write(*waiting)),
-            (_, Prompt::SendWrite(_)) => (None, vec![]),
+            (Some(Act::DeleteQuery), Prompt::DeleteQuery(query)) => (None, vec![self.delete_query(query)]),
+            (_, Prompt::SendWrite(_) | Prompt::DeleteQuery(_)) => (None, vec![]),
             (Some(Act::Open), Prompt::OpenOverUnsaved(opening)) => (None, self.open(opening)),
             (Some(Act::Open), Prompt::SaveAs { path, .. }) => self.save_as(path),
             (_, Prompt::SaveAs { mut path, error }) => {

@@ -41,6 +41,7 @@ pub(crate) enum Act {
     StepFormat,
     SwitchFormats,
     Delete,
+    DeleteQuery,
     CloseSession,
     Add,
     Edit,
@@ -121,6 +122,7 @@ impl Act {
             Self::StepFormat => "step_format",
             Self::SwitchFormats => "switch_formats",
             Self::Delete => "delete",
+            Self::DeleteQuery => "delete_query",
             Self::CloseSession => "close_session",
             Self::Add => "add",
             Self::Edit => "edit",
@@ -241,6 +243,8 @@ pub(crate) enum Pane {
     Prompt,
     /// A question on the footer line, whether to send a write: `y` sends it, any other key drops it.
     Confirm,
+    /// A question on the footer line, whether to delete a saved query: `y` deletes it, any other key keeps it.
+    ConfirmDelete,
     /// The detail of the grid's row over the screen, a popup like the finder.
     Detail,
     /// The figures of the grid's column over the screen, a popup like the row's detail.
@@ -261,7 +265,7 @@ pub(crate) enum Pane {
 
 impl Pane {
     /// The order the `?` help lists the panes in.
-    const IN_HELP: [Self; 24] = [
+    const IN_HELP: [Self; 25] = [
         Self::Editor,
         Self::Params,
         Self::Result,
@@ -277,6 +281,7 @@ impl Pane {
         Self::Form,
         Self::Prompt,
         Self::Confirm,
+        Self::ConfirmDelete,
         Self::Detail,
         Self::ColumnStats,
         Self::JsonTree,
@@ -306,6 +311,7 @@ impl Pane {
             Self::Form => "form",
             Self::Prompt => "prompt",
             Self::Confirm => "write",
+            Self::ConfirmDelete => "delete",
             Self::Detail => "row",
             Self::ColumnStats => "column",
             Self::JsonTree => "json",
@@ -467,6 +473,7 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Down, Pane::Queries, &[key(KeyCode::Char('j')), key(KeyCode::Down)]).help("j k", "next, previous query").footer("j/k", "move"),
     row(Act::Up, Pane::Queries, &[key(KeyCode::Char('k')), key(KeyCode::Up)]),
     row(Act::Open, Pane::Queries, &[key(KeyCode::Enter)]).help("⏎", "open the query, fold the folder").footer("⏎", "open"),
+    row(Act::DeleteQuery, Pane::Queries, &[key(KeyCode::Char('d'))]).help("d", "delete the query, once you say yes").footer("d", "delete"),
     row(Act::SwitchTab, Pane::Queries, SWITCH_TAB).help("← → [ ]", "the schema instead").footer("←→", "schema"),
     row(Act::Help, Pane::Queries, &[key(KeyCode::Char('?'))]).help("?", HELP_KEYS),
     row(Act::Down, Pane::Schema, &[key(KeyCode::Char('j')), key(KeyCode::Down)]).help("j k", "next, previous table").footer("j/k", "move"),
@@ -553,6 +560,11 @@ pub(crate) const ROWS: &[Row] = &[
     row(Act::Run, Pane::Confirm, &[key(KeyCode::Char('y'))]).help("y", "send the write").footer("y", "sends"),
     row(Act::Close, Pane::Confirm, &[key(KeyCode::Esc)]).help("esc", "send nothing, as any other key").footer("any other key", "cancels"),
     row(Act::Quit, Pane::Confirm, &[control('c')]).help("^c", "quit, sending nothing"),
+    row(Act::DeleteQuery, Pane::ConfirmDelete, &[key(KeyCode::Char('y'))]).help("y", "delete the query").footer("y", "deletes"),
+    row(Act::Close, Pane::ConfirmDelete, &[key(KeyCode::Esc)])
+        .help("esc", "keep the query, as any other key")
+        .footer("any other key", "keeps"),
+    row(Act::Quit, Pane::ConfirmDelete, &[control('c')]).help("^c", "quit, deleting nothing"),
     row(Act::Down, Pane::Detail, &[key(KeyCode::Char('j')), key(KeyCode::Down)])
         .help("j k", "next, previous value, line by line through one too tall to fit")
         .footer("j/k", "values"),
@@ -645,6 +657,7 @@ fn works_in(row: &Row, pane: Pane) -> bool {
                     | Pane::Form
                     | Pane::Prompt
                     | Pane::Confirm
+                    | Pane::ConfirmDelete
                     | Pane::Detail
                     | Pane::ColumnStats
                     | Pane::JsonTree
@@ -869,6 +882,7 @@ mod tests {
             Pane::Form,
             Pane::Prompt,
             Pane::Confirm,
+            Pane::ConfirmDelete,
             Pane::Detail,
             Pane::ColumnStats,
             Pane::JsonTree,
@@ -1007,6 +1021,13 @@ mod tests {
     }
 
     #[test]
+    fn the_palette_lists_removing_a_connection_and_deleting_a_query() {
+        let does = |act| listings_from(Pane::Editor).find(|listing| listing.act == act).map(|listing| listing.does);
+        assert_eq!(does(Act::Delete).as_deref(), Some("remove the connection from the config, once you say yes"));
+        assert_eq!(does(Act::DeleteQuery).as_deref(), Some("delete the query, once you say yes"));
+    }
+
+    #[test]
     fn a_listing_takes_the_help_of_the_pane_it_opened_on() {
         let down_from = |pane| listings_from(pane).find(|listing| listing.act == Act::Down).unwrap();
         assert_eq!((down_from(Pane::Result).keys.as_str(), down_from(Pane::Result).does.as_str()), ("j k", "next, previous row"));
@@ -1035,6 +1056,6 @@ mod tests {
     fn the_first_help_lists_the_focused_pane_and_what_works_anywhere() {
         let titles: Vec<&str> = sections(Pane::Result, false).iter().map(|section| section.title).collect();
         assert_eq!(titles, ["result", "anywhere"]);
-        assert_eq!(sections(Pane::Result, true).len(), 24);
+        assert_eq!(sections(Pane::Result, true).len(), 25);
     }
 }

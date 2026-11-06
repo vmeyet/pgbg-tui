@@ -13,6 +13,8 @@ Each entry says what changed, then where, then how to use it.
 - **Copy from the row's detail**, in the TUI: a cursor sits on one value, and `j` `k` or a click move it.
   `y` or a double click copies that value raw, `Y` copies the row as CSV, on the row the detail shows, a followed one too.
   `⏎` now acts only on what the cursor is on: `tab` goes to the next key after it, `⇧tab` to the one before, and on a plain value `⏎` says so instead of following a key out of sight.
+- **Delete a saved query**, in the TUI's sidebar: `d` on a query asks, and `y` deletes its file, any other key keeps it.
+  An editor showing that query keeps its text, unsaved, so `ctrl-s` can save it again under a path; a folder is never deleted.
 
 ### Fixed
 
