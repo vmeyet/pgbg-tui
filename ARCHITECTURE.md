@@ -155,6 +155,7 @@ A write's count is a read of its own `FROM` and `WHERE`, joined tables included,
 - A new query goes to the folder of the connection on screen, made at its first save.
 - A root that is a link or owned by another user is skipped; each list and read checks the root again, follows no link, and reads at most 1 MiB.
 - The file is the source of truth: read on open, written on save through a temp file renamed over; a new query never replaces another file, so saving twice changes nothing.
+- Deleting a query removes its plain file after a `y`, its text kept as a version first, never a folder nor through a link; a file already gone is no error, and an editor that stood for it keeps its text, unsaved.
 - A save over a query keeps the replaced text as a version in the data folder, best effort, the newest 50; a text holding a secret is kept as a note.
 - `-- connection:` only suggests; a statement always runs on the session on screen.
 - A query path is drawn with its control characters escaped.

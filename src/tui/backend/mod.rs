@@ -79,6 +79,7 @@ impl Backend {
             Action::OpenQuery { connection, query } => self.queries.open(connection, query),
             Action::SaveQuery { connection, query, text } => self.queries.save(connection, query, text),
             Action::SaveNewQuery { connection, folder, path, text } => self.queries.save_new(connection, folder, path, text),
+            Action::DeleteQuery { connection, query } => self.queries.delete(connection, query),
             Action::EditOutside { query, .. } => {
                 tracing::warn!("{} goes to the loop, which lends the terminal, not to the backend", query.path);
             }

@@ -128,6 +128,7 @@ The review of #214 to #231 found these, most severe first.
 - [x] Grouped charts upright or on their side, from the `-- chart:` header
 - [x] Stacked charts, and `t` and `r` on a chart, so a result with no header reaches every kind
 - [x] The grid keeps the primary key it starts with, or else its first column, on the left while it scrolls, `z` `Z`, and gives way past half its width
+- [x] `d` in the sidebar deletes the query under the cursor after a `y`, and an editor showing it keeps its text, unsaved
 - [x] The grid hides columns, `x` `X`, and keeps what was hidden and frozen while a result has the same columns
 - [x] `⌥e` and `⌥a` show `EXPLAIN` as a tree that folds, the costliest node lit and an estimate far off flagged; `⌥a` runs a read only, rolled back whatever the connection allows
 - [x] The ghost offers the rest of the past read run most on this connection, from three typed characters, after a schema name and before a keyword or an idle ask
@@ -223,6 +224,16 @@ The review of #305 to #307 left these.
 - [ ] An input line past 65,535 columns keeps scrolling
 - [ ] The schema filter does not take keys while the sidebar is hidden
 - [ ] The connection form's fields draw through `field_line`
+
+## 30. Review of query delete
+
+The review of the query delete left these.
+
+- [ ] Saving and deleting a query share one queue for the backend's file work, so a fast `^s` then `d` `y` neither brings the file back nor leaves the editor marked saved for a deleted file
+- [ ] `Roots::delete` and the write path act on a directory handle (`unlinkat`), so a swap to a link between the check and the act cannot reach outside the root
+- [ ] Deleting a query lists again the folder it was in, not the folder on screen
+- [ ] The delete and save errors name the query once, not `could not delete daily.sql: deleting daily.sql: …`
+- [ ] `src/act.rs` and `src/tui/app/mod.rs` are split, as they have grown past 800 lines
 
 ## Later
 

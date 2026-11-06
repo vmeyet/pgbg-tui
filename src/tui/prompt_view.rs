@@ -1,5 +1,5 @@
 //! The prompt on the footer line: the path of a new query as it is typed, whether to open a query over unsaved text,
-//! whether to send a write and how many rows it would touch, or the grid's filter.
+//! whether to send a write and how many rows it would touch, whether to delete a query, or the grid's filter.
 use super::app::{App, Opening, Prompt};
 use super::field_line;
 use super::ui::{draw_with_hints, footer_label, muted_hints};
@@ -34,6 +34,9 @@ pub(super) fn draw(f: &mut Frame<'_>, app: &App, prompt: &Prompt, area: Rect) {
             spans.extend((!rows.is_empty()).then(|| Span::raw(format!("{} ", render::printable(&rows)))));
             spans
         }
+        Prompt::DeleteQuery(query) => {
+            vec![Span::styled(format!(" delete {}? ", query.path), Style::default().fg(theme.danger).add_modifier(Modifier::BOLD))]
+        }
     };
     draw_with_hints(f, app, spans, prompt.pane(), area);
 }
@@ -47,7 +50,7 @@ pub(super) fn draw_row_filter(f: &mut Frame<'_>, app: &App, filter: &Field, area
 mod tests {
     use super::super::app::ask::tests::type_in;
     use super::super::app::fixtures::{app_on, connection, control, press, pressed, shop, to_shop, typed};
-    use super::super::app::queries::tests::query;
+    use super::super::app::queries::tests::{asked_to_delete_daily, query};
     use super::super::app::{Answer, App, Incoming, LookId, QueryAnswer};
     use super::super::ui;
     use crate::db::model::{ColumnKind, ResultSet, Value};
@@ -116,6 +119,11 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 6)).unwrap();
         terminal.draw(|f| _ = ui::draw(f, &app)).unwrap();
         insta::assert_snapshot!("send_write_escaped", terminal.backend());
+    }
+
+    #[test]
+    fn the_delete_question_names_the_query_and_its_keys() {
+        insta::assert_snapshot!("delete_query", render(&asked_to_delete_daily(), 80).backend());
     }
 
     #[test]

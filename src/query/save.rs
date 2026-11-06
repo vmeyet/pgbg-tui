@@ -1,4 +1,5 @@
-//! Writing a query back: into its connection's folder in pgbg's data folder, through a temporary file renamed over the old one.
+//! Writing a query back: into its connection's folder in pgbg's data folder, through a temporary file renamed over the old one;
+//! and deleting one.
 use super::{Query, Root, Roots};
 use crate::connection::ConnectionName;
 use crate::files::{self, Readers};
@@ -56,6 +57,25 @@ impl Roots {
         }
         Ok(path)
     }
+
+    /// Deletes the file of `query`, a plain file inside its root, its text kept as a version first; one already gone,
+    /// or whose queries folder is gone, is no error, so it is safe to run twice. Blocks on the file system.
+    pub(crate) fn delete(&self, query: &Query) -> Result<()> {
+        if self.dir(&query.folder).is_some_and(|dir| !super::exists(&dir)) {
+            return Ok(());
+        }
+        if let Ok(old) = self.read_blocking(query) {
+            self.keep(query, &old, "");
+        }
+        match self.file(query).and_then(|path| Ok(fs::remove_file(path)?)) {
+            Err(err) if is_not_found(&err) => Ok(()),
+            deleted => deleted.with_context(|| format!("deleting {}", query.path)),
+        }
+    }
+}
+
+fn is_not_found(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<io::Error>().is_some_and(|err| err.kind() == io::ErrorKind::NotFound)
 }
 
 fn write_inside(root: &Root, query: &Query, text: &str, write: Write) -> Result<()> {
@@ -186,6 +206,54 @@ mod tests {
         std::os::unix::fs::symlink(outside.path(), data.path().join("queries")).unwrap();
         assert!(in_data(data.path()).write(&query("orders/daily.sql"), "SELECT 1", Write::Create).is_err());
         assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn deleting_removes_the_file_and_it_is_listed_no_more() {
+        let data = tempfile::tempdir().unwrap();
+        let roots = in_data(data.path());
+        roots.write(&query("orders/daily.sql"), "SELECT 1", Write::Create).unwrap();
+        roots.delete(&query("orders/daily.sql")).unwrap();
+        assert_eq!(roots.list(&"shop".parse().unwrap()), []);
+    }
+
+    #[test]
+    fn deleting_twice_fails_nothing() {
+        let data = tempfile::tempdir().unwrap();
+        let roots = in_data(data.path());
+        roots.write(&query("daily.sql"), "SELECT 1", Write::Create).unwrap();
+        roots.delete(&query("daily.sql")).unwrap();
+        roots.delete(&query("daily.sql")).unwrap();
+    }
+
+    #[test]
+    fn deleting_a_query_whose_folder_is_gone_fails_nothing() {
+        let data = tempfile::tempdir().unwrap();
+        in_data(data.path()).delete(&query("daily.sql")).unwrap();
+    }
+
+    #[test]
+    fn deleting_refuses_a_folder() {
+        let data = tempfile::tempdir().unwrap();
+        let roots = in_data(data.path());
+        roots.write(&query("orders.sql/daily.sql"), "SELECT 1", Write::Create).unwrap();
+        assert!(roots.delete(&query("orders.sql")).is_err());
+        assert_eq!(roots.list(&"shop".parse().unwrap()), [query("orders.sql/daily.sql")]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deleting_follows_no_link_out_of_the_root() {
+        let (data, outside) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let roots = in_data(data.path());
+        roots.write(&query("daily.sql"), "SELECT 1", Write::Create).unwrap();
+        fs::write(outside.path().join("kept.sql"), "SELECT 1").unwrap();
+        let root = data.path().join("queries/shop");
+        std::os::unix::fs::symlink(outside.path(), root.join("elsewhere")).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("kept.sql"), root.join("linked.sql")).unwrap();
+        assert!(roots.delete(&query("elsewhere/kept.sql")).is_err());
+        assert!(roots.delete(&query("linked.sql")).is_err());
+        assert!(outside.path().join("kept.sql").exists());
     }
 
     #[cfg(unix)]
